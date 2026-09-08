@@ -2,7 +2,7 @@
  "source": "auction.keiba.rakuten.co.jp",
  "round": 693,
  "ymd": "250910",
- "fetched_at": "2026-09-09T06:23:36+09:00",
+ "fetched_at": "2026-09-09T08:28:36+09:00",
  "count": 59,
  "items": [
   {
@@ -750,7 +750,7 @@
    "itemId": 17016,
    "pdfUrl": "https://keiba.r10s.jp/auction/data/item/1/250910_horse_59/250910_horse_59_bt.pdf",
    "topItemName": "ペルシアーノ",
-   "offererName": "シミズレーシング",
+   "offererName": "清水 正江",
    "basicInfoUrl": "http://www.jbis.or.jp/horse/0001373600/",
    "movieUrl": "",
    "image": "https://keiba.r10s.jp/auction/data/item/1/250910_horse_59/250910_horse_59_bt.jpg",
