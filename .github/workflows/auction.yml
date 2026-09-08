@@ -1,0 +1,149 @@
+# §54.4 オークション保全(楽天サラオク=木/日・サタデー=土)。表示なし=データを repo に積むだけ。
+# - 楽天: トップは次回一覧に置き換わるが、/item/{通し番号} に全史が残存(#352・2016年の第1回から)。
+#   開催日の朝に出品一覧・夜に終値スナップ×3・/item 本体は月曜週次で回収(全史は rakuten-items を dispatch)
+# - §114(2026-09-06 #487): **毎朝 06:23 は daily**= 出品一覧(次回ぶんの先取り)+ /item の「新規+未終了の取り直し」+投入。
+#   ⛔9/3(木)は GitHub cron が一日中 4 時間近く遅れ、終値 3 回とも当日ページが片付いた後で 0 件= 第691回の落札が
+#   月曜まで無かった。終値は live ページの**時刻に賭けない**= /item(全史・確定値)を毎朝取り直せば遅れても翌朝に入る。
+#   「これからの出品」も日曜朝でなく、楽天が公開した時点(数日前)で入る。
+# - SAT は全過去が残っているが「残し続ける約束」ではないので週次で新規分を積む(バックフィルは手動 dispatch)
+# - Supabase 不要(表示フェーズ§54.4手3で別判断)。commit は [CI Skip] = Cloudflare Pages を回さない
+# - cron の分は混雑回避で半端な値(nar-refresh の実測に倣う)
+name: auction-archive
+
+on:
+  schedule:
+    - cron: '3 0 * * 4,0'    # JST 木/日 09:03 = 楽天 出品一覧(JBIS ID込み)
+    - cron: '3 14 * * 4,0'   # JST 木/日 23:03 = 楽天 終値(全組確定の本命)。#528 2026-09-08: 22:08/22:38 の先取り 2 本は撤去=
+                             #   確定値は §114 の毎朝 /item 取り直しが拾う(無料枠 2,000 分/月に収めるため)
+    - cron: '13 0 * * 0'     # JST 日 09:13 = SAT 週次(土曜回の確定後)
+    - cron: '33 0 * * 1'     # JST 月 09:33 = 楽天 /item 週次(木・日両回の確定後に本体データ回収+未終了の取り直し)
+    - cron: '23 21 * * *'    # JST 毎日 06:23 = daily(§114: 出品一覧の先取り + /item 新規・未終了の取り直し + 投入 + runs_after)
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'どれを回すか'
+        default: 'sat-weekly'
+        type: choice
+        options: [daily, rakuten-list, rakuten-close, sat-weekly, sat-backfill, rakuten-items, rakuten-items-weekly, load-only]
+
+concurrency:
+  group: auction-archive
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  archive:
+    runs-on: ubuntu-latest
+    timeout-minutes: 350   # sat-backfill(Playwright・1ページ4〜6秒)が最長。rakuten-items は #357 の API 化で
+                           #   8件/秒=全史30分。⛔切られても state は500件ブロックごとに保存+if:always() の
+                           #   commit で残る=次の dispatch/週次が続きから走る(#350/#353)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: mode
+        id: m
+        run: |
+          MODE="${{ github.event.inputs.mode }}"
+          if [ -z "$MODE" ]; then
+            case "${{ github.event.schedule }}" in
+              "3 0 * * 4,0") MODE=rakuten-list;;
+              "13 0 * * 0")  MODE=sat-weekly;;
+              "33 0 * * 1")  MODE=rakuten-items-weekly;;
+              "23 21 * * *") MODE=daily;;
+              *)             MODE=rakuten-close;;
+            esac
+          fi
+          echo "MODE=$MODE"
+          echo "mode=$MODE" >> "$GITHUB_OUTPUT"
+      # ⛔rakuten-items は #357 の JSON API 直取り= Playwright が要らない(入れると起動に1〜2分無駄)
+      - name: playwright(SAT と楽天トップだけ)
+        if: startsWith(steps.m.outputs.mode, 'sat') || steps.m.outputs.mode == 'rakuten-list' || steps.m.outputs.mode == 'rakuten-close' || steps.m.outputs.mode == 'daily'
+        run: pip install playwright==1.61.0 && python -m playwright install --with-deps chromium
+      - name: run
+        run: |
+          case "${{ steps.m.outputs.mode }}" in
+            rakuten-list)         python cloud/auction_rakuten.py --phase list;;
+            rakuten-close)        python cloud/auction_rakuten.py --phase close;;
+            sat-weekly)           python cloud/auction_sat.py --weekly;;
+            sat-backfill)         python cloud/auction_sat.py --backfill;;
+            rakuten-items)        python cloud/auction_rakuten_items.py --backfill;;
+            rakuten-items-weekly) python cloud/auction_rakuten_items.py --weekly;;
+            # §114 daily: 一覧が取れなくても /item の取り直しは続ける(exit 2 で止めない)
+            daily)                python cloud/auction_rakuten.py --phase list || echo "⚠ 出品一覧の取得失敗(続行)"
+                                  python cloud/auction_rakuten_items.py --weekly;;
+            load-only)            echo "投入だけ";;
+          esac
+      # §54.5 原本 → auction_sales(画面に出す事実だけ)。冪等なので毎回まるごと流す(1.8万行・数十秒)
+      - name: load auction_sales
+        if: always()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/auction_load.py --apply
+      # §89 詳細原本が増えた4 modeだけ、auction_salesへの同定後に傷病申告を抽出する。
+      # list/close/load-onlyでは本文原本が増えないため走らせない。先行step失敗時も走らせない。
+      - name: migrate horse health schema
+        if: >-
+          success() &&
+          (steps.m.outputs.mode == 'sat-weekly' ||
+           steps.m.outputs.mode == 'sat-backfill' ||
+           steps.m.outputs.mode == 'rakuten-items' ||
+           steps.m.outputs.mode == 'rakuten-items-weekly' ||
+           steps.m.outputs.mode == 'daily')
+        env:
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+          PGSSLMODE: require
+        run: |
+          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 \
+            -U postgres.qgsnsdjvzzeazbazjlwa -d postgres \
+            -v ON_ERROR_STOP=1 -X -f pipeline/sql/horse_health_20260903.sql
+      - name: install health dependencies
+        if: >-
+          success() &&
+          (steps.m.outputs.mode == 'sat-weekly' ||
+           steps.m.outputs.mode == 'sat-backfill' ||
+           steps.m.outputs.mode == 'rakuten-items' ||
+           steps.m.outputs.mode == 'rakuten-items-weekly' ||
+           steps.m.outputs.mode == 'daily')
+        run: pip install -r cloud/requirements.txt
+      - name: extract auction health disclosures
+        if: >-
+          success() &&
+          (steps.m.outputs.mode == 'sat-weekly' ||
+           steps.m.outputs.mode == 'sat-backfill' ||
+           steps.m.outputs.mode == 'rakuten-items' ||
+           steps.m.outputs.mode == 'rakuten-items-weekly' ||
+           steps.m.outputs.mode == 'daily')
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/horse_health.py --source auction --apply --report-json auction-health-report.json
+      - name: upload auction health audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: auction-health-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: auction-health-report.json
+          if-no-files-found: ignore
+          retention-days: 30
+      # §54.5-c オークション後の出走数(runs_after/first_after)。nar-refresh の集計SQLと同じ流し方(psql・セッションプーラー)
+      - name: runs_after (psql)
+        if: always()
+        env:
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+        run: |
+          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/auction_after.sql | tail -n 6
+      - name: commit data   # 途中失敗でも撮れた分は残す
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add cloud/data/auction 2>/dev/null || exit 0
+          if git diff --cached --quiet; then echo "変更なし"; exit 0; fi
+          git commit -m "data(auction): 保全 $(TZ=Asia/Tokyo date '+%m/%d %H:%M') [CI Skip]"
+          git pull --rebase origin master
+          git push origin HEAD:master

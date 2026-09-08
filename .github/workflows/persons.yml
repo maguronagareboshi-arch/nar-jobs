@@ -1,0 +1,77 @@
+# 騎手・調教師のプロフィール(生年月日・所属)を集めて nar_persons に入れる(DESIGN §65 / §54.2)。
+# ⛔毎晩の nar-refresh には**入れない**。個票を1,012ページ読むので20分かかり、毎日やる意味も無い
+#   (生年月日は変わらない。増えるのは新人だけ)。ここは**月1回+手押し**。
+#
+# 手押し: Actions → 「Persons profile」→ Run workflow(mode を選ぶ)
+#   dry   = 一覧だけ読んで数える(投入しない・約1分)
+#   full  = 個票まで読んで nar_persons へ投入(約20分)
+#   verify= 入っている値と nar_person_stats.name の突合だけ見る(投入しない)
+name: Persons profile
+
+on:
+  schedule:
+    - cron: '20 19 1 * *'          # JST 毎月1日 04:20
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'dry / full / verify'
+        default: 'dry'
+        type: choice
+        options: [dry, full, verify]
+
+concurrency:
+  group: persons
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  MODE: ${{ github.event.inputs.mode || 'full' }}
+
+jobs:
+  persons:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # 器を先に作る(何度流しても同じ)。⛔中身を入れるのは次の段
+      - name: create table (nar_persons)
+        if: env.MODE != 'dry'
+        env:
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+          PGSSLMODE: require
+        run: |
+          set -o pipefail
+          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa \
+               -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/persons.sql | tail -n 10
+
+      - name: collect
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          set -o pipefail
+          case "$MODE" in
+            dry)    python -X utf8 cloud/persons.py ;;
+            verify) python -X utf8 cloud/persons.py --verify ;;
+            full)   python -X utf8 cloud/persons.py --full --apply ;;
+          esac
+
+      # 入った中身を数で見せる(⛔「入れた」と言うだけにしない)
+      - name: 検算
+        if: env.MODE == 'full'
+        env:
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+          PGSSLMODE: require
+        run: |
+          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa \
+               -d postgres -v ON_ERROR_STOP=1 -X -c \
+            "select kind, count(*) rows, count(birth) with_birth,
+                    count(distinct name_short) shorts,
+                    count(*) filter (where birth is null) no_birth
+             from public.nar_persons group by kind order by kind;"

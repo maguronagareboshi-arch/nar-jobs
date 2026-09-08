@@ -1,0 +1,22 @@
+{
+ "source": "auction.keiba.rakuten.co.jp",
+ "round": 691,
+ "ymd": "260903",
+ "passes": [
+  {
+   "fetched_at": "2026-09-04T02:00:57+09:00",
+   "live_count": 0,
+   "live_items": []
+  },
+  {
+   "fetched_at": "2026-09-04T02:11:38+09:00",
+   "live_count": 0,
+   "live_items": []
+  },
+  {
+   "fetched_at": "2026-09-04T02:48:36+09:00",
+   "live_count": 0,
+   "live_items": []
+  }
+ ]
+}

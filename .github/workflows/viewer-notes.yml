@@ -1,0 +1,52 @@
+# §56.4 / 56-3 運営の確認: 利用者の**メモとマイホース**の一覧を artifact で落とす(**手で起動するときだけ**)。
+# ⛔公開サイトに管理画面を作らない。⛔§58 の管理者経路(Worker+トークン)にも載せない(§56.4 の再判断)。
+# ⛔device_id は出さない= md5 の先頭8文字だけ(実質パスワードなので手元に降ろさない)。
+# ⛔読むだけ+掃除だけ。メモ本文は書き換えない。
+# 使い方: Actions タブ → viewer-notes → Run workflow → 終わったら artifact を落とす
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY(既存。**新しい secret は作らない**)
+name: viewer-notes
+
+on:
+  workflow_dispatch:
+    inputs:
+      purge_tries:
+        description: '古い試行行(nar_viewer_claim_tries・1時間より前)も掃除する'
+        default: true
+        type: boolean
+
+concurrency:
+  group: viewer-notes
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: export viewer notes and horses
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          PURGE: ${{ inputs.purge_tries }}
+        run: |
+          set -o pipefail
+          ARGS=""
+          # ⚠真偽値は文字列で来ることがある= bash で明示的に見る('false' も非空なので [ -n ] では判定できない)
+          if [ "$PURGE" = "true" ]; then ARGS="--purge-tries"; fi
+          python cloud/viewer_export.py --out viewer-export $ARGS
+          ls -la viewer-export/
+      # ⚠保持は7日(既存のバックアップは90日だが、これは**利用者のメモ**= 置きっぱなしにしない)。
+      #   落としたらローカルで扱うこと
+      - name: upload
+        uses: actions/upload-artifact@v4
+        with:
+          name: viewer-notes-${{ github.run_id }}
+          path: viewer-export/*
+          retention-days: 7

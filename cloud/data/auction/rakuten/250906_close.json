@@ -1,0 +1,65 @@
+{
+ "source": "auction.keiba.rakuten.co.jp",
+ "round": 692,
+ "ymd": "250906",
+ "passes": [
+  {
+   "fetched_at": "2026-09-06T22:08:46+09:00",
+   "live_count": 3,
+   "live_items": [
+    {
+     "itemId": 16936,
+     "image": "https://keiba.r10s.jp/auction/data/item/1/250906_horse_02/1.JPG",
+     "customName": "ディセンシーの25　　牝１歳　　※育成馬　...",
+     "startDateTime": "2026/09/06 12:00",
+     "endDateTime": "2026/09/06 22:12",
+     "currentPrice": 1990000,
+     "currentPriceWithTax": 2189000
+    },
+    {
+     "itemId": 16935,
+     "image": "https://keiba.r10s.jp/auction/data/item/1/250906_horse_01/1.JPG",
+     "customName": "ゴールデンロッドの25　　牝１歳　　※育成...",
+     "startDateTime": "2026/09/06 12:00",
+     "endDateTime": "2026/09/06 22:12",
+     "currentPrice": 2130000,
+     "currentPriceWithTax": 2343000
+    },
+    {
+     "itemId": 16958,
+     "image": "https://keiba.r10s.jp/auction/data/item/1/250906_horse_24/1.JPG",
+     "customName": "オーロラボレアリス　　牝３歳　　※繁殖牝...",
+     "startDateTime": "2026/09/06 12:00",
+     "endDateTime": "2026/09/06 22:09",
+     "currentPrice": 840000,
+     "currentPriceWithTax": 924000
+    }
+   ]
+  },
+  {
+   "fetched_at": "2026-09-06T22:38:42+09:00",
+   "live_count": 0,
+   "live_items": []
+  },
+  {
+   "fetched_at": "2026-09-06T23:03:38+09:00",
+   "live_count": 0,
+   "live_items": []
+  },
+  {
+   "fetched_at": "2026-09-07T01:09:44+09:00",
+   "live_count": 0,
+   "live_items": []
+  },
+  {
+   "fetched_at": "2026-09-07T01:25:44+09:00",
+   "live_count": 0,
+   "live_items": []
+  },
+  {
+   "fetched_at": "2026-09-07T01:55:04+09:00",
+   "live_count": 0,
+   "live_items": []
+  }
+ ]
+}

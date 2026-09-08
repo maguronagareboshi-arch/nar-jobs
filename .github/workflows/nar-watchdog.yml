@@ -1,0 +1,176 @@
+# 統合ビューア: データ鮮度の独立見張り(DESIGN §21.1 の穴=「ジョブ自体が起動しない」故障の検知)。
+# 本体(nar-refresh)と別の cron なので、本体のスケジュールが GitHub 側で間引かれても
+# こちらのどれかが走れば 3 時間超のストールを検知して赤くなる(=所有者へ通知メール)。
+# JST 09:25〜22:25 の毎時25分。何も悪くなければ10秒で緑。
+name: nar-watchdog
+
+on:
+  schedule:
+    - cron: '25 0-13 * * *'
+    - cron: '40 23 * * *'   # JST 08:40 に1回= #142 の高知「結果ゼロ開催日」検知(下の kochi-results)
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  freshness:
+    if: github.event.schedule != '40 23 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: check nar_races freshness (fail if stale > 3h)
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          python - <<'PY'
+          import os, json, urllib.request, datetime as dt
+          url = os.environ['SUPABASE_URL'] + '/rest/v1/nar_races?select=updated_at&order=updated_at.desc&limit=1'
+          req = urllib.request.Request(url, headers={'apikey': os.environ['SUPABASE_SERVICE_KEY'],
+                                                     'Authorization': 'Bearer ' + os.environ['SUPABASE_SERVICE_KEY']})
+          rows = json.loads(urllib.request.urlopen(req, timeout=30).read())
+          last = dt.datetime.fromisoformat(rows[0]['updated_at'].replace('Z', '+00:00'))
+          age = (dt.datetime.now(dt.timezone.utc) - last).total_seconds()
+          print(f'nar_races last update: {last.isoformat()} ({age/60:.0f} min ago)')
+          raise SystemExit(0 if age < 3 * 3600 else 1)
+          PY
+
+  # §77 W3: 2 分刻みのオッズ(公開リポ nar-odds-collector の loop.py)が生きているかの見張り。
+  # 「発走 40 分前〜8 分後のレースが今あるのに、nar_odds_ticks の当日最新が 12 分より古い」なら赤(=所有者へメール)。
+  # 対象レースが無い時間帯・非開催日は緑。復旧= 公開リポの collect を手で起こす(workflow_dispatch)。
+  odds-live:
+    if: github.event.schedule != '40 23 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: check 2-minute odds ticks (fail if stale > 12 min while races are near)
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          python - <<'PY'
+          import os, json, re, urllib.request, datetime as dt
+          JST = dt.timezone(dt.timedelta(hours=9))
+          now = dt.datetime.now(JST); today = now.date().isoformat(); nm = now.hour * 60 + now.minute
+          def get(path):
+              req = urllib.request.Request(os.environ['SUPABASE_URL'] + '/rest/v1/' + path,
+                  headers={'apikey': os.environ['SUPABASE_SERVICE_KEY'], 'Authorization': 'Bearer ' + os.environ['SUPABASE_SERVICE_KEY']})
+              return json.loads(urllib.request.urlopen(req, timeout=30).read())
+          races = get(f'nar_races?select=track,race_no,post_time&race_date=eq.{today}')
+          def pm(s):
+              m = re.fullmatch(r'(\d{2})(\d{2})', str(s or '').strip()); return int(m.group(1)) * 60 + int(m.group(2)) if m else None
+          near = [r for r in races if pm(r.get('post_time')) is not None and -8 <= pm(r['post_time']) - nm <= 40]
+          print(f'JST {now:%H:%M} races today={len(races)} near={len(near)}')
+          if not near:
+              raise SystemExit(0)
+          t = get(f'nar_odds_ticks?select=t&race_date=eq.{today}&order=id.desc&limit=1')
+          last = t[0]['t'] if t else None
+          print(f'latest tick today: {last}')
+          if not last:
+              raise SystemExit(1)
+          lm = int(last[:2]) * 60 + int(last[3:5]); age = nm - lm
+          print(f'age {age} min')
+          raise SystemExit(0 if 0 <= age <= 12 else 1)
+          PY
+
+  # #142 の教訓=「高知の keiba_* は管理者の手動保存が唯一の口。保存忘れは誰も気づかない」の見張り。
+  # nar_races(公式)に高知の開催があるのに、keiba_horses の着順が3日たっても全行空の日を検知して赤くする。
+  # 修理はユーザーの通常ルーチン(ビューアで結果取り込み→保存)。⛔鍵は第1プロジェクトの公開 anon(data.js と同じ)
+  kochi-results:
+    if: github.event.schedule == '40 23 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: check kochi result-empty race days (fail if any, older than 3 days)
+        env:
+          NAR_SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          NAR_SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          python - <<'PY'
+          import os, json, urllib.request, urllib.parse, datetime as dt
+          KOCHI_URL = 'https://jcrcftvrsgmsewwdkqha.supabase.co'
+          KOCHI_ANON = ('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpjcmNmdHZyc2dtc2V3d2RrcWhhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4MDY0NjgsImV4cCI6MjA5NjM4MjQ2OH0.UED2rJNsuTPqofrhhNhQ2RM0NKc2eJ6qHllfbnebMe0')
+          def get(base, key, path):
+              req = urllib.request.Request(base + '/rest/v1/' + path,
+                  headers={'apikey': key, 'Authorization': 'Bearer ' + key})
+              return json.loads(urllib.request.urlopen(req, timeout=30).read())
+          today = dt.date.today()
+          lo, hi = (today - dt.timedelta(days=60)).isoformat(), (today - dt.timedelta(days=3)).isoformat()
+          rows = get(os.environ['NAR_SUPABASE_URL'], os.environ['NAR_SUPABASE_SERVICE_KEY'],
+                     f'nar_races?select=race_date&track=eq.%E9%AB%98%E7%9F%A5&race_no=eq.1'
+                     f'&race_date=gte.{lo}&race_date=lte.{hi}&order=race_date.desc&limit=50')
+          days = sorted({r['race_date'] for r in rows}, reverse=True)
+          gaps = []
+          for d in days[:12]:
+              kd = urllib.parse.quote(d.replace('-', '/'))
+              hs = get(KOCHI_URL, KOCHI_ANON, f'keiba_horses?select=chakujun&race_date=eq.{kd}&limit=300')
+              filled = sum(1 for h in hs if str(h.get('chakujun') or '').strip())
+              if not hs:
+                  gaps.append(f'{d}: 出馬表ごと未保存')
+              elif filled == 0:
+                  gaps.append(f'{d}: {len(hs)}行あるのに着順が全行空(結果保存忘れの疑い)')
+          print(f'高知の開催日(公式・{lo}..{hi}): {len(days)}日 / 点検 {min(len(days),12)}日')
+          for g in gaps:
+              print('MISSING', g)
+          if gaps:
+              print('修理= https://yukochi.com/ の管理者ビューアで該当日の結果取り込み→保存')
+          raise SystemExit(1 if gaps else 0)
+          PY
+
+      # §98 の見張り= 高知の翌朝自動計測(手元PCの kochi_auto.py)が動いているか。
+      # ⛔PCが閉じていても鳴らせるのはここだけ(GPU/yt-dlp が要るのでクラウドでは代われない)。
+      #   赤= 開催から48時間たっても各馬の前半3F が1頭も入っていない日がある(=計測が回っていない)。
+      #   黄(fail にしない)= kochi_auto_status.ran が7日より古い(PC放置の合図)。
+      - name: check kochi first3f not measured (fail if a race day is still empty after 48h)
+        if: always()
+        env:
+          NAR_SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          NAR_SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          python - <<'PY'
+          import os, json, urllib.request, urllib.parse, datetime as dt
+          KOCHI_URL = 'https://jcrcftvrsgmsewwdkqha.supabase.co'
+          KOCHI_ANON = ('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpjcmNmdHZyc2dtc2V3d2RrcWhhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4MDY0NjgsImV4cCI6MjA5NjM4MjQ2OH0.UED2rJNsuTPqofrhhNhQ2RM0NKc2eJ6qHllfbnebMe0')
+          def get(base, key, path):
+              req = urllib.request.Request(base + '/rest/v1/' + path,
+                  headers={'apikey': key, 'Authorization': 'Bearer ' + key})
+              return json.loads(urllib.request.urlopen(req, timeout=30).read())
+          NAR, NKEY = os.environ['NAR_SUPABASE_URL'], os.environ['NAR_SUPABASE_SERVICE_KEY']
+          # ⛔JST で数える(Actions は UTC。08:40 JST の便は UTC ではまだ前日= 土曜の開催が火曜まで見えなくなる)
+          today = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=9)).date()
+          # ⛔48時間= 開催日そのものは数えない(前日ぶんは朝の便待ちで空でも正常)
+          lo, hi = (today - dt.timedelta(days=30)).isoformat(), (today - dt.timedelta(days=2)).isoformat()
+          rows = get(NAR, NKEY, f'nar_races?select=race_date&track=eq.%E9%AB%98%E7%9F%A5&race_no=eq.1'
+                     f'&race_date=gte.{lo}&race_date=lte.{hi}&order=race_date.desc&limit=50')
+          days = sorted({r['race_date'] for r in rows}, reverse=True)
+          gaps = []
+          for d in days[:12]:
+              kd = urllib.parse.quote(d.replace('-', '/'))
+              hs = get(KOCHI_URL, KOCHI_ANON, f'keiba_horses?select=first3f&race_date=eq.{kd}&limit=300')
+              if not hs:
+                  continue          # 出馬表ごと無い日は上の「結果ゼロ」検査の受け持ち。二重に鳴らさない
+              filled = sum(1 for h in hs if str(h.get('first3f') or '').strip())
+              if filled == 0:
+                  gaps.append(f'{d}: {len(hs)}行あるのに各馬の前半3F が全行空(翌朝の自動計測が回っていない)')
+          print(f'高知の開催日(公式・{lo}..{hi}): {len(days)}日 / 点検 {min(len(days),12)}日')
+          for g in gaps:
+              print('MISSING', g)
+          # PC放置の合図(fail にはしない)
+          try:
+              st = get(NAR, NKEY, 'nar_meta?select=value&key=eq.kochi_auto_status')
+              ran = (st[0]['value'] or {}).get('ran') if st else None
+          except Exception as e:
+              ran = None
+              print('WARN kochi_auto_status が読めない:', str(e)[:120])
+          if ran:
+              age = (dt.datetime.now(dt.timezone.utc) - dt.datetime.fromisoformat(ran)).days
+              print(f'kochi_auto_status.ran = {ran} ({age}日前)')
+              if age >= 7:
+                  print('WARN 7日以上まわっていない= PC が開かれていない疑い')
+          else:
+              print('WARN kochi_auto_status がまだ無い(初回実走まではこれで正常)')
+          if gaps:
+              print('修理= PC を開いて 高知競馬\\01_高知映像計測\\kochi_auto_now.cmd')
+          raise SystemExit(1 if gaps else 0)
+          PY

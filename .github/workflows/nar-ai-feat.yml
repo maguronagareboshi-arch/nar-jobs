@@ -1,0 +1,198 @@
+# §129d 予想AI base-v1 段階1= 特徴量表 `nar_ai_feat_run` を **Actions の中の Postgres** で組む。
+#
+# ⛔なぜ本番 DB で作らないのか(9/8 決定・ここが一番大事)
+#   9/7 22:14 = 本番で refresh_nar_ai_feat() を流し、temp がディスクを使い切って 9 分で失敗。
+#   9/7 23:21 = 直した版を流したら 30 分過ぎに本番 DB が固まり、23:52〜00:22 **サイトのデータが読めなくなった**
+#              (pooler の認証も通らず cancel も効かず、Restart project で復旧)。
+#   原因は SQL でなく器= 本番は小さい計算機(work_mem 2 MB・IO の割当が小さい)で
+#   60 万行 × 246 列の組み立てに耐えない。→ **全量の特徴量作りは本番で二度と流さない**。
+#
+# ここでやること= ①本番から材料 9 表を **読むだけ**で写す(`\copy (select * …) to` だけ)
+#   ②このジョブの中に立てた Postgres 16(work_mem 256MB)に入れる
+#   ③そこで pipeline/sql/ai_feat_20260908.sql を流して refresh_nar_ai_feat() を回す
+#   ④tests/ai_feat_check.py で検算(FAIL なら job を落とす) ⑤成果物(artifact)に残す。
+#   ⛔本番への書き込みは 0(この便では印も書かない)。段階 2(学習)・段階 3(推論)は次の便で同じジョブに足す。
+#
+# ⛔cron はまだ付けない= 所要を実測してから Fable が決める(workflow_dispatch だけ)。
+name: nar-ai-feat
+
+on:
+  schedule:
+    - cron: '30 21 * * *'     # 06:30 JST。出馬表は前日朝に入っている(実測)・最初の発走 10:30 まで 4 時間
+  workflow_dispatch:
+    inputs:
+      p_from:
+        description: 'この日以降だけ差し替える(空= 全期間)。例 2025-01-01'
+        required: false
+        default: ''
+      write:
+        description: '今日の印を本番 nar_ai_marks に書く(yes/no)。schedule は常に yes'
+        required: false
+        default: 'no'
+
+concurrency:
+  group: nar-ai-feat
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGDATABASE: postgres
+      LOCAL_PGPASSWORD: feat        # ⛔このジョブの中だけの Postgres。鍵ではない
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install pg8000
+        run: pip install "pg8000>=1.30"
+
+      # ---------------------------------------------------------------- 器を立てる
+      # ⛔`services:` だと設定を渡せないので docker run で立てる(work_mem が既定の 4MB のままだと本番と同じ目に遭う)
+      - name: start local postgres
+        run: |
+          docker run -d --name feat -e POSTGRES_PASSWORD=feat -p 127.0.0.1:5432:5432 postgres:16 \
+            -c work_mem=256MB -c maintenance_work_mem=512MB -c shared_buffers=1GB \
+            -c max_wal_size=4GB -c fsync=off -c synchronous_commit=off -c full_page_writes=off
+          for i in $(seq 1 60); do
+            if pg_isready -h localhost -p 5432 -U postgres -q; then echo "ready ($i)"; break; fi
+            sleep 2
+          done
+          pg_isready -h localhost -p 5432 -U postgres
+          df -h / | tail -n 1
+
+      # ---------------------------------------------------------------- 本番から材料を写す(⛔読むだけ)
+      # ⛔この step で流してよいのは `\copy (select * from …) to` だけ。
+      #   insert / update / delete / truncate / create / 関数呼び出しは 1 つも書かない(検査 tests/ai_feat_workflow_test.mjs ①②)。
+      # ⛔1 表ずつ順に(並列にしない)= 本番の接続と IO を増やさない。⛔group by も窓も掛けない。
+      # nar_sales_daily は **view**(実測 relkind='v'・中身は nar_sales の group by)なので、
+      #   本番に group by を掛けないよう **材料の nar_sales を写して**、同じ定義の view は地元で作る。
+      # nar_meta は key='noken_index' の 1 行だけ(表ぜんぶだと 2.9 MB の他の鍵も来る)。
+      - name: dump source tables from production (read only)
+        env:
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+          PGSSLMODE: require
+        run: |
+          mkdir -p dump
+          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 \
+            -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '10min';
+          \copy (select * from public.nar_runs)                to 'dump/nar_runs.tsv'
+          \copy (select * from public.nar_races)               to 'dump/nar_races.tsv'
+          \copy (select * from public.auction_sales)           to 'dump/auction_sales.tsv'
+          \copy (select * from public.nar_horses)              to 'dump/nar_horses.tsv'
+          \copy (select * from public.nar_kb_runs)             to 'dump/nar_kb_runs.tsv'
+          \copy (select * from public.nar_horse_health_events) to 'dump/nar_horse_health_events.tsv'
+          \copy (select * from public.nar_penalties)           to 'dump/nar_penalties.tsv'
+          \copy (select * from public.nar_sales)               to 'dump/nar_sales.tsv'
+          \copy (select * from public.nar_meta where key = 'noken_index') to 'dump/nar_meta.tsv'
+          SQL
+          ls -l dump | sed -n '2,20p'
+
+      # ---------------------------------------------------------------- 地元の器に入れる
+      - name: load into local postgres
+        run: |
+          export PGPASSWORD="$LOCAL_PGPASSWORD"
+          psql -v ON_ERROR_STOP=1 -X -f pipeline/sql/ai_feat_local_schema.sql
+          for t in nar_runs nar_races auction_sales nar_horses nar_kb_runs \
+                   nar_horse_health_events nar_penalties nar_sales nar_meta; do
+            echo "::group::load $t"
+            psql -v ON_ERROR_STOP=1 -X -c "\copy public.$t from 'dump/$t.tsv'"
+            echo "::endgroup::"
+          done
+          psql -v ON_ERROR_STOP=1 -X -c "analyze"
+          psql -X -c "select relname, n_live_tup from pg_stat_user_tables order by n_live_tup desc"
+
+      # ---------------------------------------------------------------- 組み立てる(⛔地元だけ)
+      # ai_feat_20260908.sql の RLS / grant / revoke は `pg_roles` に service_role があるときだけ走る囲みの中
+      #   (Supabase の役は地元に無い)。→ 地元では表と関数だけが作られる。
+      - name: apply feature sql (local only)
+        run: |
+          export PGPASSWORD="$LOCAL_PGPASSWORD"
+          psql -v ON_ERROR_STOP=1 -X -f pipeline/sql/ai_feat_20260908.sql
+
+      - name: build features (local only)
+        env:
+          # ⛔${{ }} を run: の中に直に置くと入力がそのままシェルに入る= env 経由で受けて形も見る
+          P_FROM: ${{ github.event.inputs.p_from }}
+        run: |
+          export PGPASSWORD="$LOCAL_PGPASSWORD"
+          echo "::group::refresh"
+          if [ -z "$P_FROM" ]; then
+            ARG="null"
+          elif echo "$P_FROM" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$'; then
+            ARG="'$P_FROM'"
+          else
+            echo "p_from は YYYY-MM-DD で"; exit 1
+          fi
+          echo "p_from = $ARG"
+          T0=$SECONDS
+          psql -v ON_ERROR_STOP=1 -X \
+            -c "set statement_timeout = '40min'" \
+            -c "select * from public.refresh_nar_ai_feat($ARG)"
+          echo "::endgroup::"
+          echo "refresh の所要 $((SECONDS - T0)) 秒(戻り値の seconds は関数の中だけの時間)"
+          psql -X -c "select pg_size_pretty(pg_total_relation_size('public.nar_ai_feat_run')) as feat_size,
+                             pg_size_pretty(pg_database_size(current_database()))            as db_size"
+          df -h / | tail -n 1
+
+      # ---------------------------------------------------------------- 検算(FAIL なら job を落とす)
+      - name: check
+        run: |
+          python -X utf8 tests/ai_feat_check.py --dsn "postgresql://postgres:$LOCAL_PGPASSWORD@localhost:5432/postgres"
+
+      # ---------------------------------------------------------------- 学習(段階 2)と今日の印(段階 3)= pipeline/ai/base_v1.py
+      # ⛔本番へ書くのは REST の upsert で nar_ai_marks(model='base-v1')だけ。SQL は流さない。既にある行は触らない(凍結)。
+      - name: install lightgbm
+        run: pip install -q "lightgbm>=4.3" "pandas>=2.2" "pyarrow>=15" "numpy<2"
+      - name: dump features for training
+        run: |
+          set -o pipefail
+          export PGPASSWORD="$LOCAL_PGPASSWORD"
+          mkdir -p out
+          psql -v ON_ERROR_STOP=1 -X \
+            -c "\copy (select * from public.nar_ai_feat_run) to 'out/nar_ai_feat_run.csv' with (format csv, header)"
+      - name: fit base-v1
+        run: python -X utf8 pipeline/ai/base_v1.py fit --feat out/nar_ai_feat_run.csv --model out/base_v1.model.json
+      - name: predict today and write marks (REST upsert only)
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          WRITE: ${{ github.event_name == 'schedule' && 'yes' || github.event.inputs.write }}
+        run: |
+          DAY=$(TZ=Asia/Tokyo date +%F)
+          if [ "$WRITE" = "yes" ]; then W=--write; else W=; fi
+          python -X utf8 pipeline/ai/base_v1.py predict --feat out/nar_ai_feat_run.csv --model out/base_v1.model.json --date "$DAY" $W
+      - name: gzip features
+        run: gzip -6 out/nar_ai_feat_run.csv
+
+      # ---------------------------------------------------------------- 成果物(研究用・14 日)
+      - name: export artifacts
+        run: |
+          set -o pipefail        # ⛔既定の bash -e は最後の gzip だけ見る= psql が落ちても気づかない
+          export PGPASSWORD="$LOCAL_PGPASSWORD"
+          mkdir -p out
+          psql -v ON_ERROR_STOP=1 -X \
+            -c "\copy (select * from public.nar_ai_feat_track) to 'out/nar_ai_feat_track.csv' with (format csv, header)"
+          psql -v ON_ERROR_STOP=1 -X -At \
+            -c "select jsonb_pretty(jsonb_object_agg(key, value)) from public.nar_ai_meta" > out/nar_ai_meta.json
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nar-ai-feat-${{ github.run_number }}
+          path: out/
+          retention-days: 14
+          if-no-files-found: error
+
+      - name: stop local postgres
+        if: always()
+        run: docker rm -f feat || true

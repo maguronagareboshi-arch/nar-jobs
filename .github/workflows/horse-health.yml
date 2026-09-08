@@ -1,0 +1,136 @@
+# §89 公表された疾病・競走事故履歴。JST 10時台に直近7日を自己修復する。
+# 手動はNAR/既存auction原本を選べる。dry-runで期間を検品し、forceは確認済みsource 1件だけ。
+name: horse-health
+
+on:
+  schedule:
+    - cron: '43 1 * * *'       # JST 10:43（PDFは翌09:30台の公開を実測。GitHub cronはUTC）
+  workflow_dispatch:
+    inputs:
+      source:
+        description: '対象（auctionは既存原本だけを全履歴走査・再クロールなし）'
+        required: true
+        default: nar
+        type: choice
+        options: [nar, auction, all]
+      start:
+        description: '開始日（空ならnar=直近7日、auction=2026年全件、all=両方）'
+        required: false
+        type: string
+      end:
+        description: '終了日 YYYY-MM-DD（空なら昨日）'
+        required: false
+        type: string
+      dry_run:
+        description: '履歴行へ書かず解析件数だけ確認（DDL bootstrapは実行）'
+        required: true
+        default: true
+        type: boolean
+      force_review_ref:
+        description: '確認済みsource_ref 1件だけ強制採用（例 20260902/27）'
+        required: false
+        type: string
+      reparse:
+        description: 'parser版更新後の過去sourceを明示再解析（先にdry-run）'
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  # GitHubは同一groupのpendingを1件しか保持しない。月別backfillは必ず前run完了後に次月をdispatchする。
+  group: horse-health
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  import:
+    runs-on: ubuntu-latest
+    # 通常7日分は短時間。初回2026年NARを月単位dispatchしても途中打切りにしない安全幅。
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # 初回workflow_dispatchだけでもbootstrapできるよう、冪等DDLを収集より先に毎回確認する。
+      - name: migrate horse health schema
+        env:
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+          PGSSLMODE: require
+        run: |
+          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 \
+            -U postgres.qgsnsdjvzzeazbazjlwa -d postgres \
+            -v ON_ERROR_STOP=1 -X -f pipeline/sql/horse_health_20260903.sql
+          # §92/§109 主催者公式の器(Codex が 9/4・9/5 に適用済み)。§109 は source_kind='<slug>_official' でこの器へ入れる。
+          # ⛔20260904 の SQL は流さない= 4 主催者だけの古い allowlist を書き戻し、kochi_official の行があると制約で落ちる
+          #   (2026-09-05 run 33962513805 で実測)。20260905(全主催者)だけが冪等。
+          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 \
+            -U postgres.qgsnsdjvzzeazbazjlwa -d postgres \
+            -v ON_ERROR_STOP=1 -X -f pipeline/sql/horse_health_all_organizers_20260905.sql
+          # #528 制裁の読み済み記録(PDF の sha256+読み手の版)。冪等
+          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 \
+            -U postgres.qgsnsdjvzzeazbazjlwa -d postgres \
+            -v ON_ERROR_STOP=1 -X -f pipeline/sql/penalties_sources_20260908.sql
+      - name: install health dependencies
+        run: pip install -r cloud/requirements.txt
+
+      - name: import health events
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          INPUT_SOURCE: ${{ github.event_name == 'workflow_dispatch' && inputs.source || 'nar' }}
+          INPUT_START: ${{ inputs.start }}
+          INPUT_END: ${{ inputs.end }}
+          INPUT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+          INPUT_FORCE_REVIEW_REF: ${{ inputs.force_review_ref }}
+          INPUT_REPARSE: ${{ github.event_name == 'workflow_dispatch' && inputs.reparse || false }}
+        run: |
+          args=(--source "$INPUT_SOURCE")
+          if [ -n "$INPUT_START" ]; then args+=(--start "$INPUT_START"); fi
+          if [ -n "$INPUT_END" ]; then args+=(--end "$INPUT_END"); fi
+          if [ -n "$INPUT_FORCE_REVIEW_REF" ]; then args+=(--force-review-ref "$INPUT_FORCE_REVIEW_REF"); fi
+          if [ "$INPUT_REPARSE" = "true" ]; then args+=(--reparse); fi
+          if [ "$INPUT_DRY_RUN" != "true" ]; then args+=(--apply); fi
+          python cloud/horse_health.py "${args[@]}" --report-json horse-health-report.json
+      - name: upload source audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: horse-health-report-${{ github.run_id }}-${{ github.run_attempt }}
+          path: horse-health-report.json
+          if-no-files-found: ignore
+          retention-days: 30
+
+      # §109 主催者公式の「出来事」。⛔上の段(NAR/オークション)とは独立=落ちても走る。
+      #   既定の窓は直近14日・冪等(event_id が同じなら上書き)。読めない文書は数えるだけで止めない。
+      - name: organizer kochi (daily)
+        if: always()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/health_org.py --adapter kochi --apply
+      # §110 大井・佐賀(RSS 本文)。⛔上の段とは独立=落ちても走る。NAR 成績 PDF と同じ出来事は画面側で NAR を残す(#483 ③)
+      - name: organizer ooi (daily)
+        if: always()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/health_org.py --adapter ooi --apply
+      - name: organizer saga (daily)
+        if: always()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/health_org.py --adapter saga --apply
+
+      # §111 制裁(戒告・過怠金・騎乗停止)。⛔上の段とは独立=落ちても走る。
+      #   既定の窓は直近14日・冪等(penalty_id が同じなら上書き)。読めない行は数えるだけで止めない。
+      - name: penalties (daily)
+        if: always()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/penalties.py --apply
