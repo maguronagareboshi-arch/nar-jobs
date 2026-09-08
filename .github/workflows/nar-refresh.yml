@@ -1,4 +1,5 @@
 # 統合ビューア: NAR公式データの当日更新をクラウド(GitHub Actions)で回す。PC は不要。
+# 2026-09-08 nar-viewer(private)から nar-jobs(public)へ移設(#529)。
 # - 日次: JST 09:07〜21:37 を**30分おき**(#528 2026-09-08: 無料枠 2,000 分/月に収めるため 20 分刻みから間引き。GitHub の cron は UTC。混雑時は間引かれる=特に JST 9〜10時台。nar-watchdog が3時間超の停止を検知)
 # - 月次: JST 05:30(先の日程の出馬表+前日までの確定結果)+ データルームの集計(pipeline/sql/venue_stats.sql・person_stats.sql)
 # - 当日オッズ: 単複も全券種も公開リポ nar-odds-collector が 2 分おきに取る(§77 W3・#451 で本体の cloud/odds.py 段は撤去)

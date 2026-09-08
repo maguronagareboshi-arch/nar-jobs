@@ -1,4 +1,5 @@
 # §129d 予想AI base-v1 段階1= 特徴量表 `nar_ai_feat_run` を **Actions の中の Postgres** で組む。
+# 2026-09-08 nar-viewer(private)から nar-jobs(public)へ移設(#529)。
 #
 # ⛔なぜ本番 DB で作らないのか(9/8 決定・ここが一番大事)
 #   9/7 22:14 = 本番で refresh_nar_ai_feat() を流し、temp がディスクを使い切って 9 分で失敗。
