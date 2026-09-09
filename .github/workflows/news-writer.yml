@@ -1,0 +1,34 @@
+# §140 記事の下書き(cloud/news_writer.py)を**手で**起こす便。⛔schedule は無い(毎朝の本番は nar-refresh の朝便に相乗り)。
+# 使いどころ= 鍵を入れ替えた直後の確認・鍵が無かった日の行(status=nobody)の書き直し。
+name: news-writer
+
+on:
+  workflow_dispatch:
+    inputs:
+      retry_nobody:
+        description: "status=nobody の行をもう一度書きに行く(その行だけ上書き)"
+        type: boolean
+        default: false
+
+concurrency:
+  group: nar-refresh   # ⛔朝便と同じ組= 同時に news_drafts へ書かない
+
+jobs:
+  write:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r cloud/requirements.txt
+      - name: news writer
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          OLD_SUPABASE_URL: ${{ secrets.OLD_SUPABASE_URL }}
+          OLD_SUPABASE_SERVICE_KEY: ${{ secrets.OLD_SUPABASE_SERVICE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          if [ "${{ inputs.retry_nobody }}" = "true" ]; then python cloud/news_writer.py --apply --retry-nobody; else python cloud/news_writer.py --apply; fi

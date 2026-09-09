@@ -229,6 +229,9 @@ def parse_json(text):
     return out if isinstance(out, dict) else None
 
 
+_LLM_ERR_SHOWN = False
+
+
 def write_one(item, body, *, client):
     """1 件 → LLM の dict(⛔鍵が無い= client is None なら呼ばずに None)。壊れていたら 1 回だけ再試行"""
     if client is None:
@@ -237,7 +240,12 @@ def write_one(item, body, *, client):
     for again in (False, True):
         try:
             text = client(SYSTEM_PROMPT, user)
-        except Exception:                        # noqa: BLE001
+        except Exception as e:                   # noqa: BLE001
+            # ⚠理由を 1 回だけログに出す(鍵/モデル名/残高のどれで落ちたか分かるように)。⛔鍵は出ない
+            global _LLM_ERR_SHOWN
+            if not _LLM_ERR_SHOWN:
+                _LLM_ERR_SHOWN = True
+                print("⚠LLM の呼び出しに失敗: %s: %s" % (type(e).__name__, str(e)[:300]))
             if again:
                 return None
             continue
@@ -432,15 +440,17 @@ def rest_get(base, key, path):
     return out if isinstance(out, list) else []
 
 
-def insert_drafts(base, key, rows):
-    """⛔既にある source_url は**書かない**(人が直した行を上書きしない)"""
+def insert_drafts(base, key, rows, merge=False):
+    """⛔既にある source_url は**書かない**(人が直した行を上書きしない)。
+    merge= --retry-nobody のとき= nobody の行だけが rows に来るので、その行は上書きしてよい"""
     body = json.dumps(rows, ensure_ascii=False).encode("utf-8")
     req = urllib.request.Request(
         base.rstrip("/") + "/rest/v1/%s?on_conflict=source_url" % TABLE,
         data=body, method="POST",
         headers={"apikey": key, "Authorization": "Bearer " + key,
                  "Content-Type": "application/json",
-                 "Prefer": "resolution=ignore-duplicates,return=minimal"})
+                 "Prefer": "resolution=%s,return=minimal"
+                           % ("merge-duplicates" if merge else "ignore-duplicates")})
     with urllib.request.urlopen(req, timeout=TIMEOUT) as res:
         return res.status
 
@@ -470,12 +480,14 @@ def read_items(base, key):
     return items
 
 
-def seen_urls(base, key):
-    """既に下書きにある source_url。⛔収集役は 120 日で切るので、その窓ぶんだけ引けば足りる"""
+def seen_urls(base, key, retry_nobody=False):
+    """既に下書きにある source_url。⛔収集役は 120 日で切るので、その窓ぶんだけ引けば足りる。
+    retry_nobody= 鍵が無かった日の行(status=nobody)は既読に数えない(もう一度書きに行く)"""
     cut = (dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).date()
            - dt.timedelta(days=ON.MAX_AGE_DAYS + 20)).isoformat()
-    rows = rest_get(base, key, "%s?select=source_url&src_date=gte.%s&limit=5000" % (TABLE, cut))
-    return {r.get("source_url") for r in rows if r.get("source_url")}
+    rows = rest_get(base, key, "%s?select=source_url,status&src_date=gte.%s&limit=5000" % (TABLE, cut))
+    return {r.get("source_url") for r in rows
+            if r.get("source_url") and not (retry_nobody and r.get("status") == "nobody")}
 
 
 # ---------------------------------------------------------------- 組み立て
@@ -543,6 +555,8 @@ def main():
     ap.add_argument("--env", help="*_SUPABASE_* / ANTHROPIC_API_KEY のある .env")
     ap.add_argument("--fake", help="偽の LLM 返答(JSON ファイル)。⛔鍵の代わりに試すため")
     ap.add_argument("--items", help="収集役の代わりに読む JSON({items:[…]} か素の配列)")
+    ap.add_argument("--retry-nobody", action="store_true",
+                    help="鍵が無かった日の行(status=nobody)をもう一度書きに行く(その行だけ上書き)")
     a = ap.parse_args()
 
     env = ON.load_env(a.env) if a.env else os.environ
@@ -573,7 +587,7 @@ def main():
     seen = set()
     if a.apply:
         try:
-            seen = seen_urls(old_base, old_key)
+            seen = seen_urls(old_base, old_key, retry_nobody=a.retry_nobody)
         except Exception as e:                   # noqa: BLE001
             print("⛔既読が読めません: %s" % e)
             return 1
@@ -586,6 +600,7 @@ def main():
         client, model = fake_client(a.fake), "fake"
     elif api_key:
         client, model = anthropic_client(api_key), MODEL
+        print("LLM= %s(鍵あり)" % MODEL)
     else:
         client, model = None, None
         print("⚠ANTHROPIC_API_KEY がありません= 本文だけ溜めます(status=nobody)")
@@ -628,7 +643,7 @@ def main():
         print("新しい発表はありません")
         return 0
     try:
-        st = insert_drafts(old_base, old_key, rows)
+        st = insert_drafts(old_base, old_key, rows, merge=a.retry_nobody)
     except Exception as e:                       # noqa: BLE001
         print("投入に失敗: %s" % e)
         return 1
