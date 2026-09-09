@@ -261,7 +261,8 @@ def anthropic_client(api_key):
     cl = anthropic.Anthropic(api_key=api_key)
 
     def call(system, user):
-        res = cl.messages.create(model=MODEL, max_tokens=MAX_TOKENS, temperature=0,
+        # ⛔temperature は渡さない(SDK 新版では引数が無く TypeError・2026-09-09 実測)
+        res = cl.messages.create(model=MODEL, max_tokens=MAX_TOKENS,
                                  system=system, messages=[{"role": "user", "content": user}])
         return "".join(getattr(b, "text", "") for b in res.content)
     return call
