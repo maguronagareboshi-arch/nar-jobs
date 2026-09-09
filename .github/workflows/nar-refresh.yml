@@ -117,6 +117,18 @@ jobs:
           H=$(TZ=Asia/Tokyo date +%H%M)
           if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/noken_index.py --apply; else echo "noken index は朝の便だけ(JST $H)=スキップ"; fi
 
+      # §139 各競馬場の主催者公式のお知らせを1か所に集めた索引(見出し・日付・公式リンクだけ・本文は取らない)。
+      # ⛔**朝の便だけ**= 公式サイトを1日に何度も叩かない(笠松は番号を辿るので1回あたり30回ほど出す)。
+      # ⛔**落ちても続行**(|| echo)= 索引は付け足しの機能なので、これで朝の便を止めない。
+      # 新しい便は作らない(Actions の分予算。ここに相乗りで実測10秒ほど)。
+      - name: official news (morning only)
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          H=$(TZ=Asia/Tokyo date +%H%M)
+          if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/official_news.py --apply || echo "⚠ 各場のお知らせが取れない(続行)"; else echo "official news は朝の便だけ(JST $H)=スキップ"; fi
+
       # §79 P1 馬ごとの格組・収得賞金(全15場・公式 keiba.go.jp)。番号=出馬表 1レース1本・馬ページ 1頭1本(0.5秒)。
       # 前日に走った馬(結果が入った馬)と番号の無い馬だけ=日次 数百本・数分。**朝の便だけ**(分予算。noken index と同じ門)
       - name: horse ledger (morning only)
