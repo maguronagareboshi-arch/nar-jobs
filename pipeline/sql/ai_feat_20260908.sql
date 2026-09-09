@@ -702,9 +702,10 @@ begin
           / nullif(fl.n_fld - (y.hit_car is not null)::int, 0))::real as fld_loo,
          (y.body_weight - y.m_bw)::real  as bw_dev,
          (y.body_weight - y.m_bwm)::real as bw_season_dev,
-         y.baba_d_30::real as trk_recent_dmz
+         y.baba_d_30_prev::real as trk_recent_dmz
   from (
-    select r.*, b.baba_d, b.baba_d_30, z.rk_k, z.fs_k, z.tz, z.tza,
+    select r.*, b.baba_d, b.baba_d_30, b30.baba_d_30 as baba_d_30_prev,
+           z.rk_k, z.fs_k, z.tz, z.tza,
            (r.race_last3f - r.m_l3)::real                        as ra_pace,
            ((r.m_l3h - r.last3f) / nullif(r.sd_l3h, 0))::real     as l3z,
            (r.last3f - r.race_last3f)::real                       as l3gap,
@@ -721,6 +722,11 @@ begin
               - (select min(v::real) from jsonb_array_elements_text(r.furlongs) t(v)))::real end) as lapfade
     from t_r1 r
     left join t_baba b on b.track = r.track and b.race_date = r.race_date
+    -- §143b trk_recent_dmz(その場の最近の馬場の出方)は**前の開催日**の 30 日平均を引く=
+    --   当日は t_baba に行が無いので空だった。⛔tza に使う b.baba_d(その走の日の馬場差)はそのまま
+    left join lateral (select b2.baba_d_30 from t_baba b2
+                       where b2.track = r.track and b2.race_date < r.race_date
+                       order by b2.race_date desc limit 1) b30 on true
     join t_tz z on z.track = r.track and z.race_date = r.race_date
                and z.race_no = r.race_no and z.runner_number = r.runner_number
   ) y
@@ -1367,7 +1373,15 @@ begin
         left join lateral (select a.w365r from t_asof a
                            where a.kind = 'cf' and a.k1 = r.track || '|' || r.distance_m and a.k2 = ''
                              and a.d_idx <= r.d_idx order by a.d_idx desc limit 1) cf on true
-        left join t_bias bi on bi.track = r.track and bi.d_idx = r.d_idx
+        -- §143b(2026-09-09)⚠t_bias は**結果のある日にしか行が無い**(t_bday から作る)ので、
+        --   (track, その日)で join すると**当日の行が丸ごと空**になっていた(実測 NaN 率 100%)。
+        --   baba_diff_d と同じ形= **前の開催日**の行を引く。⛔窓(30/365 日)の意味は変えない・
+        --   ⛔当日の結果は混ぜない(d_idx < r.d_idx)。学習行も同じ形にそろう(train/serve が一致)
+        left join lateral (select a.waku_bias_30, a.waku_bias_365, a.pace_bias_30,
+                                  a.pace_bias_365, a.baba_io_365
+                           from t_bias a
+                           where a.track = r.track and a.d_idx < r.d_idx
+                           order by a.d_idx desc limit 1) bi on true
         -- ⛔馬場差は**前の開催日**の値(その日の勝ち時計は発走前に無い= 同日の結果を使わない。Fable 9/7 修正)
         left join lateral (select b.baba_d from t_baba b
                            where b.track = r.track and b.race_date < r.race_date

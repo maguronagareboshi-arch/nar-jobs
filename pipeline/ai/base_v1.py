@@ -59,17 +59,14 @@ REL = ['avg_rz_3', 'best_rz_5', 'avg_time_z_3', 'avg_time_za_3', 'fukusho_rate_5
 #      sire_rgm_gap(86% NaN)/ mf_rgm_gap(90% NaN)
 #   ③ 今日の馬装具(当日発表・100% NaN)gear_now / gear_first / gear_off
 #      ⛔gear_n / gear_hit は過去の集計なので**残す**
-#   ④ ⚠**中身は前日までで作れるのに、器の都合で当日だけ空になる列**(100% NaN)
-#      waku_bias_30 / waku_bias_365 / pace_bias_30 / pace_bias_365 / baba_io_365 / trk_recent_dmz
-#      = t_bias / t_baba を (track, その日) で join しているので、**結果がまだ 1 つも無い日は行が無い**。
-#      ⛔baba_diff_d は Fable が 9/7 に lateral(前の開催日を引く)へ直したので当日も入る= 抜かない。
-#      → SQL を同じ形に直せばこの 6 列は朝でも使える。直したらこの表から外すこと。
+#   ④ ⚠**器の都合で当日だけ空になっていた 6 列**(waku_bias_30/365・pace_bias_30/365・baba_io_365・
+#      trk_recent_dmz)は §143b(2026-09-09)で SQL を直した= `t_bias` / `t_baba` を
+#      **前の開催日を引く lateral**(baba_diff_d と同じ形)にしたので**朝でも入る**= この表には入れない。
+#      ⚠SQL を戻したら、この 6 列も戻すこと(⛔片方だけ動かすと朝の模型が空の列を覚える)。
 # ⛔wet_n / wet_fuku / wet_tza_gap は**抜かない**= 過去の道悪成績で、今日の馬場に依らない(実測 NaN 率 0〜13%)。
 TODAY_COLS = ['bataiju_now', 'bataiju_diff', 'baba_now', 'bw_dev', 'bw_season_dev',
               'rgm_gap', 'rgm_n', 'sire_rgm_gap', 'mf_rgm_gap',
-              'gear_now', 'gear_first', 'gear_off',
-              'waku_bias_30', 'waku_bias_365', 'pace_bias_30', 'pace_bias_365',
-              'baba_io_365', 'trk_recent_dmz']
+              'gear_now', 'gear_first', 'gear_off']
 VARIANTS = ('morning', 'last')
 PARAMS = dict(objective='binary', learning_rate=0.05, num_leaves=63, min_data_in_leaf=200,
               feature_fraction=0.6, bagging_fraction=0.8, bagging_freq=1, lambda_l2=10.0,
@@ -183,16 +180,31 @@ def predict_df(df, m, bst_b, bst_r):
 
 
 # ---------------------------------------------------------------- 今日の印
-def today_ready(runnable):
-    """§143 直前予想を書いてよいか= 走る全頭に**今日の馬体重**があり、**今日の馬場**も入っていること。
-    ⛔1 頭でも欠けたら書かない(0 で埋めない)。⚠帯広ばんえいは going が含水率の数字なので baba_now が
-    いつも NULL(実測 2026-08 の 216 レース全部)= この規則では直前予想が 1 本も出ない。"""
+def baba_tracks(df):
+    """§143b 馬場(baba_now)が**その場では普段から入る**か。⛔場名は書かない(規則を足さない)=
+    学習に使える行(着順のある行)で 1 度でも入っていれば「入る場」。
+    ⚠帯広ばんえいの going は含水率の数字なので学習行でも常に NULL= 「馬場は要らない場」になる。"""
+    if 'baba_now' not in df.columns or 'finish' not in df.columns:
+        return set()
+    past = df[df['finish'].notna()]
+    n = past.groupby('track')['baba_now'].count()
+    return {t for t, c in n.items() if c > 0}
+
+
+def today_ready(runnable, need_baba=True):
+    """§143 直前予想を書いてよいか= 走る全頭に**今日の馬体重**があること。
+    ⛔1 頭でも欠けたら書かない(0 で埋めない)。
+    §143b 馬場は**その場で普段から入るときだけ**要る(need_baba)。⛔普段から入らない場(帯広ばんえい)は
+    全頭 NULL のまま通す= そこだけ直前予想が永久に出ないのを避ける。⚠入る場で一部だけ欠けているのは通さない。"""
     if 'bataiju_now' not in runnable.columns or 'baba_now' not in runnable.columns:
         return False, 'bataiju_now/baba_now という列が無い'
     if runnable['bataiju_now'].isna().any():
         return False, '馬体重が %d/%d 頭' % (int(runnable['bataiju_now'].notna().sum()), len(runnable))
     if runnable['baba_now'].isna().any():
-        return False, '馬場が無い'
+        if need_baba:
+            return False, '馬場が無い'
+        if runnable['baba_now'].notna().any():
+            return False, '馬場が %d/%d 頭' % (int(runnable['baba_now'].notna().sum()), len(runnable))
     return True, ''
 
 
@@ -201,6 +213,7 @@ def build_marks(df, day, m, bst_b, bst_r, timing):
     if len(d) == 0:
         return []
     d['p'] = predict_df(d, m, bst_b, bst_r)
+    need = baba_tracks(df) if timing == 'last' else set()          # §143b 馬場が普段から入る場(1 回だけ数える)
     rows, skipped = [], {}
     for rid, g in d.groupby('rid', sort=False):
         runnable = g[g['finish_note'].fillna('') == '']            # 発走前に分かる取消・除外は外す
@@ -209,7 +222,7 @@ def build_marks(df, day, m, bst_b, bst_r, timing):
         meta = {'n': int(len(runnable)), 'model': MODEL_ID, 'trained_to': m['trained_to'],
                 'rounds': m['rounds']}
         if timing == 'last':
-            ok, why = today_ready(runnable)
+            ok, why = today_ready(runnable, rid.split('|')[0] in need)
             if not ok:
                 skipped.setdefault(rid.split('|')[0] + ' ' + why, 0)
                 skipped[rid.split('|')[0] + ' ' + why] += 1
