@@ -343,7 +343,12 @@ $rls$;
 
 -- p_from を渡すと「その日以降だけ」差し替える(⛔窓は前日までなので過去行は変わらない= 追記で正しい)。
 -- 素形は毎回全期間から組み立てる(窓に過去が要るため)。戻り= (走の行数, 場×日×距離の行数, 所要秒)。
-create or replace function public.refresh_nar_ai_feat(p_from date default null)
+-- §141 D-2(2026-09-09)= 時計プールの窓を引数にした。⛔既定 365= 便の呼び方は 1 字も変えなくていい。
+--   ⚠引数を足すと `create or replace` は**置き換えではなく多重定義**になり、
+--     いままでの `refresh_nar_ai_feat(null)` が「関数は一意でありません」で落ちる
+--     (手元の PostgreSQL 11.11 で実測 2026-09-09)。だから先に旧い形を落とす。
+drop function if exists public.refresh_nar_ai_feat(date);
+create or replace function public.refresh_nar_ai_feat(p_from date default null, p_pool_days int default 365)
 returns table (runs bigint, tracks bigint, seconds numeric)
 language plpgsql
 security definer
@@ -478,8 +483,10 @@ begin
            sum(last3f) s_l3h, sum(last3f * last3f) q_l3h, count(last3f) n_l3h
     from t_run group by 1, 2, 3, 4
   ) g
+  -- §141 D-2 ⚠**この 1 か所だけ**引数にした(場×距離×馬場の走破時計・上がりのプール)。
+  --   ⛔ほかの 365 日窓(騎手 1 年・枠バイアス等)は触っていない。
   window w as (partition by track, dist_k, gord_k order by d_idx
-               range between 365 preceding and 1 preceding);
+               range between p_pool_days preceding and 1 preceding);
   create index t_day_td_idx on t_day_td (track, dist_k, gord_k, d_idx);
   analyze t_day_td;
 
@@ -1443,7 +1450,7 @@ $fn$;
 do $rev$
 begin
   if exists (select 1 from pg_roles where rolname = 'service_role') then
-    execute 'revoke all on function public.refresh_nar_ai_feat(date) from public, anon, authenticated';
+    execute 'revoke all on function public.refresh_nar_ai_feat(date, int) from public, anon, authenticated';
   end if;
 end
 $rev$;
@@ -1451,8 +1458,9 @@ $rev$;
 commit;
 
 -- ============================================================ 検算(⛔ refresh を 1 回流したあとに読む)
---   select * from public.refresh_nar_ai_feat();       -- 全量(⛔Fable が流す)
+--   select * from public.refresh_nar_ai_feat();       -- 全量(⛔Fable が流す・時計プールは 365 日)
 --   select * from public.refresh_nar_ai_feat('2026-01-01'); -- その日以降だけ差し替え
+--   select * from public.refresh_nar_ai_feat(null, 730);    -- §141 D-2 時計プールだけ 730 日にして焼き直す
 
 -- ① 行数が nar_runs と合っているか・当日(まだ走っていない)の行数・期間
 select (select count(*) from public.nar_ai_feat_run)                         as feat_rows,

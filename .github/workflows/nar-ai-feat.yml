@@ -30,6 +30,10 @@ on:
         description: '今日の印を本番 nar_ai_marks に書く(yes/no)。schedule は常に yes'
         required: false
         default: 'no'
+      pool_days:
+        description: '§141 D-2 時計プールの窓(日)。既定 365。研究の焼き直しだけ 730(⛔write=no と組で)'
+        required: false
+        default: '365'
 
 concurrency:
   group: nar-ai-feat
@@ -124,6 +128,7 @@ jobs:
         env:
           # ⛔${{ }} を run: の中に直に置くと入力がそのままシェルに入る= env 経由で受けて形も見る
           P_FROM: ${{ github.event.inputs.p_from }}
+          POOL_DAYS: ${{ github.event.inputs.pool_days }}
         run: |
           export PGPASSWORD="$LOCAL_PGPASSWORD"
           echo "::group::refresh"
@@ -134,11 +139,13 @@ jobs:
           else
             echo "p_from は YYYY-MM-DD で"; exit 1
           fi
-          echo "p_from = $ARG"
+          POOL="${POOL_DAYS:-365}"
+          echo "$POOL" | grep -Eq '^[0-9]{3,4}$' || { echo "pool_days は 3〜4 桁の数字で"; exit 1; }
+          echo "p_from = $ARG  pool_days = $POOL"
           T0=$SECONDS
           psql -v ON_ERROR_STOP=1 -X \
             -c "set statement_timeout = '40min'" \
-            -c "select * from public.refresh_nar_ai_feat($ARG)"
+            -c "select * from public.refresh_nar_ai_feat($ARG, $POOL)"
           echo "::endgroup::"
           echo "refresh の所要 $((SECONDS - T0)) 秒(戻り値の seconds は関数の中だけの時間)"
           psql -X -c "select pg_size_pretty(pg_total_relation_size('public.nar_ai_feat_run')) as feat_size,
