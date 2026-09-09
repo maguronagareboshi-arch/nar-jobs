@@ -83,6 +83,8 @@ create table if not exists public.nar_races (
   source_snapshot_hash text,
   updated_at           timestamptz not null,
   race_kind            text,
+  cancelled            text,        -- 2026-09-09 本番に増えた 2 列(\copy は列の並びで入るので写しも同じ形に)
+  cancel_note          text,
   primary key (track, race_date, race_no)
 );
 
