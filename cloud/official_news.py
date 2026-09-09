@@ -46,6 +46,11 @@ META_KEY = "official_news"
 MAX_ITEMS = 200          # 1 場あたりではなく全体。索引なのでこれ以上は要らない
 PER_SITE = 20            # 1 サイトから取る上限(公式のトップに出ている件数ぶん)
 TIMEOUT = 20
+# ⛔これより古い告知は索引に入れない(§139 P1・2026-09-09 実測)。
+#   岩手の RSS は**フィードは生きているのに中身が 4 年前で止まっていた**(最新 2022-09-20・ほかは 2017 年)。
+#   日付で切らないと、古い記事が「取れた」顔をして新しい告知に混ざる= 索引としていちばん悪い壊れ方。
+#   ⚠これは岩手固有の話ではない= どの源でも起こりうるので**日付で切る**のが正しい直し方。
+MAX_AGE_DAYS = 120
 
 # ---------------------------------------------------------------- 場の表(⛔ここが正本。足すのは 1 行)
 # kind= 'rss'(<item> を読む) / 'html'(item_re で 1 件ずつ取る。名前つき group: u / d / t)
@@ -275,13 +280,24 @@ def collect(site):
     return rows[:PER_SITE], None
 
 
-def build(sites):
+def build(sites, today=None):
     items, sources = [], {}
     seen = set()
+    cut = ((dt.date.fromisoformat(today) if today else
+            dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).date())
+           - dt.timedelta(days=MAX_AGE_DAYS)).isoformat()
     for s in sites:
         rows, err = collect(s)
-        sources[s["id"]] = ({"ok": False, "why": err} if err else {"ok": True, "n": len(rows)})
-        for r in rows:
+        if err:
+            sources[s["id"]] = {"ok": False, "why": err}
+            continue
+        fresh = [r for r in rows if r["d"] >= cut]
+        old = len(rows) - len(fresh)
+        # ⛔全部が古い= その源は**更新が止まっている**。取れた顔をさせない(狼少年より悪い)
+        sources[s["id"]] = ({"ok": True, "n": len(fresh), "old": old} if fresh else
+                            {"ok": False, "why": "%d 件とも %d 日より古い(更新が止まっている可能性)"
+                                                 % (old, MAX_AGE_DAYS)})
+        for r in fresh:
             if r["u"] in seen:
                 continue
             seen.add(r["u"])
