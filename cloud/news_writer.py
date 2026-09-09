@@ -179,7 +179,7 @@ def read_source(url):
 
 # ---------------------------------------------------------------- C 書く(LLM)
 
-MODEL = "claude-haiku-4-5"
+MODEL = "claude-haiku-4-5-20251001"
 MAX_TOKENS = 1500
 KIND_SET = ("person", "horse", "venue", "race")
 COPY_MAX = 40            # 公式本文とそのまま同じでよい上限(字)
@@ -200,7 +200,7 @@ SYSTEM_PROMPT = (
     "他社名・他サイト名を書かない(出典は「公式」と呼ぶ)。専門用語は平易に。\n"
     "本文は次の 4 つだけで書く: 段落 / 行頭「- 」の箇条書き / [文字](https://…) のリンク / 「|」区切りの表(1 行目 見出し・2 行目 各セル「---」)。\n"
     "【返す JSON】{\"worth\":bool,\"kinds\":[\"person\"|\"horse\"|\"venue\"|\"race\" を 1 つ以上],\"title\":\"60字以内\",\"lede\":\"1 文 120 字以内\",\n"
-    "\"body\":\"2〜4 段落(表が要る発表は表)\",\"entities\":{\"jockeys\":[],\"trainers\":[],\"horses\":[],\"venues\":[\"kochi\" 等の場の英字\"],\"dates\":[\"YYYY-MM-DD\"]},\"why\":\"1 行\"}"
+    "\"body\":\"2〜4 段落(表が要る発表は表)\",\"entities\":{\"jockeys\":[],\"trainers\":[],\"horses\":[],\"venues\":[\"kochi\" のような場の英字],\"dates\":[\"YYYY-MM-DD\"]},\"why\":\"1 行\"}"
 )
 
 
