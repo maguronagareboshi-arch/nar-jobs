@@ -130,18 +130,6 @@ jobs:
           if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/official_news.py --apply || echo "⚠ 各場のお知らせが取れない(続行)"; else echo "official news は朝の便だけ(JST $H)=スキップ"; fi
 
       # §140 段 1 主催者の発表を読んで記事の下書きを作る(#542)。official news の直後・**朝の便だけ**。
-      # ⛔鍵(ANTHROPIC_API_KEY)が無い日は本文だけを溜める(status=nobody)。OLD_* が無ければ何も書かない。
-      # ⛔落ちても朝便は止めない。公式 ≤30 本(0.5秒あけ)+LLM ≤30 回+nar 読み ≤150 回+書き 1 回。
-      - name: news writer (morning only)
-        env:
-          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-          OLD_SUPABASE_URL: ${{ secrets.OLD_SUPABASE_URL }}
-          OLD_SUPABASE_SERVICE_KEY: ${{ secrets.OLD_SUPABASE_SERVICE_KEY }}
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
-        run: |
-          H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/news_writer.py --apply || echo "⚠ 記事の下書きが書けない(続行)"; else echo "news writer は朝の便だけ(JST $H)=スキップ"; fi
 
       # §79 P1 馬ごとの格組・収得賞金(全15場・公式 keiba.go.jp)。番号=出馬表 1レース1本・馬ページ 1頭1本(0.5秒)。
       # 前日に走った馬(結果が入った馬)と番号の無い馬だけ=日次 数百本・数分。**朝の便だけ**(分予算。noken index と同じ門)
