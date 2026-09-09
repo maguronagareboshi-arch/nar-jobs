@@ -168,9 +168,13 @@ jobs:
           mkdir -p out
           psql -v ON_ERROR_STOP=1 -X \
             -c "\copy (select * from public.nar_ai_feat_run) to 'out/nar_ai_feat_run.csv' with (format csv, header)"
-      - name: fit base-v1
-        run: python -X utf8 pipeline/ai/base_v1.py fit --feat out/nar_ai_feat_run.csv --model out/base_v1.model.json
-      - name: predict today and write marks (REST upsert only)
+      # 2026-09-09 朝便と直前便に分けた: 模型は 2 本(morning= 当日の馬体重・馬場に依る列を抜いた / last= 全列)。
+      #   ここで書くのは morning の印だけ。last は別便 nar-ai-last.yml が日中 30 分おきに(全列の模型は成果物から取る)。
+      - name: fit base-v1 (last / all columns)
+        run: python -X utf8 pipeline/ai/base_v1.py fit --feat out/nar_ai_feat_run.csv --model out/base_v1.model.json --variant last
+      - name: fit base-v1 (morning / without today columns)
+        run: python -X utf8 pipeline/ai/base_v1.py fit --feat out/nar_ai_feat_run.csv --model out/base_v1_morning.model.json --variant morning
+      - name: predict today (morning) and write marks (REST upsert only)
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -178,7 +182,7 @@ jobs:
         run: |
           DAY=$(TZ=Asia/Tokyo date +%F)
           if [ "$WRITE" = "yes" ]; then W=--write; else W=; fi
-          python -X utf8 pipeline/ai/base_v1.py predict --feat out/nar_ai_feat_run.csv --model out/base_v1.model.json --date "$DAY" $W
+          python -X utf8 pipeline/ai/base_v1.py predict --feat out/nar_ai_feat_run.csv --model out/base_v1_morning.model.json --date "$DAY" --timing morning $W
       - name: gzip features
         run: gzip -6 out/nar_ai_feat_run.csv
 

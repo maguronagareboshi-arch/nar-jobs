@@ -1,0 +1,172 @@
+# 予想AI base-v1 の「直前予想」(2026-09-09 §143)。
+# 朝便 nar-ai-feat.yml は当日の馬体重・馬場が出る前に動くので、それを抜いた模型で「朝予想」だけ書く。
+# この便は日中に **30 分おき**で、体重と馬場が全頭そろったレースだけ全列の模型で「直前予想」を上書きする。
+# 発走 15 分前を過ぎた行は DB のトリガー(nar_ai_marks_guard)が静かに捨てる= 最後に通った値が残る。
+#
+# 作り: 1 日 2 本の長い便(09:00〜14:55 / 15:00〜20:55 JST)。
+#   ⛔30 分おきに材料を全部写すと 1 日 6GB(月 180GB)になるので、全量の写しは便の頭で 1 回だけ。
+#   以後の回は「今日の nar_runs / nar_races」だけ写し直し(小さい)、地元で今日の行を作り直して予想する。
+#   全列の模型は朝便(schedule)の最新の成果物から取る(学習はしない)。
+#   ⛔本番への書き込みは nar_ai_marks(model='base-v1', timing='last')の REST upsert だけ。SQL は流さない。
+name: nar-ai-last
+
+on:
+  schedule:
+    - cron: '0 0 * * *'       # 09:00 JST 〜 14:55
+    - cron: '0 6 * * *'       # 15:00 JST 〜 20:55
+  workflow_dispatch:
+    inputs:
+      write:
+        description: '直前予想を本番 nar_ai_marks に書く(yes/no)。schedule は常に yes'
+        required: false
+        default: 'no'
+      once:
+        description: '1 回だけ回して終わる(yes/no)。試運転用'
+        required: false
+        default: 'yes'
+
+concurrency:
+  group: nar-ai-last
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read               # 朝便の成果物(模型)を取るため
+
+jobs:
+  last:
+    runs-on: ubuntu-latest
+    timeout-minutes: 358
+    env:
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGDATABASE: postgres
+      LOCAL_PGPASSWORD: feat        # ⛔このジョブの中だけの Postgres。鍵ではない
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install
+        run: pip install -q "pg8000>=1.30" "lightgbm>=4.3" "pandas>=2.2" "pyarrow>=15" "numpy<2"
+
+      # ---------------------------------------------------------------- 全列の模型= 朝便(schedule)の最新の成功から
+      - name: fetch morning-run artifact (model)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          ID=$(gh run list -R "$GITHUB_REPOSITORY" -w nar-ai-feat.yml -e schedule -s success -L 1 --json databaseId --jq '.[0].databaseId')
+          [ -n "$ID" ] || { echo "朝便の成功が見つからない"; exit 1; }
+          echo "morning run = $ID"
+          gh run download "$ID" -R "$GITHUB_REPOSITORY" -p 'nar-ai-feat-*' -D model
+          M=$(ls model/*/base_v1.model.json | head -n 1)
+          [ -n "$M" ] || { echo "base_v1.model.json が無い"; exit 1; }
+          cp "$M" base_v1.model.json
+          python -X utf8 -c "import json; m=json.load(open('base_v1.model.json')); print('variant', m.get('variant','(none=last)'), 'trained_to', m['trained_to'], 'cols', len(m['cols']))"
+          rm -rf model
+
+      # ---------------------------------------------------------------- 器を立てる(nar-ai-feat.yml と同じ)
+      - name: start local postgres
+        run: |
+          docker run -d --name feat -e POSTGRES_PASSWORD=feat -p 127.0.0.1:5432:5432 postgres:16 \
+            -c work_mem=256MB -c maintenance_work_mem=512MB -c shared_buffers=1GB \
+            -c max_wal_size=4GB -c fsync=off -c synchronous_commit=off -c full_page_writes=off
+          for i in $(seq 1 60); do
+            if pg_isready -h localhost -p 5432 -U postgres -q; then echo "ready ($i)"; break; fi
+            sleep 2
+          done
+          pg_isready -h localhost -p 5432 -U postgres
+
+      # ---------------------------------------------------------------- 本番から材料を写す(⛔読むだけ・便の頭で 1 回)
+      # ⛔この step で流してよいのは `\copy (select * from …) to` だけ(nar-ai-feat.yml と同じ約束)。
+      - name: dump source tables from production (read only)
+        env:
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+          PGSSLMODE: require
+        run: |
+          mkdir -p dump
+          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 \
+            -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '10min';
+          \copy (select * from public.nar_runs)                to 'dump/nar_runs.tsv'
+          \copy (select * from public.nar_races)               to 'dump/nar_races.tsv'
+          \copy (select * from public.auction_sales)           to 'dump/auction_sales.tsv'
+          \copy (select * from public.nar_horses)              to 'dump/nar_horses.tsv'
+          \copy (select * from public.nar_kb_runs)             to 'dump/nar_kb_runs.tsv'
+          \copy (select * from public.nar_horse_health_events) to 'dump/nar_horse_health_events.tsv'
+          \copy (select * from public.nar_penalties)           to 'dump/nar_penalties.tsv'
+          \copy (select * from public.nar_sales)               to 'dump/nar_sales.tsv'
+          \copy (select * from public.nar_meta where key = 'noken_index') to 'dump/nar_meta.tsv'
+          SQL
+          ls -l dump | sed -n '2,20p'
+
+      - name: load into local postgres
+        run: |
+          export PGPASSWORD="$LOCAL_PGPASSWORD"
+          psql -v ON_ERROR_STOP=1 -X -f pipeline/sql/ai_feat_local_schema.sql
+          for t in nar_runs nar_races auction_sales nar_horses nar_kb_runs \
+                   nar_horse_health_events nar_penalties nar_sales nar_meta; do
+            psql -v ON_ERROR_STOP=1 -X -c "\copy public.$t from 'dump/$t.tsv'"
+          done
+          psql -v ON_ERROR_STOP=1 -X -c "analyze"
+          psql -v ON_ERROR_STOP=1 -X -f pipeline/sql/ai_feat_20260908.sql
+
+      # ---------------------------------------------------------------- 30 分おきに回す
+      # 1 回= 今日の 2 表を写し直す(⛔読むだけ)→ 地元で今日の行を差し替え → 今日以降の特徴量を作り直す
+      #        → 全列の模型で直前予想 → REST upsert(--write のときだけ)。
+      # 終わり= 便の終了時刻(JST 14:55 / 20:55 のうち近い方)。once=yes なら 1 回で終わる。
+      - name: predict last every 30 minutes
+        env:
+          PGPASSWORD_PROD: ${{ secrets.NAR_DB_PASSWORD }}
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          WRITE: ${{ github.event_name == 'schedule' && 'yes' || github.event.inputs.write }}
+          ONCE: ${{ github.event_name == 'schedule' && 'no' || github.event.inputs.once }}
+        run: |
+          set -o pipefail
+          DAY=$(TZ=Asia/Tokyo date +%F)
+          H=$(TZ=Asia/Tokyo date +%H)
+          if [ "$H" -lt 15 ]; then END_HM="14:55"; else END_HM="20:55"; fi
+          END=$(TZ=Asia/Tokyo date -d "$DAY $END_HM" +%s)
+          if [ "$WRITE" = "yes" ]; then W=--write; else W=; fi
+          echo "day=$DAY end=$END_HM write=$WRITE once=$ONCE"
+          n=0
+          while :; do
+            n=$((n + 1)); T0=$(date +%s)
+            echo "::group::round $n $(TZ=Asia/Tokyo date +%H:%M)"
+            mkdir -p today
+            PGPASSWORD="$PGPASSWORD_PROD" PGSSLMODE=require \
+            psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 \
+              -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X \
+              -c "set statement_timeout = '2min'" \
+              -c "\copy (select * from public.nar_runs  where race_date = '$DAY') to 'today/nar_runs.tsv'" \
+              -c "\copy (select * from public.nar_races where race_date = '$DAY') to 'today/nar_races.tsv'"
+            export PGPASSWORD="$LOCAL_PGPASSWORD"
+            psql -v ON_ERROR_STOP=1 -X \
+              -c "delete from public.nar_runs  where race_date = '$DAY'" \
+              -c "delete from public.nar_races where race_date = '$DAY'" \
+              -c "\copy public.nar_runs  from 'today/nar_runs.tsv'" \
+              -c "\copy public.nar_races from 'today/nar_races.tsv'" \
+              -c "analyze public.nar_runs" -c "analyze public.nar_races"
+            psql -v ON_ERROR_STOP=1 -X -c "set statement_timeout = '25min'" \
+              -c "select * from public.refresh_nar_ai_feat('$DAY')"
+            psql -v ON_ERROR_STOP=1 -X \
+              -c "\copy (select * from public.nar_ai_feat_run where race_date = '$DAY') to 'today/feat.csv' with (format csv, header)"
+            python -X utf8 pipeline/ai/base_v1.py predict --feat today/feat.csv --model base_v1.model.json --date "$DAY" --timing last $W
+            echo "round $n took $(( $(date +%s) - T0 )) s"
+            echo "::endgroup::"
+            [ "$ONCE" = "yes" ] && break
+            NOW=$(date +%s)
+            [ "$NOW" -ge "$END" ] && break
+            SLEEP=$(( 1800 - (NOW - T0) ))
+            if [ "$SLEEP" -gt 0 ]; then
+              [ $((NOW + SLEEP)) -ge "$END" ] && break
+              sleep "$SLEEP"
+            fi
+          done
+          echo "rounds = $n"
+
+      - name: stop local postgres
+        if: always()
+        run: docker rm -f feat || true
