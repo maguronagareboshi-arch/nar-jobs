@@ -50,13 +50,8 @@ jobs:
       # cloud/odds.py / cloud/odds_full.py は同一内容の正本として残す(tests が読む・公開リポの odds_tanfuku.py/odds_full.py の元)。
       # ⛔戻すとき: ここに `- name: odds` / `run: python cloud/odds.py`(if: env.MODE != 'monthly')を足すだけ。
 
-      # AI印の型(base-v0)。朝予想=その日の最初の1回・直前予想=発走15分前まで上書き(DESIGN §15)。
-      # monthly(05:30)にも走らせて「朝予想」を朝のうちに書く
-      - name: ai marks
-        env:
-          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: python cloud/marks.py
+      # 2026-09-09 base-v0 の印(cloud/marks.py)は書くのをやめた= 画面は base-v1 の 1 本(別便 nar-ai-feat.yml が書く)。
+      # cloud/marks.py は残す(戻すときは `- name: ai marks` / `run: python cloud/marks.py` を足すだけ)。
 
       # データ鮮度の見張り(daily): 直近3時間以内に nar_races が更新されていなければ失敗させる
       # (失敗すると GitHub が所有者へ通知メールを送る=これが唯一の監視。DESIGN §21)
