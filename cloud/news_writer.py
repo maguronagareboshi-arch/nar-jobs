@@ -307,6 +307,10 @@ def check_draft(d, body):
         return ["返事が JSON の物ではない"]
     if not isinstance(d.get("worth"), bool):
         bad.append("worth が true/false でない")
+    # ⚠「出さない」(worth=false)の返事は中身を見ない= title/lede が空でも人に見せる行として残す(2026-09-09 実測:
+    #   worth=false の 14 件が空の title で failed に落ちていた)。人が却下するための行なので検査は要らない
+    if d.get("worth") is False:
+        return bad
     kinds = d.get("kinds")
     if (not isinstance(kinds, list) or not kinds
             or any(k not in KIND_SET for k in kinds)):
@@ -318,8 +322,9 @@ def check_draft(d, body):
     ls = lede.strip()
     if not 1 <= len(ls) <= LEDE_MAX:
         bad.append("lede が 1〜%d 字でない(%d 字)" % (LEDE_MAX, len(ls)))
-    elif ls.count("。") != 1 or not ls.endswith("。"):
-        bad.append("lede が 1 文でない(。は末尾に 1 つだけ)")
+    elif not 1 <= ls.count("。") <= 2 or not ls.endswith("。"):
+        # ⚠2 文まで許す(2026-09-09 実測: 120 字に 2 文入れた lede が 12 件・中身は良い)。3 文以上は落とす
+        bad.append("lede が 2 文まででない(。で終わる)")
     text = d.get("body") if isinstance(d.get("body"), str) else ""
     if not text.strip():
         bad.append("body が空")
@@ -487,8 +492,9 @@ def seen_urls(base, key, retry_nobody=False):
     cut = (dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).date()
            - dt.timedelta(days=ON.MAX_AGE_DAYS + 20)).isoformat()
     rows = rest_get(base, key, "%s?select=source_url,status&src_date=gte.%s&limit=5000" % (TABLE, cut))
+    # ⚠retry は nobody と failed の両方(どちらも機械が書き終えていない行。人が触るのは draft から)
     return {r.get("source_url") for r in rows
-            if r.get("source_url") and not (retry_nobody and r.get("status") == "nobody")}
+            if r.get("source_url") and not (retry_nobody and r.get("status") in ("nobody", "failed"))}
 
 
 # ---------------------------------------------------------------- 組み立て
@@ -557,7 +563,7 @@ def main():
     ap.add_argument("--fake", help="偽の LLM 返答(JSON ファイル)。⛔鍵の代わりに試すため")
     ap.add_argument("--items", help="収集役の代わりに読む JSON({items:[…]} か素の配列)")
     ap.add_argument("--retry-nobody", action="store_true",
-                    help="鍵が無かった日の行(status=nobody)をもう一度書きに行く(その行だけ上書き)")
+                    help="機械が書き終えていない行(status=nobody/failed)をもう一度書きに行く(その行だけ上書き)")
     a = ap.parse_args()
 
     env = ON.load_env(a.env) if a.env else os.environ
