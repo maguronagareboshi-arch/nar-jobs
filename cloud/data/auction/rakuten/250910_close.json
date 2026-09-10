@@ -167,6 +167,21 @@
      "currentPriceWithTax": 1287000
     }
    ]
+  },
+  {
+   "fetched_at": "2026-09-10T23:03:46+09:00",
+   "live_count": 1,
+   "live_items": [
+    {
+     "itemId": 16961,
+     "image": "https://keiba.r10s.jp/auction/data/item/1/250910_horse_02/1.JPG",
+     "customName": "チャンスドゥアスクの25　　牝１歳　　※育...",
+     "startDateTime": "2026/09/10 12:00",
+     "endDateTime": "2026/09/10 23:09",
+     "currentPrice": 1210000,
+     "currentPriceWithTax": 1331000
+    }
+   ]
   }
  ]
 }
