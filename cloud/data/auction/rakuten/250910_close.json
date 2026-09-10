@@ -182,6 +182,11 @@
      "currentPriceWithTax": 1331000
     }
    ]
+  },
+  {
+   "fetched_at": "2026-09-11T02:30:05+09:00",
+   "live_count": 0,
+   "live_items": []
   }
  ]
 }
