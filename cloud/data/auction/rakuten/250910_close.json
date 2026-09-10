@@ -1,0 +1,121 @@
+{
+ "source": "auction.keiba.rakuten.co.jp",
+ "round": 693,
+ "ymd": "250910",
+ "passes": [
+  {
+   "fetched_at": "2026-09-10T22:08:33+09:00",
+   "live_count": 12,
+   "live_items": [
+    {
+     "itemId": 16961,
+     "image": "https://keiba.r10s.jp/auction/data/item/1/250910_horse_02/1.JPG",
+     "customName": "チャンスドゥアスクの25　　牝１歳　　※育...",
+     "startDateTime": "2026/09/10 12:00",
+     "endDateTime": "2026/09/10 22:30",
+     "currentPrice": 510000,
+     "currentPriceWithTax": 561000
+    },
+    {
+     "itemId": 17006,
+     "image": "https://keiba.r10s.jp/auction/data/item/1/250910_horse_49/1.jpg",
+     "customName": "ブライアーヒル　　牝４歳　　※中央競馬　...",
+     "startDateTime": "2026/09/10 12:00",
+     "endDateTime": "2026/09/10 22:12",
+     "currentPrice": 950000,
+     "currentPriceWithTax": 1045000
+    },
+    {
+     "itemId": 16966,
+     "image": "https://keiba.r10s.jp/auction/data/item/1/250910_horse_07/1.jpg",
+     "customName": "メローブリーズの24　　牝２歳　　※育成馬...",
+     "startDateTime": "2026/09/10 12:00",
+     "endDateTime": "2026/09/10 22:30",
+     "currentPrice": 5040000,
+     "currentPriceWithTax": 5544000
+    },
+    {
+     "itemId": 17009,
+     "image": "https://keiba.r10s.jp/auction/data/item/1/250910_horse_52/1.jpg",
+     "customName": "ココロネ　　牝３歳　　※地方競馬　在籍...",
+     "startDateTime": "2026/09/10 12:00",
+     "endDateTime": "2026/09/10 22:12",
+     "currentPrice": 830000,
+     "currentPriceWithTax": 913000
+    },
+    {
+     "itemId": 17007,
+     "image": "https://keiba.r10s.jp/auction/data/item/1/250910_horse_50/1.jpg",
+     "customName": "プラヤデルカルメン　　牝３歳　　※地方競...",
+     "startDateTime": "2026/09/10 12:00",
+     "endDateTime": "2026/09/10 22:09",
+     "currentPrice": 1370000,
+     "currentPriceWithTax": 1507000
+    },
+    {
+     "itemId": 16964,
+     "image": "https://keiba.r10s.jp/auction/data/item/1/250910_horse_05/1.jpg",
+     "customName": "クリールダイナーの24　　牡２歳　　※育成...",
+     "startDateTime": "2026/09/10 12:00",
+     "endDateTime": "2026/09/10 22:30",
+     "currentPrice": 970000,
+     "currentPriceWithTax": 1067000
+    },
+    {
+     "itemId": 17012,
+     "image": "https://keiba.r10s.jp/auction/data/item/1/250910_horse_55/1.jpg",
+     "customName": "センビトウリョウ　　牝４歳　　※地方競馬...",
+     "startDateTime": "2026/09/10 12:00",
+     "endDateTime": "2026/09/10 22:09",
+     "currentPrice": 450000,
+     "currentPriceWithTax": 495000
+    },
+    {
+     "itemId": 16967,
+     "image": "https://keiba.r10s.jp/auction/data/item/1/250910_horse_08/1.jpg",
+     "customName": "レッドムーヴの24　　牡２歳　　※育成馬　...",
+     "startDateTime": "2026/09/10 12:00",
+     "endDateTime": "2026/09/10 22:30",
+     "currentPrice": 1010000,
+     "currentPriceWithTax": 1111000
+    },
+    {
+     "itemId": 16960,
+     "image": "https://keiba.r10s.jp/auction/data/item/1/250910_horse_01/1.jpg",
+     "customName": "アサクラの25　　牡１歳　　※育成馬　育成...",
+     "startDateTime": "2026/09/10 12:00",
+     "endDateTime": "2026/09/10 22:30",
+     "currentPrice": 620000,
+     "currentPriceWithTax": 682000
+    },
+    {
+     "itemId": 16962,
+     "image": "https://keiba.r10s.jp/auction/data/item/1/250910_horse_03/1.JPG",
+     "customName": "ロッタチャンセズの25　　牡１歳　　※育成...",
+     "startDateTime": "2026/09/10 12:00",
+     "endDateTime": "2026/09/10 22:30",
+     "currentPrice": 700000,
+     "currentPriceWithTax": 770000
+    },
+    {
+     "itemId": 16965,
+     "image": "https://keiba.r10s.jp/auction/data/item/1/250910_horse_06/1.jpg",
+     "customName": "ファイナルアンサーの24　　牡２歳　　※育...",
+     "startDateTime": "2026/09/10 12:00",
+     "endDateTime": "2026/09/10 22:30",
+     "currentPrice": 3020000,
+     "currentPriceWithTax": 3322000
+    },
+    {
+     "itemId": 16963,
+     "image": "https://keiba.r10s.jp/auction/data/item/1/250910_horse_04/1.jpg",
+     "customName": "エアリーナの24　　牝２歳　　※育成馬　育...",
+     "startDateTime": "2026/09/10 12:00",
+     "endDateTime": "2026/09/10 22:30",
+     "currentPrice": 300000,
+     "currentPriceWithTax": 330000
+    }
+   ]
+  }
+ ]
+}
