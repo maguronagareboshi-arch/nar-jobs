@@ -112,11 +112,11 @@ jobs:
           psql -v ON_ERROR_STOP=1 -X -c "analyze"
           psql -v ON_ERROR_STOP=1 -X -f pipeline/sql/ai_feat_20260908.sql
 
-      # ---------------------------------------------------------------- 30 分おきに回す
+      # ---------------------------------------------------------------- 15 分おきに回す(2026-09-11 30→15: 馬体重待ちで直前が落ちるレースを減らす)
       # 1 回= 今日の 2 表を写し直す(⛔読むだけ)→ 地元で今日の行を差し替え → 今日以降の特徴量を作り直す
       #        → 全列の模型で直前予想 → REST upsert(--write のときだけ)。
       # 終わり= 便の終了時刻(JST 14:55 / 20:55 のうち近い方)。once=yes なら 1 回で終わる。
-      - name: predict last every 30 minutes
+      - name: predict last every 15 minutes
         env:
           PGPASSWORD_PROD: ${{ secrets.NAR_DB_PASSWORD }}
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -159,7 +159,7 @@ jobs:
             [ "$ONCE" = "yes" ] && break
             NOW=$(date +%s)
             [ "$NOW" -ge "$END" ] && break
-            SLEEP=$(( 1800 - (NOW - T0) ))
+            SLEEP=$(( 900 - (NOW - T0) ))
             if [ "$SLEEP" -gt 0 ]; then
               [ $((NOW + SLEEP)) -ge "$END" ] && break
               sleep "$SLEEP"
