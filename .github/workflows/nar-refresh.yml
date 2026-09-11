@@ -293,6 +293,7 @@ jobs:
           psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/ai_record.sql | tail -n 10
           psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/race_level.sql | tail -n 5
           psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/graded.sql | tail -n 5
+          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/big_payouts.sql | tail -n 3
           # §77 W4 2分刻みオッズの保持(60 日を過ぎたレースは 1 レース 6 点に薄める・冪等)
           psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/odds_ticks_retention.sql | tail -n 3
           # 2026-09-08 s132: full-kind ticks (nar_odds_full_ticks) keep the same 60d -> 6 points rule
