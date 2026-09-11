@@ -67,6 +67,11 @@ NAGOYA_NAMES = {
     "lower_right": "4コーナー",
 }
 
+# 画面に出る順= 馬が走る順(ゴール前直線 → 1 → 2 → 向正面 → 3 → 4)。⛔器は入れた順に返すので、ここで並べる
+NAGOYA_ORDER = ["ゴール前直線", "1コーナー", "2コーナー", "向正面", "3コーナー", "4コーナー"]
+# 笠松の地点の順(公式の印の順)。⛔紙の上での見つかり順で入れると画面がばらばらになる
+KASAMATSU_ORDER = ["ゴール"] + list("①②③④⑤⑥⑦⑧⑨⑩")
+
 # 文字認識の検算(§8①)。⛔1 つでも外れたらその断面は入れない
 OCR_MIN_N, OCR_MAX_N = 10, 20                      # 個数(実測は 14〜15)
 OCR_LO, OCR_HI = 5.0, 20.0                         # cm の range
@@ -293,7 +298,7 @@ def nagoya_sections(chars, center, min_cells=8):
         my = sum(c["top"] for c in cells) / len(cells) - cy
         out.append({"angle": ang, "name": nagoya_name(mx, my),
                     "vals": [c["v"] for c in cells]})
-    out.sort(key=lambda s: s["name"])
+    out.sort(key=lambda s: NAGOYA_ORDER.index(s["name"]) if s["name"] in NAGOYA_ORDER else 99)
     return out
 
 
@@ -382,6 +387,8 @@ def kasamatsu_points(words, curves, line_tol=10.0):
         vals = [float(w["text"]) for w in seq[:4]]
         out.append({"section": m["t"], "offsets": [1.0, 3.0, 5.0, 7.0], "vals": vals,
                     "avg": float(seq[4]["text"])})
+    out.sort(key=lambda p: KASAMATSU_ORDER.index(p["section"])
+             if p["section"] in KASAMATSU_ORDER else 99)
     return out
 
 
@@ -687,6 +694,7 @@ def read_nagoya_pdf(raw, url, title, cfg):
                        note=how, title=title, src=url))
     else:
         print("   ⚠%s の %s は入れません(%s)" % (d, NAGOYA_NAMES["down"], how))
+    out.sort(key=lambda r: NAGOYA_ORDER.index(r["section"]) if r["section"] in NAGOYA_ORDER else 99)
     return out
 
 

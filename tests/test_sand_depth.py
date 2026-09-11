@@ -117,6 +117,11 @@ class NagoyaTest(unittest.TestCase):
                          [14, 15, 15, 14, 15])
         self.assertTrue(all(len(v) == 15 for v in self.secs(self.new).values()))
 
+    def test_order_is_the_way_a_horse_runs(self):
+        # 画面は入れた順に出る= 道具の側で走る順に並べる(ゴール前直線は画像なのでここには出ない)
+        got = [s["name"] for s in nagoya_sections(self.new["chars"], self.new["center"])]
+        self.assertEqual(got, ["1コーナー", "2コーナー", "向正面", "3コーナー", "4コーナー"])
+
     def test_kai_number_does_not_leak_into_a_section(self):
         # ⚠「第 16 回」の 16 は向正面と同じ回し方(0 度)。列で切らないと断面に紛れる
         vals = self.secs(self.old)["向正面"]
@@ -217,7 +222,8 @@ class KasamatsuTest(unittest.TestCase):
     def test_eleven_points_of_four(self):
         got = {p["section"]: p for p in kasamatsu_points(self.words, self.curves)}
         self.assertEqual(len(got), 11)
-        self.assertEqual(sorted(got), sorted(["ゴール"] + list("①②③④⑤⑥⑦⑧⑨⑩")))
+        self.assertEqual([p["section"] for p in kasamatsu_points(self.words, self.curves)],
+                         ["ゴール"] + list("①②③④⑤⑥⑦⑧⑨⑩"))
         self.assertEqual(got["ゴール"]["vals"], [13.0, 12.0, 11.5, 10.0])
         self.assertEqual(got["ゴール"]["offsets"], [1.0, 3.0, 5.0, 7.0])
         self.assertEqual(got["⑤"]["vals"], [12.5, 11.5, 11.0, 10.5])
