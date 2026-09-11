@@ -1,4 +1,5 @@
 requests>=2.31
 pdfplumber>=0.11
 pg8000==1.31.5   # §54.3-bc horse_changes.py(検出SQLをDB側で流すため)
-anthropic>=0.40   # §140 news_writer.py(記事の下書きを書く)
+anthropic>=0.40   # §140 news_writer.py(記事の下書きを書く)/ §146 sand_depth.py の予備の読み手
+pytesseract>=0.3.10   # §146 sand_depth.py(名古屋の砂厚は 1 断面が画像= 文字認識で読む。⚠便には apt-get install -y tesseract-ocr も要る)
