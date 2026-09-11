@@ -40,6 +40,7 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r cloud/requirements.txt
+      - run: sudo apt-get install -y -qq tesseract-ocr >/dev/null   # §146 名古屋の砂厚(画像の断面)を文字認識で読む
       - name: refresh
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -128,6 +129,13 @@ jobs:
 
       # §79 P1 馬ごとの格組・収得賞金(全15場・公式 keiba.go.jp)。番号=出馬表 1レース1本・馬ページ 1頭1本(0.5秒)。
       # 前日に走った馬(結果が入った馬)と番号の無い馬だけ=日次 数百本・数分。**朝の便だけ**(分予算。noken index と同じ門)
+      - name: sand depth (daily + monthly)   # §146 高知・名古屋・笠松の砂厚の測定表を溜める(高知は開催日 11:30 頃に出る= 便ごとに見る)
+        if: '!cancelled()'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/sand_depth.py --apply || echo "⚠ 砂厚が取れない(続行)"
+
       - name: horse ledger (morning only)
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
