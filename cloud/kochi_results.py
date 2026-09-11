@@ -9,7 +9,10 @@
 - **既存行の非結果列は保全する**= keiba_horses には first3f(映像計測)・post_comment(談話)・
   lineage_login_code 等が同居している。既存行を読んでから結果列だけを上書きして完全な行を送る
   (部分行を送ると RPC の upsert が既存値を消しうる)
-- **結果が既にある日は触らない**(日付単位・全量置き換えしない=feedback-one-year-scope)
+- **結果が既にある日は触らない**(日付単位・全量置き換えしない=feedback-one-year-scope)。
+  ⚠§149 D(2026-09-11)で**1 つだけ例外**: レース名が空の行は、公式に名前があるときだけ
+  名前・距離・クラスを埋め直す(結果列は 1 つも触らない)。2026-09-06 に 12 行が空のまま残り、
+  この規則のせいで二度と直らなかったため(#551)
 - SINCE(2026-08-01)より前は対象外(それ以前は手動保存済み)
 
 使い方:
@@ -297,6 +300,98 @@ def build_entry_bundles(nar_base, nar_key, d_iso):
     return bundles
 
 
+# ---------------------------------------------------------------- §149 D レース名の埋め直し(#551)
+
+def fill_name_bundle(date_slash, race_no, ex_race, ex_horses, meta):
+    """§149 D 「結果はあるのにレース名が空」の行を直す bundle。
+
+    ⛔**結果列は 1 つも触らない**= 送るのは既存行をそのまま写したもので、変えるのは
+      race_name / distance / race_class の 3 つだけ(しかも**空のときだけ**)。
+    ⛔公式(nar_races)に名前が無ければ None を返す= 空のまま残す(推測で埋めない)。
+    ⛔既存の馬の行が 1 つも無ければ None(部分行を送ると RPC の upsert が既存値を消しうる)。
+    """
+    name = str((meta or {}).get("race_name") or "").strip()
+    if not name:
+        return None
+    if str((ex_race or {}).get("race_name") or "").strip():
+        return None                                        # もう入っている= 触らない
+    race = {k: "" for k in RACE_KEYS}
+    race.update({"race_date": date_slash, "race_no": race_no, "baba_code": BABA})
+    for k in RACE_KEYS:                                    # 既存の値(計測・メモ・ラップ)はそのまま持ち越す
+        if ex_race and k in ex_race and ex_race[k] is not None and k not in ("race_date", "race_no", "baba_code"):
+            race[k] = ex_race[k]
+    race["race_name"] = name
+    dist = (meta or {}).get("distance_m")
+    if dist and not str(race.get("distance") or "").strip():
+        race["distance"] = str(dist) + "ｍ"                 # 手動保存の実物 '1300ｍ'(全角)に合わせる
+    if not str(race.get("race_class") or "").strip():
+        race["race_class"] = simple_class(name)
+    horses = []
+    for ex in sorted(ex_horses or [], key=lambda x: int(x["uma_ban"])):
+        row = {k: "" for k in HORSE_KEYS}
+        row.update({"race_date": date_slash, "race_no": race_no, "baba_code": BABA, "uma_ban": int(ex["uma_ban"])})
+        for k in HORSE_KEYS:                               # ⛔着順・タイム・上がり等は既存のまま写すだけ
+            if k in ex and ex[k] is not None and k not in ("race_date", "race_no", "baba_code", "uma_ban"):
+                row[k] = ex[k]
+        horses.append(row)
+    if not horses:
+        return None
+    return {"race_id": f"race_{BABA}_{date_slash}_{race_no}", "race": race,
+            "horses": horses, "expected_uma_ban": sorted(x["uma_ban"] for x in horses)}
+
+
+def name_meta_of(nar_days):
+    """公式(nar_races)の行 → (日 ISO, R) → その行。⛔対象日の検出と**同じ 1 本**の結果を読み直すだけ"""
+    meta = {}
+    for r in (nar_days or []):
+        try:
+            meta[(str(r.get("race_date")), int(r.get("race_no")))] = r
+        except (TypeError, ValueError):
+            continue
+    return meta
+
+
+def fill_missing_names(keiba, meta, out, apply_, post):
+    """§149 D 結果のある日でも「レース名が空」の行があれば埋め直す。返り値= 失敗の数。
+
+    2026-09-06 の穴= 出馬表を nar から組んだ時点で nar_races にまだ名前が入っておらず、
+    名前・距離・クラスが空のまま保存された。その後は「着順あり → 触らない」で二度と直らず 12 行残った。
+    ⛔通信は**空の行が 1 つも無ければ 1 本だけ**(見つかった日だけ既存行を読みに行く)。
+    """
+    holes = keiba(f"keiba_races?select=race_date,race_no&baba_code=eq.{BABA}"
+                  f"&race_date=gte.{urllib.parse.quote(SINCE.replace('-', '/'), safe='')}"
+                  "&or=(race_name.is.null,race_name.eq.)&order=race_date.asc,race_no.asc&limit=1000")
+    if not holes:
+        return 0
+    days = {}
+    for r in holes:
+        days.setdefault(str(r["race_date"]), set()).add(int(r["race_no"]))
+    log(f"レース名が空の行: {len(holes)}件 / {len(days)}日 → 埋め直す(⛔結果列は触らない)")
+    fails = 0
+    for d in sorted(days):
+        ex_r = keiba(f"keiba_races?select=*&baba_code=eq.{BABA}&race_date=eq.{urllib.parse.quote(d, safe='')}")
+        ex_h = keiba(f"keiba_horses?select=*&baba_code=eq.{BABA}&race_date=eq.{urllib.parse.quote(d, safe='')}&limit=1000")
+        by_no_r = {int(r["race_no"]): r for r in ex_r}
+        by_no_h = {}
+        for h in ex_h:
+            by_no_h.setdefault(int(h["race_no"]), []).append(h)
+        for no in sorted(days[d]):
+            b = fill_name_bundle(d, no, by_no_r.get(no), by_no_h.get(no, []),
+                                 meta.get((d.replace("/", "-"), no)))
+            if not b:
+                log(f"  {d} {no}R: 公式にまだ名前が無い(か既存の馬の行が無い)→ 空のまま残す")
+                continue
+            path = out / f"name_{d.replace('/', '')}_{no}.json"
+            path.write_text(json.dumps(b, ensure_ascii=False, indent=1), encoding="utf-8")
+            if not apply_:
+                log(f"(dry) 名前 {d} {no}R: '{b['race']['race_name']}' {b['race']['distance']} "
+                    f"{b['race']['race_class']} {len(b['horses'])}頭 → {path.name}")
+            else:
+                fails += post(b, f"名前 {d} {no}R")
+                time.sleep(0.5)
+    return fails
+
+
 # ---------------------------------------------------------------- 対象日の検出と実行
 
 def main():
@@ -414,8 +509,9 @@ def main():
                 time.sleep(0.5)
 
     # ---- 対象日の検出: 公式開催日(nar) ∩ 結果ゼロ(keiba) ----
+    # §149 D レース名・距離も**同じ 1 本**で受け取る(⛔列を足すだけ= 通信は増えない)
     nar_days = sb_rows(nar_base, nar_key,
-                       f"nar_races?select=race_date,race_no&track=eq.{urllib.parse.quote('高知')}&race_date=gte.{SINCE}&order=race_date.asc&limit=1000")
+                       f"nar_races?select=race_date,race_no,race_name,distance_m&track=eq.{urllib.parse.quote('高知')}&race_date=gte.{SINCE}&order=race_date.asc&limit=1000")
     today = dt.datetime.now(JST).date().isoformat()
     days = {}
     for r in nar_days:
@@ -429,8 +525,13 @@ def main():
         if filled == 0:
             targets.append((d, sorted(days[d_iso]), len(got)))
         else:
-            log(f"{d}: 着順あり {filled}行 → 触らない")
+            log(f"{d}: 着順あり {filled}行 → 結果は触らない")
     log(f"対象日 {len(targets)}日: " + " ".join(t[0] for t in targets))
+
+    # §149 D(#551) 結果のある日でも「レース名が空」の行だけは埋め直す。⛔結果列は触らない・
+    #   ⛔対象日があってもなくても必ず通す(2026-09-06 の 12 行は「着順あり→触らない」で残ったため)
+    fails += fill_missing_names(keiba, name_meta_of(nar_days), out, a.apply, post_bundle)
+
     if not targets:
         return 1 if fails else 0
 
