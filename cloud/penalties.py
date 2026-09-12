@@ -50,7 +50,7 @@ from horse_health import (                                          # noqa: E402
     NAR_PDF, UA, HostLimiter, _segments, download_pdf, pdf_pages, pdf_url,
 )
 
-PARSER_VERSION = "penalties-1.1"      # §111b で読み方を直した(飾り・停止・脚注・見出し)
+PARSER_VERSION = "penalties-1.2"      # §111c 馬名(本文の馬番 → 名簿の馬名)を足した
 JST = dt.timezone(dt.timedelta(hours=9))
 DEFAULT_DAYS = 14
 UPSERT_CHUNK = 500
@@ -85,6 +85,30 @@ _RANGE = re.compile(r"令和(\d{1,2})年(\d{1,2})月(\d{1,2})日から令和(\d{
 # §111b #2 「◯日間騎乗を停止された」も騎乗停止。⛔「賞典を停止」は別物= 戒告のまま
 _KINDS = ((re.compile(r"騎乗停止|騎乗を停止"), "騎乗停止"), (re.compile(r"過怠金"), "過怠金"),
           (re.compile(r"戒告"), "戒告"), (re.compile(r"注意"), "注意"))
+
+# 本文から**その制裁が指している馬の馬番**。⛔書いてある形だけを読む(推測しない)。
+# 実測(2026-09-12・347 行)で出てくる形は 3 通り=
+#   「騎手◯◯は7番テスト号に騎乗したところ…」   → 7
+#   「2番テスト号の騎手◯◯…」                   → 2
+#   「(調教師処分)◯◯は第1号馬テスト号を…」    → 1(「1号馬」も同じ)
+# ⛔番号のうしろが「番」か「号馬」のときだけ読む= 「2日間」「令和8年9月6日」には当たらない。
+# ⛔1 つの文に番号が 2 つ出る行は 0 件(実測)なので**最初の 1 つ**を使う。
+# ⛔全角数字も読む(いまの器には 0 件だが、原本は主催者の書き方しだいなので受ける)。
+_UMABAN = re.compile(r"(?:第)?([0-9０-９]+)\s*(?:番|号馬)")
+_ZEN = str.maketrans("０１２３４５６７８９", "0123456789")
+
+
+def umaban_of(detail):
+    """制裁の本文 → 馬番(1〜18)。読めなければ None。⛔通信なしの純関数。"""
+    m = _UMABAN.search(str(detail or ""))
+    if not m:
+        return None
+    try:
+        no = int(m.group(1).translate(_ZEN))
+    except ValueError:
+        return None
+    return no if 1 <= no <= 18 else None
+
 
 N_REQ = [0]
 
@@ -174,16 +198,28 @@ def race_days(client, start, end):
 
 
 def roster(client, track, race_date):
-    """その日その場の 騎手・調教師の**公式の略称**(nar_runs の表記)。名前を当てるのに使う。"""
-    rows = client.get("nar_runs?select=jockey,trainer&track=eq.%s&race_date=eq.%s&limit=1000"
-                      % (q(track), q(race_date)))
-    jockeys, trainers = set(), set()
+    """その日その場の 騎手・調教師の**公式の略称**(nar_runs の表記)。名前を当てるのに使う。
+
+    §111c 「馬」も同じ 1 本で受け取る= (レース番号, 馬番) → 馬名。制裁の本文の「N番◯◯号」から
+    馬番を読んで、**主催者の名簿の側の馬名**を入れる(⛔本文の字から馬名を切り出さない=
+    原本の書き方が変わっても取り違えない)。⛔列を足すだけなので通信は増えない(1 本のまま)。
+    """
+    rows = client.get("nar_runs?select=jockey,trainer,race_no,runner_number,horse_name"
+                      "&track=eq.%s&race_date=eq.%s&limit=1000" % (q(track), q(race_date)))
+    jockeys, trainers, horses = set(), set(), {}
     for r in rows:
         if r.get("jockey"):
             jockeys.add(tight(r["jockey"]))
         if r.get("trainer"):
             trainers.add(tight(r["trainer"]))
-    return {"jockey": jockeys, "trainer": trainers}
+        try:
+            key = (int(r["race_no"]), int(r["runner_number"]))
+        except (TypeError, ValueError, KeyError):
+            continue
+        name = tight(r.get("horse_name"))
+        if name:
+            horses[key] = name
+    return {"jockey": jockeys, "trainer": trainers, "horse": horses}
 
 
 # ---------------------------------------------------------------- 読み取り(純関数)
@@ -342,7 +378,7 @@ def find_person(sentence, names):
 def read_penalties(track, race_date, segments, names, source_url, source_hash):
     """(レース番号, 本文)の一覧 → 制裁の行。⛔人(騎手・調教師)の文だけを取る。"""
     rows = []
-    stats = {"blocks": 0, "sentences": 0, "no_person": 0, "name_unmatched": 0}
+    stats = {"blocks": 0, "sentences": 0, "no_person": 0, "name_unmatched": 0, "horse_named": 0}
     for race_no, text in segments:
         for block in penalty_blocks(text):
             stats["blocks"] += 1
@@ -360,11 +396,18 @@ def read_penalties(track, race_date, segments, names, source_url, source_hash):
                 kind = kind_of(sentence)
                 since, through = suspension(sentence)
                 no = race_no if isinstance(race_no, int) and 1 <= race_no <= 12 else None
+                # §111c その制裁が指している馬。⛔馬番が読めない行・名簿に居ない馬番は None のまま
+                #   (⛔埋めない)。⛔penalty_id の材料には入れない= 既にある行の id を動かさない
+                umaban = umaban_of(detail)
+                horse = names.get("horse", {}).get((no, umaban)) if (no and umaban) else None
+                if horse:
+                    stats["horse_named"] = stats.get("horse_named", 0) + 1
                 rows.append({
                     "penalty_id": sha256_text("|".join([
                         track, race_date, str(no), person_kind, name, kind, detail])),
                     "track": track, "race_date": race_date, "race_no": no,
                     "person_kind": person_kind, "person_name": name,
+                    "horse_name": horse,
                     "kind": kind, "detail": detail,
                     "suspension_from": since, "suspension_through": through,
                     "source_url": source_url, "source_hash": source_hash,
@@ -400,7 +443,7 @@ def known_sources(client, start, end):
 def run(client, start, end, apply, show=0):
     limiter = HostLimiter()
     n = {"sources": 0, "pdf_missing": 0, "rows": 0, "unparsed": 0, "name_unmatched": 0,
-         "upserted": 0, "errors": 0, "unchanged": 0}
+         "horse_named": 0, "upserted": 0, "errors": 0, "unchanged": 0}
     by_kind, by_person = {}, {}
     rows = []
     known = known_sources(client, start, end) if apply else {}   # ドライランは全部読む(検品用)
@@ -435,6 +478,7 @@ def run(client, start, end, apply, show=0):
                        "parsed_at": dt.datetime.now(dt.timezone.utc).isoformat()})
         n["unparsed"] += stats["no_person"]
         n["name_unmatched"] += stats["name_unmatched"]
+        n["horse_named"] += stats.get("horse_named", 0)
         for row in got:
             by_kind[row["kind"]] = by_kind.get(row["kind"], 0) + 1
             by_person[row["person_kind"]] = by_person.get(row["person_kind"], 0) + 1
@@ -456,10 +500,10 @@ def run(client, start, end, apply, show=0):
             client.post("nar_penalty_sources?on_conflict=track,race_date", parsed[i:i + UPSERT_CHUNK],
                         "resolution=merge-duplicates,return=minimal")
     log("sources=%d unchanged=%d pdf_missing=%d rows=%d by_kind=%s by_person_kind=%s unparsed=%d "
-        "name_unmatched=%d upserted=%d errors=%d"
+        "name_unmatched=%d horse_named=%d upserted=%d errors=%d"
         % (n["sources"], n["unchanged"], n["pdf_missing"], n["rows"], json.dumps(by_kind, ensure_ascii=False),
            json.dumps(by_person, ensure_ascii=False), n["unparsed"], n["name_unmatched"],
-           n["upserted"], n["errors"]))
+           n["horse_named"], n["upserted"], n["errors"]))
     return rows, n
 
 
