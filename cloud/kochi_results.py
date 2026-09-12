@@ -511,12 +511,29 @@ def main():
     # ---- 対象日の検出: 公式開催日(nar) ∩ 結果ゼロ(keiba) ----
     # §149 D レース名・距離も**同じ 1 本**で受け取る(⛔列を足すだけ= 通信は増えない)
     nar_days = sb_rows(nar_base, nar_key,
-                       f"nar_races?select=race_date,race_no,race_name,distance_m&track=eq.{urllib.parse.quote('高知')}&race_date=gte.{SINCE}&order=race_date.asc&limit=1000")
-    today = dt.datetime.now(JST).date().isoformat()
+                       f"nar_races?select=race_date,race_no,race_name,distance_m,post_time&track=eq.{urllib.parse.quote('高知')}&race_date=gte.{SINCE}&order=race_date.asc&limit=1000")
+    now = dt.datetime.now(JST)
+    today = now.date().isoformat()
+    # 当日は**最終レースの発走から 30 分たつまで**対象にしない(2026-09-12: 開催日の朝から 15 時まで
+    #   便ごとに「結果表なし」で exit 1 になり、後ろの段(馬場差・傾向・コース別)が全部飛んでいた)。
+    #   発走時刻の無い行は「まだ」とみなす(⛔推定で早めない)
+    def _done(r):
+        if r["race_date"] < today:
+            return True
+        if r["race_date"] > today:
+            return False
+        pt = str(r.get("post_time") or "")[:5]
+        if not re.fullmatch(r"\d{2}:\d{2}", pt):
+            return False
+        h, m = int(pt[:2]), int(pt[3:])
+        return now >= now.replace(hour=h, minute=m, second=0, microsecond=0) + dt.timedelta(minutes=30)
+    pending_today = [r for r in nar_days if r["race_date"] == today and not _done(r)]
     days = {}
     for r in nar_days:
-        if r["race_date"] <= today:
+        if r["race_date"] < today or (r["race_date"] == today and not pending_today):
             days.setdefault(r["race_date"], set()).add(int(r["race_no"]))
+    if pending_today:
+        log(f"{today.replace('-', '/')}: 発走前(または発走 30 分以内)が {len(pending_today)}R → 今日はまだ見ない")
     targets = []
     for d_iso in sorted(days):
         d = d_iso.replace("-", "/")
