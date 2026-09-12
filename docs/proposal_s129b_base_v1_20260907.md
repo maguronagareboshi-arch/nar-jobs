@@ -1,7 +1,7 @@
 # §129b 設計書(下書き): 予想 AI「base-v1」— B/C の特徴量の考え方を、毎晩の差分集計+朝の軽い推論で作り直す(2026-09-07)
 
 読むだけの下書き。⛔リポジトリのコードは 1 字も変えていない・⛔DB には 1 行も書いていない(SELECT のみ)・⛔鍵の値は 1 つも印字していない。
-前提の下調べ= `docs/proposal_s129_bc_daily_20260907.md`(全部読んだ)。本書はその A-3「base-v1」を実際の列まで落としたもの。
+前提の下調べ= `設計書`(全部読んだ)。本書はその A-3「base-v1」を実際の列まで落としたもの。
 ⚠ 本書は**提案**であって約束ではない。精度の見込みは 1 つも実測していない(I 章)。
 
 ---
@@ -469,7 +469,7 @@ order by f.track, f.race_no, f.runner_number;
 
 - 1 日 33〜60 レース × 平均 10 頭 = **400〜600 行 × 約 200 列**。pg8000 で 1 本・**推定 2〜5 秒**。
 - ⛔ PostgREST(`sb_get`)では列が多すぎて URL が長くなる → **pg8000 を使う**(`cloud/horse_changes.py` / `cloud/jockey_change.py` に先例あり・`NAR_DB_PASSWORD` は既に Secrets にある)。
-- ⛔ 列の順序は **モデルの `feature_name` と完全一致**させる。学習時に `docs/DESIGN.md` へ順序 SHA を記録し、推論側で照合して**合わなければ何も書かずに終わる**(fail-closed。B/C の `FeatureContract` と同じ考え)。
+- ⛔ 列の順序は **モデルの `feature_name` と完全一致**させる。学習時に `設計台帳` へ順序 SHA を記録し、推論側で照合して**合わなければ何も書かずに終わる**(fail-closed。B/C の `FeatureContract` と同じ考え)。
 - `timing='morning'` のときは `bataiju_now` / `bataiju_diff` / `baba_now` を **NULL に上書きしてから**推論する(D-3 と対)。
 
 ---
@@ -541,7 +541,7 @@ early_stopping_rounds = 100     # 検証窓の最初の 3 か月(2026-01〜03)�
 - 置き場= **`cloud/data/base_v1.txt`**(git に入れる)。
 - ⚠⛔ **`keiba-deploy` は push = 自動デプロイ**。CI が**許可リスト完全一致**なので、9 MB のファイルを足すと ①CI の許可リストに載せる必要がある ②Cloudflare Pages の配信物に入ると閲覧者が 9 MB を引く可能性がある。
   → **⛔第 3 段の前に、`cloud/` 以下が配信物に入らないことを `validate-production.py` と `_headers` で確認する**(I-2)。入るなら **git LFS か Actions の artifact か Supabase Storage** に逃がす。
-- **SHA256 を `docs/DESIGN.md` に記録**する(B/C の `model_sha256` と同じ)。加えて**学習時の LightGBM の版**も記録する(⛔B/C はこれを記録せず、推論の再現性の裏取りができなくなっている= 下調べ G-3)。
+- **SHA256 を `設計台帳` に記録**する(B/C の `model_sha256` と同じ)。加えて**学習時の LightGBM の版**も記録する(⛔B/C はこれを記録せず、推論の再現性の裏取りができなくなっている= 下調べ G-3)。
 
 ### D-7. 再学習の頻度
 

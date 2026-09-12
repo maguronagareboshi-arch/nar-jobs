@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: 「データの状態」= 取り込めたかを毎朝、行数で見る(DESIGN §118・#487 の反省)。
+"""本体 cloud: 「データの状態」= 取り込めたかを毎朝、行数で見る(DESIGN §118・#487 の反省)。
 
 job が success かではなく **行が入ったか** を、データの種類 × 場ごとに数えて nar_meta `coverage` に 1 枚で書く。
 /status(閲覧者向け「データの状態」)がこれを読む。管理者向けの「止まっている行」も同じ 1 枚から出す。
@@ -37,7 +37,7 @@ import urllib.request
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from tenkai import TRACK2PREFIX  # noqa: E402
 
-UA = "nar-viewer-coverage/1.0 (+https://nar.yukochi.com/)"
+UA = "nar-jobs-coverage/1.0"
 META_KEY = "coverage"
 JST = dt.timezone(dt.timedelta(hours=9))
 OLD_URL = "https://jcrcftvrsgmsewwdkqha.supabase.co"

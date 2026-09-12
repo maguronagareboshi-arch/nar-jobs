@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: 馬ごとの「格組」と「収得賞金」(全15場・公式)を keiba.go.jp から取る(DESIGN §79 P1・§38 1-B 第二弾)。
+"""本体 cloud: 馬ごとの「格組」と「収得賞金」(全15場・公式)を keiba.go.jp から取る(DESIGN §79 P1・§38 1-B 第二弾)。
 
 2つの表を育てる(どちらも insert/upsert だけ・冪等・再開可能):
   nar_horse_codes  馬名(+生年)→ 血統登録番号(11桁)。出典= 公式の出馬表 TodayRaceInfo/DebaTable(1レース1本・全出走馬のリンク)

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: コース特性(場×距離の 枠番/型/逃げ馬・§103)。
+"""本体 cloud: コース特性(場×距離の 枠番/型/逃げ馬・§103)。
 
 過去1年(**当日を含まない**)の公式の結果を、場ごと1行の nar_meta `course_stats:<prefix>` に数える。
 ⛔全部「地方競馬全国協会の発表(公式)の結果を当サイトが数えたもの」= 推定は1つも入れない。
@@ -50,7 +50,7 @@ from tenkai import TRACK2PREFIX, first_corner, rows_window        # noqa: E402
 # ⛔クラス帯の読み方(race_name からの粗い抽出)は cloud/baba.py の 1 か所だけ(§5.4)
 from baba import band_of                                          # noqa: E402
 
-UA = "unified-viewer/1.0 (+maguronagareboshi@gmail.com)"
+UA = "nar-jobs/1.0"
 META_PREFIX = "course_stats:"
 JST = dt.timezone(dt.timedelta(hours=9))
 DAYS = 365              # 窓(当日は入れない= until は前日)

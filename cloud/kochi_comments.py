@@ -38,7 +38,7 @@ import urllib.parse
 import urllib.request
 
 JST = dt.timezone(dt.timedelta(hours=9))
-UA = "Mozilla/5.0 (compatible; unified-viewer/1.0; +maguronagareboshi@gmail.com)"
+UA = "Mozilla/5.0 (compatible; nar-jobs/1.0)"
 TRACK = "高知"
 PAGE = "https://www.keiba.or.jp/?postracecomment={ymd}{rr:02d}"
 SLEEP = 0.7                                # 公式への間合い(1 レース 1 GET)

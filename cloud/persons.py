@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: 騎手・調教師のプロフィール(生年月日・所属)を nar_persons へ入れる(DESIGN §65 / §54.2)。
+"""本体 cloud: 騎手・調教師のプロフィール(生年月日・所属)を nar_persons へ入れる(DESIGN §65 / §54.2)。
 
 公式 keiba.go.jp の DataRoom に**一覧ページ**がある(2026-08-30 実測。8/29 の設計より楽な道):
   一覧 `DataRoom/RiderList?k_pageNum=N&k_nameCondition=include&k_genneki_flag=1&k_shozoku=*&k_sei=`

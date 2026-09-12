@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: せり市場(セレクトセール=JRHA / 北海道市場=HBA)の取引結果を auction_sales に同居させる(DESIGN §54.6・2026-09-04)。
+"""本体 cloud: せり市場(セレクトセール=JRHA / 北海道市場=HBA)の取引結果を auction_sales に同居させる(DESIGN §54.6・2026-09-04)。
 
   出典(一次・ユーザーが許可を確認済み 2026-09-04):
     JRHA 取引馬データベース  POST https://www.jrha.or.jp/database/hpJRHASearch(上場年度ごとに 1 本・表 1 枚に全馬・**競走馬名あり**)
@@ -34,7 +34,7 @@ sys.path.insert(0, str(HERE))
 from load_nar_official import load_env, upsert            # noqa: E402
 from odds import JST, log                                  # noqa: E402
 
-UA = "unified-viewer/1.0 (+maguronagareboshi@gmail.com)"
+UA = "nar-jobs/1.0"
 SLEEP = 1.0
 TABLE = "auction_sales"
 JRHA_URL = "https://www.jrha.or.jp/database/hpJRHASearch"

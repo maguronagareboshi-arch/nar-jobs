@@ -36,7 +36,7 @@ from load_nar_official import load_env, upsert  # noqa: E402
 
 DATA = HERE / "data" / "auction"
 JST = dt.timezone(dt.timedelta(hours=9))
-UA = "Mozilla/5.0 (compatible; unified-viewer/1.0; +maguronagareboshi@gmail.com)"
+UA = "Mozilla/5.0 (compatible; nar-jobs/1.0)"
 BATCH = 500
 THIS_ROUND = ("2026-09-03", 691)     # 第691回=2026-09-03(木)。⛔更新するときは公式トップの「第N回」で
 

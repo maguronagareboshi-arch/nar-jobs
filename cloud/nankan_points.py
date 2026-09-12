@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: 南関東4場(大井・船橋・川崎・浦和)の「格」「格付ポイント」を nankankeiba.com の馬ページから取る(DESIGN §38 1-C)。
+"""本体 cloud: 南関東4場(大井・船橋・川崎・浦和)の「格」「格付ポイント」を nankankeiba.com の馬ページから取る(DESIGN §38 1-C)。
 
 大井だけだった 他場\\scraper\\fetch_nankan_points.py(PC の日次・chihou_meta ooi_points)の置き換え。PC を閉じていても回る。
   表= nar_nankan_points(鍵= nankankeiba の馬コード)。画面は 1レースの出走馬ぶんを馬名で引く(data.js getNankanPoints)。

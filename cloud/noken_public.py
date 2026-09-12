@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: 公式サイトの能力検査を集めて nar_meta へ入れる(DESIGN §32a)。
+"""本体 cloud: 公式サイトの能力検査を集めて nar_meta へ入れる(DESIGN §32a)。
 
 第1陣 = 岩手(盛岡・水沢)・兵庫(園田・西脇)。第2陣 = 佐賀・ばんえい帯広。
 第3陣(§32c) = 笠松・名古屋・高知。この3場は HTML ではなく成績表 PDF しか無い。
@@ -50,7 +50,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "pipeline"))
 from load_nar_official import load_env, upsert  # noqa: E402
 
-UA = "unified-viewer/1.0 (+maguronagareboshi@gmail.com)"
+UA = "nar-jobs/1.0"
 SLEEP = 0.7
 JST = dt.timezone(dt.timedelta(hours=9))
 

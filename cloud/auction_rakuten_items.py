@@ -40,7 +40,7 @@ HERE = Path(__file__).resolve().parent
 OUT = HERE / "data" / "auction" / "rakuten_items"
 STATE = OUT / "state.json"
 JST = dt.timezone(dt.timedelta(hours=9))
-UA = "Mozilla/5.0 (compatible; unified-viewer/1.0; +maguronagareboshi@gmail.com)"
+UA = "Mozilla/5.0 (compatible; nar-jobs/1.0)"
 API = "https://auction.keiba.rakuten.co.jp/api/item/"
 
 WORKERS = 8

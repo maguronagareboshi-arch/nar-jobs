@@ -27,7 +27,7 @@ import urllib.parse
 import urllib.request
 
 JST = dt.timezone(dt.timedelta(hours=9))
-UA = "unified-viewer/1.0 (+maguronagareboshi@gmail.com)"
+UA = "nar-jobs/1.0"
 
 
 def log(msg):

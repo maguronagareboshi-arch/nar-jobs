@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: 能検13地区を1つの索引にまとめる(DESIGN §37.4-①)。
+"""本体 cloud: 能検13地区を1つの索引にまとめる(DESIGN §37.4-①)。
 
 /shinba(新馬戦ゾーン)は出走馬に「能検 51.6(7/31)▶」のバッジを出す。v1 は**地区ごとの JSON を読んで**
 照合していたので、13地区ぜんぶだと 11本 383KB(gzip)——しかも地区の JSON は7〜15年ぶんの全履歴で、
@@ -63,7 +63,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "pipeline"))
 from load_nar_official import load_env, upsert  # noqa: E402
 
-UA = "unified-viewer/1.0 (+maguronagareboshi@gmail.com)"
+UA = "nar-jobs/1.0"
 JST = dt.timezone(dt.timedelta(hours=9))
 META_KEY = "noken_index"
 YEARS = 3

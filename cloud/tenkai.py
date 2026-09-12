@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: 展開の見立て(全15場・§99a 位置だけ)。
+"""本体 cloud: 展開の見立て(全15場・§99a 位置だけ)。
 
 各馬の**直近5走の1番目のコーナー通過順**(公式・§41-B)から 逃げ/先行/差し/追込 の型を推定し、
 レースごとに1枚ぶんの材料を nar_meta `tenkai:YYYY-MM-DD` へ入れる。画面(js/pages/race.js)は
@@ -44,7 +44,7 @@ try:
 except Exception:
     pass
 
-UA = "unified-viewer/1.0 (+maguronagareboshi@gmail.com)"
+UA = "nar-jobs/1.0"
 META_PREFIX = "tenkai:"
 BANEI = "帯広ば"
 JST = dt.timezone(dt.timedelta(hours=9))

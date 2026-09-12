@@ -32,7 +32,7 @@ OUT = HERE / "data" / "auction" / "sat"
 ITEMS = OUT / "items.jsonl"
 STATE = OUT / "state.json"
 JST = dt.timezone(dt.timedelta(hours=9))
-UA = "Mozilla/5.0 (compatible; unified-viewer/1.0; +maguronagareboshi@gmail.com)"
+UA = "Mozilla/5.0 (compatible; nar-jobs/1.0)"
 BASE = "https://www.sat-auction.jp/auction/"
 SLEEP = 1.0
 MISS_STOP = 40   # 連続欠番でここまで来たら「上端」とみなす

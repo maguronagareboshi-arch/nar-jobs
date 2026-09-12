@@ -40,7 +40,7 @@ import urllib.parse
 import urllib.request
 
 JST = dt.timezone(dt.timedelta(hours=9))
-UA = "unified-viewer/1.0 (+maguronagareboshi@gmail.com)"
+UA = "nar-jobs/1.0"
 PAGE = 1000                      # ⛔PostgREST の 1000 行上限(#8/#92)= 必ず範囲で刻んで読む
 TRIES_KEEP_HOURS = 1             # ⚠DB 側 viewer_handover_claim の掃除と同じ値
 HASH_LEN = 8                     # §56.4「substr(md5(device_id),1,8)」

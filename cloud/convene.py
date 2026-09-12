@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: 公式の月別開催日程(未来ぶん)を nar_meta へ入れる(DESIGN §46.2・#146 の解決)。
+"""本体 cloud: 公式の月別開催日程(未来ぶん)を nar_meta へ入れる(DESIGN §46.2・#146 の解決)。
 
 keiba.go.jp `MonthlyConveneInfo/MonthlyConveneInfoTop?k_year=Y&k_month=M` に先の月の開催予定がある
 (2026-08-28 実測: 表= tr が場・td が日・記号は「☆」「●」「Ｄ」。9月が全15場ぶん取れた)。

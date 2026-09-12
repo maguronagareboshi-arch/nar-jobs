@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: PC に依存しない当日更新(GitHub Actions の定期実行から呼ぶ)。
+"""本体 cloud: PC に依存しない当日更新(GitHub Actions の定期実行から呼ぶ)。
 
 公式ZIP(keiba.go.jp DataDownload)をメモリ上で正規化し、nar-official(Supabase)へ直接 upsert する。
 ローカル保存はしない(PC 側の pipeline/nar_refresh.py と同じ判定・同じ投入関数を使うので結果は同じ)。

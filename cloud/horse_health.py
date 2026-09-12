@@ -42,7 +42,7 @@ MIN_DATE = dt.date(2026, 1, 1)
 MAX_PDF_BYTES = 25 * 1024 * 1024
 MAX_PDF_PAGES = 150
 MIN_HOST_INTERVAL = 0.5
-UA = "nar-viewer-health/1.0 (+maguronagareboshi@gmail.com)"
+UA = "nar-jobs-health/1.0"
 AUCTION_ROOT = HERE / "data" / "auction"
 PUBLIC_PDF_GUARD_CODES = frozenset({
     "pdf_size", "pdf_magic", "pdf_content_type", "pdf_pages", "pdf_redirect_host",

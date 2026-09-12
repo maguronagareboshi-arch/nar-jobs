@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: 主催者公式の「出来事」— 佐賀(§110)。
+"""本体 cloud: 主催者公式の「出来事」— 佐賀(§110)。
 
 入口= 公式の RSS(`/news/feed/?s=今日の出来事`)。1 item = 1 開催日で、`content:encoded` は
 節ごとの `<p>` に分かれ、節見出しだけが `<span style="border: 1px solid;">…</span>` で囲まれている:

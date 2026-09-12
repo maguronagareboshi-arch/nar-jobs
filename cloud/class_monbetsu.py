@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: 門別の級別表PDFを読んで nar_meta へ入れる(DESIGN §38 1-E)。
+"""本体 cloud: 門別の級別表PDFを読んで nar_meta へ入れる(DESIGN §38 1-E)。
 
 ホッカイドウ競馬は**馬ごとの「級」と「番組賞金」を公式PDFで丸ごと配っている**——15場で唯一。
 うちで計算した値ではなく**主催者の発表そのもの**なので、§38 のなかで最も正確な一枚になる。
@@ -83,7 +83,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parent / "pipeline"))
 from load_nar_official import load_env, upsert  # noqa: E402
 
-UA = "unified-viewer/1.0 (+maguronagareboshi@gmail.com)"
+UA = "nar-jobs/1.0"
 SLEEP = 0.7
 JST = dt.timezone(dt.timedelta(hours=9))
 META_KEY = "monbetsu_class"

@@ -40,7 +40,7 @@ from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
 JST = dt.timezone(dt.timedelta(hours=9))
-UA = "Mozilla/5.0 (compatible; unified-viewer/1.0; +maguronagareboshi@gmail.com)"
+UA = "Mozilla/5.0 (compatible; nar-jobs/1.0)"
 SINCE = "2026-08-01"                     # これより前の日は対象外(手動保存済み・1年単位ルールの床とは別物)
 BABA = "31"                              # 高知
 WORKER_URL = "https://keiba-proxydeploy.maguronagareboshi.workers.dev"

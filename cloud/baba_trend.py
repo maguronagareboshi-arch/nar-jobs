@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: 馬場傾向まとめ(全15場・§100)。
+"""本体 cloud: 馬場傾向まとめ(全15場・§100)。
 
 日×場ごとに3つの数と、平年からの外れ具合を言葉にしたものを nar_meta `baba_trend` に入れる。
 
@@ -52,7 +52,7 @@ sys.path.insert(0, HERE)
 # ⛔§99 の読み方をそのまま使う(3か所目を作らない)。first_corner の中で corner_ranks を呼んでいる
 from tenkai import first_corner                          # noqa: E402
 
-UA = "unified-viewer/1.0 (+maguronagareboshi@gmail.com)"
+UA = "nar-jobs/1.0"
 META_KEY = "baba_trend"
 BABA_KEY = "baba_diff"
 BANEI = "帯広ば"

@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: 当日の単勝・複勝オッズを公式サイトから取り nar_race_odds へ入れる(DESIGN §13.2C)。
+"""本体 cloud: 当日の単勝・複勝オッズを公式サイトから取り nar_race_odds へ入れる(DESIGN §13.2C)。
 
 公式 TodayRaceInfo の単複ページ(1レース1ページ)を、発走が近いレースだけ取りに行く。
 1レース1行・最新だけ(履歴は持たない)。「（最終）」と書かれたレースは以後取りに行かない。
@@ -28,7 +28,7 @@ from load_nar_official import load_env, upsert  # noqa: E402
 JST = dt.timezone(dt.timedelta(hours=9))
 ODDS_URL = "https://www.keiba.go.jp/KeibaWeb/TodayRaceInfo/OddsTanFuku"
 # 連絡先付きの UA(公式サイトへの負荷を名乗る。DESIGN §13.5)
-UA = "unified-viewer/1.0 (+maguronagareboshi@gmail.com)"
+UA = "nar-jobs/1.0"
 TIMEOUT = 20
 SLEEP = 1.0            # 1リクエストの間隔(秒)
 TABLE = "nar_race_odds"

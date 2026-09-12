@@ -1,8 +1,8 @@
 -- §129c base-v1 段階1= 予想AI の**特徴量の表**と、夜にそれを作り直す関数。
--- 設計= docs/proposal_s129b_base_v1_20260907.md(B-2 の 183 列・B-3 の④・C 章)。台帳= DESIGN §10 #524。
+-- 設計= 設計書(B-2 の 183 列・B-3 の④・C 章)。台帳= DESIGN §10 #524。
 -- ⛔本番では流さない(9/8 決定)。Actions の Postgres 用 = 9/7 夜にこの関数を本番で流したら 30 分サイトが読めなくなった。
 --   全量の特徴量作りは .github/workflows/nar-ai-feat.yml の中に立てた Postgres で行う(材料は本番から読むだけ)。
---   本番に流してよいのは表の定義まで(§129d)。詳しくは docs/opus_s129d_ai_feat_actions_20260908.md。
+--   本番に流してよいのは表の定義まで(§129d)。詳しくは 設計書。
 -- ⛔§129d で直した所(3 つ)= **insert が一度も通っていなかった**ので、地元で通して見つけた。
 --   ①`nar_avg5/std5` は引数が real なのに `p_pos2`(= pos2::real / n2 は double precision)や
 --     `p1_c4 - p1_chaku`(int - real)を渡していて「関数が無い」で落ちる → 呼ぶ所に `::real` を足した。

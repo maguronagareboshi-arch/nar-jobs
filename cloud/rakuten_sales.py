@@ -32,7 +32,7 @@ sys.path.insert(0, str(HERE.parent / "pipeline"))
 from load_nar_official import load_env, upsert  # noqa: E402
 
 JST = dt.timezone(dt.timedelta(hours=9))
-UA = "Mozilla/5.0 (compatible; unified-viewer/1.0; +maguronagareboshi@gmail.com)"
+UA = "Mozilla/5.0 (compatible; nar-jobs/1.0)"
 SLEEP = 1.2
 
 # 場コード(= keiba.go.jp k_babaCode)。pipeline/probe_babacode.py の実測で確定させる。

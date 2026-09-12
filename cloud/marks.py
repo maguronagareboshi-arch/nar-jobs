@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: AI印の型 — base-v0(公式データの単純スコア)の印を計算し発走前に凍結保存する(DESIGN §15)。
+"""本体 cloud: AI印の型 — base-v0(公式データの単純スコア)の印を計算し発走前に凍結保存する(DESIGN §15)。
 
 nar_ai_marks に (model, track, race_date, race_no, timing) で upsert する。凍結ルール:
   - timing='morning'(朝予想): その日の最初の1回だけ書く(行が既にあれば触らない)

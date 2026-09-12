@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: 馬場差の全15場一括計算(DESIGN §48 K-1b)。
+"""本体 cloud: 馬場差の全15場一括計算(DESIGN §48 K-1b)。
 
 公式の勝ち時計(nar_runs.time_sec, finish=1)を「場×距離×クラス帯の**過去3年**中央値」と比べ、
 **日×場の中央値**を馬場差(秒)として nar_meta `baba_diff` に入れる。マイナス=速い馬場。
@@ -34,7 +34,7 @@ try:
 except Exception:
     pass
 
-UA = "unified-viewer/1.0 (+maguronagareboshi@gmail.com)"
+UA = "nar-jobs/1.0"
 META_KEY = "baba_diff"
 BANEI = "帯広ば"
 TRACK2PREFIX = {"門別": "monbetsu", "盛岡": "morioka", "水沢": "mizusawa", "浦和": "urawa",

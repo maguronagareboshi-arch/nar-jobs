@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: 主催者公式の「出来事」を読む core(§92b / §109)。
+"""本体 cloud: 主催者公式の「出来事」を読む core(§92b / §109)。
 
 各主催者の adapter(cloud/health_org_<slug>.py)から
   list_documents(fetch, since, until) -> [(開催日 'YYYY-MM-DD', 記事の URL), …]
@@ -43,7 +43,7 @@ sys.path.insert(0, HERE)
 # ⛔語表(骨・腱= musculoskeletal / 鼻出血= epistaxis …)は §89 の 1 か所だけ
 from horse_health import _groups                                  # noqa: E402
 
-UA = "nar-viewer-health/1.0 (+https://nar.yukochi.com/about)"
+UA = "nar-jobs-health/1.0"
 JST = dt.timezone(dt.timedelta(hours=9))
 HOST_INTERVAL = 2.0             # 同じ host にこれ以上あける(秒)
 MAX_BYTES = 2 * 1024 * 1024     # 原本の上限

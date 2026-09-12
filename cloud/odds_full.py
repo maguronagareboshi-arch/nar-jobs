@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-"""統合ビューア cloud: 当日の**全券種**オッズ(枠連複/枠連単/馬連/馬単/ワイド/3連複/3連単)を
-公式サイトから取り nar_odds_full へ入れる(§77 W1・設計= docs/proposal_s77_odds_center_20260902.md)。
+"""本体 cloud: 当日の**全券種**オッズ(枠連複/枠連単/馬連/馬単/ワイド/3連複/3連単)を
+公式サイトから取り nar_odds_full へ入れる(§77 W1・設計= 設計書)。
 
 単複(cloud/odds.py・nar_race_odds)とは別の表・別の窓。こちらは発走が近いレースだけを狭く取る。
   python cloud/odds_full.py                 # 今日(JST)の「発走 60 分前〜10 分後」・最大10レース
