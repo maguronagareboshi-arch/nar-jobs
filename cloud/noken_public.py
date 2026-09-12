@@ -2891,40 +2891,32 @@ ORDER = ["iwate", "hyogo", "saga", "banei", "kasamatsu", "nagoya", "kochi", "kan
 
 
 # ---------------------------------------------------------------- §117b-2 5 場の補完(2026-09-06 ユーザー指摘「上がり3F と着順・馬番は大事」)
-# 公式(南関)には 着順・馬番・上がり3F・通過・馬場・天候 が無い。旧 DB(chihou_meta `<prefix>_noken`= 手元のジョブが
-# 書いている側)は持っているので、**日付+馬名**で当てて足す。⛔公式の行が本体・旧 DB は足すだけ(公式の値は上書きしない)。
-# 旧 DB は公開 anon キーで**読むだけ**(js/data.js のもの)。手元ジョブが追いつくと次の朝便で自動的に埋まる。
-CHIHOU_URL = "https://jcrcftvrsgmsewwdkqha.supabase.co"
+# 公式(南関)には 着順・馬番・上がり3F・通過・馬場・天候 が無い。手元のジョブ(build_noken /
+# build_ooi_noken)が作る側は持っているので、**日付+馬名**で当てて足す。⛔公式の行が本体・こちらは足すだけ。
+# §157 6-1(2026-09-12): 置き場を旧 DB(chihou_meta `<prefix>_noken`)から
+#   **本体の nar_meta `kb_noken:<prefix>`** へ移した= 旧 DB はもう引かない(同じ鍵・同じ形)。
 CHIHOU_ENRICH = ("monbetsu", "ooi", "funabashi", "kawasaki", "urawa")
 ENRICH_ROW_KEYS = ("fin", "umaban", "last3f", "pass_order")
 ENRICH_RACE_KEYS = ("going", "weather")
-
-
-def chihou_anon_key():
-    try:
-        js = (HERE.parent / "js" / "data.js").read_text(encoding="utf-8")[:4000]
-        m = re.search(r"SUPABASE_KEY\s*=\s*'(eyJ[A-Za-z0-9._-]+)'", js)
-        return m.group(1) if m else None
-    except OSError:
-        return None
+KB_NOKEN_PREFIX = "kb_noken:"        # nar_meta の鍵(手元のジョブが書く)
 
 
 def name_key(text):
     return re.sub(r"\s+", "", norm(str(text or "")))
 
 
-def chihou_enrich(prefix, days):
-    """旧 DB の同じ日の行を馬名で当て、無い項目だけ足す。戻り値= (足した行数, 当たらなかった行数)。"""
+def chihou_enrich(prefix, days, base=None, key=None):
+    """手元のジョブが置いた同じ日の行を馬名で当て、無い項目だけ足す。
+    戻り値= (足した行数, 当たらなかった行数)。§157 6-1 で出どころを本体の nar_meta へ移した。"""
     if prefix not in CHIHOU_ENRICH or not days:
         return 0, 0
-    key = chihou_anon_key()
-    if not key:
-        log(f"  {prefix}: 旧 DB のキーが読めない= 補完なし")
+    if not base or not key:
+        log(f"  {prefix}: 本体の鍵が無い= 補完なし")
         return 0, 0
     try:
-        old = sb_get_meta(CHIHOU_URL, key, f"{prefix}_noken", table="chihou_meta") or {}
+        old = sb_get_meta(base, key, KB_NOKEN_PREFIX + prefix) or {}
     except Exception as e:                                       # noqa: BLE001
-        log(f"  {prefix}: 旧 DB が読めない({type(e).__name__})= 補完なし")
+        log(f"  {prefix}: 手元ジョブの置き場が読めない({type(e).__name__})= 補完なし")
         return 0, 0
     by_date = {}
     for d in old.get("days") or []:
@@ -3225,8 +3217,9 @@ def main():
                 log("  " + line)
         added = 0
         if name in CHIHOU_ENRICH:
-            added, missed = chihou_enrich(name, days)
-            log(f"{name}: 旧 DB から 着順・馬番・上がり3F・通過・馬場・天候 を補完= 足した行 {added} / 当たらない行 {missed}")
+            added, missed = chihou_enrich(name, days, base, key)
+            log(f"{name}: 手元ジョブの置き場から 着順・馬番・上がり3F・通過・馬場・天候 を補完"
+                f"= 足した行 {added} / 当たらない行 {missed}")
         offs = None
         if new_offsets:
             okey = f"{meta_key}_offsets"
