@@ -36,7 +36,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(ROOT / "pipeline"))
 from load_nar_official import load_env  # noqa: E402
 
-PARSER_VERSION = "health-v1.1.0"   # §124 出品 1 件を分類・発生日ごとに束ねる(再解析が要る)
+PARSER_VERSION = "health-v1.1.1"   # 1 記述 1 件(分類が複数当たっても鍵を重ねない・再解析が要る)
 JST = dt.timezone(dt.timedelta(hours=9))
 MIN_DATE = dt.date(2026, 1, 1)
 MAX_PDF_BYTES = 25 * 1024 * 1024
@@ -514,7 +514,11 @@ def parse_nar_pages(
                 continue
             birth = str(runner.get("birth_date") or "")
             birth = birth if is_date(birth) else None
-            for group in groups:
+            # ⚠1 つの記述に分類が 2 つ当たる(例: 跛行+鼻出血)と、event_key(分類を含まない)が同じ記録が
+            #   2 件できて race RPC が「duplicate event_key」で PDF ごと review にし、毎日 exit 1 が続いた
+            #   (2026-09-12 実測: 高知 9/6・門別 9/10)。記録は**1 記述 1 件**= 分類は先頭(GROUP_RULES の順)だけ。
+            #   ⛔本文(detail)は全文そのまま残るので情報は落ちない
+            for group in groups[:1]:
                 lh = line_hash(detail)
                 eid = event_id([
                     "nar_pdf", track, race_date, race_no, runner["runner_number"], stage, event_type, group, lh,
