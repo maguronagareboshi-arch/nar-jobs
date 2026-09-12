@@ -75,7 +75,7 @@ BACKTEST_GATE = 0.5     # 1角先頭率がこれ未満の場は SHOW_TRACKS か�
 TEN_TRACKS = ("高知", "門別", "大井", "船橋", "川崎", "浦和")
 # ペース見込みを出す場。⛔`--backtest 60 --pace` のゲートに届かない場は外す(2026-09-05 実測):
 #   大井65%(123R) 門別61%(115R) 船橋55%(80R) 高知68%(34R) は通過 /
-#   **川崎・浦和は chihou_results.first3f がほとんど無い**(1年で 390走・378走。大井は13,392走)ので
+#   **川崎・浦和は前半3F がほとんど無い**(1年で 390走・378走。大井は13,392走)ので
 #   テンの付く馬が足りず測れない= pace を出さない。テン(小バッジ)はある馬にだけ出る
 # ⛔Fable 2026-09-05: 高知は外す。60日のバックテストで「いつも速い」と言うだけ(74%)に負ける(68%)=
 #   情報量が無い(n=34・8/3〜9/4 休催で標本が薄い)。高知の開催が 60 日たまったら --backtest --pace で測り直して戻す。
@@ -84,7 +84,7 @@ PACE_TRACKS = {"monbetsu", "ooi", "funabashi"}
 TEN_MIN_RUNS = 3        # テンを出す最少走数(⛔3走未満は出さない)
 TEN_STD_MIN = 30        # 場×距離の標準を出す最少標本(小サンプルから基準を作らない)
 KOCHI_BAND = 0.4        # 高知は ±0.4 秒(kochi-pace-definition)。他場は場ごとの四分位
-CHIHOU_MIN_DIST = 1200  # ⛔1200m 未満の chihou_results.first3f は「距離−600m 通過」で別物(js/data.js 296行)
+CHIHOU_MIN_DIST = 1200  # ⛔1200m 未満の前半3F は「距離−600m 通過」で別物(js/data.js first3fFOf)
 PACE_GATE_HIT = 0.45    # 見込みと実際の一致率がこれ未満の場は pace を出さない
 PACE_GATE_OPP = 0.15    # 逆(速い↔遅い)がこれを超える場も出さない
 
@@ -451,14 +451,6 @@ def day_block(base, key, date):
 
 # ---------------------------------------------------------------- §99b テンとペース見込み
 
-def _chihou():
-    """旧DB(keiba_* / chihou_*)の入口。⛔鍵はここに書かず cloud/kochi_results.py の値を借りる
-    (匿名キー= js/data.js と同じ公開キー・**読み取りだけ**)。"""
-    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-    import kochi_results
-    return kochi_results.CHIHOU_URL, kochi_results.CHIHOU_ANON
-
-
 def _kochi_kinds(base, key, days):
     """§98b の nar_meta `kochi_3f_kinds:<日>` → {(日, 'R-馬番'): '実測'|'推定'}。⛔推定は使わない"""
     out = {}
@@ -473,60 +465,55 @@ def _kochi_kinds(base, key, days):
 
 
 def fetch_ten(base, key, need):
-    """need={(場, 日)} → (ten_of, std, band)。⛔旧DBへは**日単位**でまとめて引く(1馬1本にしない)。
+    """need={(場, 日)} → (ten_of, std, band)。⛔**日単位**でまとめて引く(1馬1本にしない)。
 
     ten_of {(場, 日, R, 馬番): (前半3F 秒, 距離m)} / std {(場, 距離): 中央値} /
     band   {場: [下四分位, 上四分位]}(高知は使わない= ±KOCHI_BAND 固定)
     """
-    curl, canon = _chihou()
     ten_of = {}
-    # ---- 高知(keiba_*・映像計測)。⛔`kochi_3f_kinds` が「実測」の馬だけ(推定は使わない)
+    # ⛔§157 段 2(2026-09-12)で読み口を**本体(nar-official)だけ**にした=
+    #   高知は自前計測の nar_own_runs、門別・南関4 は競馬ブックの nar_kb_runs。
+    #   ⛔中身の決まりは 1 つも変えていない(高知は「実測」の馬だけ・南関は 1200m 未満を入れない)。
+    dist = {}
+    nd = sorted({d for t, d in need if t in TEN_TRACKS})
+    nt = sorted({t for t, _d in need if t in TEN_TRACKS})
+    if nd and nt:
+        for part in chunks(nd):
+            for r in rows_all(base, key, "/rest/v1/nar_races?select=track,race_date,race_no,distance_m"
+                              "&track=in.(%s)&race_date=in.(%s)" % (q_in(nt), q_in(part))):
+                if r.get("distance_m"):
+                    dist[(r["track"], r["race_date"], r["race_no"])] = int(r["distance_m"])
+    # ---- 高知(nar_own_runs・映像計測)。⛔`kochi_3f_kinds` が「実測」の馬だけ(推定は使わない)
     kd = sorted({d for t, d in need if t == "高知"})
     if kd:
-        dist = {}
-        for part in chunks(kd):
-            for r in rows_all(curl, canon, "/rest/v1/keiba_races?select=race_date,race_no,distance"
-                              "&baba_code=eq.31&race_date=in.(%s)"
-                              % q_in([d.replace("-", "/") for d in part])):
-                dnum = "".join(c for c in str(r.get("distance") or "") if c.isdigit())
-                if dnum:
-                    dist[(r["race_date"], r["race_no"])] = int(dnum)
         kinds = _kochi_kinds(base, key, kd)
         for part in chunks(kd):
-            for r in rows_all(curl, canon, "/rest/v1/keiba_horses?select=race_date,race_no,uma_ban,"
-                              "first3f&baba_code=eq.31&race_date=in.(%s)"
-                              % q_in([d.replace("-", "/") for d in part])):
-                v = str(r.get("first3f") or "").strip()
-                if not v:
+            for r in rows_all(base, key, "/rest/v1/nar_own_runs?select=race_date,race_no,umaban,first3f"
+                              "&track=eq.%%E9%%AB%%98%%E7%%9F%%A5&race_date=in.(%s)" % q_in(part)):
+                v = r.get("first3f")
+                if v is None or r.get("umaban") is None:
                     continue
-                d = str(r["race_date"]).replace("/", "-")
-                if kinds.get((d, "%s-%s" % (r["race_no"], r["uma_ban"]))) != "実測":
+                d = str(r["race_date"])
+                if kinds.get((d, "%s-%s" % (r["race_no"], r["umaban"]))) != "実測":
                     continue                      # ⛔推定は使わない(§98b の札で見分ける)
-                dm = dist.get((r["race_date"], r["race_no"]))
+                dm = dist.get(("高知", d, r["race_no"]))
                 if dm:
-                    try:
-                        ten_of[("高知", d, int(r["race_no"]), int(r["uma_ban"]))] = (float(v), dm)
-                    except ValueError:
-                        pass
-    # ---- 門別・南関4(chihou_*・競馬ブック)。⛔1200m 未満は別物なので入れない
+                    ten_of[("高知", d, int(r["race_no"]), int(r["umaban"]))] = (float(v), dm)
+    # ---- 門別・南関4(nar_kb_runs・競馬ブック)。⛔1200m 未満は別物なので入れない
     cd = sorted({d for t, d in need if t in TEN_TRACKS and t != "高知"})
     ct = sorted({t for t, _d in need if t in TEN_TRACKS and t != "高知"})
     if cd and ct:
-        rmeta = {}
         for part in chunks(cd):
-            for r in rows_all(curl, canon, "/rest/v1/chihou_races?select=race_id,track,race_date,"
-                              "race_no,distance_m&track=in.(%s)&race_date=in.(%s)"
+            for r in rows_all(base, key, "/rest/v1/nar_kb_runs?select=track,race_date,race_no,umaban,"
+                              "first3f&track=in.(%s)&race_date=in.(%s)&first3f=not.is.null"
                               % (q_in(ct), q_in(part))):
-                if (r.get("distance_m") or 0) >= CHIHOU_MIN_DIST:
-                    rmeta[r["race_id"]] = r
-        for part in chunks(sorted(rmeta)):
-            for r in rows_all(curl, canon, "/rest/v1/chihou_results?select=race_id,umaban,first3f"
-                              "&race_id=in.(%s)" % q_in(part)):
-                v, m = r.get("first3f"), rmeta.get(r["race_id"])
-                if v is None or not m or r.get("umaban") is None:
+                if r.get("umaban") is None:
                     continue
-                ten_of[(m["track"], m["race_date"], int(m["race_no"]), int(r["umaban"]))] = \
-                    (float(v), int(m["distance_m"]))
+                d = str(r["race_date"])
+                dm = dist.get((r["track"], d, r["race_no"]))
+                if not dm or dm < CHIHOU_MIN_DIST:
+                    continue
+                ten_of[(r["track"], d, int(r["race_no"]), int(r["umaban"]))] = (float(r["first3f"]), dm)
     # ---- 標準(場×距離の中央値)と、場ごとのテンの四分位
     by_dist = {}
     for (t, _d, _no, _u), (v, dm) in ten_of.items():
