@@ -213,6 +213,7 @@ create table if not exists public.nar_penalties (
   parser_version      text not null,
   created_at          timestamptz not null,
   updated_at          timestamptz not null,
+  horse_name          text,                 -- §156 F1(2026-09-12)で本番に足した列。⛔本番と列の並びを同じにしないと \copy が「extra data after last expected column」で落ちる
   primary key (penalty_id)
 );
 
