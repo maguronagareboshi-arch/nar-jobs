@@ -25,12 +25,16 @@ grant select on public.nar_person_stats to anon, authenticated;
 -- 1 走 = 1 行の作業表(出走した馬だけ・単勝払戻を 1 着に付ける)
 drop table if exists tmp_pr;
 create temp table tmp_pr as
-select r.track, r.race_date, r.race_no, r.distance_m, r.race_name,
+select r.track, r.race_date, r.race_no, r.distance_m, r.race_name, r.going,
        extract(year from r.race_date)::int as yr,
        u.runner_number, u.horse_name, u.jockey, u.trainer, u.finish, u.finish_note, u.popularity, u.time_sec,
        case when u.finish = 1 then coalesce((
          select (p->>'y')::int from jsonb_array_elements(rp.payouts) p
-         where p->>'t' = 'win' and p->>'c' = u.runner_number::text limit 1), 0) else 0 end as win_pay
+         where p->>'t' = 'win' and p->>'c' = u.runner_number::text limit 1), 0) else 0 end as win_pay,
+       -- §156 F2 複勝払戻(3着内の馬に付ける・複回収用)。⛔無い回は 0
+       case when u.finish between 1 and 3 then coalesce((
+         select (p->>'y')::int from jsonb_array_elements(rp.payouts) p
+         where p->>'t' = 'place' and p->>'c' = u.runner_number::text limit 1), 0) else 0 end as place_pay
 from public.nar_runs u
 join public.nar_races r on r.track = u.track and r.race_date = u.race_date and r.race_no = u.race_no
 left join public.nar_race_payouts rp on rp.track = u.track and rp.race_date = u.race_date and rp.race_no = u.race_no
@@ -72,6 +76,7 @@ returns jsonb language sql as $$
     'top2', round(100.0 * count(*) filter (where finish <= 2) / nullif(count(*), 0), 1),
     'top3', round(100.0 * count(*) filter (where finish <= 3) / nullif(count(*), 0), 1),
     'roi', round(100.0 * sum(win_pay) / nullif(count(*) * 100.0, 0), 0),
+    'roi3', round(100.0 * sum(place_pay) / nullif(count(*) * 100.0, 0), 0),
     'from', min(race_date), 'to', max(race_date))
   from tmp_pp where kind = p_kind and name = p_name and yr between p_from and p_to and (p_track = 'all' or track = p_track)
 $$;
@@ -128,7 +133,12 @@ select g.kind, g.name, 'all', p.period,
     'by_distance', (
       select coalesce(jsonb_agg(jsonb_build_object('distance', distance_m, 'n', n, 'w1', w1, 'win', round(100.0 * w1 / n, 1), 'top3', round(100.0 * t3 / n, 1)) order by distance_m), '[]'::jsonb)
       from (select distance_m, count(*) n, count(*) filter (where finish = 1) w1, count(*) filter (where finish <= 3) t3
-            from tmp_pp x where x.kind = g.kind and x.name = g.name and x.yr between p.y_from and p.y_to and distance_m is not null group by distance_m having count(*) >= 5) d)
+            from tmp_pp x where x.kind = g.kind and x.name = g.name and x.yr between p.y_from and p.y_to and distance_m is not null group by distance_m having count(*) >= 5) d),
+    -- §156 F3 馬場別(良/稍重/重/不良 の 4 つだけ・帯広の水分率や空は入れない・5 走以上)
+    'by_going', (
+      select coalesce(jsonb_agg(jsonb_build_object('going', going, 'n', n, 'w1', w1, 'win', round(100.0 * w1 / n, 1), 'top3', round(100.0 * t3 / n, 1)) order by array_position(array['良','稍重','重','不良'], going)), '[]'::jsonb)
+      from (select going, count(*) n, count(*) filter (where finish = 1) w1, count(*) filter (where finish <= 3) t3
+            from tmp_pp x where x.kind = g.kind and x.name = g.name and x.yr between p.y_from and p.y_to and going in ('良','稍重','重','不良') group by going having count(*) >= 5) gg)
   ), now()
 from (select kind, name from tmp_pp where kind in ('sire', 'bms') group by 1, 2) g
 cross join tmp_periods p
@@ -137,3 +147,53 @@ where (select count(*) from tmp_pp x where x.kind = g.kind and x.name = g.name a
 commit;
 select kind, count(*) as rows, pg_size_pretty(sum(octet_length(stats::text))::bigint) as json_size from public.nar_person_stats group by kind;
 select pg_size_pretty(pg_total_relation_size('public.nar_person_stats')) as table_size;
+
+-- ---------------------------------------------------------------- §156 F2 組み合わせ(騎手×調教師/馬主/父)
+-- 上の tmp_pr を使うので**この場所(同じ psql)で**続けて作る。⛔別ファイルにすると temp 表が消える
+
+create table if not exists public.nar_pair_stats (
+  key        text primary key,          -- kind|騎手|相手
+  kind       text not null,             -- 'jt'(騎手×調教師) | 'jo'(騎手×馬主) | 'js'(騎手×父)
+  a          text not null,             -- 騎手(公式の略称)
+  b          text not null,             -- 相手(調教師の略称 / 馬主名 / 父名)
+  stats      jsonb not null,            -- {n,w1,w2,w3,win,top2,top3,roi,roi3,from,to}
+  updated_at timestamptz not null default now()
+);
+alter table public.nar_pair_stats enable row level security;
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'nar_pair_stats' and policyname = 'nar_pair_stats_read') then
+    create policy nar_pair_stats_read on public.nar_pair_stats for select to anon, authenticated using (true);
+  end if;
+end $$;
+grant select on public.nar_pair_stats to anon, authenticated;
+
+drop table if exists tmp_pairs;
+create temp table tmp_pairs as
+select 'jt'::text as kind, t.jockey as a, t.trainer as b, t.* from tmp_pr t
+ where t.jockey is not null and t.jockey <> '' and t.trainer is not null and t.trainer <> ''
+union all
+select 'jo', t.jockey, h.owner, t.* from tmp_pr t join public.nar_horses h on h.horse_name = t.horse_name
+ where t.jockey is not null and t.jockey <> '' and h.owner is not null and h.owner <> ''
+union all
+select 'js', t.jockey, h.sire, t.* from tmp_pr t join public.nar_horses h on h.horse_name = t.horse_name
+ where t.jockey is not null and t.jockey <> '' and h.sire is not null and h.sire <> '';
+
+begin;
+delete from public.nar_pair_stats;
+insert into public.nar_pair_stats (key, kind, a, b, stats, updated_at)
+select kind || '|' || a || '|' || b, kind, a, b,
+  jsonb_build_object(
+    'n', count(*), 'w1', count(*) filter (where finish = 1), 'w2', count(*) filter (where finish = 2), 'w3', count(*) filter (where finish = 3),
+    'win', round(100.0 * count(*) filter (where finish = 1) / nullif(count(*), 0), 1),
+    'top2', round(100.0 * count(*) filter (where finish <= 2) / nullif(count(*), 0), 1),
+    'top3', round(100.0 * count(*) filter (where finish <= 3) / nullif(count(*), 0), 1),
+    'roi', round(100.0 * sum(win_pay) / nullif(count(*) * 100.0, 0), 0),
+    'roi3', round(100.0 * sum(place_pay) / nullif(count(*) * 100.0, 0), 0),
+    'from', min(race_date), 'to', max(race_date)),
+  now()
+from tmp_pairs
+group by kind, a, b
+having count(*) >= 5;
+commit;
+select kind, count(*) as rows from public.nar_pair_stats group by kind order by kind;
+select pg_size_pretty(pg_total_relation_size('public.nar_pair_stats')) as table_size;
