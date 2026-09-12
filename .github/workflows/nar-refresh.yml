@@ -181,17 +181,7 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: python cloud/rakuten_sales.py --days 3 --apply
 
-      # §52 高知の結果保存の自動化(daily+monthly)。公式成績→既存Worker RPC(旧DB keiba_*)。
-      # 判定=公式開催日∩結果ゼロの日だけ(自己修復型・結果のある日は触らない)。開催の無い日は数秒で終わる。
-      # ⛔KOCHI_WRITE_TOKEN(Worker の X-Write-Token)が未登録ならスキップ(失敗にしない)
-      - name: kochi results (self-heal)
-        env:
-          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-          KOCHI_WRITE_TOKEN: ${{ secrets.KOCHI_WRITE_TOKEN }}
-        run: |
-          if [ -z "$KOCHI_WRITE_TOKEN" ]; then echo "KOCHI_WRITE_TOKEN 未登録=スキップ"; exit 0; fi
-          python cloud/kochi_results.py --apply
+      # §157 段 3(2026-09-12): 高知の結果の自己修復(旧 DB keiba_* へ Worker 経由で保存)は外した= 高知の結果は 15 場の公式取得(nar_runs)に一本化
 
       # §120 高知のレース後コメント(主催者公式 www.keiba.or.jp)。結果の確定した(日,R)だけ
       # 1 レース 1 GET(0.7 秒あけ)・既に行のある(日,R)は開かない・未掲載は記録しない(次の便でまた見る)。

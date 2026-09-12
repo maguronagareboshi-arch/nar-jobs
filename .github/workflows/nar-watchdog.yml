@@ -75,50 +75,13 @@ jobs:
           raise SystemExit(0 if 0 <= age <= 12 else 1)
           PY
 
-  # #142 の教訓=「高知の keiba_* は管理者の手動保存が唯一の口。保存忘れは誰も気づかない」の見張り。
-  # nar_races(公式)に高知の開催があるのに、keiba_horses の着順が3日たっても全行空の日を検知して赤くする。
-  # 修理はユーザーの通常ルーチン(ビューアで結果取り込み→保存)。⛔鍵は第1プロジェクトの公開 anon(data.js と同じ)
+  # 高知の自前計測(前半3F)の見張り。§157 段 3(2026-09-12)で旧 DB の見張りは外し、本体の nar_own_runs を見る
   kochi-results:
     if: github.event.schedule == '40 23 * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: check kochi result-empty race days (fail if any, older than 3 days)
-        env:
-          NAR_SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
-          NAR_SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: |
-          python - <<'PY'
-          import os, json, urllib.request, urllib.parse, datetime as dt
-          KOCHI_URL = 'https://jcrcftvrsgmsewwdkqha.supabase.co'
-          KOCHI_ANON = ('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpjcmNmdHZyc2dtc2V3d2RrcWhhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4MDY0NjgsImV4cCI6MjA5NjM4MjQ2OH0.UED2rJNsuTPqofrhhNhQ2RM0NKc2eJ6qHllfbnebMe0')
-          def get(base, key, path):
-              req = urllib.request.Request(base + '/rest/v1/' + path,
-                  headers={'apikey': key, 'Authorization': 'Bearer ' + key})
-              return json.loads(urllib.request.urlopen(req, timeout=30).read())
-          today = dt.date.today()
-          lo, hi = (today - dt.timedelta(days=60)).isoformat(), (today - dt.timedelta(days=3)).isoformat()
-          rows = get(os.environ['NAR_SUPABASE_URL'], os.environ['NAR_SUPABASE_SERVICE_KEY'],
-                     f'nar_races?select=race_date&track=eq.%E9%AB%98%E7%9F%A5&race_no=eq.1'
-                     f'&race_date=gte.{lo}&race_date=lte.{hi}&order=race_date.desc&limit=50')
-          days = sorted({r['race_date'] for r in rows}, reverse=True)
-          gaps = []
-          for d in days[:12]:
-              kd = urllib.parse.quote(d.replace('-', '/'))
-              hs = get(KOCHI_URL, KOCHI_ANON, f'keiba_horses?select=chakujun&race_date=eq.{kd}&limit=300')
-              filled = sum(1 for h in hs if str(h.get('chakujun') or '').strip())
-              if not hs:
-                  gaps.append(f'{d}: 出馬表ごと未保存')
-              elif filled == 0:
-                  gaps.append(f'{d}: {len(hs)}行あるのに着順が全行空(結果保存忘れの疑い)')
-          print(f'高知の開催日(公式・{lo}..{hi}): {len(days)}日 / 点検 {min(len(days),12)}日')
-          for g in gaps:
-              print('MISSING', g)
-          if gaps:
-              print('修理= https://yukochi.com/ の管理者ビューアで該当日の結果取り込み→保存')
-          raise SystemExit(1 if gaps else 0)
-          PY
-
+      # §157 段 3(2026-09-12): 「結果ゼロ」の見張り(旧 DB keiba_*)は外した= 高知の結果は 15 場の公式取得(nar_runs)に一本化
       # §98 の見張り= 高知の翌朝自動計測(手元PCの kochi_auto.py)が動いているか。
       # ⛔PCが閉じていても鳴らせるのはここだけ(GPU/yt-dlp が要るのでクラウドでは代われない)。
       #   赤= 開催から48時間たっても各馬の前半3F が1頭も入っていない日がある(=計測が回っていない)。
@@ -131,8 +94,6 @@ jobs:
         run: |
           python - <<'PY'
           import os, json, urllib.request, urllib.parse, datetime as dt
-          KOCHI_URL = 'https://jcrcftvrsgmsewwdkqha.supabase.co'
-          KOCHI_ANON = ('eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImpjcmNmdHZyc2dtc2V3d2RrcWhhIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODA4MDY0NjgsImV4cCI6MjA5NjM4MjQ2OH0.UED2rJNsuTPqofrhhNhQ2RM0NKc2eJ6qHllfbnebMe0')
           def get(base, key, path):
               req = urllib.request.Request(base + '/rest/v1/' + path,
                   headers={'apikey': key, 'Authorization': 'Bearer ' + key})
@@ -147,13 +108,13 @@ jobs:
           days = sorted({r['race_date'] for r in rows}, reverse=True)
           gaps = []
           for d in days[:12]:
-              kd = urllib.parse.quote(d.replace('-', '/'))
-              hs = get(KOCHI_URL, KOCHI_ANON, f'keiba_horses?select=first3f&race_date=eq.{kd}&limit=300')
-              if not hs:
-                  continue          # 出馬表ごと無い日は上の「結果ゼロ」検査の受け持ち。二重に鳴らさない
-              filled = sum(1 for h in hs if str(h.get('first3f') or '').strip())
-              if filled == 0:
-                  gaps.append(f'{d}: {len(hs)}行あるのに各馬の前半3F が全行空(翌朝の自動計測が回っていない)')
+              # §157: 前半3F は本体の nar_own_runs(高知の自前計測)。行は測れた馬ぶんだけ立つ
+              rs = get(NAR, NKEY, f'nar_runs?select=runner_number&track=eq.%E9%AB%98%E7%9F%A5&race_date=eq.{d}&limit=300')
+              if not rs:
+                  continue          # 出走馬ごと無い日は公式取得の受け持ち。二重に鳴らさない
+              own = get(NAR, NKEY, f'nar_own_runs?select=umaban&track=eq.%E9%AB%98%E7%9F%A5&race_date=eq.{d}&first3f=not.is.null&limit=300')
+              if not own:
+                  gaps.append(f'{d}: 出走 {len(rs)}頭なのに各馬の前半3F が 1 頭も無い(翌朝の自動計測が回っていない)')
           print(f'高知の開催日(公式・{lo}..{hi}): {len(days)}日 / 点検 {min(len(days),12)}日')
           for g in gaps:
               print('MISSING', g)
