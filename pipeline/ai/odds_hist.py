@@ -54,11 +54,15 @@ def slim(j):
     return ri[0] if ri else None
 
 
-def fetch(pred, out, limit):
-    todo = [r for r in races_from_pred(pred) if not raw_path(out, *r).exists()]
+def fetch(pred, out, limit, shard=(0, 1), gap=GAP):
+    """shard=(i, n)= 並べたレースの i 番目おき(i%n)だけ取る= 別プロセスで同時に回せる(担当は重ならない)。
+    ⛔失敗が 20 回続いたら相手に止められたとみなして 'blocked' と書いて終わる(叩き続けない)。"""
+    allr = races_from_pred(pred)
+    si, sn = shard
+    todo = [r for k, r in enumerate(allr) if k % sn == si and not raw_path(out, *r).exists()]
     (out / 'raw').mkdir(parents=True, exist_ok=True)
-    log('races', len(races_from_pred(pred)), 'todo', len(todo))
-    ok = empty = fail = 0
+    log('shard', f'{si}/{sn}', 'races', len(allr), 'todo', len(todo), 'gap', gap)
+    ok = empty = fail = streak = 0
     for i, (track, day, no) in enumerate(todo[:limit] if limit else todo):
         url = URL.format(d=day, t=urllib.parse.quote(TRACK_API.get(track, track)), n=no)
         body = None
@@ -73,17 +77,26 @@ def fetch(pred, out, limit):
                 log('http', e.code, track, day, no)
             except Exception as e:                           # noqa: BLE001 通信の揺れは 3 回まで
                 log('err', type(e).__name__, track, day, no)
-            time.sleep(GAP * (attempt + 2))
+            time.sleep(max(gap, 0.6) * (attempt + 2))
         if body is None:
             fail += 1
+            streak += 1
+            if streak >= 20:
+                log('blocked', 'shard', f'{si}/{sn}', 'fail streak', streak, 'at', track, day, no)
+                break
         else:
-            with gzip.open(raw_path(out, track, day, no), 'wt', encoding='utf-8') as f:
+            streak = 0
+            dst = raw_path(out, track, day, no)
+            tmp = dst.with_name(dst.name + '.part')          # 途中で止めても書きかけを「取得済み」にしない
+            with gzip.open(tmp, 'wt', encoding='utf-8') as f:
                 json.dump(body, f, ensure_ascii=False)
+            os.replace(tmp, dst)
             empty += 1 if body.get('empty') else 0
             ok += 0 if body.get('empty') else 1
         if (i + 1) % 200 == 0:
             log('done', i + 1, 'ok', ok, 'empty', empty, 'fail', fail)
-        time.sleep(GAP)
+        if gap:
+            time.sleep(gap)
     log('end ok', ok, 'empty', empty, 'fail', fail)
 
 
@@ -133,19 +146,23 @@ def flat_rows(track, day, no, ri):
 
 def flat(out):
     import pandas as pd
-    rows, n_file, n_empty = [], 0, 0
+    rows, n_file, n_empty, bad = [], 0, 0, []
     for fp in sorted((out / 'raw').glob('*.json.gz')):
         n_file += 1
         track, day, r = fp.name[:-len('.json.gz')].rsplit('_', 2)
-        with gzip.open(fp, 'rt', encoding='utf-8') as f:
-            ri = json.load(f)
+        try:
+            with gzip.open(fp, 'rt', encoding='utf-8') as f:
+                ri = json.load(f)
+        except (OSError, EOFError, ValueError):
+            bad.append(fp.name)                                # ⛔黙って飛ばさない= 数と名前を出す(消せば次の fetch で取り直す)
+            continue
         if ri.get('empty'):
             n_empty += 1
             continue
         rows += flat_rows(track, day, int(r[1:]), ri)
     df = pd.DataFrame(rows)
     df.to_parquet(out / 'flat.parquet', index=False)
-    log('files', n_file, 'empty', n_empty, 'rows', len(df), '->', out / 'flat.parquet')
+    log('files', n_file, 'empty', n_empty, 'bad', len(bad), bad[:5], 'rows', len(df), '->', out / 'flat.parquet')
 
 
 def load_pay(tsv):
@@ -244,11 +261,14 @@ def main():
     ap.add_argument('--out', default=str(HOME / 'keibaodds'))
     ap.add_argument('--payouts', default=str(HOME / 'payouts_2024.tsv'))
     ap.add_argument('--limit', type=int, default=0)
+    ap.add_argument('--shard', default='0/1', help='i/n= 並べたレースの i%%n 番目だけ取る(別プロセスで同時に回す)')
+    ap.add_argument('--gap', type=float, default=GAP, help='1 本ごとの待ち秒(既定 0.6)')
     a = ap.parse_args()
     sys.stdout.reconfigure(encoding='utf-8')
     out = Path(a.out)
     if a.cmd == 'fetch':
-        fetch(a.pred, out, a.limit)
+        si, sn = (int(x) for x in a.shard.split('/'))
+        fetch(a.pred, out, a.limit, (si, sn), a.gap)
     elif a.cmd == 'flat':
         flat(out)
     else:
