@@ -13,6 +13,8 @@
   - 型が1頭も付かないレースは races に入れない(画面はカードごと出さない=推定を薄めない)
   - §99b(2026-09-05)で **テン**(`h[馬番].ten` 秒・`tn` 走数)と **ペース見込み**(`pace`/`pace_by`/`pace_ten`)を
     **足した**。⛔§99a のキー(n/k/lead/front/mid/back/none/h の s,p,m/w)は1バイトも変えていない
+  - §169 段 3(2026-09-14)で **逃げそうな馬 1 頭**(`pick`)と **隊列の見込み**(`order`)を**足した**
+    (どちらも `h[馬番].p`= 過去 5 走の 1 角の平均位置から・テンは使わない)。既存の鍵は変えていない
   - ⛔帯広ばは対象外(コーナーの通過順が無い)
   - ⛔`SHOW_TRACKS` に無い場は races に**入れない**(画面で隠すのでなく配らない)
 
@@ -274,6 +276,14 @@ def style_of(ps):
     return ("先行" if m <= FRONT_P else "差し" if m <= MID_P else "追込"), m
 
 
+def pick_order(hh):
+    """§169 段 3 h(型の付いた馬)→ (pick, order)。pick= 1 角の平均位置 p がいちばん小さい馬・
+    order= p の昇順の馬番。⛔同点は馬番の小さい方・型なしの馬は入れない(推定で並べない)・p の無い馬は入れない"""
+    items = sorted((v["p"], int(u)) for u, v in hh.items() if isinstance(v, dict) and v.get("p") is not None)
+    order = [u for _p, u in items]
+    return (order[0] if order else None), order
+
+
 def word_of(lead):
     """カードの1行目。⛔価値判断語は使わない(§5)"""
     if not lead:
@@ -413,6 +423,8 @@ def build_races(day_races, day_runs, past_by_horse, ranks_of, ten=None):
             "none": sorted(none), "h": hh,
             "w": word_of(lead) + thickness(len(lead) + len(buckets["先行"]), k),
         }
+        # §169 段 3 逃げそうな馬 1 頭と隊列の見込み(⛔手元の h から作る= 通信 +0・既存の鍵は変えない)
+        rec["pick"], rec["order"] = pick_order(hh)
         if ten_of:
             add_pace(rec, t, hh, band)          # §99b(出せないレースはキーごと置かない)
         out["%s-%d" % (TRACK2PREFIX[t], no)] = rec
@@ -787,7 +799,8 @@ def backtest(base, key, days, pace=False, kochi_q=False, order=False):
         if not rows:
             continue
         s = stat.setdefault(t, {"races": 0, "cand_races": 0, "hit": 0, "cand": 0, "cand_hit": 0,
-                                "kn": [], "absent": 0, "absent_kind": {}})
+                                "kn": [], "absent": 0, "absent_kind": {},
+                                "pick_n": 0, "pick_hit": 0, "pick_rand": 0.0, "lead_n": 0})
         s["races"] += 1
         lead, style, tens, tens_new, tna, tnn = [], {}, {}, {}, {}, {}
         qpos, prev = {}, {}
@@ -825,6 +838,13 @@ def backtest(base, key, days, pace=False, kochi_q=False, order=False):
                         tnn[u] = len(tv2)
         s["kn"].append(k / len(rows))
         top = [u for u, r in ranks.items() if r == 1]
+        # §169 段 3 当たりは 1 頭指名で数える= 本番と同じ pick_order(p は h と同じく小数 2 桁)
+        if qpos:
+            pk, _od = pick_order({str(u): {"p": round(m2, 2)} for u, m2 in qpos.items()})
+            s["pick_n"] += 1
+            s["pick_hit"] += 1 if pk in top else 0
+            s["pick_rand"] += sum(1 for u in qpos if u in top) / len(qpos)     # でたらめ 1 頭(同着の先頭も数える)
+            s["lead_n"] += len(lead)
         act = pred = pred_new = None
         if pace and t in TEN_TRACKS:
             cands = lead or [u for u, st2 in style.items() if st2 == "先行"]
@@ -924,8 +944,10 @@ def backtest(base, key, days, pace=False, kochi_q=False, order=False):
             s["absent_kind"][kind] = s["absent_kind"].get(kind, 0) + 1
 
     log("")
-    log("場      レース  候補あり  1角先頭率   候補ごと   k/N   逃げ不在→実際の先頭の型")
-    rows_out = []
+    log("§169 段 3 指名的中= 逃げそうな馬 1 頭(1 角の平均位置が最小)が実際の 1 角先頭 / でたらめ 1 頭 / 候補の平均頭数= 逃げの型の馬の数")
+    log("        「候補の誰かが先頭」は候補の数に左右される(候補が多いほど当たりやすい)")
+    log("場      レース  指名的中  でたらめ1頭  候補の平均頭数  候補あり  候補の誰かが先頭   候補ごと   k/N   逃げ不在→実際の先頭の型")
+    rows_out, tot1 = [], {}
     for t in sorted(stat, key=lambda x: -stat[x]["races"]):
         s = stat[t]
         rate = s["hit"] / s["cand_races"] if s["cand_races"] else None
@@ -933,12 +955,24 @@ def backtest(base, key, days, pace=False, kochi_q=False, order=False):
         kn = statistics.fmean(s["kn"]) if s["kn"] else 0
         kinds = "・".join("%s%d" % (k, v) for k, v in sorted(s["absent_kind"].items(),
                                                             key=lambda kv: -kv[1]))
-        log("%-6s %5d %8d %9s %10s %6.2f   %s"
-            % (t, s["races"], s["cand_races"],
+        log("%-6s %5d %8s %11s %14.2f %8d %13s %10s %6.2f   %s"
+            % (t, s["races"],
+               ("%.1f%%" % (s["pick_hit"] / s["pick_n"] * 100)) if s["pick_n"] else "—",
+               ("%.1f%%" % (s["pick_rand"] / s["pick_n"] * 100)) if s["pick_n"] else "—",
+               s["lead_n"] / s["pick_n"] if s["pick_n"] else 0,
+               s["cand_races"],
                ("%.0f%%" % (rate * 100)) if rate is not None else "—",
                ("%.0f%%" % (crate * 100)) if crate is not None else "—",
                kn, kinds or "—"))
         rows_out.append((t, rate))
+        for k2 in ("races", "pick_n", "pick_hit", "pick_rand", "lead_n", "cand_races", "hit", "cand", "cand_hit"):
+            tot1[k2] = tot1.get(k2, 0) + s[k2]
+    if tot1.get("pick_n"):
+        log("%-6s %5d %7.1f%% %10.1f%% %14.2f %8d %12.1f%% %9.1f%%"
+            % ("全場計", tot1["races"], tot1["pick_hit"] / tot1["pick_n"] * 100, tot1["pick_rand"] / tot1["pick_n"] * 100,
+               tot1["lead_n"] / tot1["pick_n"], tot1["cand_races"],
+               tot1["hit"] / tot1["cand_races"] * 100 if tot1["cand_races"] else 0,
+               tot1["cand_hit"] / tot1["cand"] * 100 if tot1["cand"] else 0))
     ng = [t for t, r in rows_out if r is None or r < BACKTEST_GATE]
     log("")
     log("ゲート(1角先頭率 %.0f%%)に届かない場: %s" % (BACKTEST_GATE * 100, "・".join(ng) or "なし"))
