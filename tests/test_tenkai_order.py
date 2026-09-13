@@ -4,7 +4,7 @@
   py -3.12 -m unittest discover -s tests -p "test_tenkai*.py"
 
 確かめるのは=
-  ①直線の当てはめ(fit_line / ten_fits)= 標本の下限・x が同じなら出さない・窓の外の走を入れない
+  ①q_ten(段 2-A′)= そのレースのテン順位の百分位・同点は同じ順位・テンのある馬が TEN_RANK_MIN 頭未満なら出さない
   ②q の合成と qs= 両方/テンだけ/通過順だけ/どちらも無し
   ③order= q の昇順・同点は馬番順
   ④型の付け直し= 閾値(LEAD_P/FRONT_P/MID_P)を動かしていない
@@ -17,34 +17,20 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cloud import tenkai                                                  # noqa: E402
-from cloud.tenkai import fit_line, order_of, q_merge, spearman, style_of_q, ten_fits   # noqa: E402
+from cloud.tenkai import order_of, q_merge, spearman, style_of_q, ten_ranks   # noqa: E402
 
 
 class Order(unittest.TestCase):
-    def test_fit_line(self):
-        xs = [i * 0.01 - 1.0 for i in range(tenkai.TEN_Q_MIN)]
-        ys = [0.5 + 0.3 * x for x in xs]
-        a, b = fit_line(xs, ys)
-        self.assertAlmostEqual(a, 0.5)
-        self.assertAlmostEqual(b, 0.3)
-        self.assertIsNone(fit_line(xs[:-1], ys[:-1]), "標本の下限を守っていない")
-        self.assertIsNone(fit_line([1.0] * tenkai.TEN_Q_MIN, ys), "x がすべて同じでも当てている")
-
-    def test_ten_fits_window(self):
-        ten_of, ranks_of = {}, {}
-        n = tenkai.TEN_Q_MIN
-        for i in range(n):
-            d = "2026-05-%02d" % (1 + i % 28)
-            ten_of[("大井", d, i + 1, 1)] = (35.0 + i * 0.01, 1400)
-            ranks_of[("大井", d, i + 1)] = {1: 1 + i % 10, 2: 11}
-            # 窓の外(検証の窓の日)= 当てはめに入れない
-            ten_of[("大井", "2026-07-01", 1000 + i, 1)] = (35.0, 1400)
-            ranks_of[("大井", "2026-07-01", 1000 + i)] = {1: 11, 2: 1}
-        std = {("大井", 1400): 36.0}
-        fits = ten_fits(ten_of, ranks_of, std, None, "2026-01-01", "2026-06-15")
-        self.assertIn("大井", fits)
-        self.assertEqual(fits["大井"][2], n, "窓の外の走を入れている")
-        self.assertEqual(ten_fits(ten_of, ranks_of, std, None, "2026-06-15", "2026-06-30"), {})
+    def test_ten_ranks(self):
+        q = ten_ranks({3: -0.8, 7: 0.4, 1: -0.1, 5: 1.2})
+        self.assertEqual(q, {3: 0.125, 1: 0.375, 7: 0.625, 5: 0.875})
+        # 同点は同じ順位(小さい方)
+        self.assertEqual(ten_ranks({1: 0.0, 2: 0.0, 3: 0.5}), {1: 0.5 / 3, 2: 0.5 / 3, 3: 2.5 / 3})
+        self.assertEqual(tenkai.TEN_RANK_MIN, 3)
+        self.assertEqual(ten_ranks({1: 0.0, 2: 0.5}), {}, "テンのある馬が 3 頭未満でも出している")
+        self.assertEqual(ten_ranks({}), {})
+        self.assertFalse(hasattr(tenkai, "fit_line") or hasattr(tenkai, "ten_fits") or hasattr(tenkai, "TEN_Q_MIN"),
+                         "直線の部品が残っている")
 
     def test_q_merge(self):
         q, qs = q_merge(0.2, 0.6, 0.7)

@@ -92,7 +92,7 @@ PACE_GATE_OPP = 0.15    # 逆(速い↔遅い)がこれを超える場も出さ�
 TEN_DAY_ADJ = True      # False で §99b の道(日の補正なし)に戻る
 TEN_DAY_MIN = 20        # その場・その日の前半3F がこれ未満なら補正しない(None= x のまま)
 # §169 段 2 隊列の見込み q(1 角の位置の見込み・0= 先頭側 / 1= 最後方側)。⛔定数はこの 3 つだけ
-TEN_Q_MIN = 200                     # 場ごとの直線(q = a + b·テン)を当てる最少の走数
+TEN_RANK_MIN = 3                    # そのレースでテンのある馬がこれ未満なら q_ten を出さない(2 頭の順位は情報が薄い)
 TEN_W_CANDIDATES = (0.5, 0.7, 1.0)  # テンの重み W の候補(⛔小刻みに探さない)
 TEN_W = None                        # --backtest --order で 1 つに決める(決まるまで本番の隊列は変えない)
 
@@ -652,43 +652,18 @@ def add_pace(rec, track, hh, band):
 
 # ---------------------------------------------------------------- §169 段 2 隊列の見込み
 
-def fit_line(xs, ys):
-    """最小二乗の 1 次式 y = a + b·x → (a, b)。⛔標本が TEN_Q_MIN 未満・x がすべて同じなら None"""
-    n = len(xs)
-    if n < TEN_Q_MIN or n != len(ys):
-        return None
-    mx, my = statistics.fmean(xs), statistics.fmean(ys)
-    sxx = sum((x - mx) ** 2 for x in xs)
-    if sxx <= 0:
-        return None
-    b = sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / sxx
-    return my - b * mx, b
-
-
-def ten_fits(ten_of, ranks_of, std, day_off=None, lo=None, hi=None):
-    """場ごとの直線 {場: (a, b, 標本)}。材料= 1 走ずつの
-    (テン= 前半3F − 標準 − その日の出やすさ, その走の 1 角の位置 p= 順位 ÷ 頭数)。
-    ⛔手元の ten_of と ranks_of だけで作る(通信 +0)・lo <= 日 < hi の走だけ(--backtest は窓より前)"""
-    pts = {}
-    for (t, d, no, u), (v, dm) in ten_of.items():
-        if (lo is not None and d < lo) or (hi is not None and d >= hi):
-            continue
-        ranks = ranks_of.get((t, d, no))
-        base_v = std.get((t, dm))
-        if not ranks or u not in ranks or base_v is None:
-            continue
-        x = v - base_v
-        if day_off is not None:
-            off = day_off_of(day_off, t, d, x)
-            x = x - off if off is not None else x
-        xs, ys = pts.setdefault(t, ([], []))
-        xs.append(x)
-        ys.append(ranks[u] / len(ranks))
+def ten_ranks(tens):
+    """§169 段 2-A′ {馬番: テン} → {馬番: q_ten}= **今回のメンバーの中の**テン順位の百分位
+    (順位 − 0.5)÷ テンのある頭数(0 に近い= 前半が速い側)。⛔同点は同じ順位(小さい方)・
+    ⛔テンのある馬が TEN_RANK_MIN 頭未満なら {}(出さない)。通信なし(手元のテンだけ)"""
+    n = len(tens)
+    if n < TEN_RANK_MIN:
+        return {}
+    vals = sorted(tens.values())
     out = {}
-    for t, (xs, ys) in pts.items():
-        ab = fit_line(xs, ys)
-        if ab:
-            out[t] = (ab[0], ab[1], len(xs))
+    for u, v in tens.items():
+        rank = vals.index(v) + 1
+        out[u] = (rank - 0.5) / n
     return out
 
 
@@ -755,7 +730,8 @@ def backtest(base, key, days, pace=False, kochi_q=False, order=False):
     §169 `--pace` は 旧(日の補正なし)と 新(補正あり)を**1 回で並べる**。⛔std・四分位の材料は
       検証の窓より前の 365 日だけ(リーク止め)。答え(実際の言葉)は旧・新で**同じ**(補正なし・旧の四分位)。
     §169 段 2 `--order`= 隊列の見込み。旧= 通過順の平均 p だけ / 前走= 前走の 1 角の位置で並べるだけ /
-      W= テン(直線 a+b·テン・窓より前の 365 日で当てる)と通過順の合成。⛔**旧で見込みのある馬が 3 頭以上**の
+      W= テン(§169 段 2-A′ そのレースのテン順位の百分位)と通過順の合成 / 並び= 型は旧のまま・並びだけ W=0.5。
+      ⛔**旧で見込みのある馬が 3 頭以上**の
       レースだけで、全部の版を**同じレース**で比べる。答え= 公式の 1 番目のコーナーの順位
     """
     hi = dt.date.today()
@@ -790,7 +766,7 @@ def backtest(base, key, days, pace=False, kochi_q=False, order=False):
     for r in runs:
         runs_by_race.setdefault((r["track"], r["race_date"], r["race_no"]), []).append(r)
 
-    ten_of, std, band, band_new, day_off, fits = {}, {}, {}, {}, None, {}
+    ten_of, std, band, band_new, day_off = {}, {}, {}, {}, None
     if pace or order:
         need = {(r["track"], r["race_date"]) for r in races if r["track"] in TEN_TRACKS}
         need |= ten_year_days(base, key, (lo - dt.timedelta(days=1)).isoformat())
@@ -802,8 +778,6 @@ def backtest(base, key, days, pace=False, kochi_q=False, order=False):
         n_small = sum(1 for (t, d), xs in day_off.items() if d >= lo.isoformat() and len(xs) < TEN_DAY_MIN)
         log("  テン: %d走 / 標準 %d組(%s より前) / 四分位 旧 %s 新 %s / 窓の場日 %d(%d 本未満 %d)・要求 %d 回"
             % (len(ten_of), len(std), lo, band, band_new, n_day, TEN_DAY_MIN, n_small, N_REQ[0]))
-        if order:
-            fits = ten_fits(ten_of, ranks_of, std, day_off, far, lo.isoformat())
 
     stat = {}
     for (t, d, no), ranks in sorted(ranks_of.items()):
@@ -887,24 +861,28 @@ def backtest(base, key, days, pace=False, kochi_q=False, order=False):
                 ps["tna"] += sum(tna.values())
                 ps["tn"] += sum(tnn.values())
         if order and t in TEN_TRACKS and sum(1 for u in qpos if u in ranks) >= 3:
-            fit = fits.get(t)
             runners = [int(e["runner_number"]) for e in rows if e.get("runner_number") is not None]
+            qten = ten_ranks({u: tens_new[u] for u in runners if u in tens_new})
             vers = [("旧", dict(qpos), dict(style), {u: "pos" for u in qpos}), ("前走", dict(prev), {}, {})]
             for w in TEN_W_CANDIDATES:
                 qd, sty, qsd = {}, {}, {}
                 for u in runners:
-                    qt = fit[0] + fit[1] * tens_new[u] if fit and u in tens_new else None
-                    q, qs = q_merge(qt, qpos.get(u), w)
+                    q, qs = q_merge(qten.get(u), qpos.get(u), w)
                     if q is None:
                         continue
                     qd[u], qsd[u] = q, qs
                     sty[u] = style[u] if qs == "pos" else style_of_q(q)
                 vers.append(("W=%.1f" % w, qd, sty, qsd))
+                if w == 0.5:
+                    # 並びだけ= 型は今の style_of のまま(4 行は変えない)・order だけ W=0.5 の q
+                    vers.append(("並び", dict(qd), dict(style), dict(qsd)))
             os_ = s.setdefault("order", {})
             for name, qd, sty, qsd in vers:
                 o = os_.setdefault(name, {"n": 0, "rho": 0.0, "rn": 0, "top": 0, "rand": 0.0, "top3": 0,
                                           "rand3": 0.0, "cr": 0, "ch": 0, "horses": 0, "runners": 0, "qs": {},
-                                          "pn": 0, "phit": 0, "popp": 0, "bhit": 0, "bopp": 0})
+                                          "pn": 0, "phit": 0, "popp": 0, "bhit": 0, "bopp": 0, "chg": 0})
+                if name != "前走":
+                    o["chg"] += sum(1 for u in set(sty) | set(style) if sty.get(u) != style.get(u))
                 seen = [u for u in order_of(qd) if u in ranks]
                 o["n"] += 1
                 o["runners"] += len(runners)
@@ -1008,25 +986,24 @@ def backtest(base, key, days, pace=False, kochi_q=False, order=False):
     if order:
         log("")
         log("■ §169 段 2 隊列の見込み(1 角)・旧= 通過順だけ / 前走= 前走の 1 角の位置で並べるだけ / W= テンと通過順の合成")
-        log("  直線(窓より前の 365 日・1 走ずつ): " + " / ".join(
-            "%s a=%.3f b=%+.3f n=%d" % (t, a, b, n) for t, (a, b, n) in sorted(fits.items())))
-        log("場      版      レース   順位相関ρ   先頭  でたらめ1頭  前3頭  でたらめ3頭  逃げ候補的中(レース)  見込み  qs 内訳   pace 一致/逆(今の型→この版・レース)")
-        names = ["旧", "前走"] + ["W=%.1f" % w for w in TEN_W_CANDIDATES]
+        log("  q_ten= そのレースのテン順位の百分位(テンのある馬 %d 頭以上のレースだけ)" % TEN_RANK_MIN)
+        log("場      版      レース   順位相関ρ   先頭  でたらめ1頭  前3頭  でたらめ3頭  逃げ候補的中(レース)  見込み  qs 内訳   pace 一致/逆(今の型→この版・レース)  型が旧と変わった馬")
+        names = ["旧", "前走"] + ["W=%.1f" % w for w in TEN_W_CANDIDATES] + ["並び"]
         keys = ("n", "rho", "rn", "top", "rand", "top3", "rand3", "cr", "ch", "horses", "runners",
-                "pn", "phit", "popp", "bhit", "bopp")
+                "pn", "phit", "popp", "bhit", "bopp", "chg")
         tot = {nm: {k2: 0 for k2 in keys} for nm in names}
         pct = lambda a, b: (a / b * 100) if b else float("nan")
 
         def row(label, nm, o):
             qs = "・".join("%s%d" % (k2, v) for k2, v in sorted(o.get("qs", {}).items()))
-            log("%-6s %-6s %6d %10.3f %6.1f%% %9.1f%% %6.2f %10.2f %9.1f%%(%d) %8.0f%%  %s  %s"
+            log("%-6s %-6s %6d %10.3f %6.1f%% %9.1f%% %6.2f %10.2f %9.1f%%(%d) %8.0f%%  %s  %s  %s"
                 % (label, nm, o["n"], o["rho"] / o["rn"] if o["rn"] else float("nan"),
                    pct(o["top"], o["n"]), pct(o["rand"], o["n"]),
                    o["top3"] / o["n"] if o["n"] else 0, o["rand3"] / o["n"] if o["n"] else 0,
                    pct(o["ch"], o["cr"]), o["cr"], pct(o["horses"], o["runners"]), qs or "—",
                    ("%.1f%%/%.1f%%→%.1f%%/%.1f%%(%d)" % (pct(o["bhit"], o["pn"]), pct(o["bopp"], o["pn"]),
                                                         pct(o["phit"], o["pn"]), pct(o["popp"], o["pn"]), o["pn"]))
-                   if o["pn"] else "—"))
+                   if o["pn"] else "—", o["chg"] if nm != "前走" else "—"))
 
         for t in TEN_TRACKS:
             os_ = stat.get(t, {}).get("order")
@@ -1058,6 +1035,12 @@ def backtest(base, key, days, pace=False, kochi_q=False, order=False):
                 ok_w.append((rho_of(o), w))
         log("§169 段 2 採る条件(6 場計= ρ 旧より上・先頭 旧以上・逃げ候補の的中 旧 −2 ポイントまで): %s"
             % (("W=%.1f(満たす中で ρ が最も高い)" % max(ok_w)[1]) if ok_w else "満たす W なし"))
+        o = tot["並び"]
+        if o["n"] and old["n"]:
+            ok = rho_of(o) > rho_of(old) and o["top"] / o["n"] > old["top"] / old["n"]
+            log("§169 段 2-A′ 並びだけ(W=0.5・型は旧のまま= ρ 旧より上・先頭 旧より上): ρ %.3f(旧 %.3f)・先頭 %.1f%%(旧 %.1f%%)→ %s"
+                % (rho_of(o), rho_of(old), pct(o["top"], o["n"]), pct(old["top"], old["n"]),
+                   "満たす" if ok else "満たさない"))
     return 0
 
 
