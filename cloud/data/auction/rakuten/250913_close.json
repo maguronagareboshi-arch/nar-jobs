@@ -1,0 +1,41 @@
+{
+ "source": "auction.keiba.rakuten.co.jp",
+ "round": 694,
+ "ymd": "250913",
+ "passes": [
+  {
+   "fetched_at": "2026-09-13T22:08:36+09:00",
+   "live_count": 2,
+   "live_items": [
+    {
+     "itemId": 17042,
+     "image": "https://keiba.r10s.jp/auction/data/item/1/250913_horse_24/1.jpg",
+     "customName": "ブラックパロット　　牡３歳　　※中央競馬...",
+     "startDateTime": "2026/09/13 12:00",
+     "endDateTime": "2026/09/13 22:12",
+     "currentPrice": 1440000,
+     "currentPriceWithTax": 1584000
+    },
+    {
+     "itemId": 17020,
+     "image": "https://keiba.r10s.jp/auction/data/item/1/250913_horse_02/1.JPG",
+     "customName": "パルヴニールの25　　牡１歳　　※育成馬　...",
+     "startDateTime": "2026/09/13 12:00",
+     "endDateTime": "2026/09/13 22:12",
+     "currentPrice": 1570000,
+     "currentPriceWithTax": 1727000
+    }
+   ]
+  },
+  {
+   "fetched_at": "2026-09-13T22:38:32+09:00",
+   "live_count": 0,
+   "live_items": []
+  },
+  {
+   "fetched_at": "2026-09-13T23:03:33+09:00",
+   "live_count": 0,
+   "live_items": []
+  }
+ ]
+}

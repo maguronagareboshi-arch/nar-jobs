@@ -230,6 +230,8 @@ def build_marks(df, day, m, bst_b, bst_r, timing):
             meta['timing'] = 'last'
             meta['bw_n'] = int(runnable['bataiju_now'].notna().sum())
         s = runnable['p'] / runnable['p'].sum()
+        # §170 B 全頭の s(= p/Σp)を残す= 期待値の検証用。⛔marks(上位 4 頭)の形は変えない
+        meta['p'] = {str(int(u)): round(float(v), 4) for u, v in zip(runnable['runner_number'], s)}
         order = runnable.assign(s=s).sort_values(['s', 'runner_number'], ascending=[False, True]).head(4)
         marks = [{'num': int(r.runner_number), 'mark': MARKS[i], 'score': round(float(r.s) * 100, 1)}
                  for i, r in enumerate(order.itertuples())]
