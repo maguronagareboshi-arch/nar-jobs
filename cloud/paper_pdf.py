@@ -108,6 +108,31 @@ def gear_marks(text):
     return "+".join(c for c in "BPS" if c in got)
 
 
+def gear_from_band(band):
+    """⑨の帯の認識(左→右に並べたもの)→ (馬具の字 or None, 信頼度が足りず読まなかったか)。
+    ① 右端から続く箱が B/P/S だけ(合わせて 1〜3 字)= 印の箱。**その箱の信頼度だけ**で決める。
+       2026-09-15 10R の実測= 文字認識はカタカナの馬名をほとんど拾わず(拾っても 0.5〜0.7)、印は別の箱で 0.8〜1.0 で返る。
+    ② 印の箱が無い(名前と印が 1 つの箱)= 全部の信頼度が足りるときだけ gear_marks。
+    ⛔印の箱の信頼度が低い・崩れた字(例 'SA(EXYIHYE')は読まない(推定しない)"""
+    band = list(band or [])
+    if not band:
+        return None, False
+    marks = []
+    for d in reversed(band):
+        t = re.sub(r"\s", "", unicodedata.normalize("NFKC", str(d.get("text") or "")))
+        if not re.fullmatch(r"[BPS]+", t):
+            break
+        marks.append((t, float(d["score"])))
+    if marks and len("".join(t for t, _ in marks)) <= 3:
+        if any(s < MIN_SCORE for _, s in marks):
+            return None, True
+        got = set("".join(t for t, _ in marks))
+        return "+".join(c for c in "BPS" if c in got), False
+    if any(float(d["score"]) < MIN_SCORE for d in band):
+        return None, True
+    return gear_marks(" ".join(str(d.get("text") or "") for d in band)), False
+
+
 def rows_to_write(name, runs, hits, distances, src):
     """特定できた馬の、紙面に前半の値がある走だけ → nar_paper_runs の行。
     distances= {(track, date, race_no): distance_m}・src= {ref(ファイル名だけ), page, col}。
@@ -176,11 +201,9 @@ def parse_block(lines, width, height, race_date):
             row["low_score"].append(key)
     elif len(toks) > 2:
         row["low_score"].append("3f_many")
-    # ⑨相手の馬(最下段)の末尾の B/P/S= その走のその馬の馬具。信頼度が低い字が混じれば読まない
-    last = sorted(_band(lines, height, 0.9, 1.01), key=lambda d: float(d["cx"]))
-    if last:
-        if any(float(d["score"]) < MIN_SCORE for d in last):
-            row["low_score"].append("gear")
-        else:
-            row["gear"] = gear_marks(" ".join(d["text"] for d in last))
+    # ⑨相手の馬(最下段)の末尾の B/P/S= その走のその馬の馬具(読み方は gear_from_band)
+    gear, low = gear_from_band(sorted(_band(lines, height, 0.9, 1.01), key=lambda d: float(d["cx"])))
+    row["gear"] = gear
+    if low:
+        row["low_score"].append("gear")
     return row

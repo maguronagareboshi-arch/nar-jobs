@@ -88,6 +88,25 @@ class Gear(unittest.TestCase):
         self.assertIsNone(pp.gear_marks("マリリンダンサーBX"))
         self.assertEqual(pp.gear_marks("マリリンダンサー S P"), "P+S")      # 並びは B→P→S
 
+    @staticmethod
+    def _band(*boxes):
+        """⑨の帯の認識(2026-09-15 10R の実測の字と信頼度)→ parse_block に渡す行(枠の高さ 100 の 96)"""
+        return [{"text": t, "score": s, "cx": 20 + 40 * i, "cy": 96} for i, (t, s) in enumerate(boxes)]
+
+    def test_real_low_name_then_mark_box(self):
+        # 名前の箱が低い信頼度(夕 0.655・ジ 0.642・シ↑ 0.539)でも、別の箱で返った印は読む(9/15 10R 列 1・8・12)
+        for boxes, want in ([("夕", 0.655), ("S", 0.98)], "S"), ([("ジ", 0.642), ("B", 0.997)], "B"), ([("シ↑", 0.539), ("B", 0.993)], "B"):
+            row = pp.parse_block(self._band(*boxes), 160, 100, "2026-09-15")
+            self.assertEqual((row["gear"], "gear" in row["low_score"]), (want, False), boxes)
+
+    def test_real_mark_box_only(self):
+        # 名前の箱が無く印の箱だけ(9/15 10R 列 2・9)= 読む。崩れた字(列 1)・休養の字(列 6)・印の信頼度が低い= 読まない
+        for boxes, want in (([("B", 1.0)], ("B", False)), ([("BS", 0.882)], ("B+S", False)),
+                            ([("SA(EXYIHYE", 0.677)], (None, True)), ([("3力月休養", 0.971)], (None, False)),
+                            ([("マ", 0.605), ("B", 0.7)], (None, True))):
+            row = pp.parse_block(self._band(*boxes), 160, 100, "2026-09-15")
+            self.assertEqual((row["gear"], "gear" in row["low_score"]), want, boxes)
+
     def test_rows_gear_only_when_present(self):
         runs = [dict(run("2026-09-06", "水沢", 2, 83.6, 37.9), gear="B+S"), run("2026-08-11", "盛岡", 10, 101.3, 37.1)]
         dist = {("水沢", "2026-09-06", 4): 1300, ("盛岡", "2026-08-11", 8): 1400}
