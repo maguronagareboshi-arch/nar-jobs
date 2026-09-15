@@ -236,10 +236,12 @@ def one_pdf(base, name, race_date, href, work):
 
 
 def upsert(rows):
+    """⛔1 本の中の行は同じ鍵をそろえる(鍵の無い行を null で送らない)= gear のある行と無い行を分けて送る"""
     now = dt.datetime.now(dt.timezone.utc).isoformat()
-    for i in range(0, len(rows), CHUNK):
-        sb("nar_paper_runs?on_conflict=" + ",".join(PK),
-           json.dumps([dict(r, updated_at=now) for r in rows[i:i + CHUNK]], ensure_ascii=False).encode("utf-8"))
+    for part in ([r for r in rows if "gear" in r], [r for r in rows if "gear" not in r]):
+        for i in range(0, len(part), CHUNK):
+            sb("nar_paper_runs?on_conflict=" + ",".join(PK),
+               json.dumps([dict(r, updated_at=now) for r in part[i:i + CHUNK]], ensure_ascii=False).encode("utf-8"))
 
 
 def main(argv=None):
@@ -277,8 +279,8 @@ def main(argv=None):
         except Exception as e:  # ⛔例外の文には URL やパスが入りうる= 種類名だけ
             log("%s 失敗(%s)" % (label, type(e).__name__)); fails += 1; continue
         n3 = sum(1 for r in rows if r["first3f"] is not None)
-        log("%s 馬の列 %d・特定 %d・保留 %d・公式の行 %d・書く行 %d(first3f %d・first2f %d)" % (
-            label, ncol, ncol - len(held), len(held), ndb, len(rows), n3, len(rows) - n3))
+        log("%s 馬の列 %d・特定 %d・保留 %d・公式の行 %d・書く行 %d(first3f %d・first2f %d・馬具 %d 走)" % (
+            label, ncol, ncol - len(held), len(held), ndb, len(rows), n3, len(rows) - n3, sum(1 for r in rows if r.get("gear"))))
         for page, col, why in held:
             log("  %s p%d 右から%d列 保留 %s" % (label, page, col, why))
         for r in rows:
@@ -291,7 +293,7 @@ def main(argv=None):
         with open(a.out, "w", encoding="utf-8") as f:
             json.dump(rows, f, ensure_ascii=False, indent=0)
     n3 = sum(1 for r in rows if r["first3f"] is not None)
-    log("書く行 %d(first3f %d・first2f %d)・失敗 %d 本" % (len(rows), n3, len(rows) - n3, fails))
+    log("書く行 %d(first3f %d・first2f %d・馬具 %d 走)・失敗 %d 本" % (len(rows), n3, len(rows) - n3, sum(1 for r in rows if r.get("gear")), fails))
     if a.dry_run:
         log("--dry-run= 表に書かずに終了"); return 1 if fails else 0
     if rows:

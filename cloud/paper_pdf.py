@@ -2,7 +2,7 @@
 r"""紙面 PDF の過去走の枠 1 つ(文字認識の結果= 字と位置)→ 過去走 1 行(純関数・ネット/DB 不要)。
 
 紙面の枠は上から 9 行= ①日付・馬場・場 ②クラス ③頭数・馬番・人気 ④着順・距離の記号・走破時計 ⑤馬場差・タイム差
-⑥斤量・騎手・馬体重 ⑦通過 ⑧「前半 Ⓢ/Ⓜ/Ⓗ 上がり」 ⑨相手の馬。
+⑥斤量・騎手・馬体重 ⑦通過 ⑧「前半 Ⓢ/Ⓜ/Ⓗ 上がり」 ⑨相手の馬(名前の後ろの B/P/S= その馬自身の馬具)。
 - ⑧の 2 つの数は**横の位置**で分ける(左= 前半・右= 上がり)。文字認識の行の順は当てにしない(実測で入れ替わる)。
 - 前半が空欄の走は右の 1 つだけ= 上がりだけ入れ、前半は None(⛔推測で埋めない)。
 - 信頼度が低い字(score < MIN_SCORE)の値は欠損(None)にする。
@@ -10,12 +10,14 @@ r"""紙面 PDF の過去走の枠 1 つ(文字認識の結果= 字と位置)→ 
 - ⛔紙面の段組の順や仮のレース番号は鍵にしない(出どころの位置は呼ぶ側が持つ)。
 """
 import re
+import unicodedata
 
 MIN_SCORE = 0.8
 VENUE_SHORT = {"盛": "盛岡", "水": "水沢"}   # 岩手の 2 場は略字(「4盛4」= 4 回盛岡 4 日目)
 VENUE_FULL = ("名古屋", "高知", "金沢", "大井", "門別", "船橋", "川崎", "浦和", "園田", "姫路", "笠松", "佐賀", "帯広",
               "中山", "東京", "中京", "京都", "阪神", "札幌", "函館", "福島", "新潟", "小倉")
 NUM3F = re.compile(r"(\d{2}\.\d)")
+GEAR_TAIL = re.compile(r"[^\x00-\x7f]\s*([BPS](?:\s*[BPS]){0,2})$")   # 名前(日本語の字)の直後・末尾に 1〜3 字の B/P/S
 
 
 def _band(lines, height, lo, hi):
@@ -94,9 +96,22 @@ def identify_horse(runs, db_rows):
     return name, "特定(%d 走一致)" % n, hits
 
 
+def gear_marks(text):
+    """⑨相手の馬の行 → その走のその馬の馬具の字('B'・'P'・'S' を B→P→S の順に '+' でつなぐ)。無ければ None。
+    名前の直後に 1〜3 字の B/P/S が**末尾**に並ぶときだけ(全角も受ける・間の空白は問わない)。
+    ⛔1 字でも B/P/S 以外の字が末尾に混じれば None(推定しない)"""
+    s = unicodedata.normalize("NFKC", str(text or "")).strip()
+    m = GEAR_TAIL.search(s)
+    if not m:
+        return None
+    got = set(re.sub(r"\s", "", m.group(1)))
+    return "+".join(c for c in "BPS" if c in got)
+
+
 def rows_to_write(name, runs, hits, distances, src):
     """特定できた馬の、紙面に前半の値がある走だけ → nar_paper_runs の行。
     distances= {(track, date, race_no): distance_m}・src= {ref(ファイル名だけ), page, col}。
+    馬具の字がある走だけ gear を足す(無い走の行には gear の鍵を持たせない)。
     距離 ≥1200 → first3f / <1200 → first2f(⛔3F に入れない)"""
     out = []
     for i, run in enumerate(runs or []):
@@ -111,6 +126,8 @@ def rows_to_write(name, runs, hits, distances, src):
                     "umaban": int(d["runner_number"]), "horse_name": name,
                     "first3f": run["first3f"] if big else None, "first2f": None if big else run["first3f"],
                     "src_ref": src["ref"], "src_page": src["page"], "src_pos": "右から%d列 上から%d段" % (src["col"], i + 1)})
+        if run.get("gear"):                                  # ⛔None は書かない= 既存の行の gear を null で潰さない
+            out[-1]["gear"] = run["gear"]
     return out
 
 
@@ -118,7 +135,7 @@ def parse_block(lines, width, height, race_date):
     """lines= [{text, score, cx, cy}](枠の左上が 0,0)→ 1 行。値の無い所は None"""
     lines = list(lines or [])
     row = {"date": None, "venue": None, "finish": None, "time_sec": None, "first3f": None, "last3f": None,
-           "note": None, "low_score": []}
+           "gear": None, "note": None, "low_score": []}
     top = sorted(_band(lines, height, 0, 0.13), key=lambda d: float(d["cx"]))
     row["date"], row["venue"] = parse_date_venue(" ".join(d["text"] for d in top), race_date)
     body = " ".join(d["text"] for d in lines)
@@ -159,4 +176,11 @@ def parse_block(lines, width, height, race_date):
             row["low_score"].append(key)
     elif len(toks) > 2:
         row["low_score"].append("3f_many")
+    # ⑨相手の馬(最下段)の末尾の B/P/S= その走のその馬の馬具。信頼度が低い字が混じれば読まない
+    last = sorted(_band(lines, height, 0.9, 1.01), key=lambda d: float(d["cx"]))
+    if last:
+        if any(float(d["score"]) < MIN_SCORE for d in last):
+            row["low_score"].append("gear")
+        else:
+            row["gear"] = gear_marks(" ".join(d["text"] for d in last))
     return row

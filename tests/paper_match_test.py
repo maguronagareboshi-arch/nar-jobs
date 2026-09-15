@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """紙面の馬の特定(cloud/paper_pdf.py identify_horse / rows_to_write)。⛔ネット・DB なし。
 実行: py -3.12 -X utf8 -m unittest tests.paper_match_test"""
+import json
 import sys
 import unittest
 from pathlib import Path
@@ -77,6 +78,33 @@ class ListPdfs(unittest.TestCase):
         self.assertEqual(sorted(pf.pick_pdfs(html).values()), [("2026-09-13", 3, "y/20260913_03R.pdf"), ("2026-09-13", 12, "y/20260913_12R.pdf")])
         # 済みの判定は (日付, R)= a4 名で入った日の無印を取り直さない
         self.assertEqual((pf.sibling("20260914_03Ra4.pdf"), pf.sibling("20260914_03R.pdf")), ("20260914_03R.pdf", "20260914_03Ra4.pdf"))
+
+
+class Gear(unittest.TestCase):
+    def test_gear_marks(self):
+        self.assertEqual(pp.gear_marks("マリリンダンサーB S"), "B+S")
+        self.assertIsNone(pp.gear_marks("マリリンダンサー"))
+        self.assertEqual(pp.gear_marks("マリリンダンサーＢ"), "B")
+        self.assertIsNone(pp.gear_marks("マリリンダンサーBX"))
+        self.assertEqual(pp.gear_marks("マリリンダンサー S P"), "P+S")      # 並びは B→P→S
+
+    def test_rows_gear_only_when_present(self):
+        runs = [dict(run("2026-09-06", "水沢", 2, 83.6, 37.9), gear="B+S"), run("2026-08-11", "盛岡", 10, 101.3, 37.1)]
+        dist = {("水沢", "2026-09-06", 4): 1300, ("盛岡", "2026-08-11", 8): 1400}
+        rows = pp.rows_to_write("タイセイアダマス", runs, {0: DB[0], 1: DB[1]}, dist, {"ref": "20260915_10R.pdf", "page": 1, "col": 1})
+        self.assertEqual(rows[0]["gear"], "B+S")
+        self.assertNotIn("gear", rows[1], "馬具の無い走に gear を持たせた(null で潰す)")
+
+    def test_upsert_sends_same_keys_per_request(self):
+        sent = []
+        orig = pf.sb
+        pf.sb = lambda path, body=None: sent.append(json.loads(body.decode("utf-8")))
+        try:
+            pf.upsert([{"track": "水沢", "gear": "B"}, {"track": "盛岡"}, {"track": "水沢", "gear": "S"}])
+        finally:
+            pf.sb = orig
+        self.assertEqual([sorted({k for r in part for k in r}) == sorted(set(part[0])) for part in sent], [True, True])
+        self.assertEqual([len(p) for p in sent], [2, 1])
 
 
 if __name__ == "__main__":

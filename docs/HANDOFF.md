@@ -1,7 +1,7 @@
-commit: 枝 s179b-paper-all(master 0d3c5d6 から・⛔push/merge なし)= cloud/paper_first3f.py(HREF_RE が `_NNR(a4)?.pdf` を受ける・新規 pick_pdfs= 同じ (日付, R) に両方あれば a4・無印だけならそれ・新規 sibling= a4 ⇔ 無印の名前・done_refs は 2 名で引いて (日付, R) で済みを見る・list_pdfs は pick_pdfs を呼ぶだけ)・tests/paper_match_test.py に 2 項(ListPdfs)
-検品: `py -3.12 -X utf8 -m unittest tests.paper_match_test` 8/8 OK= (a) 架空パスの一覧断片で 1R・2R は a4 を採る(並び順が逆でも)・10R は無印 (b) 無印だけの日も 3R・12R を拾い .html は拾わない・sibling が 03Ra4 ⇔ 03R。git diff --check 通過・禁止語 0・PAPER_BASE_URL なしの起動は rc=2(従来どおり)
-通信: 済み判定で引く名前が 2 倍(nar_paper_runs を 50 名ずつ= 9 日×12R でも 5 本)。PDF を読む本数は a4 の無いレースの分だけ増える(1 日 12 本×約 35 秒・timeout 120 のまま)
-回帰: 読み取り(paper_pdf.py・grid・pdf_columns)・ログの字・書き込み・yml は触っていない。既存の Identify 6 項は緑のまま
-変えた点: 返す辞書の鍵はファイル名のまま= src_ref は採った方の名前(無印を読んだレースは `YYYYMMDD_NNR.pdf` で入る)。9/14 の 1〜5R(a4 名で入った行)は無印を取り直さない
-⚠: 本物の一覧と無印 PDF(A3 1 枚)は手元で読んでいない= a4 以外の紙で列の幅(120〜220px)と罫線の帯が合うかは、手動実行(dates=2026-09-13,2026-09-15)のログの「馬の列・特定・保留」で見る
+commit: 枝 s179c-paper-gear(master bbb47b4 から・⛔push/merge なし・⛔便は回していない)= cloud/paper_pdf.py(新規 gear_marks= ⑨相手の馬の行の末尾の B/P/S → 'B'/'P'/'S' を B→P→S の順に '+'・parse_block が最下段(枠の高さ 90% 以下)の字から row["gear"]・rows_to_write は馬具の字がある走だけ gear を足す)・cloud/paper_first3f.py(upsert は gear のある行/無い行を別の本で送る・ログに「馬具 N 走」)・tests/paper_match_test.py に 3 項(Gear)
+検品: `py -3.12 -X utf8 -m unittest tests.paper_match_test` 11/11 OK= 'マリリンダンサーB S'→'B+S'/'マリリンダンサー'→None/'マリリンダンサーＢ'→'B'/'マリリンダンサーBX'→None/' S P'→'P+S'・馬具の無い走の行に gear の鍵が無い・upsert の 1 本の中の行は鍵がそろう(2 本= gear あり 2 行/なし 1 行)。git diff --check 通過・禁止語 0
+通信: DB への書き込みの本数が最大 2 倍(gear あり/なしで分ける= 1 日 12R でも 2 本)。一覧・PDF・公式の表を引く本数は変わらない
+回帰: 前半3F の読み取り(⑧の帯)・馬の特定・ログの他の字・yml は触っていない。既存の Identify 6 項・ListPdfs 2 項は緑のまま
+変えた点: ⛔gear が None の走は行に gear を持たせない= 既存の行を null で潰さない(PostgREST の一括は 1 本目の鍵で列を決めるので、鍵のそろった本に分けた)。⑨の帯の字に信頼度 0.8 未満が 1 つでもあれば gear は読まない(low_score に "gear")。行を作る条件(前半の値がある走だけ)は変えていない= 前半が空欄の走の馬具は入らない
+⚠: 本物の紙面で⑨の帯(枠の高さの 90〜100%)に相手の馬の行が収まるか・OCR が B/P/S を名前の後ろに返すかは確かめていない= SQL(gear 列)の後の `--force dates=2026-09-15` のログ「馬具 N 走」で見る(列が無いまま便が gear を送ると書き込みが 400 で落ちる= SQL を先に)
 要判断: なし(push は Fable)
