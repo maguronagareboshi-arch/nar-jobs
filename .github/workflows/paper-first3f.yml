@@ -30,12 +30,16 @@ permissions:
 jobs:
   paper:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 120           # PDF は約 5 日前に 3 日分 10〜15 本まとめて出る(1 本 約 3 分)
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+
+      # 文字認識の opencv が libGL を要る
+      - name: system libs
+        run: sudo apt-get install -y libgl1
 
       - name: install
         run: pip install pypdfium2==5.13.0 rapidocr-onnxruntime==1.4.4 pillow==12.3.0 numpy==1.26.4

@@ -1,7 +1,7 @@
-commit: 枝 s179-paper(master 3bd102b から・⛔push なし)= 新規 cloud/paper_pdf.py(紙面の枠 → 過去走 1 行・馬の特定・書く行= 純関数)・cloud/paper_first3f.py(一覧 → 対象の絞り込み → 取得 → 画像化 300dpi → 文字認識 → 馬の特定 → 距離 → nar_paper_runs へ PK merge・293 行)・.github/workflows/paper-first3f.yml(cron 17 22 * * *= JST 07:17・workflow_dispatch の dates/force・concurrency paper-first3f・timeout 20 分・版を固定)・tests/paper_match_test.py(6 項)・README 1 行
-検品: 手元で `--dates 2026-09-14 --force --dry-run`(置き場の値は環境変数で渡しただけ・公式の表は匿名キーで読む)= 5 本すべて読めて失敗 0・**3R 61 行**= 前回の手元の道具の 61 行と PK・前半の値・馬名・ページ・位置が全部同じ(欠け 0・余分 0・違い 0・17 頭特定・保留 0)。ほか 1R 列 17・特定 16・保留 1・14 行/2R 17・15・2・12 行/4R 18・16・2・54 行/5R 17・16・1・55 行(合計 196 行・first2f 0)。保留 6 頭の理由= 一致 1 走 5 頭・一致 1 走(場・日・着順・時計が同じ 2 頭)1 頭(⛔閾値は動かしていない)。`py -3.12 -X utf8 -m unittest tests.paper_match_test` 6/6 OK(pytest はこの PC に無い)
-通信: 便 1 回= 一覧 1 本+対象の PDF 1 本ずつ+表の確認 1 本(50 本ずつ)+PDF 1 本につき nar_runs 1 本(1000 行ごとに続き)+nar_races(80 走ずつ)+書き込み(500 行ずつ)。表にある PDF は取らない= 普段は新しい 3〜6 本だけ
-回帰: 既存の便・スクリプトは触っていない(新規 4 ファイル+README 1 行)
-変えた点: 出どころの列は src_ref(ファイル名だけ)。ログは 日付・レース番号・件数・保留の理由・status 番号・例外の種類名だけ(dry-run のログで URL/ファイル名の字 0 件を確認)。PDF は RUNNER_TEMP に置いて読み終えたら消す。--dry-run は SUPABASE_ANON_KEY でも動く・書き込みは SUPABASE_SERVICE_KEY 必須。禁止語= この commit の差分と commit 文で 0 件(master に前からある同じ字の既存ファイル 6 本=「アルファベット」の意味の語など、と、他の主催者の番組編成要領の URL にあるローマ字 2 本は今回と無関係・触っていない)
-⚠: cloud/paper_first3f.py は 293 行= 設計の 250 行を 43 行超えた(取得・読み取り・照合・投入を 1 本にまとめたため・動く読み取りの処理は削っていない)。便の上ではまだ流していない= rapidocr-onnxruntime は opencv-python に依存し、ubuntu で libGL が無いと import で落ちる恐れ(落ちたら install の段に apt の libgl1 を足す)。分数の見込み= 手元で 5 本 約 15 分(1 本 約 3 分)= 普段の 1 便 3〜6 本なら 10〜18 分・timeout 20 分に近い→ 初回の dispatch で実測を見る
-次: 検品役が枝を読む(grep・ログの形)→ ユーザーが Secrets(PAPER_BASE_URL)を確認して push → dispatch 1 回(dates=2026-09-13)→ REST で 9/13 の行数と 1 頭の値を紙面と目視
+commit: 枝 s179-paper= fd894a6(便・読み取りの関数・テスト・README)の上に yml だけ直す commit を 1 つ(⛔push なし)= .github/workflows/paper-first3f.yml の timeout-minutes 20→120 と、install の段の前に「system libs」の段(sudo apt-get install -y libgl1)
+検品: fd894a6 は検品役の検品で 秘匿・ログ・3R 61 行の答え合わせ 合格。この commit は yml の 2 か所だけ= 手順名に「: 」なし(grep で確認)・差分と commit 文の禁止語 0 件・git diff --check 通過・yml は YAML として読める
+通信: +0(便の中身は fd894a6 のまま。apt の取得が 1 回増えるだけ)
+回帰: 他のファイルは触っていない(cloud/・tests/・README・他の便は fd894a6 のまま)
+変えた点: ①timeout 120 分= PDF は開催の約 5 日前に 3 日分 10〜15 本まとめて出る・1 本 約 3 分で 45 分前後。20 分で切られると表に書く前に終わり、翌日も同じ本数を取り直していた ②libgl1= rapidocr-onnxruntime が使う opencv-python の import に libGL が要る(ubuntu-latest に無いと落ちる)
+⚠: 便の上ではまだ流していない= 初回の dispatch で apt と pip の所要時間・1 本あたりの分数を実測する(公開リポなので Actions の分数は無料枠に入らない見込み)。cloud/paper_first3f.py が設計の 250 行を 43 行超えた件は fd894a6 のまま
+次: ユーザーが Secrets(PAPER_BASE_URL)を確認して push → dispatch 1 回(dates=2026-09-13)→ REST で 9/13 の行数と 1 頭の値を紙面と目視
