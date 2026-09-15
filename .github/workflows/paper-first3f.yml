@@ -1,0 +1,58 @@
+# 紙面 PDF の各馬の前半3F を nar_paper_runs に入れる(毎朝 1 回・一覧にあって表にまだ無い PDF だけ)。
+# PDF は公開後に差し替わらない= 1 日 1 回で足りる。置き場の URL は secrets の PAPER_BASE_URL だけ(⛔コードとログに出さない)。
+#
+# 手押し: Actions → 「Paper first3f」→ Run workflow
+#   dates = YYYY-MM-DD をカンマ区切り(空なら 今日-1〜+7 日)
+#   force = 表に行がある PDF も取り直す
+name: Paper first3f
+
+on:
+  schedule:
+    - cron: '17 22 * * *'          # JST 07:17(nar-ai-feat 06:30 の後)
+  workflow_dispatch:
+    inputs:
+      dates:
+        description: 'YYYY-MM-DD をカンマ区切り(空なら 今日-1〜+7 日)'
+        default: ''
+        type: string
+      force:
+        description: '表に行がある PDF も取り直す'
+        default: false
+        type: boolean
+
+concurrency:
+  group: paper-first3f
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  paper:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120           # PDF は約 5 日前に 3 日分 10〜15 本まとめて出る(1 本 約 3 分)
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # 文字認識の opencv が libGL を要る
+      - name: system libs
+        run: sudo apt-get install -y libgl1
+
+      - name: install
+        run: pip install pypdfium2==5.13.0 rapidocr-onnxruntime==1.4.4 pillow==12.3.0 numpy==1.26.4
+
+      - name: read and upsert
+        env:
+          PAPER_BASE_URL: ${{ secrets.PAPER_BASE_URL }}
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          DATES: ${{ github.event.inputs.dates }}
+          FORCE: ${{ github.event.inputs.force }}
+        run: |
+          set --
+          if [ -n "$DATES" ]; then set -- "$@" "--dates=$DATES"; fi
+          if [ "$FORCE" = "true" ]; then set -- "$@" --force; fi
+          python -X utf8 cloud/paper_first3f.py "$@"
