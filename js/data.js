@@ -4,7 +4,7 @@
 // ・ページは本モジュール以外から fetch しない。ui/router は import しない(§71: race-phase は純関数なので可)
 
 import { phaseOf } from './race-phase.js';
-// §26.4 競馬ブック表記の調教師名 → 公式表記の対応表(349名・pipeline/build_trainer_map.py の生成物)
+// §26.4 専門紙表記の調教師名 → 公式表記の対応表(349名・pipeline/build_trainer_map.py の生成物)
 import { TRAINER_MAP } from './trainer-map.js';
 import { JOCKEY_MAP } from './jockey-map.js';
 
@@ -50,7 +50,7 @@ const VIDEO_SLUG = new Map([['kochi', 'kouchi']]);
 // yukochi.com の静的ファイルから **nar_meta** へ移したので、yukochi.com へは1本も出さない
 // (OWN_BASE / ownFetch は廃止。ARCHIVE_BASE=川崎浦和アーカイブだけが yukochi.com に残る)。
 // R2 の動画・ポスターは URL を組み立てて <video> に渡すだけ(R2 は CORS 無しなので fetch で存在確認しない)
-// §11.2 / PROJECT.md「例外: 開発用の表示切替」: 競馬ブック由来のもの(厩舎の話・調教・能検の寸評)は閲覧者に出さない(ユーザー決定 2026-08-23)。
+// §11.2 / PROJECT.md「例外: 開発用の表示切替」: 専門紙由来のもの(厩舎の話・調教・能検の寸評)は閲覧者に出さない(ユーザー決定 2026-08-23)。
 // §58: 本文の表(chihou_danwa/chihou_cyokyo)は 2026-08 に DB 権限で anon から閉鎖。管理者だけが
 // 高知 Worker の admin read 経路(X-Write-Token 検証)で読む。トークンは localStorage 'viewer_admin' に
 // 管理者が自分で入れる(DevTools コンソールで localStorage.viewer_admin='…'・消せば閲覧者と同じ)。
@@ -60,8 +60,8 @@ const ADMIN_WORKER = 'https://keiba-proxydeploy.maguronagareboshi.workers.dev';
 function adminToken() {
   try { return String(localStorage.getItem('viewer_admin') || ''); } catch { return ''; }
 }
-export const FLAGS = { dev: !!adminToken(), keibabookText: false };
-FLAGS.keibabookText = FLAGS.dev;   // 管理者のときだけ文章(厩舎の話・調教短評・能検の寸評)も返す。閲覧者は常に false
+export const FLAGS = { dev: !!adminToken(), pressText: false };
+FLAGS.pressText = FLAGS.dev;   // 管理者のときだけ文章(厩舎の話・調教短評・能検の寸評)も返す。閲覧者は常に false
 // 管理者読み取り(トークン無しなら null)。Worker が表・列を固定しているので path はこの2種類だけ
 async function adminGet(path) {
   const token = adminToken();
@@ -72,9 +72,9 @@ async function adminGet(path) {
 }
 // 能検(デビュー前の試験)を持っている地区。
 // §117b で **13地区すべてが主催者公式(nar-official の nar_meta)**になった。
-// ⛔競馬ブック由来(旧DB chihou_meta)の経路は空にした= 行に競馬ブックの馬ID(horse_id)は入らない。
+// ⛔専門紙由来(旧DB chihou_meta)の経路は空にした= 行に専門紙の馬ID(horse_id)は入らない。
 //   馬ページとの接続は NAR 8 地区と同じ「馬名(+生年月日)」の索引(nar_meta noken_index)だけを通る。
-// ⚠この配列を空にすると、下の nokenOf / getNokenLinks(競馬ブック ID の経路)は**呼ばれない**。
+// ⚠この配列を空にすると、下の nokenOf / getNokenLinks(専門紙 ID の経路)は**呼ばれない**。
 //   道を消すのは切替が本番で落ち着いてから(⛔切替と同時に2つ変えない)。
 export const NOKEN_CHIHOU = [];
 // §32d PDF勢3場(笠松・名古屋・高知)を追加=12地区。nar_meta の鍵は `<prefix>_noken` なので、
@@ -133,7 +133,7 @@ const BIAS_PREFIXES = ['monbetsu', 'ooi', 'funabashi'];                         
 
 // ---------------------------------------------------------------- 定数
 
-// code = 競馬ブックの場コード(race_id の [6:8])。babaCode = 公式サイトの k_babaCode(§13.1。競馬ブックの code とは別物)
+// code = 専門紙の場コード(race_id の [6:8])。babaCode = 公式サイトの k_babaCode(§13.1。専門紙の code とは別物)
 // §116a pref = 競馬場のある都道府県(/venues の一覧に出す)。⛔並び(order)は北から= 一覧もこの順で出す
 export const VENUES = [
   { code: '58', prefix: 'obihiro',   name: '帯広', supported: 'nar',    babaCode: '03', order: 0, banei: true, pref: '北海道' },
@@ -208,7 +208,7 @@ const NAR_TRACK_ALIAS = new Map([['帯広ば', 'obihiro']]);
 // 逆引き(prefix → 公式場名)。nar_venue_stats.track など公式表記で引くときに使う(§12.3)
 const NAR_TRACK_NAME = new Map([...NAR_TRACK_ALIAS].map(([track, prefix]) => [prefix, track]));
 function narTrackName(v) { return NAR_TRACK_NAME.get(v.prefix) ?? v.name; }
-// §1.6 / §13.2A: nar_* を出馬表・結果の源にする9場(帯広ばを含む)。既存6場は競馬ブック/高知が主で nar は補完(§13.2B)
+// §1.6 / §13.2A: nar_* を出馬表・結果の源にする9場(帯広ばを含む)。既存6場は専門紙/高知が主で nar は補完(§13.2B)
 const NAR_TRACKS = VENUES.filter((v) => v.supported === 'nar').map(narTrackName);
 
 // ---------------------------------------------------------------- ユーティリティ(同期)
@@ -352,7 +352,7 @@ function lapMeta(laps, distance) {
   return { lapLabels, lapNote };
 }
 // §49 U-5 officialLaps = **公式発表のハロンタイム**(nar_races.furlongs)。⛔高知の自前計測(laps)とも
-// 競馬ブック由来のラップ(#24 で出さないと決めたもの)とも**別の入れ物**にする(§5.3 出典の規律)
+// 専門紙由来のラップ(#24 で出さないと決めたもの)とも**別の入れ物**にする(§5.3 出典の規律)
 function raceExtra(laps, distance, pace, agari3fRace, sectional, agari4fRace, officialLaps) {
   return {
     laps, pace, agari3fRace, agari4fRace: agari4fRace ?? null,
@@ -1032,9 +1032,9 @@ async function kochiRace(date, no) {
 
 const NAR_TRACK_IN = `track=in.(${NAR_TRACKS.map(enc).join(',')})`;
 // §13.2B-1: 日付系(直近の開催日・前後の開催日・週間日程)は全15場を見て既存ソースと和集合にする。
-// 競馬ブック経路(PC の取込)が止まっても、公式データがある日は開催日として出る
+// 専門紙経路(PC の取込)が止まっても、公式データがある日は開催日として出る
 const NAR_ALL_IN = `track=in.(${VENUES.map((v) => enc(narTrackName(v))).join(',')})`;
-// §13.2B-2: 1日一覧の補完対象= 競馬ブック(chihou)/高知(kochi)が主の6場(nar 9場は narDay が直接引く)
+// §13.2B-2: 1日一覧の補完対象= 専門紙(chihou)/高知(kochi)が主の6場(nar 9場は narDay が直接引く)
 const NAR_FALLBACK_TRACKS = VENUES.filter((v) => v.supported === 'chihou' || v.supported === 'kochi');
 const NAR_FALLBACK_IN = `track=in.(${NAR_FALLBACK_TRACKS.map((v) => enc(narTrackName(v))).join(',')})`;
 const NAR_RACE_COLS = 'track,race_date,race_no,post_time,race_name,surface,distance_m,weather,going,field_size,condition,race_last3f,furlongs,race_kind';
@@ -1247,7 +1247,7 @@ async function narRace(venue, date, no) {
   const payouts = narPayoutList(payRows[0], race.id, null);
   const results = race.status === 'done' ? sortResults(runs.map((r) => narResult(r, race.id))) : [];
   // §41-A 公式の corners から通過順位を埋める(nar_runs には列が無い=#121)。
-  // ⚠既に値のある馬(競馬ブック由来)は上書きしない
+  // ⚠既に値のある馬(専門紙由来)は上書きしない
   const pass = passingFromCorners(race.corners);
   if (pass.size) for (const r of results) if (!r.passing) r.passing = pass.get(r.umaban) ?? null;
   // 単勝オッズは nar に無いので、1着馬(同着は両方)だけ単勝払戻÷100 を入れる(§1.6)
@@ -1395,7 +1395,7 @@ export function getPrevRaceDate(before) {
 }
 
 // §28.3 今日どの競馬場が開催しているか(15場ストリップの ● 用)。Set(prefix)・**1クエリ**・10分メモ。
-// レースの中身は要らないので track 列だけ引く。公式(nar_races)は全15場を持ち、実測でも競馬ブック・高知に
+// レースの中身は要らないので track 列だけ引く。公式(nar_races)は全15場を持ち、実測でも専門紙・高知に
 // あって公式に無い場は無かった(2026-08-23〜27 の5日で確認)ので、これだけで「本日開催」は足りる。
 // 開催が無い日は空の Set(= ● なし)。**取得に失敗したときは投げる**=呼び出し側(refreshStrip)が
 // 何もしないので、通信が落ちたときに ● が消えてしまうことはない(memo は失敗を覚えないので次回やり直す)
@@ -1600,9 +1600,9 @@ export function getDayResults(date) {
       byVenue.get(r.venue).push(r);
     }
     const arcIds = new Set(day.archived.map((a) => a.race.id));
-    // §24.1-2 場ごとに 2 本ずつ引いていたのを、源ごとに 1 組へまとめる(nar / 高知 / 競馬ブック)
+    // §24.1-2 場ごとに 2 本ずつ引いていたのを、源ごとに 1 組へまとめる(nar / 高知 / 専門紙)
     const narVenues = [];       // 公式が主の場
-    const chihouRaces = [];     // 競馬ブックが主の場のレース
+    const chihouRaces = [];     // 専門紙が主の場のレース
     let kochiRaces = null;
     for (const [prefix, races] of byVenue) {
       if (prefix === 'kochi') { kochiRaces = races; continue; }
@@ -1713,7 +1713,7 @@ export function getRace(venue, date, no) {
   return memo(`race:${v.prefix}/${date}/${n}`, ttl, async () => applyOdds(v, await loadRace(v, date, n)));
 }
 
-// レース1件を源ごとに組み立てる(§13.2B-3 の順番: nar 9場 → 高知 → 競馬ブック → アーカイブ → nar 補完)
+// レース1件を源ごとに組み立てる(§13.2B-3 の順番: nar 9場 → 高知 → 専門紙 → アーカイブ → nar 補完)
 async function loadRace(v, date, n) {
   if (v.supported === 'nar') {
     // §28.1b 公式は 2022-11 から。それ以前はその場のアーカイブに答えがある(公式が先=新しい日は必ず公式が勝つ)
@@ -1729,11 +1729,11 @@ async function loadRace(v, date, n) {
   if (db) return narFallbackRace(v, db);
   const arc = await archiveRace(v, date, n);
   if (arc) return arc;
-  return narRace(v, date, n);                                   // 競馬ブック/高知に行が無いレース
+  return narRace(v, date, n);                                   // 専門紙/高知に行が無いレース
 }
 
 // §41-B 公式の1行を kb経路のレースに載せる。⚠**通過は公式で上書きする**(裁定)=
-// 競馬ブック由来の通過は corners の無い日のフォールバックに降りる(値は消さない=集計側は今まで通り)
+// 専門紙由来の通過は corners の無い日のフォールバックに降りる(値は消さない=集計側は今まで通り)
 function applyNarRaceRow(r, row) {
   if (!row) return;
   // §79 P2 このレースの本賞金(1〜5着)と公式のレース名から読む条件クラス。
@@ -1754,7 +1754,7 @@ function applyNarRaceRow(r, row) {
   if (r.race.extra) {
     if (r.race.extra.agari3fRace == null) r.race.extra.agari3fRace = num(row.race_last3f);
     if (r.race.extra.agari4fRace == null) r.race.extra.agari4fRace = num(row.race_last4f);
-    // §49 U-5 公式ハロンタイム。⛔既にある laps(高知=自前計測・競馬ブック=出所未確認)には触らない
+    // §49 U-5 公式ハロンタイム。⛔既にある laps(高知=自前計測・専門紙=出所未確認)には触らない
     if (!r.race.extra.officialLaps) {
       const of = lapsOf(row.furlongs);
       r.race.extra.officialLaps = of && of.length ? of : null;
@@ -2125,11 +2125,11 @@ async function narFallbackRace(v, r) {
   if (!r) return r;
   if (r.race.date < NAR_FROM) return r;            // 公式が始まる前=補完のあてが無い(§28.1b)
   const future = r.race.date > todayJST();
-  const needEntries = r.entries.length === 0;      // §13.2B-4: race 行はあるのに出馬表が空(競馬ブックの取込前)
+  const needEntries = r.entries.length === 0;      // §13.2B-4: race 行はあるのに出馬表が空(専門紙の取込前)
   if (future && !needEntries) return r;            // 先の日付に結果・払戻は無い
   const t = enc(narTrackName(v)), d = r.race.date, n = r.race.no;
   // §41-B **通過は公式で全15場そろえる**(ユーザー裁定 2026-08-27)。corners・レース上がり・天候は
-  // 競馬ブック / 高知の源に無いので、ここで nar_races を **+1本**引く(この経路=門別・南関4場・高知だけ)
+  // 専門紙 / 高知の源に無いので、ここで nar_races を **+1本**引く(この経路=門別・南関4場・高知だけ)
   // §49 U-5 furlongs(公式ハロンタイム)も**この1本に相乗り**させる=通信の本数は増えない
   const narRow = sbNar(`nar_races?select=corners,race_last3f,race_last4f,weather,furlongs,prize_yen,race_name,race_kind&track=eq.${t}` +
     `&race_date=eq.${d}&race_no=eq.${n}&limit=1`).then((x) => (Array.isArray(x) && x.length ? x[0] : null)).catch(() => null);
@@ -2153,8 +2153,8 @@ async function narFallbackRace(v, r) {
       }
       sortResults(r.results);
     }
-    // §25.1 当日の馬体重。公式(nar_runs)は競馬ブックより先に入ることがある
-    // (2026-08-25 実測: 船橋1〜4R は 競馬ブック 0/N・公式 N/N)。**空いている馬だけ**埋める(既存値は上書きしない)。
+    // §25.1 当日の馬体重。公式(nar_runs)は専門紙より先に入ることがある
+    // (2026-08-25 実測: 船橋1〜4R は 専門紙 0/N・公式 N/N)。**空いている馬だけ**埋める(既存値は上書きしない)。
     // 確定レースでも結果が公式由来なら出馬表だけ「—」になるので、そこも同じ値でそろえる。
     // 取得は上の nar_runs に相乗りなので追加クエリは無い
     for (const x of runs) {
@@ -2226,7 +2226,7 @@ function narFallbackRacesDay(date) {
       .catch(() => []));
 }
 
-// §25.2 競馬ブック・高知の行は当日の馬場/天候が空のことがある(2026-08-25 実測: 門別・船橋とも null)。
+// §25.2 専門紙・高知の行は当日の馬場/天候が空のことがある(2026-08-25 実測: 門別・船橋とも null)。
 // narSupplementDay と同じ1本を使い回して、空いているところだけ公式の値で埋める(追加クエリなし)
 async function narFillDayConds(races, date) {
   if (date < NAR_FROM) return;                     // 公式が始まる前(§28.1b のアーカイブ日)
@@ -2518,7 +2518,7 @@ export function getRaceOddsFull(venue, date, no) {
   });
 }
 
-// 出馬表に当日オッズを重ねる。単勝は「値が無い馬」だけ(競馬ブック/高知の値は上書きしない)。複勝はここでしか入らない
+// 出馬表に当日オッズを重ねる。単勝は「値が無い馬」だけ(専門紙/高知の値は上書きしない)。複勝はここでしか入らない
 async function applyOdds(v, r) {
   if (!r || !r.entries.length) return r;
   let o = null;
@@ -2603,7 +2603,7 @@ async function kochiRaceOwn(race) {
 function danwaOf(row) {
   const headline = str(row.headline), trainer = str(row.trainer), comment = str(row.comment);
   if (!headline && !trainer && !comment) return null;
-  const text = FLAGS.keibabookText;
+  const text = FLAGS.pressText;
   return { headline: text ? headline : null, trainer, comment: text ? comment : null };
 }
 // 調教 works の1本 → CyokyoWork。坂路(course に「坂」)は t_5f/t_half/t_3f/t_1f を 4F/3F/2F/1F、本馬場は 5F/4F/3F/1F と読む(本番 keiba.html と同じ)
@@ -2619,7 +2619,7 @@ function cyokyoWork(w) {
 function cyokyoOf(row) {
   const works = (Array.isArray(row.works) ? row.works : []).filter((w) => w && typeof w === 'object');
   const arrow = str(row.arrow);
-  const tanpyo = FLAGS.keibabookText ? str(row.tanpyo) : null;
+  const tanpyo = FLAGS.pressText ? str(row.tanpyo) : null;
   if (!works.length && !arrow && !tanpyo) return null;
   const dated = works.filter((w) => isDateStr(w.date)).sort((a, b) => b.date.localeCompare(a.date));
   const last = works.find((w) => w.mark === '☆') || dated[0] || works[0] || null;
@@ -2640,7 +2640,7 @@ function chihouBias(v, date) {
   });
 }
 // 門別・南関: 厩舎の話(門別は 0 行)・調教・内外の傾向(done のときだけ・門別/大井/船橋)。
-// 厩舎の話と調教は競馬ブック由来なので閲覧者には出さない= §58 管理者だけ Worker 経由で読む(閲覧者は通信もしない)
+// 厩舎の話と調教は専門紙由来なので閲覧者には出さない= §58 管理者だけ Worker 経由で読む(閲覧者は通信もしない)
 async function chihouRaceOwn(race, v) {
   const rid = enc(String(race.sourceId));
   const [own, bias] = await Promise.allSettled([
@@ -2753,7 +2753,7 @@ export function getNokenOffsets(prefix) {
     return out.size ? out : null;
   });
 }
-// 能力検査(デビュー前の試験)。rows[].horse_id === 競馬ブック 7 桁。最初に見つかった行=最新の受検
+// 能力検査(デビュー前の試験)。rows[].horse_id === 専門紙 7 桁。最初に見つかった行=最新の受検
 async function nokenOf(v, code) {
   const days = await nokenDays(v.prefix);
   for (const day of days) {
@@ -2770,7 +2770,7 @@ async function nokenOf(v, code) {
         finish: num(row.fin), time, last3f,
         // 最初の 1F = タイム − 上り3F は 800m(4F)の能検だけに成り立つ。門別 1000m・大井 1200m・川崎 900m の能検もある(2026-08-23 実測)ので他は出さない
         ten1f: dist === 800 && sec !== null && last3f !== null ? Math.round((sec - last3f) * 10) / 10 : null,
-        ok: str(row.ok), comment: FLAGS.keibabookText ? str(row.comment) : null,
+        ok: str(row.ok), comment: FLAGS.pressText ? str(row.comment) : null,
         video: mp4 ? { kind: 'mp4', url: mp4 } : (yt ? { kind: 'youtube', url: yt } : null),
         pdf: str(race.pdf) ?? str(day.all_pdf),
       };
@@ -2869,8 +2869,8 @@ function nokenRow(row) {
     owner: nokenText(r.owner),                   // 馬主
     base: nokenBase(r.base),                     // 高知の合格基準タイム(行ごと)
     isNew: nokenText(r.new) !== null,            // 佐賀の新馬印(元は馬名頭の ※)
-    // 寸評は競馬ブック由来=閲覧者に出さない(dev のときだけ入る。§20.1 / §10 #22)
-    comment: FLAGS.keibabookText ? nokenText(r.comment) : null,
+    // 寸評は専門紙由来=閲覧者に出さない(dev のときだけ入る。§20.1 / §10 #22)
+    comment: FLAGS.pressText ? nokenText(r.comment) : null,
   };
 }
 function nokenRace(race) {
@@ -3259,7 +3259,7 @@ function nokenRecs(list) {
       start: num(r.s),                        // 頭出し秒(川崎・浦和の443件だけ)
       // §37.7-1 で足された値。⚠**無いキーは無いまま**(推定しない)。実測の埋まり具合(7,561件中):
       // r/n=7,561(13地区ぜんぶ)・tr=6,155(タイム欠測の馬には無い)・a/ar=1,804・t1=1,527
-      // (a/ar/t1 は競馬ブックのある5場=門別・南関4場だけ。t1 は 800m の検査だけ)
+      // (a/ar/t1 は専門紙のある5場=門別・南関4場だけ。t1 は 800m の検査だけ)
       raceNo: num(r.r),                       // その検査回の第何レースか
       heads: num(r.n),                        // そのレースの発表行数(順位の分母)
       timeRank: num(r.tr),                    // レース内のタイム順位(同着は同順位)
@@ -3494,12 +3494,12 @@ function parseNokenDebuts(v) {
   };
 }
 
-// §20.2 その日の受検馬のうち「馬ページのある馬」= 競馬ブックに結果か出馬表がある馬。Set(馬ID)。30分メモ。
+// §20.2 その日の受検馬のうち「馬ページのある馬」= 専門紙に結果か出馬表がある馬。Set(馬ID)。30分メモ。
 // 能検を受けたばかりの馬はまだ1走もしておらず、リンクにすると行き止まりになる
 // (実測 2026-08-25: 最新日は門別 4/14頭・大井 15/52頭しか居ない。古い日ほど増える)
 export function getNokenLinks(prefix, date) {
   const p = String(prefix ?? '');
-  // 主催者公式の4地区(§32)は行に競馬ブックの馬IDが無いので、そもそも引かない
+  // 主催者公式の4地区(§32)は行に専門紙の馬IDが無いので、そもそも引かない
   if (!NOKEN_CHIHOU.includes(p) || !isDateStr(date)) return Promise.resolve(new Set());
   return memo(`nokenlink:${p}:${date}`, 30 * MIN, async () => {
     const days = await nokenDays(p);
@@ -3526,7 +3526,7 @@ export function getNokenLinks(prefix, date) {
 }
 
 // 厩舎の話の履歴(kb: のみ・最大 8)。日付・場・R は chihou_races から引く(race_id の桁から日付を作らない)。
-// 競馬ブック由来なので §58 管理者だけ Worker 経由で引く(閲覧者には常に [])
+// 専門紙由来なので §58 管理者だけ Worker 経由で引く(閲覧者には常に [])
 async function danwaHistory(code) {
   if (!FLAGS.dev) return [];
   const j = await adminGet(`/rpc/admin-danwa-history?horse_id=${enc(code)}`);
@@ -4341,7 +4341,7 @@ export async function searchPeople(q) {
 // ---------------------------------------------------------------- §19.1 馬柱(出走各馬の直近5走)
 
 const HIST_RUNS = 5;              // 1頭あたりに出す過去走
-const HIST_ROW_LIMIT = 400;       // 競馬ブック・高知をまとめて引くときの行上限(1レース分に十分)
+const HIST_ROW_LIMIT = 400;       // 専門紙・高知をまとめて引くときの行上限(1レース分に十分)
 const HIST_NAR_LIMIT = 600;       // 公式(nar_runs)をまとめて引くときの行上限
 
 // 過去走は「どの源のどの行か」だけの中間形 {date, venue, no, src, row} で集め、5走に切ってから Run に組む。
@@ -4353,7 +4353,7 @@ function histPush(map, key, item) {
 const histKey = (d) => `${d.venue}/${d.date}/${d.no}`;
 
 // 新しい順に並べ、同じレースは1回だけ・HIST_RUNS 件に切る。
-// 積んだ順(競馬ブック → 高知 → 公式)が同着のときは先に来るので、項目の多い源が残る(sort は安定)
+// 積んだ順(専門紙 → 高知 → 公式)が同着のときは先に来るので、項目の多い源が残る(sort は安定)
 function histCut(list) {
   const seen = new Set();
   const out = [];
@@ -4367,7 +4367,7 @@ function histCut(list) {
   return out;
 }
 
-// 競馬ブック(chihou_results)。horse_id で引くので同名異馬の心配が無い(1クエリ)
+// 専門紙(chihou_results)。horse_id で引くので同名異馬の心配が無い(1クエリ)
 async function histKb(codes, before) {
   const cols = 'race_id,horse_id,umaban,finish,finish_note,pop,time_str,time_sec,margin,first3f,last3f,passing,jockey,kinryo,body_weight,' +
     'chihou_races(track,race_date,race_no,distance_m,going,klass,race_name)';
@@ -4388,7 +4388,7 @@ async function histKb(codes, before) {
   return out;
 }
 
-// 公式(nar_runs)。全15場を持つので、競馬ブックに無い川崎・浦和の走もここで埋まる(§19.5 の実測)。
+// 公式(nar_runs)。全15場を持つので、専門紙に無い川崎・浦和の走もここで埋まる(§19.5 の実測)。
 // 公式に馬IDが無いので馬名で引く(同名異馬は 33/32,431 名・§10 #16 と同じ承知の上)
 async function histNar(names, before) {
   // §54.3-a `trainer,trainer_area,birth_date` の3列は**転入初戦の判定だけ**に使う。
@@ -4470,7 +4470,7 @@ function histRun(d, narInfo, kochiInfo) {
   else run = narRun(d.row, ni);
   run.heads = ni ? num(ni.field_size) : null;      // 頭数は公式にしか無い(2022-11 以降の走だけ入る)
   run.banei = !!(v && v.banei);
-  // §38 R-1 条件クラスと本賞金の表。**公式(nar_races)のレース名から**取る=源が競馬ブックの走でも同じ規則で読める。
+  // §38 R-1 条件クラスと本賞金の表。**公式(nar_races)のレース名から**取る=源が専門紙の走でも同じ規則で読める。
   // 公式に無い走(2022-11 より前)は両方 null=画面は何も出さない
   run.raceClass = ni ? raceClassOf(ni.race_name, str(ni.race_kind)) : null;
   run.prizeList = ni && Array.isArray(ni.prize_yen) ? ni.prize_yen : null;
@@ -4489,7 +4489,7 @@ function histNameOf(id, names) {
 //   佐賀のミナミジュウジセイ(2022年生・8/22 佐賀)が入り「佐賀→ばんえい 転入」と誤って出る
 // ⛔**直前走が無い馬(新馬・能検上がり)には出さない**=「変わった」と言えないため
 // ⚠当日の所属が分かるのは**公式ソースの場**(nar_runs で出馬表を作る9場)だけ。
-//   競馬ブック・高知の出馬表には所属の列が無いので、その場の馬には出ない(2026-08-29 実測)
+//   専門紙・高知の出馬表には所属の列が無いので、その場の馬には出ない(2026-08-29 実測)
 function raceMoves(entries, nar) {
   const out = new Map();
   for (const e of entries) {
@@ -4538,7 +4538,7 @@ async function loadRaceHistory(race, entries) {
       ? histKochi(kochiCodes, kochiNames, toKochiDate(race.date)).catch(() => new Map())
       : new Map(),
   ]);
-  // 馬ごとに 競馬ブック → 高知 → 公式 の順に積んでから5走に切る(同じレースは先に積んだ源が残る)
+  // 馬ごとに 専門紙 → 高知 → 公式 の順に積んでから5走に切る(同じレースは先に積んだ源が残る)
   const picked = new Map();
   for (const id of names.keys()) {
     const cand = [];
@@ -4551,7 +4551,7 @@ async function loadRaceHistory(race, entries) {
   const { narInfo, kochiInfo } = await histInfo([...picked.values()].flat());
   const out = new Map();
   for (const [id, ds] of picked) out.set(id, ds.map((d) => histRun(d, narInfo, kochiInfo)));
-  // §54.3-a 転入・転厩は**切る前の公式の走**(nar)から見る= 直前走が競馬ブック由来の回でも判定できる
+  // §54.3-a 転入・転厩は**切る前の公式の走**(nar)から見る= 直前走が専門紙由来の回でも判定できる
   return { runs: out, moves: raceMoves(entries, nar) };
 }
 
@@ -5589,7 +5589,7 @@ export async function getRaceWinners(runs) {
 
 // ---------------------------------------------------------------- §43 騎乗馬一覧(/rides/:venue/:date)
 
-// §80 A ② 調教師名の書き方は源で違う(公式 '米川' / 競馬ブック '門米川'= 場の頭文字つき)。
+// §80 A ② 調教師名の書き方は源で違う(公式 '米川' / 専門紙 '門米川'= 場の頭文字つき)。
 // 対応表(js/trainer-map.js)で公式表記へ寄せ、寄せられた名前だけ official=true にする。
 // ⛔頭文字を機械で削らない(実測 2026-09-03 門別: '門柳沢' の公式は '柳澤好'= 字も長さも違う)。
 // ⛔表に無い名前は**書いてあるまま**返して official=false(別人のページへ飛ばさないため。
@@ -5602,7 +5602,7 @@ function trainerOf(raw, isOfficial) {
   return m ? { name: m, official: true } : { name: s, official: false };
 }
 
-// #411 騎手も源で表記が違う(競馬ブック '藤田凌駕' / 公式 '藤田駕')。対応表(js/jockey-map.js・§26.4 と同じ作り方)に
+// #411 騎手も源で表記が違う(専門紙 '藤田凌駕' / 公式 '藤田駕')。対応表(js/jockey-map.js・§26.4 と同じ作り方)に
 //   あれば公式表記へ。無ければ書いてあるまま(騎手はほぼ同じ字なので official 旗は持たない=ui.personLink と同じ規則)
 function jockeyOf(raw) {
   const s = str(raw);
@@ -5616,7 +5616,7 @@ const NAR_RIDE_COLS = 'race_no,runner_number,gate,horse_name,jockey,trainer,trai
 
 // その日その場の**騎乗**をぜんぶ返す。返り値 = { venue, date, races, rides } / その場の開催が無ければ null。
 // ⚠その日の器(loadDay)は結果一覧・レースページと**同じ memo** を使い回すので、増えるのは
-// 出走各馬を引く **1〜2本**だけ(公式の場=1本・競馬ブックの場=出馬表と結果で2本・高知=1本・
+// 出走各馬を引く **1〜2本**だけ(公式の場=1本・専門紙の場=出馬表と結果で2本・高知=1本・
 // アーカイブの日=**0本**。§13.2B-2 で公式から足したレースが混じる日だけ +1本)
 export function getVenueRides(prefix, date) {
   const v = VENUE_BY_PREFIX.get(String(prefix ?? ''));
@@ -5666,7 +5666,7 @@ export function getVenueRides(prefix, date) {
       const fin = new Map((a.results || []).map((x) => [x.umaban, x]));
       for (const e of (a.entries || [])) {
         const r = fin.get(e.umaban) || null;
-        // §28.1b アーカイブの中身は競馬ブック表記('川加藤誠')= 公式扱いにしない(対応表を通す)
+        // §28.1b アーカイブの中身は専門紙表記('川加藤誠')= 公式扱いにしない(対応表を通す)
         add(a.race, e, r ? r.finish : null, r ? r.finishNote : null);
       }
     }
@@ -5734,7 +5734,7 @@ export function getVenueRides(prefix, date) {
         }, n.note !== null ? null : narFinish(x), n.note);
       }
     } else if (rest.length) {
-      // 公式が主の場はまるごと1本。競馬ブックが主の場でも §13.2B-2 で足したレースはこちら
+      // 公式が主の場はまるごと1本。専門紙が主の場でも §13.2B-2 で足したレースはこちら
       const narRaces = v.supported === 'nar' ? rest : rest.filter((r) => r.sourceKind === 'nar');
       const kbRaces = v.supported === 'nar' ? [] : rest.filter((r) => r.sourceKind !== 'nar');
       await Promise.all([
@@ -5786,7 +5786,7 @@ export function getVenueRides(prefix, date) {
               horseName: str(e.horse_name) || (r ? str(r.horse_name) : '') || '',
               horseId: kbId(e.horse_id) || (r ? kbId(r.horse_id) : null),
               jockey: (r && str(r.jockey)) || str(e.jockey),
-              trainer: (r && str(r.trainer)) || str(e.trainer),   // 競馬ブック表記= 対応表を通す
+              trainer: (r && str(r.trainer)) || str(e.trainer),   // 専門紙表記= 対応表を通す
               ninki: (r && num(r.pop)) ?? num(e.pop),
               odds: (r && num(r.win_odds)) ?? num(e.win_odds),
               scratched: isScratched(r && r.finish_note) || isScratched(e.status),   // §80 A 取消・除外だけ(§50)
@@ -5978,7 +5978,7 @@ function salesDayList(rows) {
 // 馬ページの脚質を**画面の結果表と同じ値**(公式 `nar_races.corners`)で数えるための束。
 // 返り値 = Map(Race.id → Map(馬番 → '3-3-5'))。走歴が出そろってから**1回だけ**呼ぶ。
 // ⚠corners の無い走(ばんえい=コーナーが無い・2022-11 より前)は Map に入れない=
-// 呼ぶ側が競馬ブックの `passing` に落ちる(§41-B と同じ型)。80レースずつ=ふつうの馬は1本
+// 呼ぶ側が専門紙の `passing` に落ちる(§41-B と同じ型)。80レースずつ=ふつうの馬は1本
 export async function getRunCorners(runs) {
   const list = Array.isArray(runs) ? runs : [];
   const keys = new Map();                     // Race.id → {track, date, no}
@@ -7909,7 +7909,7 @@ export function patchNews(id, patch) {
   return adminWrite(`/rest/v1/site_news?id=eq.${n}`, 'PATCH', patch);
 }
 
-// §93.2 A 1レース分の陣営コメント・調教(競馬ブック由来)。**既存の読み口をそのまま叩く**。
+// §93.2 A 1レース分の陣営コメント・調教(専門紙由来)。**既存の読み口をそのまま叩く**。
 // ⛔memo に載せない(§93.6: 管理者ページに本文を溜めない)。⛔401 を握りつぶさない=
 //   「トークンが合わない」と「その日は空」を画面が言い分けられるよう status を載せて投げ直す。
 // 返り= { danwa: [{umaban, horseName, horseId, headline, trainer, comment}], cyokyo: [...], updatedAt }

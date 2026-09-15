@@ -497,7 +497,7 @@ def fetch_ten(base, key, need, std_before=None):
     """
     ten_of = {}
     # ⛔§157 段 2(2026-09-12)で読み口を**本体(nar-official)だけ**にした=
-    #   高知は自前計測の nar_own_runs、門別・南関4 は競馬ブックの nar_kb_runs。
+    #   高知は自前計測の nar_own_runs、門別・南関4 は専門紙の nar_kb_runs。
     #   ⛔中身の決まりは 1 つも変えていない(高知は「実測」の馬だけ・南関は 1200m 未満を入れない)。
     dist = {}
     nd = sorted({d for t, d in need if t in TEN_TRACKS})
@@ -524,7 +524,7 @@ def fetch_ten(base, key, need, std_before=None):
                 dm = dist.get(("高知", d, r["race_no"]))
                 if dm:
                     ten_of[("高知", d, int(r["race_no"]), int(r["umaban"]))] = (float(v), dm)
-    # ---- 門別・南関4(nar_kb_runs・競馬ブック)。⛔1200m 未満は別物なので入れない
+    # ---- 門別・南関4(nar_kb_runs・専門紙)。⛔1200m 未満は別物なので入れない
     cd = sorted({d for t, d in need if t in TEN_TRACKS and t != "高知"})
     ct = sorted({t for t, _d in need if t in TEN_TRACKS and t != "高知"})
     if cd and ct:
