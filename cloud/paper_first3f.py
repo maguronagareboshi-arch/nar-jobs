@@ -34,7 +34,8 @@ sys.path.insert(0, HERE)
 import paper_pdf as pp  # noqa: E402
 
 JST = dt.timezone(dt.timedelta(hours=9))
-HREF_RE = re.compile(r"""href\s*=\s*["']([^"']*?(\d{4})(\d{2})(\d{2})_(\d{1,2})Ra4\.pdf)["']""", re.I)
+HREF_RE = re.compile(r"""href\s*=\s*["']([^"']*?(\d{4})(\d{2})(\d{2})_(\d{1,2})R(a4)?\.pdf)["']""", re.I)
+TAIL_RE = re.compile(r"R(a4)?\.pdf$", re.I)
 DATES_RE = re.compile(r"^\d{4}-\d{2}-\d{2}(,\d{4}-\d{2}-\d{2})*$")
 PK = ("track", "race_date", "race_no", "umaban")
 UA = "Mozilla/5.0"
@@ -118,24 +119,37 @@ def distances(keys):
     return out
 
 
+def sibling(name):
+    """同じ (日付, R) のもう一方の名前(a4 ⇔ 無印)"""
+    return TAIL_RE.sub(lambda m: "R.pdf" if m.group(1) else "Ra4.pdf", name)
+
+
 def done_refs(names):
+    """表に行がある PDF の名前。(日付, R) で見る= a4 名で入った日の無印も「済み」にする"""
     got = set()
-    names = sorted(names)
+    names = sorted({x for n in names for x in (n, sibling(n))})
     for i in range(0, len(names), 50):
         for r in sb("nar_paper_runs?select=src_ref&src_ref=" + q_in(names[i:i + 50])) or []:
             got.add(r.get("src_ref"))
-    return got
+    return got | {sibling(n) for n in got if n}
 
 
 # ---------------------------------------------------------------- 一覧と PDF
+def pick_pdfs(html):
+    """一覧の HTML → {ファイル名: (日付, レース番号, 置き場からの相対)}。
+    同じ (日付, R) に a4 と無印の両方があれば a4(A4 2 枚の方が文字が大きい= 読み取りが安定)・無印だけならそれ"""
+    best = {}
+    for m in HREF_RE.finditer(html):
+        href, y, mo, d, no, a4 = m.groups()
+        key = ("%s-%s-%s" % (y, mo, d), int(no))
+        if key not in best or (a4 and not best[key][0]):
+            best[key] = (bool(a4), href)
+    return {os.path.basename(href): (key[0], key[1], href) for key, (_, href) in best.items()}
+
+
 def list_pdfs(base):
     """一覧 → {ファイル名: (日付, レース番号, 置き場からの相対)}"""
-    html = http_get(base + "index.html").decode("cp932", "replace")
-    out = {}
-    for m in HREF_RE.finditer(html):
-        href, y, mo, d, no = m.groups()
-        out[os.path.basename(href)] = ("%s-%s-%s" % (y, mo, d), int(no), href)
-    return out
+    return pick_pdfs(http_get(base + "index.html").decode("cp932", "replace"))
 
 
 def _runs(vals, thr):

@@ -8,6 +8,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from cloud import paper_pdf as pp  # noqa: E402
+from cloud import paper_first3f as pf  # noqa: E402
 
 
 def run(date, venue, fin, sec, f3=None):
@@ -60,6 +61,22 @@ class Identify(unittest.TestCase):
                          [("水沢", 3, 37.9, None, "20260914_03Ra4.pdf", "右から6列 上から1段"),
                           ("盛岡", 2, None, 25.5, "20260914_03Ra4.pdf", "右から6列 上から2段")])
         self.assertNotIn("src_url", rows[0], "出どころの列は src_ref(ファイル名だけ)")
+
+
+class ListPdfs(unittest.TestCase):
+    def test_both_kinds_prefer_a4(self):
+        html = ('<a href="x/20260915_01R.pdf">1R</a><a href="x/20260915_01Ra4.pdf">1R A4</a>'
+                "<a href='x/20260915_10R.pdf'>10R</a><a href=\"x/20260915_02Ra4.pdf\">2R A4</a><a href=\"x/20260915_02R.pdf\">2R</a>")
+        self.assertEqual(pf.pick_pdfs(html), {
+            "20260915_01Ra4.pdf": ("2026-09-15", 1, "x/20260915_01Ra4.pdf"),
+            "20260915_02Ra4.pdf": ("2026-09-15", 2, "x/20260915_02Ra4.pdf"),
+            "20260915_10R.pdf": ("2026-09-15", 10, "x/20260915_10R.pdf")})
+
+    def test_plain_only_day(self):
+        html = '<a href="y/20260913_03R.pdf">3R</a><a href="y/20260913_12R.pdf">12R</a><a href="y/20260913_12R.html">x</a>'
+        self.assertEqual(sorted(pf.pick_pdfs(html).values()), [("2026-09-13", 3, "y/20260913_03R.pdf"), ("2026-09-13", 12, "y/20260913_12R.pdf")])
+        # 済みの判定は (日付, R)= a4 名で入った日の無印を取り直さない
+        self.assertEqual((pf.sibling("20260914_03Ra4.pdf"), pf.sibling("20260914_03R.pdf")), ("20260914_03R.pdf", "20260914_03Ra4.pdf"))
 
 
 if __name__ == "__main__":
