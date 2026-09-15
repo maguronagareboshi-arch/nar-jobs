@@ -1,7 +1,10 @@
 # -*- coding: utf-8 -*-
 """§170 C 期待値で買う検証(複勝・12 か月の WF)。**読むだけ**(DB に書かない・材料は手元のファイルだけ)。
 
-  py -3.12 -X utf8 pipeline/ai/ev_backtest.py [--pred <wf1_pred_a.parquet>] [--flat <flat.parquet>] [--payouts <tsv>]
+  py -3.12 -X utf8 pipeline/ai/ev_backtest.py [--pred <wf1_pred_a.parquet>] [--flat <flat.parquet>] [--payouts <tsv>] [--top N]
+
+§190 案 1: `--top N`(既定 0= 今まで通り全頭)= EV の候補をレース内の p の順位 N 位以内の馬だけにする
+(順位は予測にある全頭で数える・同じ p は馬番の小さい方が上)。式・c・ゲートは同じ。
 
 材料= 予測(各馬の 3着内の確率 p・前の月までで学習済み)× 締切 10 分前の複勝下限(f10_lo)と単勝(o10)×
       確定の複勝の払戻。**3 つ揃うレースだけ**使う(揃わなかった数は表に出す)。
@@ -37,6 +40,17 @@ def odds_band(f):
     return next(lab for lo, hi, lab in ODDS_BANDS if lo <= f < hi)
 
 
+def p_ranks(pairs):
+    """[(馬番, p)] → {馬番: レース内の p の順位}(p の大きい順・同じ p は馬番の小さい方が上)"""
+    order = sorted(((int(u), float(p)) for u, p in pairs), key=lambda x: (-x[1], x[0]))
+    return {u: i + 1 for i, (u, _p) in enumerate(order)}
+
+
+def candidates(horses, top):
+    """§190 案 1 EV の候補= top > 0 なら p の順位 top 位以内の馬だけ・0 なら全頭(§170 と同じ)"""
+    return [h for h in horses if top <= 0 or h['prank'] <= top]
+
+
 def load(pred, flat, payouts):
     """→ (races, miss)。races= [(ym, key, [馬の dict…])]・日付順。miss= 揃わなかった数の内訳(月別)"""
     import pandas as pd
@@ -62,12 +76,13 @@ def load(pred, flat, payouts):
             miss[ym]['複勝の払戻無し'] += 1
             continue
         horses = []
+        prank = p_ranks(zip(g['runner_number'], g['p']))       # §190 順位は f10_lo の無い馬を落とす前の全頭で数える
         for u, p, y in zip(g['runner_number'], g['p'], g['y']):
             o, f = fo.get((t, d, int(no), int(u)), (None, None))
             if f is None or f != f:
                 miss[ym]['f10_lo の無い馬'] += 1
                 continue
-            horses.append(dict(u=int(u), p=float(p), y=int(y), f=float(f),
+            horses.append(dict(u=int(u), p=float(p), y=int(y), f=float(f), prank=prank[int(u)],
                                o=(float(o) if o is not None and o == o else None), pay=int(pay.get(int(u), 0))))
         if len(horses) < 2:
             miss[ym]['買える馬 2 頭未満'] += 1
@@ -142,6 +157,7 @@ def main():
     ap.add_argument('--pred', default=str(HOME / 'wf1_pred_a.parquet'))
     ap.add_argument('--flat', default=str(HOME / 'keibaodds' / 'flat.parquet'))
     ap.add_argument('--payouts', default=str(HOME / 'payouts_2024.tsv'))
+    ap.add_argument('--top', type=int, default=0, help='§190 EV の候補を p の順位 N 位以内に絞る(0= 全頭)')
     a = ap.parse_args()
     sys.stdout.reconfigure(encoding='utf-8')
     races, miss = load(a.pred, a.flat, a.payouts)
@@ -149,7 +165,10 @@ def main():
 
     combos = [(lam, tau) for lam in LAMBDAS for tau in TAUS]
     books = {('EV', lam, tau): Book() for lam, tau in combos}
-    base = {'全馬買い': Book(), '1 番人気': Book(), 'AI ◎': Book()}
+    top_name = f'上位 {a.top} 頭 全部買い'
+    base = ({top_name: Book()} if a.top > 0 else {}) | {'全馬買い': Book(), '1 番人気': Book(), 'AI ◎': Book()}
+    pop_cand = defaultdict(int)                               # §190 候補の人気帯(10 分前の複勝下限の順)
+    pop_ev = {c: defaultdict(int) for c in combos}
     band_ev = {(lam, tau): defaultdict(Book) for lam, tau in combos}
     band_all = defaultdict(Book)
     venue_ev = {(lam, tau): defaultdict(Book) for lam, tau in combos}
@@ -166,6 +185,11 @@ def main():
             band_all[odds_band(h['f'])].buy(ym, h)
             venue_all[vn].buy(ym, h)
             calib.append((h['p'], h['y']))
+        # §190 案 1 候補= --top N のとき p の順位 N 位以内だけ(0= 全頭= §170 と同じ)。⛔式・c・ゲートは同じ
+        for h in candidates(horses, a.top):
+            if a.top > 0:
+                base[top_name].buy(ym, h)
+                pop_cand[h['band']] += 1
             c = cmap[ym][h['band']]
             for lam, tau in combos:
                 ev = ((1 - lam) * h['p'] + lam * h['q']) * h['f'] * c
@@ -173,6 +197,8 @@ def main():
                     books[('EV', lam, tau)].buy(ym, h)
                     band_ev[(lam, tau)][odds_band(h['f'])].buy(ym, h)
                     venue_ev[(lam, tau)][vn].buy(ym, h)
+                    if a.top > 0:
+                        pop_ev[(lam, tau)][h['band']] += 1
 
     # ---- 揃わなかった数
     print('## C-0 揃ったレースと欠けの内訳(月別)')
@@ -192,7 +218,15 @@ def main():
         return (f'| {name} | {bk.n:,} | {pct(bk.hit / bk.n if bk.n else None)} | {pct(bk.roi())} | '
                 f'{pct(bk.roi(1))} | {pct(bk.roi(3))} | {bk.months_over(months)}/{len(months)} | {bk.dd:,} |')
 
-    print('\n## C-5 合計(12 か月・1 点 100 円)')
+    if a.top > 0:
+        print(f'\n## §190 候補(p の上位 {a.top} 頭)の人気帯= 10 分前の複勝下限のレース内の順')
+        print('| 人気帯 | 候補の頭数 | ' + ' | '.join(f'選んだ λ={lam} τ={tau}' for lam, tau in combos) + ' |')
+        print('|---|---|' + '---|' * len(combos))
+        for _lo, _hi, b in BANDS:
+            print(f'| {b} | {pop_cand[b]:,} | ' + ' | '.join(f'{pop_ev[c][b]:,}' for c in combos) + ' |')
+        print(f'| 計 | {sum(pop_cand.values()):,} | ' + ' | '.join(f'{sum(pop_ev[c].values()):,}' for c in combos) + ' |')
+
+    print('\n## C-5 合計(12 か月・1 点 100 円)' + (f'= 候補は p の上位 {a.top} 頭' if a.top > 0 else ''))
     print('| 買い方 | 点数 | 的中率(3着内) | 回収率 | 最大 1 本抜き | 上位 3 本抜き | 100% 超の月 | 最大ドローダウン(円) |')
     print('|---|---|---|---|---|---|---|---|')
     for lam, tau in combos:
