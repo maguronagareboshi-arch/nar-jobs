@@ -99,7 +99,9 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: python cloud/noken_debuts.py --apply
+        run: |
+          python cloud/noken_debuts.py --apply
+          python cloud/auction_today.py --apply || echo "⚠ 今日のオークション取引馬(auction_today)が書けない(続行)"
 
       # §37.4-① 能検索引(13地区 → nar_meta key='noken_index')。meta の読み15本 + ran照会 約60本・1分弱・冪等。
       # §50 #187 から daily でも回す= ran(デビュー済み)の旗を翌朝までに更新するため
