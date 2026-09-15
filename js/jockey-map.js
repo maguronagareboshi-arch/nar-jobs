@@ -1,4 +1,4 @@
-// 生成物: 競馬ブックの騎手表記 → 公式表記(§26.4・#411)。pipeline/build_trainer_map.py --kind jockey が作る。手で編集しない。
+// 生成物: 専門紙の騎手表記 → 公式表記(§26.4・#411)。pipeline/build_trainer_map.py --kind jockey が作る。手で編集しない。
 // 採用条件: 全共起一致なら n>=2・割れている場合は n>=3 かつ 最多シェア>=95%。あいまいな表記は載せていない。
 export const JOCKEY_MAP = {
   'クアトロ': 'クアト',
