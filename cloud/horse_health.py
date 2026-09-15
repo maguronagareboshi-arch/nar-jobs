@@ -1210,7 +1210,7 @@ def run_nar(
 ) -> dict[str, int]:
     stats = {k: 0 for k in (
         "sources", "complete", "candidates", "events", "review", "not_ready", "changed", "error", "attention",
-        "skipped", "force_matched", "force_applied", "status_mismatch", "review_waiting",
+        "skipped", "force_matched", "force_applied", "status_mismatch", "review_waiting", "reparse_waiting",
     )}
     limiter = HostLimiter()
     work = venue_days(client, start, end)
@@ -1264,15 +1264,7 @@ def run_nar(
         decision, reason = fetch_decision(old, forced, reparse)
         if decision == "skip":
             stats["skipped"] += 1
-            if reason == "changed_waiting_review":
-                stats["changed"] += 1
-            elif reason == "review_waiting_parser_or_force":
-                # ⛔前の run で review になった source を毎回 review に数えると、毎日 exit 1 が続く
-                #   (2026-09-06 auction 363 件・nar 13 件)。新しく review になった数だけ exit 1 に効かせ、
-                #   待ちは review_waiting で見せる(--reparse か --force-review-ref で解く)。
-                stats["review_waiting"] += 1
-            elif reason == "parser_changed_use_reparse":
-                stats["attention"] += 1
+            count_skip_reason(stats, reason)
             if reason not in {"complete_after_window", "checked_today"}:
                 add_report(
                     reports, kind="nar_pdf", ref=ref, status=str((old or {}).get("status") or "skipped"),
@@ -1470,7 +1462,7 @@ def run_auction(
 ) -> dict[str, int]:
     stats = {k: 0 for k in (
         "sources", "complete", "candidates", "events", "review", "changed", "error", "attention", "skipped",
-        "force_matched", "force_applied", "review_waiting",
+        "force_matched", "force_applied", "review_waiting", "reparse_waiting",
     )}
     imported = {kind: list_import_refs(client, kind) for kind in ("rakuten", "sat")}
     records, raw_errors = read_raw_records()
@@ -1510,15 +1502,7 @@ def run_auction(
         decision, reason = auction_fetch_decision(old, digest, forced, reparse)
         if decision == "skip":
             stats["skipped"] += 1
-            if reason == "changed_waiting_review":
-                stats["changed"] += 1
-            elif reason == "review_waiting_parser_or_force":
-                # ⛔前の run で review になった source を毎回 review に数えると、毎日 exit 1 が続く
-                #   (2026-09-06 auction 363 件・nar 13 件)。新しく review になった数だけ exit 1 に効かせ、
-                #   待ちは review_waiting で見せる(--reparse か --force-review-ref で解く)。
-                stats["review_waiting"] += 1
-            elif reason == "parser_changed_use_reparse":
-                stats["attention"] += 1
+            count_skip_reason(stats, reason)
             if reason not in {"complete_after_window", "checked_today"}:
                 add_report(
                     reports, kind=source, ref=ref, status=str((old or {}).get("status") or "skipped"),
@@ -1739,10 +1723,7 @@ def main(argv: list[str] | None = None) -> int:
     bad = 0
     for source, stats in totals.items():
         log(f"{source}: " + " ".join(f"{k}={v}" for k, v in stats.items()))
-        bad += (
-            stats.get("review", 0) + stats.get("changed", 0) +
-            stats.get("not_ready", 0) + stats.get("error", 0) + stats.get("attention", 0)
-        )
+        bad += exit_count(stats)
     if args.force_review_ref:
         matched = sum(stats.get("force_matched", 0) for stats in totals.values())
         applied = sum(stats.get("force_applied", 0) for stats in totals.values())
@@ -1762,6 +1743,26 @@ def main(argv: list[str] | None = None) -> int:
         totals=totals, rows=report_rows, reparse=args.reparse,
     )
     return 1 if bad else 0
+
+
+def count_skip_reason(stats: dict[str, int], reason: str | None) -> None:
+    """skip した source の理由を数える(nar・auction 共通)。
+    ⛔前の run で review になった source を毎回 review に数えると、毎日 exit 1 が続く
+      (2026-09-06 auction 363 件・nar 13 件)。新しく review になった数だけ exit 1 に効かせ、
+      待ちは review_waiting で見せる(--reparse か --force-review-ref で解く)。
+    ⛔parser の版が上がって取り直し待ちの source(parser_changed_use_reparse)も exit 1 に数えない=
+      reparse_waiting で見せるだけ(2026-09-13〜 auction 871 件で毎回 exit 1 が続いた・--reparse で解く)"""
+    if reason == "changed_waiting_review":
+        stats["changed"] += 1
+    elif reason == "review_waiting_parser_or_force":
+        stats["review_waiting"] += 1
+    elif reason == "parser_changed_use_reparse":
+        stats["reparse_waiting"] += 1
+
+
+def exit_count(stats: dict[str, int]) -> int:
+    """exit 1 に効かせる数= review・changed・not_ready・error・attention(⛔review_waiting・reparse_waiting は数えない)"""
+    return sum(stats.get(k, 0) for k in ("review", "changed", "not_ready", "error", "attention"))
 
 
 if __name__ == "__main__":

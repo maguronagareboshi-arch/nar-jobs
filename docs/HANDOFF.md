@@ -1,7 +1,7 @@
-commit: なし(下調べだけ・⛔実装なし・⛔push なし)。master(854098c)の作業木に新規 docs/run_failures_20260915.md と、この HANDOFF.md の上書きを置いた(未 commit)
-検品: `gh run list` で JST 9/9 以降の success でない run= 47 本(auction-archive 11・horse-health 8・nar-refresh 18・nar-ai-last 5・nar-watchdog 4・nar-ai-feat 1= 依頼の本数と一致)を全部 `gh run view --json jobs` と `--log` で読み、1 run 1 行の表にした。分類= ① 3・② 4・③ 37・④ 1・実行中/待ち 2(nar-ai-last 09-15 12:27 実行中・15:08 待ち)
-通信: gh の読み取りだけ(一覧 1 本+run ごとに 2 本)。ログは scratchpad に落として読んだ(URL・社名・鍵は表に写していない)
-回帰: コード・yml・DB は触っていない
-変えた点: ③の中身= **auction-archive 10 本は今も続く**(解析の版が上がって attention=871・理由 parser_changed_use_reparse → bad に数えて exit 1)/horse-health 8 本は同じ形で 9/12 11:07 以降止んだ/nar-refresh 12 本= 高知の自己修復 8(撤去済み)・門別の級別表のリンク無し 2(9/13 以降通過)・daily の HTTP 404 を rc=2 にする 2/AI 便 3 本= 本番の列追加で COPY の列ずれ(fd36163 で修正済み)/watchdog 4 本= 9/11 の当日オッズのティック 0 が 2・**高知の前半3F が 9/12・9/13 に 0 頭が 2(今も続く)**
-⚠: 見立てが推測を含むもの= ①の 3 本は job 0 本・ログ 0 行で「待ちの run が次の run に置き換わった」は run の形(待ち時間と group)からの判断。watchdog の高知の前半3F は「計測は当日動いている(ran が新しい)のに nar_own_runs が 0」= 書き先の確認が要る(未確認)。9/11 のオッズのティック 0 は公開リポ側の run を見ていない
-要判断: auction-archive の取り直し(手押しで --source auction --reparse を 1 回)をするか、parser_changed_use_reparse を exit の数から外すか(どちらも本番の DB に書く= Fable)。高知の前半3F 0 頭(9/12・9/13)は手元 PC の確認が要る
+commit: 枝 s186-health-exit(origin/master 09a4e8f から・⛔push/merge なし・⛔便は回していない)= cloud/horse_health.py(新規 純関数 count_skip_reason= skip の理由を数える所を nar・auction で 1 つに・parser_changed_use_reparse は attention でなく reparse_waiting に数える/新規 exit_count= review・changed・not_ready・error・attention の合計(review_waiting・reparse_waiting は数えない)/stats の鍵に reparse_waiting を足した= 要約行「nar: … reparse_waiting=N」「auction: … reparse_waiting=N」に出る)・cloud/refresh.py(新規 not_found(e)= 例外の応答が 404 か/daily の取得で 404 のときは「公式が 404 を返す → 開催なしとみなして投入なし」で次へ= rc 0)・新規 tests/test_health_exit.py・tests/test_refresh_404.py 各 1 項
+検品: `py -3.12 -X utf8 -m unittest tests.test_health_exit tests.test_refresh_404` 2/2 OK(health= 871 本の parser_changed_use_reparse+review 待ち 1 で exit_count 0・changed 1 で 1・error 2+review 3 で 6/refresh= fetch_doc を差し替えて daily 404 → rc 0・daily 500 → rc 2・not_found は ValueError に False)。既存 `unittest discover -p "test_*.py"` 53/53・paper_match_test 緑。py_compile 通過・git diff --check 通過・禁止語 0
+通信: 変わらない(数え方と終了コードだけ)
+回帰: 取り直しの判定(fetch_decision/auction_fetch_decision)・--reparse・--force-review-ref・監査 report(要確認の表には理由付きの source が今までどおり並ぶ)・monthly の取得失敗・daily の ZIP でない応答・500 などの取得失敗 rc=2 は触っていない
+変えた点: stats の attention はもう増やす所が無い(parser_changed_use_reparse だけが足していた)= 鍵は残して常に 0(ログの並びを変えないため)。refresh の 404 は daily だけ(monthly の 404 は今までどおり取得失敗= 月の ZIP が無いのは異常のため)
+⚠: auction の 871 件は取り直されないまま「reparse_waiting=871」で緑になる= 取り直しは手押しの `--source auction --reparse` が要る(便は勝手に取り直さない)。daily の 404 が「開催なし」でなく公式の障害だったときも rc 0 で黙る(health check 段= nar_races が 3 時間更新されないと赤、が残りの見張り)
+要判断: auction の取り直し(`horse_health.py --source auction --reparse --apply` を 1 回)をいつ流すか(本番 DB に書く= Fable)

@@ -29,6 +29,11 @@ def log(msg):
     print(f"[{dt.datetime.now(JST):%Y-%m-%d %H:%M:%S}] {msg}", flush=True)
 
 
+def not_found(e):
+    """取得の例外が HTTP 404 か(requests.HTTPError は e.response.status_code を持つ)"""
+    return getattr(getattr(e, "response", None), "status_code", None) == 404
+
+
 def fetch_doc(scope, **kw):
     url = download_url("race", scope=scope, **kw)
     observed = dt.datetime.now(dt.timezone.utc).isoformat()
@@ -79,6 +84,8 @@ def main():
                 log(f"翌月 {kw}: まだ公式に無い({e})"); continue
             failed += 1; log(f"取得失敗 {scope} {kw}: {e}"); continue
         except Exception as e:                               # ネットワーク断など。次回の実行で取り直す
+            if scope == "daily" and not_found(e):            # §186 daily の 404= ZIP でない応答と同じ(夜の手押しで rc=2 が 2 回)
+                log(f"daily {kw['race_date']}: 公式が 404 を返す → 開催なしとみなして投入なし"); continue
             failed += 1; log(f"取得失敗 {scope} {kw}: {type(e).__name__}: {str(e)[:200]}"); continue
         races = doc.get("races") or []
         dates = sorted({r.get("race_date") for r in races if r.get("race_date")})
