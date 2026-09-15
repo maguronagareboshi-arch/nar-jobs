@@ -3,6 +3,7 @@
 
   python -X utf8 cloud/paper_first3f.py                                   # 今日-1〜+7 日(JST)の PDF のうち表にまだ無いもの
   python -X utf8 cloud/paper_first3f.py --dates 2026-09-14 --force --dry-run
+  python -X utf8 cloud/paper_first3f.py --gate                            # 今日・明日に岩手の開催が無ければ GITHUB_OUTPUT に skip=true
 環境変数: PAPER_BASE_URL(一覧と PDF の置き場・末尾 /)/ SUPABASE_URL / SUPABASE_SERVICE_KEY
           (--dry-run は読むだけなので SUPABASE_ANON_KEY でも動く)
 終了コード: 0 正常 / 1 一部失敗 / 2 前提が無い
@@ -244,13 +245,47 @@ def upsert(rows):
                json.dumps([dict(r, updated_at=now) for r in part[i:i + CHUNK]], ensure_ascii=False).encode("utf-8"))
 
 
+IWATE = ("盛岡", "水沢")
+
+
+def iwate_days(today, rows):
+    """today(date)と nar_races の行 → 行にある今日・明日(JST)の日付(昇順)。空= 岩手の開催が無い"""
+    want = {today.isoformat(), (today + dt.timedelta(days=1)).isoformat()}
+    return sorted({str(r.get("race_date")) for r in (rows or []) if str(r.get("race_date")) in want})
+
+
+def gate(today=None):
+    """便の入口の判定。今日・明日に岩手のレースが無ければ skip=true。⛔REST が失敗したら skip にしない(止まる側に倒さない)"""
+    today = today or dt.datetime.now(JST).date()
+    skip = False
+    if not os.environ.get("SUPABASE_URL") or not sb_key():
+        log("開催判定= SUPABASE_URL / キーが無い= 回す")
+    else:
+        days = [today.isoformat(), (today + dt.timedelta(days=1)).isoformat()]
+        try:
+            rows = sb("nar_races?select=race_date&track=" + q_in(IWATE) + "&race_date=in.(" + ",".join(days) + ")&limit=1") or []
+            got = iwate_days(today, rows)
+            skip = not got
+            log("開催判定= 岩手の開催 %s" % ("あり(%s)= 回す" % ",".join(got) if got else "なし(%s)= 飛ばす" % ",".join(days)))
+        except Quiet as q:
+            log("開催判定に失敗 %s= 回す" % q)
+    out = os.environ.get("GITHUB_OUTPUT")
+    if out:
+        with open(out, "a", encoding="utf-8") as f:
+            f.write("skip=%s\n" % ("true" if skip else "false"))
+    return 0
+
+
 def main(argv=None):
     ap = argparse.ArgumentParser(description="紙面 PDF の前半3F → nar_paper_runs")
     ap.add_argument("--dates", default="", help="YYYY-MM-DD をカンマ区切り(既定= 今日-1〜+7 日・JST)")
     ap.add_argument("--force", action="store_true", help="表に行がある PDF も取り直す")
     ap.add_argument("--dry-run", action="store_true", help="読むだけで表に書かない")
     ap.add_argument("--out", help="書く行を JSON で保存(手元の答え合わせ用)")
+    ap.add_argument("--gate", action="store_true", help="岩手の開催判定だけ(今日・明日に盛岡/水沢のレースが無ければ GITHUB_OUTPUT に skip=true)")
     a = ap.parse_args(argv)
+    if a.gate:
+        return gate()
     base = os.environ.get("PAPER_BASE_URL", "").strip()
     if not base:
         log("PAPER_BASE_URL が無い"); return 2

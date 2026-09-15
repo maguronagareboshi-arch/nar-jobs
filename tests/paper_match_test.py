@@ -126,5 +126,47 @@ class Gear(unittest.TestCase):
         self.assertEqual([len(p) for p in sent], [2, 1])
 
 
+class Gate(unittest.TestCase):
+    TODAY = __import__("datetime").date(2026, 9, 15)
+
+    def _run(self, rows=None, fail=False):
+        import os
+        import tempfile
+        orig, env = pf.sb, dict(os.environ)
+        calls = []
+
+        def fake(path, body=None):
+            calls.append(path)
+            if fail:
+                raise pf.Quiet("DB HTTP 503")
+            return rows
+        fd, out = tempfile.mkstemp()
+        os.close(fd)
+        pf.sb = fake
+        os.environ.update({"SUPABASE_URL": "x", "SUPABASE_ANON_KEY": "x", "GITHUB_OUTPUT": out})
+        try:
+            self.assertEqual(pf.gate(self.TODAY), 0)
+            with open(out, encoding="utf-8") as f:
+                return f.read(), calls
+        finally:
+            pf.sb = orig
+            os.environ.clear()
+            os.environ.update(env)
+            os.remove(out)
+
+    def test_race_day_runs(self):
+        self.assertEqual(pf.iwate_days(self.TODAY, [{"race_date": "2026-09-16"}]), ["2026-09-16"])
+        text, calls = self._run([{"race_date": "2026-09-15"}])
+        self.assertEqual(text, "skip=false\n")
+        self.assertIn("race_date=in.(2026-09-15,2026-09-16)", calls[0])
+        self.assertIn("limit=1", calls[0])
+        # REST が失敗したら skip にしない(止まる側に倒さない)
+        self.assertEqual(self._run(fail=True)[0], "skip=false\n")
+
+    def test_no_race_day_skips(self):
+        self.assertEqual(pf.iwate_days(self.TODAY, [{"race_date": "2026-09-20"}]), [])
+        self.assertEqual(self._run([])[0], "skip=true\n")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -1,7 +1,7 @@
-commit: 枝 s179d-gear-miss(master 403b13d から・⛔push/merge なし・⛔便は回していない・⛔DB に書いていない)= 新規 docs/gear_miss_20260915.md(9/15 10R の 13 列×4 段= 52 段の⑨の帯の字・信頼度・gear_marks・low_score の表と原因)・cloud/paper_pdf.py(新規 gear_from_band= 右端から続く B/P/S だけの箱(1〜3 字)はその箱の信頼度だけで決める・無ければ従来どおり全部の信頼度が足りるときだけ gear_marks・parse_block はこれを呼ぶだけ)・tests/paper_match_test.py に実例 2 項
-検品: 手元で PAPER_BASE_URL の 9/15 10R(無印 1 ページ)を grid/ocr_lines/parse_block に通した= 直す前 0/52 段(便の「馬具 0 走」と一致)→ 直した後 21/52 段(B 16・B+S 4・S 1)。`py -3.12 -X utf8 -m unittest tests.paper_match_test` 13/13 OK(実例= 名前の箱が低い信頼度+印の箱「夕 0.655/S 0.980」「ジ 0.642/B 0.997」「シ↑ 0.539/B 0.993」→ 読む・印の箱だけ「B 1.000」「BS 0.882」→ 読む・「SA(EXYIHYE 0.677」「マ 0.605/B 0.7」→ 読まない+low_score・「3力月休養」→ なし)。git diff --check 通過・禁止語 0
-通信: 変わらない(読み取りの判定だけ)。PDF は scratchpad に置いて読んだ後に消した
-回帰: 帯の位置(90〜101%)・閾値 0.8・gear_marks・GEAR_TAIL・前半3F の読み取り・書き込み・ログは触っていない。既存 11 項は緑のまま
-変えた点: 原因= ①帯の位置は正しい(⑨は全列で枠の高さ 95〜96%)②**主因= GEAR_TAIL**(文字認識はカタカナの馬名をほとんど返さず、印だけを別の箱で返す= 直前に日本語の字が無く 16 段が外れた)③**副因= 閾値の当て方**(名前の箱 0.5〜0.7 が 1 つでもあると 0.98〜0.997 の印の箱ごと捨てた= 4 段)。⛔閾値は下げていない・名前の箱と印が 1 つの箱で低い信頼度のものは読まないまま
-⚠: 残る取りこぼし= 列 1 の 3 段(S が 0.577/0.590/崩れた字 0.677)と「(字なし)」の段(帯に何も返らない= 無いのか読めないのか分からない)。列と馬名の対応は確かめていない(列 9 の B+S がユーザー指摘の馬かは、push 後の --force の行で見る)
-要判断: なし(push と --force dates=2026-09-15 の取り直しは Fable)
+commit: 枝 s179e-paper-gate(origin/master cd6677a から・⛔push/merge なし・⛔便は回していない)= cloud/paper_first3f.py(新規 純関数 iwate_days(today, rows)= 行にある今日・明日(JST)の日付・新規 gate()= nar_races?select=race_date&track=in.(盛岡,水沢)&race_date=in.(今日,明日)&limit=1 → 0 行なら GITHUB_OUTPUT に skip=true・REST 失敗/キー無しは skip=false・入口 --gate)・.github/workflows/paper-first3f.yml(setup-python の直後に手順「iwate race day gate」id gate・if dates が空のときだけ/system libs・install・read and upsert に if steps.gate.outputs.skip != 'true')・tests/paper_match_test.py に 2 項(Gate)
+検品: `py -3.12 -X utf8 -m unittest tests.paper_match_test` 15/15 OK(開催あり= skip=false・引く字に race_date=in.(2026-09-15,2026-09-16) と limit=1・REST 503 でも skip=false/開催なし= 0 行で skip=true)。手元で本番の匿名 REST に --gate= 「岩手の開催 あり(2026-09-15)= 回す」skip=false rc=0・キー無し= 「回す」rc=0。yml は YAML として読める・手順名に「: 」0・git diff --check 通過・禁止語 0
+通信: 便 1 回に REST 1 本(1 行だけ)が増える。岩手の開催が今日も明日も無い朝は apt/pip/読み取りを飛ばす= Actions の分数が減る(公開リポなので無料枠の外)
+回帰: 読み取り・書き込み・一覧の拾い方・cron・concurrency・timeout・手押しの inputs は触っていない。手押しで dates を渡すと判定の手順ごと飛ぶ= steps.gate.outputs.skip は空= 必ず回る。既存 13 項は緑のまま
+変えた点: 判定の手順のキーは**匿名キーでなく既存の NAR_SUPABASE_SERVICE_KEY**(GET 1 本だけ)= リポの secrets に匿名キーが無い(yml を grep して 0)。新しい secrets にすると登録までいつも「回す」になるため。判定は pip の前= 標準ライブラリだけで動く(paper_pdf を import するが numpy 等は関数の中で import)。apt の手順も飛ばす側に入れた(pip の前にあるため)
+⚠: PDF は約 5 日前に出る= 岩手の開催が今日・明日に無い朝は、先の日の PDF を拾うのが開催の前日まで遅れる(設計どおり)。本物の便での skip=true はまだ見ていない(開催の無い朝の run のログ「開催判定= 岩手の開催 なし」と後の 3 手順が skipped で見る)
+要判断: 判定に匿名キーを使うなら NAR_SUPABASE_ANON_KEY を secrets に登録して yml の 1 行を差し替える(今のままでも動く)

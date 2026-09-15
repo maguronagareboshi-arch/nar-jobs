@@ -37,14 +37,27 @@ jobs:
         with:
           python-version: '3.12'
 
+      # 岩手(盛岡・水沢)の開催が今日も明日も無ければ以降を飛ばす(標準ライブラリだけ= pip の前)。
+      # 手押しで dates を渡したときは判定しない= 必ず回す。REST が失敗したら skip にしない(止まる側に倒さない)
+      - name: iwate race day gate
+        id: gate
+        if: github.event.inputs.dates == ''
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python -X utf8 cloud/paper_first3f.py --gate
+
       # 文字認識の opencv が libGL を要る
       - name: system libs
+        if: steps.gate.outputs.skip != 'true'
         run: sudo apt-get install -y libgl1
 
       - name: install
+        if: steps.gate.outputs.skip != 'true'
         run: pip install pypdfium2==5.13.0 rapidocr-onnxruntime==1.4.4 pillow==12.3.0 numpy==1.26.4
 
       - name: read and upsert
+        if: steps.gate.outputs.skip != 'true'
         env:
           PAPER_BASE_URL: ${{ secrets.PAPER_BASE_URL }}
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
