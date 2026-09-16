@@ -11,6 +11,7 @@
 - 馬名は読まない(縦書き)= 枠の過去走を公式 nar_runs に当てて特定(paper_pdf.identify_horse)。
 - 距離(nar_races)≥1200 → first3f・<1200 → first2f。出どころは src_ref(ファイル名だけ)・src_page・src_pos。
 - 同じ PDF の行が表に 1 行でもあれば飛ばす(--force で取り直し= PK で merge)。
+- 一覧に名前だけ残って本体が HTTP 404 の PDF は「本体なし」として飛ばす(失敗に数えない= rc 0)。404 以外は今までどおり失敗。
 - ⛔ログに出すのは 日付・レース番号・件数・保留の理由・HTTP の status 番号だけ(URL・ファイル名・例外の文は出さない)。
 - PDF は作業フォルダ(RUNNER_TEMP)に置き、読み終えたら消す(⛔保存しない・上げない)。
 """
@@ -49,6 +50,10 @@ class Quiet(Exception):
     """ログに出してよい字(status 番号・例外の種類名)だけを持つ失敗"""
 
 
+class Gone(Quiet):
+    """一覧に名前はあるが本体が無い(PDF 本体が HTTP 404)= 失敗に数えず飛ばす"""
+
+
 def log(msg):
     print(msg, flush=True)
 
@@ -59,7 +64,9 @@ def http_get(url, headers=None, timeout=90):
         with urllib.request.urlopen(req, timeout=timeout) as r:
             return r.read()
     except urllib.error.HTTPError as e:
-        raise Quiet("HTTP %d" % e.code) from None
+        q = Quiet("HTTP %d" % e.code)
+        q.status = e.code
+        raise q from None
     except (urllib.error.URLError, OSError) as e:
         raise Quiet("通信失敗(%s)" % type(e).__name__) from None
 
@@ -211,8 +218,14 @@ def pdf_columns(path, race_date):
 
 def one_pdf(base, name, race_date, href, work):
     path = os.path.join(work, "paper_%s" % re.sub(r"[^0-9A-Za-z_.]", "", name))
+    try:
+        body = http_get(urllib.parse.urljoin(base, href), timeout=120)
+    except Quiet as q:
+        if getattr(q, "status", None) == 404:
+            raise Gone(str(q)) from None   # 一覧の残りかす= 本体が消えている
+        raise
     with open(path, "wb") as f:
-        f.write(http_get(urllib.parse.urljoin(base, href), timeout=120))
+        f.write(body)
     try:
         cols = pdf_columns(path, race_date)
     finally:
@@ -304,11 +317,13 @@ def main(argv=None):
     todo = sorted((v[0], v[1], n) for n, v in pdfs.items() if n not in skip)
     log("対象の日の PDF %d 本・読む %d 本(表に行がある %d 本は飛ばす)" % (len(pdfs), len(todo), len(pdfs) - len(todo)))
     work = os.environ.get("RUNNER_TEMP") or tempfile.gettempdir()
-    table, fails = {}, 0
+    table, fails, gone = {}, 0, 0
     for race_date, no, name in todo:
         label = "%s %dR" % (race_date, no)
         try:
             rows, ncol, held, ndb = one_pdf(base, name, race_date, pdfs[name][2], work)
+        except Gone:
+            log("%s 一覧にあるが本体なし(HTTP 404)" % label); gone += 1; continue
         except Quiet as q:
             log("%s 失敗 %s" % (label, q)); fails += 1; continue
         except Exception as e:  # ⛔例外の文には URL やパスが入りうる= 種類名だけ
@@ -328,7 +343,8 @@ def main(argv=None):
         with open(a.out, "w", encoding="utf-8") as f:
             json.dump(rows, f, ensure_ascii=False, indent=0)
     n3 = sum(1 for r in rows if r["first3f"] is not None)
-    log("書く行 %d(first3f %d・first2f %d・馬具 %d 走)・失敗 %d 本" % (len(rows), n3, len(rows) - n3, sum(1 for r in rows if r.get("gear")), fails))
+    log("書く行 %d(first3f %d・first2f %d・馬具 %d 走)・失敗 %d 本・本体なし %d 本" % (
+        len(rows), n3, len(rows) - n3, sum(1 for r in rows if r.get("gear")), fails, gone))
     if a.dry_run:
         log("--dry-run= 表に書かずに終了"); return 1 if fails else 0
     if rows:

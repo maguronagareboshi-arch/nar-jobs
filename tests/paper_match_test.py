@@ -168,5 +168,48 @@ class Gate(unittest.TestCase):
         self.assertEqual(self._run([])[0], "skip=true\n")
 
 
+class Missing(unittest.TestCase):
+    """一覧に名前だけ残って本体が無い PDF(§192 段 2)= 404 だけ飛ばす・404 以外は今までどおり失敗"""
+
+    def _run(self, status):
+        import contextlib
+        import io as _io
+        import os
+        orig = (pf.http_get, pf.list_pdfs, pf.done_refs)
+        env = dict(os.environ)
+
+        def fake_get(url, headers=None, timeout=90):
+            q = pf.Quiet("HTTP %d" % status)
+            q.status = status
+            raise q
+
+        pf.http_get = fake_get
+        pf.list_pdfs = lambda base: {"20260901_12R.pdf": ("2026-09-01", 12, "20260901_12R.pdf")}
+        pf.done_refs = lambda pdfs: set()
+        os.environ.update({"PAPER_BASE_URL": "x/", "SUPABASE_URL": "x", "SUPABASE_ANON_KEY": "x"})
+        buf = _io.StringIO()
+        try:
+            with contextlib.redirect_stdout(buf):
+                rc = pf.main(["--dates", "2026-09-01", "--dry-run"])
+            return rc, buf.getvalue()
+        finally:
+            pf.http_get, pf.list_pdfs, pf.done_refs = orig
+            os.environ.clear()
+            os.environ.update(env)
+
+    def test_body_404_is_not_a_failure(self):
+        rc, out = self._run(404)
+        self.assertEqual(rc, 0, "本体が 404 の残りかすで便が赤くなる")
+        self.assertIn("2026-09-01 12R 一覧にあるが本体なし(HTTP 404)", out)
+        self.assertIn("失敗 0 本・本体なし 1 本", out)
+        self.assertNotIn(".pdf", out, "⛔ログにファイル名を出した")
+
+    def test_body_500_is_still_a_failure(self):
+        rc, out = self._run(500)
+        self.assertEqual(rc, 1, "404 以外まで飛ばしている")
+        self.assertIn("2026-09-01 12R 失敗 HTTP 500", out)
+        self.assertIn("失敗 1 本・本体なし 0 本", out)
+
+
 if __name__ == "__main__":
     unittest.main()
