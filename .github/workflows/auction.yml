@@ -102,6 +102,8 @@ jobs:
           psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 \
             -U postgres.qgsnsdjvzzeazbazjlwa -d postgres \
             -v ON_ERROR_STOP=1 -X -f pipeline/sql/horse_health_20260903.sql
+          # §193c オークションの分類 v2(CHECK 17 値・印 2 列・書く関数 v2)。⛔20260903 が公開の関数を古い本体で作り直すので毎回この後に流す。冪等
+          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 \n            -U postgres.qgsnsdjvzzeazbazjlwa -d postgres \n            -v ON_ERROR_STOP=1 -X -f pipeline/sql/auction_groups_v2_20260916.sql | tail -n 3
       - name: install health dependencies
         if: >-
           success() &&
