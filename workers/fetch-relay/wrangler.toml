@@ -1,0 +1,22 @@
+# §195c nar-fetch-relay — GitHub の住所を拒むサイトだけ Cloudflare 側から取り、生のまま表に置く。
+# ⛔取るだけ= 読み解きは便(cloud/health_org_*.py)に残す。⛔inbound は受けない(route も workers.dev も作らない)。
+#
+# ユーザーの手順(この folder で 4 行)=
+#   1) npx wrangler login
+#   2) npx wrangler secret put SUPABASE_URL
+#   3) npx wrangler secret put SUPABASE_SERVICE_KEY
+#   4) npx wrangler deploy
+# 初回だけ手押し= Cloudflare の画面 Workers → nar-fetch-relay → Settings → Trigger Events の
+#   Cron Triggers の「Run」(または手元で `npx wrangler dev --test-scheduled` → 別窓で
+#   `curl "http://localhost:8787/__scheduled?cron=0+21+*+*+*"`)。
+# ⛔鍵は wrangler secret にだけ置く= この repo には 1 字も書かない。
+
+name = "nar-fetch-relay"
+main = "src/index.js"
+compatibility_date = "2026-09-16"
+
+# ⛔公開の入口を作らない(*.workers.dev を生やさない・route も書かない)= 起きるのは下の cron だけ
+workers_dev = false
+
+[triggers]
+crons = ["0 21 * * *"]      # 06:00 JST。健康便(horse-health 10:43 JST)より前

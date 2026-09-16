@@ -4,3 +4,5 @@ out/
 dump/
 backup/
 viewer-export/
+node_modules/
+.wrangler/
