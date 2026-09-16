@@ -1427,6 +1427,84 @@ def dump_review(path: str) -> int:
     return 0
 
 
+def line_status(detail: str) -> str:
+    """⛔読むだけ= その 1 文を今の規則がどう扱っているかを言葉にする(§193b 段 1)。
+
+    _auction_details と**同じ規則を同じ順**で見るだけ(規則は 1 字も変えない)。
+    戻り= 他馬 / 打ち消し(開示) / 打ち消し / 人の話(除外) / ambiguous / <分類名> / unknown / 静か
+    """
+    if not detail:
+        return "空"
+    if OTHER_HORSE_RE.search(detail):
+        return "他馬"
+    if NEGATIVE_DISCLOSURE_RE.search(detail):
+        return "打ち消し(開示)"
+    if NEGATIVE_HEALTH_RE.search(detail):
+        return "打ち消し"
+    if AUCTION_NON_HORSE_ACTOR_RE.search(detail):
+        if AUCTION_EXPLICIT_HORSE_RE.search(detail):
+            pass
+        elif AUCTION_HORSE_ANATOMY_RE.search(detail) and not AUCTION_HUMAN_ANATOMY_RE.search(detail):
+            return "ambiguous"
+        else:
+            return "人の話(除外)"
+    groups = _groups(detail)
+    if groups:
+        return groups[0]
+    return "unknown" if UNKNOWN_MEDICAL_RE.search(detail) else "静か"
+
+
+def auction_lines(record: dict, source: str) -> list[str]:
+    """⛔読むだけ= 出品 1 件の文を _auction_details に渡るのと同じ形で取り出す。"""
+    if source == "rakuten":
+        about, _shape = _rakuten_about(record)
+        raws = _sentences(about)
+    elif source == "sat":
+        raws, _flag, _shape = _sat_allowed_lines(record)
+    else:
+        return []
+    return [clean_text(raw.lstrip("★※ "))[:1000] for raw in raws]
+
+
+def dump_all(path: str) -> int:
+    """⛔読むだけ(DB に触らない・通信しない)= 原本の全部の文と「今の結果」を TSV に出す(§193b 段 1)。
+
+    列= 出品の鍵 / 出品日 / 今の結果 / 文(原文のまま・タブと改行だけ半角空白に)。
+    ⛔出品者名・馬名・URL は出さない(鍵と日付と文だけ)。
+    """
+    global _REVIEW_SINK
+    records, _ = read_raw_records()
+    rows: list[tuple[str, str, str, str]] = []
+    checked = mismatch = 0
+    for (source, item_id), record in sorted(records.items()):
+        _REVIEW_SINK = []
+        try:
+            cand = auction_candidate(record, source)
+        finally:
+            sink, _REVIEW_SINK = _REVIEW_SINK, None
+        date = (cand or {}).get("auction_date") or ""
+        mine = []
+        for detail in auction_lines(record, source):
+            status = line_status(detail)
+            rows.append((f"{source}/{item_id}", date, status, detail))
+            if status in {"unknown", "ambiguous"}:
+                mine.append(detail)
+        checked += 1
+        if len(mine) != len(sink):
+            mismatch += 1
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("source_ref\tauction_date\tstatus\tdetail\n")
+        for row in rows:
+            fh.write("\t".join(x.replace("\t", " ").replace("\n", " ") for x in row) + "\n")
+    kinds: dict[str, int] = {}
+    for _ref, _date, status, _detail in rows:
+        kinds[status] = kinds.get(status, 0) + 1
+    log(f"dump-all: {len(rows)} 文 / {checked} 出品 → {path}")
+    log("  " + "・".join(f"{k}={v}" for k, v in sorted(kinds.items(), key=lambda kv: -kv[1])))
+    log(f"  ⛔便の判定と数が合わない出品= {mismatch} 件(0 なら line_status は便と同じ見方)")
+    return 0
+
+
 def read_raw_records() -> tuple[dict[tuple[str, int], dict], list[tuple[str, str, int]]]:
     """既存原本を読む。壊れたfile/行は黙殺せず、原文なしの監査情報として返す。"""
     records: dict[tuple[str, int], dict] = {}
@@ -1688,6 +1766,7 @@ def main(argv: list[str] | None = None) -> int:
                         help="§124 束ねなど、parser の変更で事象が減るのを承知で全 source を通す(displayable_count_decreased を解く)")
     parser.add_argument("--report-json", help="原本文を含まないsource別監査reportの保存先")
     parser.add_argument("--dump-review", help="§193 手元の原本から review の文を TSV に出すだけ(⛔DB に触らない)")
+    parser.add_argument("--dump-all", help="§193b 手元の原本の全部の文と今の判定を TSV に出すだけ(⛔DB に触らない)")
     parser.add_argument("--env")
     args = parser.parse_args(argv)
     if args.apply and args.dry_run:
@@ -1696,6 +1775,8 @@ def main(argv: list[str] | None = None) -> int:
         load_env(args.env)
     if args.dump_review:
         return dump_review(args.dump_review)
+    if args.dump_all:
+        return dump_all(args.dump_all)
     url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     key = os.environ.get("SUPABASE_SERVICE_KEY", "")
     if not url or not key:
