@@ -36,6 +36,11 @@ on:
         required: true
         default: false
         type: boolean
+      allow_fewer:
+        description: '§124 parser更新で事象が減るsourceも通す（reparseと一緒に・1回だけ）'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   # GitHubは同一groupのpendingを1件しか保持しない。月別backfillは必ず前run完了後に次月をdispatchする。
@@ -90,12 +95,14 @@ jobs:
           INPUT_DRY_RUN: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
           INPUT_FORCE_REVIEW_REF: ${{ inputs.force_review_ref }}
           INPUT_REPARSE: ${{ github.event_name == 'workflow_dispatch' && inputs.reparse || false }}
+          INPUT_ALLOW_FEWER: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_fewer || false }}
         run: |
           args=(--source "$INPUT_SOURCE")
           if [ -n "$INPUT_START" ]; then args+=(--start "$INPUT_START"); fi
           if [ -n "$INPUT_END" ]; then args+=(--end "$INPUT_END"); fi
           if [ -n "$INPUT_FORCE_REVIEW_REF" ]; then args+=(--force-review-ref "$INPUT_FORCE_REVIEW_REF"); fi
           if [ "$INPUT_REPARSE" = "true" ]; then args+=(--reparse); fi
+          if [ "$INPUT_ALLOW_FEWER" = "true" ]; then args+=(--allow-fewer); fi
           if [ "$INPUT_DRY_RUN" != "true" ]; then args+=(--apply); fi
           python cloud/horse_health.py "${args[@]}" --report-json horse-health-report.json
       - name: upload source audit report
