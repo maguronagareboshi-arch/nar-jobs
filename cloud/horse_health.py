@@ -660,6 +660,9 @@ def _event_date(detail: str) -> str | None:
         return None
 
 
+_REVIEW_SINK: list[tuple[str, str]] | None = None   # --dump-review のときだけ (理由, 文) を溜める(ふだんは None= 何もしない)
+
+
 def _auction_details(lines: list[str]) -> tuple[list[tuple[str, str, str | None]], list[str]]:
     """出品 1 件の文 → 分類ごと・発生日ごとに 1 事象(§124)。
 
@@ -685,6 +688,8 @@ def _auction_details(lines: list[str]) -> tuple[list[tuple[str, str, str | None]
                 pass
             elif AUCTION_HORSE_ANATOMY_RE.search(detail) and not AUCTION_HUMAN_ANATOMY_RE.search(detail):
                 review.append("ambiguous_auction_actor")
+                if _REVIEW_SINK is not None:
+                    _REVIEW_SINK.append(("ambiguous_auction_actor", detail))
                 continue
             else:
                 continue
@@ -692,6 +697,8 @@ def _auction_details(lines: list[str]) -> tuple[list[tuple[str, str, str | None]
         if not groups:
             if UNKNOWN_MEDICAL_RE.search(detail):
                 review.append("unknown_auction_expression")
+                if _REVIEW_SINK is not None:
+                    _REVIEW_SINK.append(("unknown_auction_expression", detail))
             continue
         happened = _event_date(detail)
         for group in groups:
@@ -1392,6 +1399,34 @@ def _raw_ref(path: Path) -> str:
         return path.name
 
 
+def dump_review(path: str) -> int:
+    """⛔読むだけ(DB に触らない・通信しない)= 手元の原本から review になった文を TSV に出す(§193 段 1)。
+
+    列= 出品の鍵(source/item_id) / review の理由 / 文(原文のまま・タブと改行だけ半角空白に)。
+    ⛔出品者名・馬名・URL は出さない(鍵と文だけ)。規則(GROUP_RULES・除外)は 1 つも変えない。
+    """
+    global _REVIEW_SINK
+    records, _ = read_raw_records()
+    rows: list[tuple[str, str, str]] = []
+    for (source, item_id), record in sorted(records.items()):
+        _REVIEW_SINK = []
+        try:
+            auction_candidate(record, source)
+        finally:
+            sink, _REVIEW_SINK = _REVIEW_SINK, None
+        for reason, detail in sink:
+            rows.append((f"{source}/{item_id}", reason, detail))
+    with open(path, "w", encoding="utf-8", newline="\n") as fh:
+        fh.write("source_ref\treason\tdetail\n")
+        for row in rows:
+            fh.write("\t".join(x.replace("\t", " ").replace("\n", " ") for x in row) + "\n")
+    kinds: dict[str, int] = {}
+    for _ref, reason, _detail in rows:
+        kinds[reason] = kinds.get(reason, 0) + 1
+    log(f"dump-review: {len(rows)} 文(" + "・".join(f"{k}={v}" for k, v in sorted(kinds.items())) + f")→ {path}")
+    return 0
+
+
 def read_raw_records() -> tuple[dict[tuple[str, int], dict], list[tuple[str, str, int]]]:
     """既存原本を読む。壊れたfile/行は黙殺せず、原文なしの監査情報として返す。"""
     records: dict[tuple[str, int], dict] = {}
@@ -1652,12 +1687,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--allow-fewer", action="store_true",
                         help="§124 束ねなど、parser の変更で事象が減るのを承知で全 source を通す(displayable_count_decreased を解く)")
     parser.add_argument("--report-json", help="原本文を含まないsource別監査reportの保存先")
+    parser.add_argument("--dump-review", help="§193 手元の原本から review の文を TSV に出すだけ(⛔DB に触らない)")
     parser.add_argument("--env")
     args = parser.parse_args(argv)
     if args.apply and args.dry_run:
         parser.error("--apply と --dry-run は同時指定できない")
     if args.env:
         load_env(args.env)
+    if args.dump_review:
+        return dump_review(args.dump_review)
     url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     key = os.environ.get("SUPABASE_SERVICE_KEY", "")
     if not url or not key:
