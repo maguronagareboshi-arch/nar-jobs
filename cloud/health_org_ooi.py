@@ -20,16 +20,34 @@
 """
 import hashlib
 import html as html_mod
+import os
 import re
 import unicodedata
-import urllib.parse
 
 SLUG = "ooi"
 TRACK = "大井"
 SOURCE_KIND = "ooi_official"       # ⛔器の allowlist(private.nar_health_race_kind_ok)の語
 PARSER_VERSION = "org-ooi-1.0"
 
-FEED = "https://www.tokyocitykeiba.com/news/feed/?s=" + urllib.parse.quote("出来事")
+# §195b 入口= **当サイトの中継**(nar-viewer functions/feed/ooi.js)。
+# 先方の RSS は `https://www.tokyocitykeiba.com/news/feed/?s=出来事&paged=N` で、中継はそれを
+# そのまま返すだけ(⛔書き換えない・⛔取れるのは paged=1〜8 の 8 本だけ)。
+# なぜ中継なのか(§195 段 1)= **GitHub ランナーの IP は先方に 403**・当サイトの Cloudflare 側からは
+# 便と同じ名乗り `nar-jobs-health/1.0` のままで 200(2026-09-16 実測)。⛔UA は偽らない・IP も変えない。
+# 手元から直に読みたいときだけ OOI_FEED_BASE で先方を指せる(PC からは直でも 200)。
+FEED_BASE_DEFAULT = "https://nar.yukochi.com/feed/ooi"
+
+
+def feed_base():
+    """入口の根。⛔空文字の環境変数は「未設定」と同じに扱う。"""
+    return (os.environ.get("OOI_FEED_BASE") or "").strip() or FEED_BASE_DEFAULT
+
+
+def feed_url(page, base=None):
+    """一覧の N 頁目の URL(純関数)。根に query があれば & で継ぐ。"""
+    root = feed_base() if base is None else str(base)
+    return "%s%spaged=%d" % (root, "&" if "?" in root else "?", int(page))
+
 MAX_PAGES = 8                      # 1 頁 10 件。実測でこれだけあれば 2026 は全部入る(67 件)
 MAX_RACE_NO = 12
 
@@ -131,7 +149,7 @@ def list_documents(fetch, since, until):
     out = []
     seen = set()
     for page in range(1, MAX_PAGES + 1):
-        body = _page(fetch, FEED + "&paged=%d" % page)
+        body = _page(fetch, feed_url(page))
         if not body:
             continue        # ⛔1 頁の一時的な失敗で窓を黙って縮めない(古い頁は残っている)
         items = _ITEM.findall(body)

@@ -136,3 +136,56 @@ jobs:
               print('修理= PC を開いて 高知競馬\\01_高知映像計測\\kochi_auto_now.cmd')
           raise SystemExit(1 if gaps else 0)
           PY
+
+  # §195b 大井 主催者公式の「出来事」が入っているか。⛔読むだけ。
+  #   9/8〜9/16 は先方が GitHub ランナーの IP に 403 を返していて、段が「0 件でも exit 0」だったため
+  #   8 日間だれも気づかなかった(§195 段 1)。中継に替えたので、止まったら**ここで鳴らす**。
+  #   赤= ooi_official の最大 race_date が、大井の直近の開催日(今日以前)より 2 日以上古い。
+  #   非開催の期間は 0(直近の開催日が動かないので遅れも増えない)。
+  ooi-official:
+    if: github.event.schedule == '40 23 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: check ooi official health events are fresh (fail if 2+ days behind the last Oi race day)
+        env:
+          NAR_SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          NAR_SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          python - <<'PY'
+          import os, json, urllib.request, datetime as dt
+          BASE, KEY = os.environ['NAR_SUPABASE_URL'], os.environ['NAR_SUPABASE_SERVICE_KEY']
+          def get(path):
+              req = urllib.request.Request(BASE + '/rest/v1/' + path,
+                  headers={'apikey': KEY, 'Authorization': 'Bearer ' + KEY})
+              return json.loads(urllib.request.urlopen(req, timeout=30).read())
+          OI = '%E5%A4%A7%E4%BA%95'                       # 大井
+          # ⛔JST で数える(Actions は UTC。08:40 JST は UTC ではまだ前日)
+          today = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=9)).date()
+          lo = (today - dt.timedelta(days=60)).isoformat()
+          races = get(f'nar_races?select=race_date&track=eq.{OI}&race_no=eq.1'
+                      f'&race_date=gte.{lo}&race_date=lte.{today.isoformat()}'
+                      '&order=race_date.desc&limit=60')
+          days = sorted({r['race_date'] for r in races}, reverse=True)
+          if not days:
+              print(f'大井の開催日が直近 60 日に無い({lo}..{today}) = 見張らない')
+              raise SystemExit(0)
+          last_race = days[0]
+          ev = get('nar_horse_health_events?select=race_date&source_kind=eq.ooi_official'
+                   '&order=race_date.desc&limit=1')
+          last_ev = ev[0]['race_date'] if ev else None
+          print(f'大井の直近の開催日 {last_race}(直近 60 日で {len(days)} 日)')
+          print(f'ooi_official の最新 race_date {last_ev}')
+          if last_ev is None:
+              print('MISSING ooi_official の行が 1 つも無い')
+              raise SystemExit(1)
+          gap = (dt.date.fromisoformat(last_race) - dt.date.fromisoformat(last_ev)).days
+          behind = [d for d in days if d > last_ev]
+          print(f'遅れ {gap} 日 / 取れていない開催日 {len(behind)} 日 {behind[:5]}')
+          if gap >= 2:
+              print('MISSING 大井公式の出来事が 2 日以上入っていない')
+              print('修理= 中継 https://nar.yukochi.com/feed/ooi?paged=1 が 200 か見る'
+                    ' → horse-health を手押し(source=nar・dry_run=false)')
+              raise SystemExit(1)
+          raise SystemExit(0)
+          PY
