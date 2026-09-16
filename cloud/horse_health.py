@@ -36,7 +36,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(ROOT / "pipeline"))
 from load_nar_official import load_env  # noqa: E402
 
-PARSER_VERSION = "health-v1.1.1"   # 1 記述 1 件(分類が複数当たっても鍵を重ねない・再解析が要る)
+PARSER_VERSION = "health-v1.2.0"   # §193c オークションだけ 13 分類(1 記述 1 件の鍵の作り方は変えない)
 JST = dt.timezone(dt.timedelta(hours=9))
 MIN_DATE = dt.date(2026, 1, 1)
 MAX_PDF_BYTES = 25 * 1024 * 1024
@@ -660,10 +660,97 @@ def _event_date(detail: str) -> str | None:
         return None
 
 
+# ---------------------------------------------------------------- §193c オークション出典だけの語表
+# ⛔主催者出典(取消・除外・中止)は上の GROUP_RULES のまま。ここはオークションの文だけに使う。
+# ⛔語は §193b の棚卸し(docs/auction_disease_inventory_20260916.md)に出た語だけ= 一般知識で足さない。
+AUCTION_GROUP_RULES = (
+    ("epistaxis", re.compile(r"鼻出血")),
+    ("cardiac", re.compile(r"心房細動|細動|不整脈")),
+    ("respiratory", re.compile(
+        r"喘鳴症|喉頭片麻痺|咽頭片麻痺|喉頭形成|喉頭手術|披裂|タイバック|軟口蓋|DDSP|"
+        r"喉頭蓋|エントラップメント|副鼻腔炎|蓄膿症|肺炎|気管支炎|肺出血|喉嚢|"
+        r"ノド鳴り|喉鳴り|喉鳴|ノドの手術|喉の手術|喉の疾患")),
+    ("digestive", re.compile(r"疝痛|変位疝|開腹手術|腸炎|下痢|便秘")),
+    ("eye", re.compile(r"白内障|角膜|結膜|眼球|左眼|右眼|両眼(?!管)|点眼|目に砂")),
+    ("hoof", re.compile(
+        r"蟻洞|裂蹄|蹄葉炎|蹄叉腐[乱爛]|挫跖|蹄骨骨折|蹄骨炎|蹄底割れ|弱蹄|"
+        r"蹄を痛め|蹄叉を痛め|蹄の不安")),
+    ("tendon_ligament", re.compile(
+        r"屈腱炎|浅屈腱|深屈腱|屈腱部|屈腱周囲炎|腱鞘炎|腱周囲炎|腱断裂|腱損傷|"
+        r"繋靭帯|繋靱帯|靭帯炎|靱帯炎|種子骨靭帯|種子骨靱帯|長趾伸筋炎|半腱半膜|腱炎")),
+    ("bone_joint", re.compile(
+        r"骨折|骨々折|骨片|OCD|離断性骨軟骨症|骨軟骨腫|骨瘤|ソエ|骨膜炎|骨膜剥離|骨膜剝離|"
+        r"骨増生|骨棘|関節炎|球節炎|腕節炎|飛節炎|種子骨炎|軟腫|飛節後腫|捻挫|脱臼|"
+        r"ボーンシスト|骨嚢胞|骨髄炎|滑膜炎|関節鏡|クリーニング手術|クリーニング処置|"
+        r"トリミング手術|螺子固定|ボルト固定|肢軸矯正")),
+    ("muscle_back", re.compile(r"筋肉痛|腰背部|筋肉疲労|背腰を痛め|背腰の痛み|背腰に張り|肉ばなれ|筋炎")),
+    ("skin_wound", re.compile(
+        r"皮膚病|皮膚炎|皮膚荒れ|外傷|フレグモーネ|蜂窩織炎|挫創|裂創|創傷|挫傷|擦過傷|"
+        r"打撲|裂傷|傷腫|鞍傷|血腫|排膿|化膿|縫合|蕁麻疹|じんましん|多形性紅斑|紅斑|疥癬")),
+    ("fever_infection", re.compile(r"熱発|発熱|感冒|熱中症|熱射病|輸送熱(?!予防)|感染症|腺疫")),
+    ("castration", re.compile(r"去勢(?!すれ|してみ|するの|しておけ|した方|したほう|も考え|を考え|も検討|を検討)")),
+    ("symptom", re.compile(
+        r"跛行|破行|浮腫|腫脹|疼痛|圧痛|屈曲痛|触診痛|麻痺|貧血|潰瘍|後遺症|炎症|"
+        r"歩様が乱れ|歩様の乱れ|歩様異常|疾病|疾患")),
+)
+# 打ち消し= その病名の**すぐ後ろ**が否定のときだけ。⛔「発症したが今は問題ない」は事象として残す。
+_AUCTION_NEG_END = (r"(?:ありません|ございません|なし|無し|ないです|ない[。、]|なく[、。]|見られません|見られず|見受けられません|見受けられず|見当たりません|見当たらず|"
+                    r"見つかりません|認められません|認められず|確認されません|していません|しておりません|"
+                    r"ではありません|ではない)")
+AUCTION_NEG_TAIL = re.compile(
+    r"(?:"
+    r"(?:など|等|やケガ|すること)?"
+    r"(?:の診断|の症状|の所見|の兆候|の既往|の歴|の問題|歴|既往|経験|症状|兆候|所見|問題)?"
+    r"(?:は|も|が)?(?:一度も|特に|全く|これまで|今まで|過去に)?" + _AUCTION_NEG_END +
+    r"|"
+    r"(?:を|は|も|が)?[^。]{0,12}?(?:発症|発生|起こ|罹患|患っ)(?:した|して)?(?:こと)?(?:は|が|も)?"
+    r"(?:一度も|これまで|今まで)?(?:ありません|ございません|ない[。、]|なし|いません|おりません)"
+    r")")
+# まだ起きていない(「〜になるかもしれない」)= 事象にしない
+AUCTION_MAYBE_TAIL = re.compile(r"(?:に|を)?(?:なるかもしれ|なる恐れ|なる可能性|になりそう)")
+# 病名が 1 つも無い打ち消しの言い回し(§193 の C)= review にも出さない
+AUCTION_PLAIN_NEG = re.compile(
+    r"異常(?:は|も)?(?:特に|大きな)?(?:なく|ありません|ございません|見つかりません|出たことはありません)|"
+    r"(?:特に|大きな)?異常(?:は|も)なく|問題(?:は|も)?(?:特に)?(?:なく|ありません|ございません|ない)|"
+    r"不調(?:は|も)ありません|支障(?:は|も)ありません|後遺症[^。]{0,6}(?:ありません|見られません)|"
+    r"気になるところ(?:は|も)ありません|痛み(?:や熱感)?(?:は|も)(?:ない|ありません|出ていません)")
+# 一般の注意書き(この馬の事象ではない)= 分類より先に捨てる
+AUCTION_NOTICE = re.compile(r"ノークレーム|ノーリターン|クレーム|記載事項|キャンセルに|キャンセルは|"
+                            r"返品|不安を覚える|ご了承ください|入札してください")
+# 検査だけ(所見なし)= 捨てる。「検査したが異常なし」は上の打ち消しで先に消える
+AUCTION_EXAM = re.compile(r"レントゲン|エコー|内視鏡|レポジトリ|超音波|ドップラー|血液検査|精密検査|"
+                          r"定期検査|画像検査|触診|検査")
+# 装蹄まわり・予防= 事象にしない(review にもしない)
+AUCTION_IGNORE = re.compile(r"装蹄|蹄鉄|削蹄|落鉄|針治療|鍼治療|ワクチン|予防接種")
+# 印= 競走能力喪失(どの分類でも立てる)
+RACING_ABILITY_LOST_RE = re.compile(r"競走能力喪失")
+
+
+def _auction_terms(detail: str) -> list[tuple[str, str]]:
+    """⛔オークションの文だけ= 文 → [(分類, 当たった語)]。
+
+    ・打ち消されている語(「<病名>はありません」「<病名>を発症したことはありません」)は落とす。
+    ・まだ起きていない語(「<病名>になるかもしれない」)は落とす。
+    ・1 文に複数の分類= 分類ごとに 1 事象(§124)。症状だけ(symptom)は他が 1 つも無いときだけ。
+    """
+    if AUCTION_NOTICE.search(detail):
+        return []
+    out: list[tuple[str, str]] = []
+    for name, rx in AUCTION_GROUP_RULES:
+        for m in rx.finditer(detail):
+            if AUCTION_NEG_TAIL.match(detail, m.end()) or AUCTION_MAYBE_TAIL.match(detail, m.end()):
+                continue
+            out.append((name, m.group(0)))
+            break
+    if len(out) > 1:
+        out = [t for t in out if t[0] != "symptom"]
+    return out
+
+
 _REVIEW_SINK: list[tuple[str, str]] | None = None   # --dump-review のときだけ (理由, 文) を溜める(ふだんは None= 何もしない)
 
 
-def _auction_details(lines: list[str]) -> tuple[list[tuple[str, str, str | None]], list[str]]:
+def _auction_details(lines: list[str]) -> tuple[list[tuple[str, str, str | None, str | None, bool]], list[str]]:
     """出品 1 件の文 → 分類ごと・発生日ごとに 1 事象(§124)。
 
     旧(v1.0.0)は「病名の語を含む文 1 つ = 1 事象」だったので、同じ出品の同じ内容が
@@ -672,16 +759,17 @@ def _auction_details(lines: list[str]) -> tuple[list[tuple[str, str, str | None]
       ② 日付の無い文= その分類に日付つきの事象があれば**いちばん新しい日付**に合流し、
         無ければ日付なしの事象 1 つに合流する。
     ⛔文の中身は変えない(連結は**原文の順**・区切りは半角空白・1000 字で切る)。
-    ⛔分類の規則(GROUP_RULES)も除外の規則も触らない。⛔推定しない(日付の無い文に日付を作らない)。
+    ⛔推定しない(日付の無い文に日付を作らない)。§193c= 分類は AUCTION_GROUP_RULES(オークション専用)で、
+    主催者出典の GROUP_RULES / _groups は触らない。戻りの 1 件= (本文, 分類, 発生日, 当たった語, 競走能力喪失)。
     """
     review: list[str] = []
     # (分類, 発生日) → [(原文で何番目の文か, 本文)]。番号を持つのは
     # 束ねたあとも**原文の順**で並べ直すため(日付なしの文が先に書かれていることがある)
-    buckets: dict[tuple[str, str | None], list[tuple[int, str]]] = {}
+    buckets: dict[tuple[str, str | None], list[tuple[int, str, str, bool]]] = {}
     seen: set[tuple[str, str]] = set()          # 旧と同じく同じ文の重複は 1 つにする
     for order_no, raw in enumerate(lines):
         detail = clean_text(raw.lstrip("★※ "))[:1000]
-        if not detail or OTHER_HORSE_RE.search(detail) or NEGATIVE_DISCLOSURE_RE.search(detail) or NEGATIVE_HEALTH_RE.search(detail):
+        if not detail or OTHER_HORSE_RE.search(detail) or NEGATIVE_DISCLOSURE_RE.search(detail):
             continue
         if AUCTION_NON_HORSE_ACTOR_RE.search(detail):
             if AUCTION_EXPLICIT_HORSE_RE.search(detail):
@@ -693,38 +781,42 @@ def _auction_details(lines: list[str]) -> tuple[list[tuple[str, str, str | None]
                 continue
             else:
                 continue
-        groups = _groups(detail)
-        if not groups:
+        terms = _auction_terms(detail)
+        if not terms:
+            # 打ち消し・検査だけ・装蹄まわり= 事象にも review にもしない
+            if AUCTION_PLAIN_NEG.search(detail) or AUCTION_EXAM.search(detail) or AUCTION_IGNORE.search(detail):
+                continue
             if UNKNOWN_MEDICAL_RE.search(detail):
                 review.append("unknown_auction_expression")
                 if _REVIEW_SINK is not None:
                     _REVIEW_SINK.append(("unknown_auction_expression", detail))
             continue
         happened = _event_date(detail)
-        for group in groups:
+        lost = bool(RACING_ABILITY_LOST_RE.search(detail))
+        for group, term in terms:
             key = (line_hash(detail), group)
             if key in seen:
                 continue
             seen.add(key)
-            buckets.setdefault((group, happened), []).append((order_no, detail))
+            buckets.setdefault((group, happened), []).append((order_no, detail, term, lost))
     return _merge_auction_buckets(buckets), review
 
 
 def _merge_auction_buckets(
-    buckets: dict[tuple[str, str | None], list[tuple[int, str]]],
-) -> list[tuple[str, str, str | None]]:
+    buckets: dict[tuple[str, str | None], list[tuple[int, str, str, bool]]],
+) -> list[tuple[str, str, str | None, str | None, bool]]:
     """分類ごとに束ね、日付なしの文をいちばん新しい日付の事象へ合流させる。
 
     ⊙本文は**原文の順**でつなぐ(束ねた順ではない)。⊙日付の無い文に日付を作らない。
     """
     order: list[str] = []                        # 分類の先頭登場順(画面の並びを原文に寄せる)
-    by_group: dict[str, dict[str | None, list[tuple[int, str]]]] = {}
+    by_group: dict[str, dict[str | None, list[tuple[int, str, str, bool]]]] = {}
     for (group, happened), sentences in buckets.items():
         if group not in by_group:
             by_group[group] = {}
             order.append(group)
         by_group[group].setdefault(happened, []).extend(sentences)
-    out: list[tuple[str, str, str | None]] = []
+    out: list[tuple[str, str, str | None, str | None, bool]] = []
     for group in order:
         dates = sorted(d for d in by_group[group] if d is not None)
         undated = by_group[group].pop(None, [])
@@ -736,9 +828,10 @@ def _merge_auction_buckets(
                 by_group[group][None] = undated
         for happened in (dates or [None]):
             sentences = sorted(by_group[group][happened])          # 原文で何番目かで並べ直す
-            joined = " ".join(text for _, text in sentences)[:1000]
+            joined = " ".join(row[1] for row in sentences)[:1000]
             if joined:
-                out.append((joined, group, happened))
+                # 当たった語= 原文でいちばん先に出た文の語・競走能力喪失= どれか 1 文にあれば立てる
+                out.append((joined, group, happened, sentences[0][2], any(row[3] for row in sentences)))
     return out
 
 
@@ -771,7 +864,7 @@ def auction_candidate(record: dict, source: str) -> dict | None:
     if not is_date(date) or not raw_name:
         return None
     if injury_flag and not details:
-        details = [("傷病歴の申告あり", "unspecified", None)]
+        details = [("傷病歴の申告あり", "unspecified", None, None, False)]
     # fetched_atは収集時刻であって公式本文ではない。同じ原本の再取得だけでchanged停止しないようhash対象外。
     source_record = {key: value for key, value in record.items() if key != "fetched_at"}
     canonical = json.dumps(source_record, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
@@ -815,7 +908,7 @@ def parse_auction_record(record: dict, source: str, sale: dict | None) -> ParseR
     birth = birth if is_date(birth) else None
     jbis = clean_text(sale.get("jbis_id")) or None
     events: list[dict] = []
-    for detail, group, happened in candidate["details"]:
+    for detail, group, happened, term, lost in candidate["details"]:
         lh = line_hash(detail)
         eid = event_id([source, candidate["item_id"], "auction_disclosure", "auction_disclosure", group, lh])
         events.append({
@@ -833,6 +926,8 @@ def parse_auction_record(record: dict, source: str, sale: dict | None) -> ParseR
             "stage": "auction_disclosure",
             "event_type": "auction_disclosure",
             "condition_group": group,
+            "condition_term": term,             # §193c 当たった語(コラムで分類の中を分けるため)
+            "racing_ability_lost": lost,        # §193c 「競走能力喪失」の印
             "race_status": None,
             "detail": detail,
             "restriction_from": None,
