@@ -698,6 +698,8 @@ def main_saga(a):
         rep = verify_saga(lines, rows, births, races, since, lags)
         print_report(rep, f"佐賀 検算(オラクル= 次に走ったレースの格組・{since} 以降の佐賀の走)")
         return 0
+    if not a.apply and hist_wanted(a):
+        return hist_stage(a, 'saga', {"lines": lines, "lag": a.lag if a.lag is not None else SAGA_LAG, "races": races}, rows, births)
     if a.apply:
         lag = a.lag if a.lag is not None else SAGA_LAG
         today = dt.datetime.now(JST).date()
@@ -722,7 +724,7 @@ def main_saga(a):
                 log("upsert 失敗", st, msg)
                 return 1
         log("完了")
-        return 0
+        return hist_stage(a, 'saga', {"lines": lines, "lag": a.lag if a.lag is not None else SAGA_LAG, "races": races}, rows, births)
     return 0
 
 
@@ -1203,6 +1205,8 @@ def main_tokai(a):
         rep = verify_tokai(lines, rows, births, races, since, lags)
         print_report(rep, f"東海(笠松・名古屋) 検算(オラクル= 次に走った普通競走の格・{since} 以降)")
         return 0
+    if not a.apply and hist_wanted(a):
+        return hist_stage(a, 'tokai', {"lines": lines, "lag": a.lag if a.lag is not None else TOKAI_LAG, "races": races}, rows, births)
     if a.apply:
         if TOKAI_PARKED and os.environ.get("TOKAI_FORCE") != "1":
             log("東海は検算が 95% 未満(Ｂ級 86.9%)なので calc を書かない(docs/s79_p3_verify_tokai_20260903.md)")
@@ -1231,7 +1235,7 @@ def main_tokai(a):
                 log("upsert 失敗", st, msg)
                 return 1
         log("完了")
-        return 0
+        return hist_stage(a, 'tokai', {"lines": lines, "lag": a.lag if a.lag is not None else TOKAI_LAG, "races": races}, rows, births)
     return 0
 
 
@@ -1573,6 +1577,8 @@ def main_hyogo(a):
         rep = verify_hyogo(tables, rows, births, races, since, lags)
         print_report(rep, f"兵庫(園田・姫路) 検算(オラクル= 次に走った単独クラスの普通・特別競走の格組・{since} 以降)")
         return 0
+    if not a.apply and hist_wanted(a):
+        return hist_stage(a, 'hyogo', {"lines": tables, "lag": a.lag if a.lag is not None else HYOGO_LAG, "races": races}, rows, births)
     if a.apply:
         lag = a.lag if a.lag is not None else HYOGO_LAG
         today = dt.datetime.now(JST).date()
@@ -1605,7 +1611,7 @@ def main_hyogo(a):
                 log("upsert 失敗", st, msg)
                 return 1
         log("完了")
-        return 0
+        return hist_stage(a, 'hyogo', {"lines": tables, "lag": a.lag if a.lag is not None else HYOGO_LAG, "races": races}, rows, births)
     return 0
 
 
@@ -1718,6 +1724,12 @@ def main():
     ap.add_argument("--since", default="2026-04-01", help="検算に使う高知の走の始まり(令和8年度の線が効く範囲)")
     ap.add_argument("--lag", type=int, default=None, help="編成日= レース日の何日前か(既定 KOCHI_LAG)")
     ap.add_argument("--node", default=None)
+    ap.add_argument("--hist-days", type=int, nargs="?", const=3, default=None,
+                    help="§200 直近 N 日(既定 3)にその場で走った/出走予定の馬の、走の日ごとの calc を nar_class_calc_hist へ")
+    ap.add_argument("--hist-all", action="store_true", help="§200 初回の埋め= --since 以降のその場の走の日すべて(手押し)")
+    ap.add_argument("--shard", default=None, help="§200 'i/n'= 馬コード %% n == i の馬だけ")
+    ap.add_argument("--out", default=None, help="§200 履歴の行を CSV にも書く(検算用)")
+    ap.add_argument("--today", default=None, help="§200 きょうの日付を差し替える(検算用)")
     a = ap.parse_args()
     if a.prefix == "obihiro":
         return main_obihiro(a)
@@ -1752,6 +1764,8 @@ def main():
         print_report(rep, f"高知 検算(オラクル= 次に走ったレースの格組・{since} 以降の高知の走)")
         return 0
 
+    if not a.apply and hist_wanted(a):
+        return hist_stage(a, 'kochi', {"lines": lines, "lag": a.lag if a.lag is not None else KOCHI_LAG}, rows, births)
     if a.apply:
         lag = a.lag if a.lag is not None else KOCHI_LAG
         today = dt.datetime.now(JST).date()
@@ -1775,7 +1789,7 @@ def main():
                 log("upsert 失敗", st, msg)
                 return 1
         log("完了")
-        return 0
+        return hist_stage(a, 'kochi', {"lines": lines, "lag": a.lag if a.lag is not None else KOCHI_LAG}, rows, births)
     ap.print_help()
     return 0
 
@@ -1804,6 +1818,8 @@ def main_obihiro(a):
         print_report(rep, f"帯広ばんえい 検算(オラクル= 次に走ったレース名の級・{since} 以降の帯広の走)")
         return 0
 
+    if not a.apply and hist_wanted(a):
+        return hist_stage(a, 'obihiro', {"lines": tables, "lag": a.lag if a.lag is not None else OBI_LAG, "races": races}, rows, births)
     if a.apply:
         lag = a.lag if a.lag is not None else OBI_LAG
         today = dt.datetime.now(JST).date()
@@ -1826,7 +1842,129 @@ def main_obihiro(a):
                 log("upsert 失敗", st, msg)
                 return 1
         log("完了")
+        return hist_stage(a, 'obihiro', {"lines": tables, "lag": a.lag if a.lag is not None else OBI_LAG, "races": races}, rows, births)
+    return 0
+
+
+# ---------------------------------------------------------------- §200 D1 レース日時点の calc(表 nar_class_calc_hist)
+# 同じ馬・同じ場の走の日 D ごとに calc(asof=D) を 1 行。式は上の *_calc をそのまま呼ぶ(⛔式・線・lag・note は触らない)。
+# 各 *_calc は「asof − lag より前の走」だけを数える= D の朝(当日の便が calc 列に書くとき)と同じ値になる。
+T_HIST = "nar_class_calc_hist"
+HIST_TRACKS = {"kochi": ("高知",), "obihiro": ("帯広",), "saga": ("佐賀",), "tokai": TOKAI_TRACKS, "hyogo": HYOGO_TRACKS}
+DB_TRACK = {"帯広": "帯広ば"}          # nar_runs の場名(台帳の runs は「帯広」)
+
+
+def hist_wanted(a):
+    return a.hist_days is not None or a.hist_all
+
+
+def last_local(runs, before):
+    """before より前の地方の走(着順あり)の最新の場= apply の last_tr と同じ取り方(apply は before= きょう)。runs は新しい順"""
+    for x in runs:
+        d = _date(x.get("d"))
+        if d and d < before and not x.get("jra") and x.get("fin") is not None:
+            return x.get("tr")
+    return None
+
+
+def hist_calc(kind, ctx, r, b, d, track):
+    """1 頭 × 走の日 d の calc(apply の 1 頭ぶんと同じ手順・きょう → d)。出さない馬は None"""
+    runs = r.get("runs") or []
+    lag = ctx["lag"]
+    if kind == "kochi":
+        c = kochi_calc(ctx["lines"], runs, d, lag, lambda x: (x.year - b.year) if b else r.get("age"))
+        if last_local(runs, d) != "高知":
+            c["note"] = ("転入前の場の走を高知の換算率で数えた値(要領 4.(2))" + ("・" + c["note"] if c.get("note") else ""))
+        return c
+    if kind == "obihiro":
+        return obi_calc(ctx["lines"], runs, d, lag, lambda x: (x.year - b.year) if b else r.get("age"), ctx["races"])
+    if not b:
+        return None
+    age_at = (lambda x: x.year - b.year)
+    if kind == "saga":
+        c = saga_calc(ctx["lines"], runs, d, lag, b, age_at, ctx["races"])
+        return c if c and c["cls"] != "２歳" else None
+    if kind == "tokai":
+        return tokai_calc(ctx["lines"], runs, d, lag, b, age_at, ctx["races"], TOKAI_PREFIX[track])
+    c = hyogo_calc(ctx["lines"], runs, d, lag, b, age_at, ctx["races"], HYOGO_PREFIX[track])
+    if not c:
+        return None
+    # 公式の直近の格組= d より前の最新の走の格組(apply の last_cls と同じ物= 台帳の runs の先頭)
+    prev = next((x for x in runs if (xd := _date(x.get("d"))) and xd < d), None)
+    lab = hyogo_label({"cls": prev.get("cls") if prev else None, "name": ""}, None)
+    official = (("3歳" if lab[0] == "y3" else "") + lab[1]) if lab else None
+    if c.get("hide") or (official and official != c["cls"]):
+        c["hide"] = True
+        c["next"] = None
+    return c
+
+
+def hist_targets(rows, births, tracks, lo, entries=()):
+    """→ {(code, D, track)}。D= その場の地方の走の日(lo 以降)+ 出馬表(entries= nar_runs の (馬名, 生年月日, D, track))"""
+    want = set()
+    by_name = defaultdict(list)
+    for r in rows:
+        by_name[r.get("horse_name")].append(r)
+        for x in r.get("runs") or []:
+            d = _date(x.get("d"))
+            if d and d >= lo and not x.get("jra") and x.get("tr") in tracks:
+                want.add((r["code"], d, x["tr"]))
+    for name, birth, d, tr in entries:
+        for r in by_name.get(name, []):
+            b = births.get(r["code"])
+            if birth and b and str(birth)[:10] != str(b)[:10]:
+                continue                               # 同名の別馬
+            if d >= lo:
+                want.add((r["code"], d, tr))
+    return want
+
+
+def hist_stage(a, kind, ctx, rows, births):
+    """§200 D1 の段(--apply の calc 列の後)。--apply で表へ upsert・--out で CSV。⛔失敗しても calc 列は済んでいる"""
+    if not hist_wanted(a):
         return 0
+    today = _date(a.today) if a.today else dt.datetime.now(JST).date()
+    lo = _date(a.since) if a.hist_all else today - dt.timedelta(days=a.hist_days)
+    tracks = HIST_TRACKS[kind]
+    url, key = os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_SERVICE_KEY")
+    entries = []
+    if url and key and not a.local:                    # 出走予定(台帳の runs にまだ無い走の日)= 場ごとに 1 本
+        q = urllib.parse.quote
+        for tr in tracks:
+            for e in sb_all(url, key, f"nar_runs?select=horse_name,birth_date,race_date&track=eq.{q(DB_TRACK.get(tr, tr))}"
+                                      f"&race_date=gte.{max(lo, today).isoformat()}&order=race_date,race_no,runner_number"):
+                entries.append((e["horse_name"], e.get("birth_date"), _date(e["race_date"]), tr))
+    shard_i, shard_n = (int(x) for x in a.shard.split("/")) if a.shard else (0, 1)
+    by_code = {r["code"]: r for r in rows}
+    out = []
+    for code, d, tr in sorted(hist_targets(rows, births, tracks, lo, entries)):
+        if int(code) % shard_n != shard_i:
+            continue
+        c = hist_calc(kind, ctx, by_code[code], _date(births.get(code)), d, tr)
+        if c:
+            out.append({"code": code, "prefix": c["prefix"], "asof": d.isoformat(), "calc": c})
+    per = Counter(x["prefix"] for x in out)
+    nul = Counter(x["prefix"] for x in out if not x["calc"].get("cls"))
+    log(f"§200 履歴 {len(out)} 行(D >= {lo}・shard {shard_i}/{shard_n})= " +
+        " ".join(f"{k} {v}(cls null {nul[k]})" for k, v in sorted(per.items())))
+    if a.out:
+        import csv
+        with open(a.out, "w", encoding="utf-8", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["code", "prefix", "asof", "cls", "value", "basis", "hide", "calc"])
+            for x in out:
+                c = x["calc"]
+                w.writerow([x["code"], x["prefix"], x["asof"], c.get("cls") or "", c.get("value"), c.get("basis"),
+                            c.get("hide") or "", json.dumps(c, ensure_ascii=False)])
+    if not a.apply:
+        log("§200 履歴 dry-run: 書かない")
+        return 0
+    for i in range(0, len(out), 500):
+        st, msg = upsert(url, key, T_HIST, "code,prefix,asof", out[i:i + 500])
+        if st not in (200, 201):
+            log("§200 履歴 upsert 失敗", st, msg)
+            return 1
+    log("§200 履歴 完了")
     return 0
 
 
