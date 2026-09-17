@@ -9,6 +9,8 @@
   python cloud/nankan_points.py --runs-csv runs.csv --state-json st.json --days 92 --max-horses 5000
                                                                        # 遡り(DB を読まずに CSV から・結果は JSON に)
   python cloud/nankan_points.py --apply --load-json st.json            # JSON の中身を表へ入れるだけ(通信は DB だけ)
+  python cloud/nankan_points.py --apply --results-dates 2024-01-01..2026-09-16 [--results-kind 重賞]
+                                                                       # §196b 過去の結果ページだけ(nar_races.nankan の空きを埋める)
 環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY。終了コード: 0 正常 / 1 投入失敗 / 2 前提の読み取りに失敗
 
 流れ(横着せず、走った馬だけ取り直す= #155 の教訓):
@@ -17,6 +19,8 @@
      (回・日は /calendar/000000.do(直近数か月ぶん・日々動くので毎回読む)と過去月 /calendar/YYYYMM.do から。⛔当月以降の月別URLは 404 #157)
   ③ 馬ページ uma_info/{code}.do → 馬名・格・格付ポイント・「◯日現在」・生年月日。取り直しの規則=
      きょう既に読んだ馬は飛ばす / asof(主催者の基準日)が最終出走日以上なら飛ばす / それ以外(走ったのに反映前)は読む
+  ④ §196b その窓で南関を走り終えたレースの結果ページ /result/{raceid}.do → nar_races.nankan= {raceid, pts[5], grade}
+     (raceid は③の馬ページのリンクの本物を優先・無ければ開催カレンダー・過去は DB の日程から組み、日付と場を見て確かめる)
   ⛔ 抹消馬は格・ポイント欄ごと消える= kaku/points null で保存(解析不能が正常・出馬表に載らないので実害なし)
   ⛔ 「格付ポイント」は主催者の用語。画面でも「収得賞金」とは呼ばない
 """
@@ -36,6 +40,7 @@ sys.path.insert(0, str(HERE))
 from load_nar_official import load_env, upsert            # noqa: E402
 from odds import JST, log                                  # noqa: E402
 
+import urllib.parse
 import urllib.request
 
 BASE = "https://www.nankankeiba.com"
@@ -116,6 +121,90 @@ def parse_uma(h):
     }
 
 
+ROMAN = str.maketrans({"Ⅰ": "I", "Ⅱ": "II", "Ⅲ": "III", "Ｉ": "I", "Ｓ": "S", "Ｇ": "G", "ｐ": "p", "ｎ": "n", "Ｊ": "J"})
+
+
+def parse_result(h, date=None, track=None):
+    """結果ページ → {pts, grade, title} / 違うレースのページ・点が無いページは None。"""
+    t = re.sub(r"(?is)<(script|style).*?</\1>", " ", h)
+    t = re.sub(r"<[^>]+>", " ", t).replace("&nbsp;", " ")
+    t = re.sub(r"\s+", " ", t)
+    if date:
+        y, m, d = (int(x) for x in date.split("-"))
+        if f"{y}年{m}月{d}日" not in t or (track and f"{track}競馬" not in t):
+            return None
+    pm = re.search(r"番組ポイント ポイント 1着([\d,]+)P 2着([\d,]+)P 3着([\d,]+)P 4着([\d,]+)P 5着([\d,]+)P", t)
+    head = re.search(r"発走時刻 \d{1,2}:\d{2} (.+?) 詳細 ", t)
+    if not pm:
+        return None
+    title = head.group(1) if head else ""
+    g = re.search(r"(JpnI{1,3}|SI{1,3}|GI{1,3})(?![A-Za-z])", title.translate(ROMAN).replace(" ", ""))
+    return {"pts": [int(x.replace(",", "")) for x in pm.groups()], "grade": g.group(1) if g else None, "title": title}
+
+
+def patch_nankan(url, key, track, date, no, value):
+    path = (f"nar_races?track=eq.{urllib.parse.quote(track)}&race_date=eq.{date}&race_no=eq.{int(no)}")
+    req = urllib.request.Request(f"{url}/rest/v1/{path}", data=json.dumps({"nankan": value}, ensure_ascii=False).encode("utf-8"),
+                                 method="PATCH", headers={"apikey": key, "Authorization": f"Bearer {key}",
+                                                          "Content-Type": "application/json", "Prefer": "return=minimal"})
+    with urllib.request.urlopen(req, timeout=30) as r:
+        return r.status
+
+
+def fetch_results(url, key, races, real, cal, sched, apply_, limit):
+    """races= [(track, date, no)]。raceid= 本物 → カレンダー → DB の日程(回 ±1 も試す)。→ (書いた数, 取れなかった数)"""
+    done = miss = 0
+    for (track, date, no) in races[:limit]:
+        cands = []
+        if (track, date, no) in real:
+            cands.append(real[(track, date, no)])
+        kd = cal.get((BA[track], date))
+        if kd:
+            cands.append(f"{date.replace('-', '')}{BA[track]}{kd}{int(no):02d}")
+        v = sched.get((track, date))
+        if v:
+            for dk in (0, -1, 1):
+                if v[2] + dk >= 1:
+                    cands.append(f"{date.replace('-', '')}{BA[track]}{v[2] + dk:02d}{v[3]:02d}{int(no):02d}")
+        got = None
+        for rid in dict.fromkeys(cands):
+            try:
+                res = parse_result(get(f"{BASE}/result/{rid}.do"), date, track)
+            except Exception as e:
+                log(f"  結果 {rid}: {type(e).__name__}")
+                continue
+            if res:
+                got = {"raceid": rid, "pts": res["pts"], "grade": res["grade"]}
+                break
+        if not got:
+            miss += 1
+            log(f"  ⚠結果ページが取れない {track} {date} {no}R(候補 {len(cands)})")
+            continue
+        if done < 3:
+            log(f"  例: {track} {date} {no}R {got}")
+        if apply_:
+            try:
+                patch_nankan(url, key, track, date, no, got)
+            except Exception as e:
+                miss += 1
+                log(f"  書き込み失敗 {track} {date} {no}R: {type(e).__name__}: {str(e)[:120]}")
+                continue
+        done += 1
+    return done, miss
+
+
+def sched_map(url, key, lo):
+    """DB の開催日程 → nankan_hist.meetings の索引(回・日)。"""
+    import nankan_hist
+    tr = ",".join(f'"{t}"' for t in BA)
+    rows = sb_all(url, key, f"nar_races?select=track,race_date&race_no=eq.1&track=in.({urllib.request.quote(tr)})"
+                            f"&race_date=gte.{lo}&order=track,race_date")
+    dates = {}
+    for r in rows:
+        dates.setdefault(r["track"], set()).add(r["race_date"])
+    return nankan_hist.meetings(dates)
+
+
 # ---------------------------------------------------------------- DB
 
 def sb_all(url, key, path, page=1000):
@@ -177,6 +266,10 @@ def main():
     ap.add_argument("--test", action="store_true", help="馬ページを 1 頭だけ")
     ap.add_argument("--shard", help="遡りを並列に分ける: 'i/n'(馬ページの対象を n 等分した i 番目だけ・state は別ファイルへ)")
     ap.add_argument("--sleep", type=float, help=f"リクエスト間隔(秒・既定 {SLEEP})")
+    ap.add_argument("--no-results", action="store_true", help="④ 結果ページの段をしない")
+    ap.add_argument("--results-dates", help="'YYYY-MM-DD..YYYY-MM-DD'= その期間の南関のレースで nankan が空のものだけ結果ページを引く(馬ページはしない)")
+    ap.add_argument("--results-kind", help="--results-dates を競走種類(重賞 など)で絞る")
+    ap.add_argument("--max-results", type=int, default=150, help="結果ページを引く上限(1本 1.5 秒)")
     args = ap.parse_args()
     if args.sleep:
         globals()["SLEEP"] = args.sleep
@@ -194,6 +287,26 @@ def main():
             log("dry-run: 書かない")
             return 0
         return 0 if push(url, key, rows) else 1
+
+    if args.results_dates:
+        if not url or not key:
+            log("SUPABASE_URL / SUPABASE_SERVICE_KEY が無い")
+            return 2
+        a, b = args.results_dates.split("..")
+        tr = ",".join(f'"{t}"' for t in BA)
+        kind = f"&race_kind=eq.{urllib.request.quote(args.results_kind)}" if args.results_kind else ""
+        try:
+            todo = sb_all(url, key, f"nar_races?select=track,race_date,race_no&track=in.({urllib.request.quote(tr)})"
+                                    f"&race_date=gte.{a}&race_date=lte.{b}&nankan=is.null{kind}&order=race_date,track,race_no")
+            sched = sched_map(url, key, "2022-11-01")
+        except Exception as e:
+            log(f"DB の読み取りに失敗: {type(e).__name__}: {str(e)[:200]}")
+            return 2
+        races = [(r["track"], r["race_date"], int(r["race_no"])) for r in todo]
+        log(f"④ 結果ページ {len(races)} 本(上限 {args.max_results})")
+        done, miss = fetch_results(url, key, races, {}, {}, sched, args.apply, args.max_results)
+        log(f"④ nankan {'書いた' if args.apply else '読めた(dry-run)'} {done} / 取れない {miss}")
+        return 0 if miss == 0 else 1
 
     # ---- 既知の馬(表 or JSON or seed)
     known = {}
@@ -318,9 +431,15 @@ def main():
         known = {}                                       # 分担ぶんだけ書く(元の state は読み専用)
         log(f"  shard {shard_i}/{shard_n}: {len(targets)} 頭 → {state_out}")
     rows, bad, nopts = [], 0, 0
+    real = {}                                               # ④ 用= 馬ページの結果リンク(本物の raceid)
+    inv = {v: k for k, v in BA.items()}
     for c, tr, d in targets:
         try:
-            v = parse_uma(get(f"{BASE}/uma_info/{c}.do"))
+            h = get(f"{BASE}/uma_info/{c}.do")
+            v = parse_uma(h)
+            for rid in re.findall(r"/result/(\d{16})\.do", h):
+                if rid[8:10] in inv:
+                    real[(inv[rid[8:10]], f"{rid[:4]}-{rid[4:6]}-{rid[6:8]}", int(rid[14:16]))] = rid
         except Exception as e:
             bad += 1
             log(f"  馬 {c}: ERR {type(e).__name__}: {str(e)[:100]}")
@@ -347,11 +466,28 @@ def main():
     if state_out:
         Path(state_out).write_text(json.dumps(known, ensure_ascii=False), encoding="utf-8")
         log(f"state → {state_out}({len(known)} 頭)")
-    if not args.apply:
+    rc = 0
+    if args.apply:
+        rc = 0 if push(url, key, seeded + rows) else 1
+    else:
         log("dry-run: 書かない")
-        return 0
-    out = seeded + rows
-    return 0 if push(url, key, out) else 1
+    # ---- ④ §196b 走り終えたレースの結果ページ → nar_races.nankan(⛔③の表の書き込みとは別= ここで失敗しても③は済んでいる)
+    if args.no_results or args.state_json or args.test:
+        return rc
+    try:
+        have = sb_all(url, key, f"nar_races?select=track,race_date,race_no,nankan&track=in.({urllib.request.quote(','.join(chr(34) + t + chr(34) for t in BA))})"
+                                f"&race_date=gte.{lo}&race_date=lt.{today_s}&order=track,race_date,race_no")
+        sched = sched_map(url, key, "2022-11-01")
+    except Exception as e:
+        log(f"④ DB の読み取りに失敗: {type(e).__name__}: {str(e)[:200]}")
+        return rc or 2
+    races = [(r["track"], r["race_date"], int(r["race_no"])) for r in have if not (r.get("nankan") or {}).get("pts")]
+    if not cal:
+        cal = calendar_map({d[:7].replace("-", "") for (_, d, _) in races}) if races else {}
+    log(f"④ 結果ページ {len(races)} 本(上限 {args.max_results}・本物の raceid {len(real)})")
+    done, miss = fetch_results(url, key, races, real, cal, sched, args.apply, args.max_results)
+    log(f"④ nankan {'書いた' if args.apply else '読めた(dry-run)'} {done} / 取れない {miss}")
+    return rc
 
 
 if __name__ == "__main__":
