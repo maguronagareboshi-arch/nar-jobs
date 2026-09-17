@@ -6,3 +6,4 @@ backup/
 viewer-export/
 node_modules/
 .wrangler/
+data/
