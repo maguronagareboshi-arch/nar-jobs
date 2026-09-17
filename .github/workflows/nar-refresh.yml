@@ -155,6 +155,8 @@ jobs:
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
           if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/nankan_points.py --apply --days 2 --max-horses 400; else echo "nankan points は朝の便だけ(JST $H)=スキップ"; fi
+          # §196b 第 2 段= 走った馬の格付ポイントの履歴(表 nar_nankan_point_hist)。nankan_points の直後・朝の便だけ
+          if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/nankan_hist.py --apply --days 3; fi
 
       # §79 P3 場ごとの「番組賞金(当サイトの計算)」と「あと◯」を台帳の calc 列へ(通信は DB だけ・数秒)。
       # 線の表は class.js を node で読む(tests/class_const_dump.mjs)。検算= docs/s79_p3_verify_20260903.md
