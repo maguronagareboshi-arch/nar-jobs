@@ -8,13 +8,17 @@
   出力 = nar_meta key='monbetsu_class' の value:
     {"built":"YYYY-MM-DD", "src":"official", "fy":2026, "kai":10, "asof":"2026-08-14",
      "asof_by":{"ipan":"2026-08-14","2sai":"2026-08-14"},
-     "horses":{"シャンアリーズ":{"cls":"Ｃ４－３","prize":380000,"age":5,"tr":"桧森邦"}, …},
+     "kakuzuke":{"fy":2026, "src":"番組編成要領 第5 格付区分(…)", "lines":[["Ａ１",800,null], …]},
+     "horses":{"シャンアリーズ":{"cls":"Ｃ４－３","prize":380000,"kaku":"Ｃ４","age":5,"tr":"桧森邦"}, …},
      "kais":[{"kai":1,"asof":"2026-04-10","n":548}, …]}
     cls   = **PDFの見出しそのまま**。単独(「Ｃ４－３」)・並記(「Ｃ３－２ Ｃ４－１」)・範囲
             (「Ｂ１～Ｂ３－１」)・語(「オープン」「新馬」「未勝利」)・条件(「３歳２００万円以下」)がある。
             **範囲を1クラスに決めつけない**(§38「推定と公式を混ぜない」)。主催者が級を刷っていない組は
             **null** にして、代わりに枠の題を grp に入れる(例「ＪＲＡ認定アタックチャレンジ競走」)。
     prize = 番組賞金。**PDFは万円・ここでは円**(×10000)。他所属馬は賞金が刷られず from に「ＪＲＡ」等。
+    kaku  = §203 番組賞金を要領 第5 格付区分(kakuzuke)に当てた**その馬の級**(Ａ１〜Ｃ４)。cls は
+            その組に出られる級の**範囲**なので、馬の級はこちら。付けるのは cls が級の形(単独/並記/範囲)で
+            prize がある 3歳以上の馬だけ。語の見出し・級なし・2歳・賞金なし・年度違い・見出しと矛盾は付けない。
     ほかに age(馬齢)・tr(調教師)・sex(2歳の牝)・born(2歳の早い回だけ載る生年月日 月/日)・
     mark(馬名の左の印。「補欠」「補１」「♦」「△」等。意味は発表されていない)。
     horses は**最新回だけ**(馬柱が見たいのは今の級)。過去回は --archive で 'monbetsu_class_hist' へ。
@@ -665,7 +669,7 @@ def read_pdf(data, last_modified, kind, kai, want_fy, drop):
 def collect_kai(fy, kai, drop, cache=None):
     """1開催回(PDF 2本)→ {"kai","asof","fy","horses","blocks","files"}。
     年度違い(前年度の残骸)は None を返す(⛔1)。"""
-    horses, blocks, files, asofs = {}, [], [], {}
+    horses, blocks, files, asofs, nisai = {}, [], [], {}, set()
     for kind in KINDS:
         url = pdf_url(kai, kind)
         try:
@@ -702,12 +706,15 @@ def collect_kai(fy, kai, drop, cache=None):
         for b in got["blocks"]:
             for r in b["rows"]:
                 put_horse(horses, r, b, drop)
+                if kind == "2sai":
+                    nisai.add(r["name"])
     if not files:
         return None
+    kaku_n = attach_kaku(horses, fy, nisai, drop, kai)
     # ⚠同じ回でも2本の PDF の作成日が違うことがある(実測 第8回= 一般 7/17・2歳 7/23)。
     # asof は**遅いほう**(表がそろった日)。内訳も残す。
     return {"kai": kai, "fy": fy, "asof": max(asofs.values()) if asofs else None,
-            "asof_by": asofs, "horses": horses, "blocks": blocks, "files": files}
+            "asof_by": asofs, "horses": horses, "blocks": blocks, "files": files, "kaku_n": kaku_n}
 
 
 def put_horse(horses, row, block, drop):
@@ -763,15 +770,17 @@ def cls_rank(label):
 
 # ---------------------------------------------------------------- 検品
 
-# 番組編成要領 第5「格付区分」(令和8年度・単位 万円)。⚠**年度で変わる**(§2.5)ので
-# **出力には使わない**。抽出した賞金と見出しが噛み合っているかを見るためだけの物差し。
+# 番組編成要領 第5「格付区分」(令和8年度・単位 万円)。⚠**年度で変わる**(§2.5)。
+# §203 から出力(馬ごとの kaku)にも使う。年度は KAKUZUKE_FY と同じ場所で持ち、PDF の年度と違えば付けない。
+KAKUZUKE_FY = 2026
+KAKUZUKE_SRC = "番組編成要領 第5 格付区分(令和8年度・単位 万円)"
 KAKUZUKE_2026 = [("Ａ１", 800, None), ("Ａ２", 600, 800), ("Ａ３", 500, 600), ("Ａ４", 400, 500),
                  ("Ｂ１", 350, 400), ("Ｂ２", 300, 350), ("Ｂ３", 250, 300), ("Ｂ４", 200, 250),
                  ("Ｃ１", 160, 200), ("Ｃ２", 120, 160), ("Ｃ３", 80, 120), ("Ｃ４", None, 80)]
 
 
 def kaku_of(prize_yen):
-    """番組賞金(円)→ 令和8年度の格付区分。**検品専用**。"""
+    """番組賞金(円)→ 令和8年度の格付区分(lo 超〜hi 以下)。"""
     if prize_yen is None:
         return None
     man = prize_yen / MAN
@@ -800,6 +809,48 @@ def in_label(kaku, label):
         elif cls_rank(p) is not None and cls_rank(p) - cls_rank(p) % 100 == r:
             return True
     return False
+
+
+def kaku_for(h, fy, nisai=False):
+    """§203 馬 1 頭 → (kaku, 付けない理由)。⛔推定しない= 条件に当たらなければ付けない。"""
+    if fy != KAKUZUKE_FY:
+        return None, "年度違い"
+    if nisai:
+        return None, "2歳"
+    cls = h.get("cls")
+    if not cls:
+        return None, "級なし"
+    if in_label("Ｃ４", cls) is None:
+        return None, "語"
+    if h.get("prize") is None:
+        return None, "賞金なし"
+    kaku = kaku_of(h["prize"])
+    if not in_label(kaku, cls):
+        return None, "矛盾"
+    return kaku, None
+
+
+def attach_kaku(horses, fy, nisai, drop, kai=None):
+    """horses に kaku を付ける(付けない馬は触らない)。→ Counter({"付けた": n, 理由: n})"""
+    n = Counter()
+    if fy != KAKUZUKE_FY:
+        log(f"  第{kai}回: PDF は令和{fy - 2018}年度・格付区分の表は令和{KAKUZUKE_FY - 2018}年度"
+            f"= kaku を付けない(表を今年度に直すこと)")
+    for name, h in horses.items():
+        kaku, why = kaku_for(h, fy, name in nisai)
+        if kaku:
+            h["kaku"] = kaku
+            n["付けた"] += 1
+            continue
+        n[why] += 1
+        if why == "矛盾":
+            drop.append(f"第{kai}回 {name}: 番組賞金 {h['prize'] // MAN}万 → {kaku_of(h['prize'])}"
+                        f" だが見出しは {h['cls']}(kaku を付けない)")
+    return n
+
+
+def kakuzuke_meta():
+    return {"fy": KAKUZUKE_FY, "src": KAKUZUKE_SRC, "lines": [list(x) for x in KAKUZUKE_2026]}
 
 
 def said_total(said):
@@ -859,6 +910,9 @@ def verify(kai_data, drop):
         print(f"     ⚠ {line}")
     if len(ngs) > 20:
         print(f"     …ほか {len(ngs) - 20} 件")
+    kn = kai_data.get("kaku_n") or Counter()
+    print(f"     kaku(§203)= 付けた {kn['付けた']}頭 / 付けない {sum(kn.values()) - kn['付けた']}頭("
+          + "・".join(f"{k} {v}" for k, v in kn.most_common() if k != "付けた") + ")")
     if drop:
         print(f"  -- ④捨てた/気になった行 {len(drop)}件 --")
         for line in drop[:40]:
@@ -959,7 +1013,7 @@ def main():
     index.sort(key=lambda x: x["kai"])
     value = {"built": f"{dt.datetime.now(JST):%Y-%m-%d}", "src": "official", "fy": fy,
              "kai": newest, "asof": head["asof"], "asof_by": head.get("asof_by") or {},
-             "horses": head["horses"], "kais": index}
+             "kakuzuke": kakuzuke_meta(), "horses": head["horses"], "kais": index}
 
     out = Path(args.out) if args.out else (
         Path(os.environ.get("TEMP", ".")) / "claude" /
@@ -1004,7 +1058,7 @@ def main():
             hist[str(kai)] = {"asof": v["asof"], "horses": v["horses"]}
         rows.append({"key": HIST_KEY, "updated_at": now,
                      "value": {"built": value["built"], "fy": fy, "src": "official",
-                               "kais": hist}})
+                               "kakuzuke": kakuzuke_meta(), "kais": hist}})
     status, msg = upsert(base, key, "nar_meta", "key", rows)
     if status not in (200, 201):
         log(f"投入失敗 {status} {msg}")
