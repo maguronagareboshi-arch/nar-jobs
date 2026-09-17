@@ -148,6 +148,10 @@ def run_points(r, race, tie, mixed="upper"):
             return 0, "取消除外"
         if "中止" in note:
             return 0, "中止=0"
+        if re.search("失格|降着", note):
+            return 0, "失格=0"                          # 原文 ④ L234= 失格は着内ポイントなし
+        if not note and str((race or {}).get("cancelled") or "").strip() not in ("", "null", "[]", "{}"):
+            return 0, "取り止め"                        # §196b 工事 B= 取り止めになったレース(走っていない)
         return None, "着順なし"
     if fin > 5:
         return 0, "ok"
@@ -230,7 +234,7 @@ def load_rest(url, key, args, today):
     while (y, mth) <= (today.year, today.month):   # ⛔深い offset を避けて月ごとに(order は主キーで一意)
         a = f"{y}-{mth:02d}-01"
         y2, m2 = (y + 1, 1) if mth == 12 else (y, mth + 1)
-        races += sb_all(url, key, f"nar_races?select=track,race_date,race_no,race_name,race_kind,condition,nankan"
+        races += sb_all(url, key, f"nar_races?select=track,race_date,race_no,race_name,race_kind,condition,nankan,cancelled"
                                   f"&track=in.({tracks})&race_date=gte.{a}&race_date=lt.{y2}-{m2:02d}-01&order=track,race_date,race_no")
         y, mth = y2, m2
     if args.all:
@@ -368,7 +372,7 @@ def main():
     ap.add_argument("--apply", action="store_true", help="表へ書く(無ければドライラン)")
     ap.add_argument("--days", type=int, default=3, help="直近この日数に南関で走った馬")
     ap.add_argument("--all", action="store_true", help="2024-01-01 以降に走った全頭(初回の埋め)")
-    ap.add_argument("--shard", help="'i/n'= 馬コード % n == i の馬だけ")
+    ap.add_argument("--shard", help="'i/n'= 馬コード %% n == i の馬だけ")
     ap.add_argument("--from-csv", help="REST の代わりに tools/nankan_recon_dump.sh の CSV を読む(DB に触らない)")
     ap.add_argument("--out", help="行を CSV にも書く(検算用)")
     ap.add_argument("--mixed", default="upper", choices=["upper", "lower"])

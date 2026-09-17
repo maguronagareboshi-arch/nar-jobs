@@ -74,6 +74,15 @@ class T(unittest.TestCase):
         self.assertEqual(H.run_points({"fin": None, "note": ""}, race, 1), (None, "着順なし"))
         self.assertEqual(H.run_points({"fin": 9}, sg, 1), (0, "ok"))
 
+    def test_cancelled_race(self):
+        race = {"race_kind": "普通", "race_name": "Ｃ２(一)", "condition": "一般", "race_date": "2026-03-25"}
+        self.assertEqual(H.run_points({"fin": None, "note": ""}, dict(race, cancelled="refund"), 1), (0, "取り止め"))
+        self.assertEqual(H.run_points({"fin": None, "note": ""}, dict(race, cancelled=""), 1), (None, "着順なし"))
+
+    def test_disqualified(self):
+        race = {"race_kind": "普通", "race_name": "Ｃ２(一)", "condition": "一般", "race_date": "2026-03-25"}
+        self.assertEqual(H.run_points({"fin": None, "note": "失格"}, race, 1), (0, "失格=0"))
+
 
 if __name__ == "__main__":
     unittest.main()
