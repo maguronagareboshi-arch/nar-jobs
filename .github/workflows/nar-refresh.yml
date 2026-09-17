@@ -166,7 +166,7 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/class_calc.py --apply --prefix kochi && python cloud/class_calc.py --apply --prefix obihiro && python cloud/class_calc.py --apply --prefix saga && python cloud/class_calc.py --apply --prefix tokai && python cloud/class_calc.py --apply --prefix hyogo; else echo "class calc は朝の便だけ(JST $H)=スキップ"; fi
+          if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/class_calc.py --apply --hist-days 3 --prefix kochi && python cloud/class_calc.py --apply --hist-days 3 --prefix obihiro && python cloud/class_calc.py --apply --hist-days 3 --prefix saga && python cloud/class_calc.py --apply --hist-days 3 --prefix tokai && python cloud/class_calc.py --apply --hist-days 3 --prefix hyogo; else echo "class calc は朝の便だけ(JST $H)=スキップ"; fi
 
       # §99 展開の見立て(今日+明日の出馬表)。朝の便(09:30 前)と 17:07 の便(明日の出馬表が前日夕に出る)だけ
       - name: tenkai (morning + 17:07)
