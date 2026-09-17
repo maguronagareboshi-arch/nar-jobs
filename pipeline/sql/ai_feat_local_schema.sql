@@ -193,6 +193,8 @@ create table if not exists public.nar_horse_health_events (
   support_source_kind         text,
   support_source_ref          text,
   support_source_url          text,
+  racing_ability_lost         boolean not null default false,   -- §193c v2(2026-09-16)
+  condition_term              text,                             -- §193c v2
   primary key (event_id)
 );
 
