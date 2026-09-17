@@ -1,9 +1,7 @@
 # -*- coding: utf-8 -*-
 """本体 cloud: 主催者公式の「出来事」— 大井(§110)。
 
-入口= **表 `nar_fetch_raw`**(§195c)。先方の RSS を取るのは Cloudflare の Worker
-(nar-jobs `workers/fetch-relay`)の役で、ここは置かれた生の本文を読むだけ(⛔先方へは 1 本も行かない)。
-1 item = 1 開催日で、`content:encoded` の本文がこの形:
+入口= 公式の RSS(`/news/feed/?s=出来事`)。1 item = 1 開催日で、`content:encoded` の本文がこの形:
 
     ≪出走取消≫
     第7競走 8号馬 グロワールスカイ
@@ -20,29 +18,36 @@
 ≪競走中止≫29 ≪戒告≫23 ≪騎乗停止≫6 ≪出走停止≫4 …。⛔騎手の節は**人の名前**なので読まない
 (識別行が「第1競走 ◯◯騎手」で「号馬」が無いため、正規表現でも当たらない)。
 """
-import datetime as dt
 import hashlib
 import html as html_mod
-import json
 import os
 import re
 import unicodedata
-import urllib.parse
-import urllib.request
 
 SLUG = "ooi"
 TRACK = "大井"
 SOURCE_KIND = "ooi_official"       # ⛔器の allowlist(private.nar_health_race_kind_ok)の語
 PARSER_VERSION = "org-ooi-1.0"
 
-# §195c 入口= **表 `nar_fetch_raw`**(先方へは行かない)。
-# 取るのは Cloudflare の Worker(nar-jobs `workers/fetch-relay`)の役= 06:00 JST に 8 頁を取って
-# 生のまま (source, key) = ('ooi_official', 'paged=N') で置く。便はその本文を読むだけ。
-# なぜ分けるのか(§195 段 1)= **GitHub ランナーの IP は先方に 403**(UA を替えても・curl でも・HTML でも)。
-# Cloudflare 側からは便と同じ名乗りのままで 200。⛔UA は偽らない・⛔関門には触らない。
-# ⛔読み解き(parse)は便に残す= 直すときはいつもこちら側。
-RAW_TABLE = "nar_fetch_raw"
-RAW_FRESH_DAYS = 3                 # これより古い頁は「取れず」に数える(Worker が止まった合図)
+# §195b 入口= **当サイトの中継**(nar-viewer functions/feed/ooi.js)。
+# 先方の RSS は `https://www.tokyocitykeiba.com/news/feed/?s=出来事&paged=N` で、中継はそれを
+# そのまま返すだけ(⛔書き換えない・⛔取れるのは paged=1〜8 の 8 本だけ)。
+# なぜ中継なのか(§195 段 1)= **GitHub ランナーの IP は先方に 403**・当サイトの Cloudflare 側からは
+# 便と同じ名乗り `nar-jobs-health/1.0` のままで 200(2026-09-16 実測)。⛔UA は偽らない・IP も変えない。
+# 手元から直に読みたいときだけ OOI_FEED_BASE で先方を指せる(PC からは直でも 200)。
+FEED_BASE_DEFAULT = "https://nar.yukochi.com/feed/ooi"
+
+
+def feed_base():
+    """入口の根。⛔空文字の環境変数は「未設定」と同じに扱う。"""
+    return (os.environ.get("OOI_FEED_BASE") or "").strip() or FEED_BASE_DEFAULT
+
+
+def feed_url(page, base=None):
+    """一覧の N 頁目の URL(純関数)。根に query があれば & で継ぐ。"""
+    root = feed_base() if base is None else str(base)
+    return "%s%spaged=%d" % (root, "&" if "?" in root else "?", int(page))
+
 MAX_PAGES = 8                      # 1 頁 10 件。実測でこれだけあれば 2026 は全部入る(67 件)
 MAX_RACE_NO = 12
 
@@ -132,80 +137,19 @@ def _race_date(title, posted):
     return iso if _valid(iso) else None
 
 
-def log(msg):
-    """⛔置き場は書かない(health_org.py の log と同じ出し方)。"""
-    print(msg, flush=True)
-
-
-def _utc(value):
-    """PostgREST の timestamptz → aware な datetime / 読めなければ None(純関数)。"""
-    text = str(value or "").strip().replace("Z", "+00:00")
-    try:
-        got = dt.datetime.fromisoformat(text)
-    except ValueError:
-        return None
-    return got if got.tzinfo else got.replace(tzinfo=dt.timezone.utc)
-
-
-def fresh_pages(rows, now=None, fresh_days=RAW_FRESH_DAYS):
-    """表の行 → ({'paged=N': 本文}, [捨てた理由])(純関数)。
-
-    ⛔採るのは **status 200 かつ本文があり、fetched_at が fresh_days 日以内**の頁だけ。
-    ⛔理由に URL は入れない(置き場を書かない)。
-    """
-    at = now or dt.datetime.now(dt.timezone.utc)
-    pages, dropped = {}, []
-    for row in rows or []:
-        key = str((row or {}).get("key") or "")
-        if not key:
-            continue
-        status = row.get("status")
-        got = _utc(row.get("fetched_at"))
-        age = None if got is None else (at - got).total_seconds() / 86400.0
-        if status != 200 or not row.get("body"):
-            dropped.append("%s status=%s" % (key, status))
-        elif age is None:
-            dropped.append("%s 取った時刻が読めない" % key)
-        elif age > fresh_days:
-            dropped.append("%s %.1f 日前(古い)" % (key, age))
-        else:
-            pages[key] = row["body"]
-    return pages, sorted(dropped)
-
-
-def read_raw(source=SOURCE_KIND):
-    """表 `nar_fetch_raw` の その出どころの行を 1 本で。⛔service key が要る(anon では読めない)。"""
-    base = (os.environ.get("SUPABASE_URL") or "").rstrip("/")
-    key = os.environ.get("SUPABASE_SERVICE_KEY") or ""
-    if not base or not key:
-        raise RuntimeError("SUPABASE_URL / SUPABASE_SERVICE_KEY が無いので %s を読めません" % RAW_TABLE)
-    path = ("%s/rest/v1/%s?select=key,status,body,fetched_at&source=eq.%s&limit=100"
-            % (base, RAW_TABLE, urllib.parse.quote(str(source), safe="")))
-    req = urllib.request.Request(path, headers={
-        "apikey": key, "Authorization": "Bearer " + key, "Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=90) as res:
-        body = res.read().decode("utf-8")
-    return json.loads(body) if body else []
+def _page(fetch, url):
+    """一覧の 1 頁。⛔一時的に取れないことがあるので **1 回だけ引き直す**(2026-09-05 実測)。"""
+    return fetch(url) or fetch(url)
 
 
 # ---------------------------------------------------------------- 一覧
 
-def list_documents(fetch, since, until, rows=None):
-    """表に置かれた RSS 8 頁を読んで [(開催日, 記事の URL, 本文)] を返す。
-
-    ⛔**先方へは 1 本も行かない**(取るのは Worker の役)= 引数 `fetch` は使わない(呼び出し側の形をそのまま受ける)。
-    ⛔1 頁も使えないときだけ例外= 便の段が赤くなる(0 件で緑のまま気づかなかった §195 の反省)。
-    """
-    got = read_raw() if rows is None else rows
-    pages, dropped = fresh_pages(got)
-    for why in dropped:
-        log("  ⚠ 使えない頁 %s" % why)
-    if not pages:
-        raise RuntimeError("%s に使える頁がありません(Worker が止まっている疑い)" % RAW_TABLE)
+def list_documents(fetch, since, until):
+    """RSS を頁送りして [(開催日, 記事の URL, 本文)] を返す。⛔本文を同梱= 記事ページは取りに行かない。"""
     out = []
     seen = set()
     for page in range(1, MAX_PAGES + 1):
-        body = pages.get("paged=%d" % page)
+        body = _page(fetch, feed_url(page))
         if not body:
             continue        # ⛔1 頁の一時的な失敗で窓を黙って縮めない(古い頁は残っている)
         items = _ITEM.findall(body)
