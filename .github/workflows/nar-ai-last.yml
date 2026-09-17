@@ -1,6 +1,9 @@
 # 予想AI base-v1 の「直前予想」(2026-09-09 §143)。
 # 朝便 nar-ai-feat.yml は当日の馬体重・馬場が出る前に動くので、それを抜いた模型で「朝予想」だけ書く。
-# この便は日中に **30 分おき**で、体重と馬場が全頭そろったレースだけ全列の模型で「直前予想」を上書きする。
+# この便は日中に **5 分おき**(§202・9/17)で、体重と馬場が全頭そろったレースだけ全列の模型で「直前予想」を上書きする。
+# 周の中で公式の当日 ZIP を 1 回取り、**手元の**当日行に体重と馬場を重ねる(cloud/ai_last_today.py・本番には書かない)。
+# 起動は pg_cron の dispatch(09:08 / 15:08 JST・write=yes・once=no)だけ(§202 で schedule を外した=
+#   GitHub の schedule は数時間遅れて dispatch と concurrency で押し合い、15:08 の便が cancelled になっていた)。
 # 発走 15 分前を過ぎた行は DB のトリガー(nar_ai_marks_guard)が静かに捨てる= 最後に通った値が残る。
 #
 # 作り: 1 日 2 本の長い便(09:00〜14:55 / 15:00〜20:55 JST)。
@@ -11,13 +14,10 @@
 name: nar-ai-last
 
 on:
-  schedule:
-    - cron: '0 0 * * *'       # 09:00 JST 〜 14:55
-    - cron: '0 6 * * *'       # 15:00 JST 〜 20:55
   workflow_dispatch:
     inputs:
       write:
-        description: '直前予想を本番 nar_ai_marks に書く(yes/no)。schedule は常に yes'
+        description: '直前予想を本番 nar_ai_marks に書く(yes/no)。pg_cron の dispatch は yes'
         required: false
         default: 'no'
       once:
@@ -49,7 +49,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: install
-        run: pip install -q "pg8000>=1.30" "lightgbm>=4.3" "pandas>=2.2" "pyarrow>=15" "numpy<2"
+        run: pip install -q "pg8000>=1.30" "lightgbm>=4.3" "pandas>=2.2" "pyarrow>=15" "numpy<2" "requests>=2.31"
 
       # ---------------------------------------------------------------- 全列の模型= 朝便(schedule)の最新の成功から
       - name: fetch morning-run artifact (model)
@@ -112,17 +112,18 @@ jobs:
           psql -v ON_ERROR_STOP=1 -X -c "analyze"
           psql -v ON_ERROR_STOP=1 -X -f pipeline/sql/ai_feat_20260908.sql
 
-      # ---------------------------------------------------------------- 15 分おきに回す(2026-09-11 30→15: 馬体重待ちで直前が落ちるレースを減らす)
-      # 1 回= 今日の 2 表を写し直す(⛔読むだけ)→ 地元で今日の行を差し替え → 今日以降の特徴量を作り直す
-      #        → 全列の模型で直前予想 → REST upsert(--write のときだけ)。
+      # ---------------------------------------------------------------- 5 分おきに回す(2026-09-11 30→15・§202 9/17 15→5)
+      # ⚠1 周 ≈220 秒で印を書くのは周の終わり= 15 分おきだと :31 の周が発走 15 分前の締切を跨いで捨てられていた
+      # 1 回= 今日の 2 表を写し直す(⛔読むだけ)→ 地元で今日の行を差し替え → 公式の当日 ZIP を地元に重ねる
+      #        → 今日以降の特徴量を作り直す → 全列の模型で直前予想 → REST upsert(--write のときだけ)。
       # 終わり= 便の終了時刻(JST 14:55 / 20:55 のうち近い方)。once=yes なら 1 回で終わる。
-      - name: predict last every 15 minutes
+      - name: predict last every 5 minutes
         env:
           PGPASSWORD_PROD: ${{ secrets.NAR_DB_PASSWORD }}
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-          WRITE: ${{ github.event_name == 'schedule' && 'yes' || github.event.inputs.write }}
-          ONCE: ${{ github.event_name == 'schedule' && 'no' || github.event.inputs.once }}
+          WRITE: ${{ github.event.inputs.write }}
+          ONCE: ${{ github.event.inputs.once }}
         run: |
           set -o pipefail
           DAY=$(TZ=Asia/Tokyo date +%F)
@@ -149,6 +150,16 @@ jobs:
               -c "\copy public.nar_runs  from 'today/nar_runs.tsv'" \
               -c "\copy public.nar_races from 'today/nar_races.tsv'" \
               -c "analyze public.nar_runs" -c "analyze public.nar_races"
+            # §202 公式の当日 ZIP を地元にだけ重ねる(体重が空の走・馬場が空のレースだけ)。⛔失敗しても周は続ける
+            python -X utf8 cloud/ai_last_today.py --date "$DAY" --out today || echo "official today: 失敗(周は続ける)"
+            psql -v ON_ERROR_STOP=1 -X \
+              -c "create temp table o_h (track text, race_date date, race_no int, runner_number int, body_weight int, body_weight_change int)" \
+              -c "\copy o_h from 'today/official_horses.tsv'" \
+              -c "update public.nar_runs u set body_weight = o.body_weight, body_weight_change = o.body_weight_change from o_h o where (u.track, u.race_date, u.race_no, u.runner_number) = (o.track, o.race_date, o.race_no, o.runner_number) and u.body_weight is null" \
+              -c "create temp table o_r (track text, race_date date, race_no int, going text, post_time text)" \
+              -c "\copy o_r from 'today/official_races.tsv'" \
+              -c "update public.nar_races r set going = o.going from o_r o where (r.track, r.race_date, r.race_no) = (o.track, o.race_date, o.race_no) and o.going <> '' and coalesce(r.going, '') = ''" \
+              || echo "official today: 地元への重ねに失敗(周は続ける)"
             psql -v ON_ERROR_STOP=1 -X -c "set statement_timeout = '25min'" \
               -c "select * from public.refresh_nar_ai_feat('$DAY')"
             psql -v ON_ERROR_STOP=1 -X \
@@ -159,7 +170,7 @@ jobs:
             [ "$ONCE" = "yes" ] && break
             NOW=$(date +%s)
             [ "$NOW" -ge "$END" ] && break
-            SLEEP=$(( 900 - (NOW - T0) ))
+            SLEEP=$(( 300 - (NOW - T0) ))
             if [ "$SLEEP" -gt 0 ]; then
               [ $((NOW + SLEEP)) -ge "$END" ] && break
               sleep "$SLEEP"
