@@ -164,7 +164,7 @@ jobs:
           today = (dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=9)).date()
           lo = (today - dt.timedelta(days=60)).isoformat()
           races = get(f'nar_races?select=race_date&track=eq.{OI}&race_no=eq.1'
-                      f'&race_date=gte.{lo}&race_date=lte.{today.isoformat()}'
+                      f'&race_date=gte.{lo}&race_date=lt.{today.isoformat()}'   # 今日は数えない(出来事は翌 10:43 の便で入る)
                       '&order=race_date.desc&limit=60')
           days = sorted({r['race_date'] for r in races}, reverse=True)
           if not days:
@@ -184,7 +184,7 @@ jobs:
           print(f'遅れ {gap} 日 / 取れていない開催日 {len(behind)} 日 {behind[:5]}')
           if gap >= 2:
               print('MISSING 大井公式の出来事が 2 日以上入っていない')
-              print('修理= 中継 https://nar.yukochi.com/feed/ooi?paged=1 が 200 か見る'
+              print('修理= nar_fetch_raw の fetched_at が今朝 06:00 か見る(§195d pg_cron)'
                     ' → horse-health を手押し(source=nar・dry_run=false)')
               raise SystemExit(1)
           raise SystemExit(0)
