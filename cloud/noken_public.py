@@ -3156,10 +3156,32 @@ def load_hyogo_split(path, base, key):
         return {}
 
 
+def merge_days(stored_days, new_days, day_key, backfill=False, replace=False):
+    """§212 置き場の日と今回取れた日を合わせる。日付降順・同じ鍵は1日だけ。
+    ⛔--backfill でも既存の日は捨てない(9/9 に公式が取得を拒んだ回の総当たりで大井が 13 日 → 3 日に減った)。
+    既存の日を消すのは --replace(明示)のときだけ。--backfill は取り直した方を先に置く= 同じ鍵は新しく取った方"""
+    if replace:
+        merged = list(new_days)
+    elif backfill:
+        merged = list(new_days) + list(stored_days)
+    else:
+        merged = list(stored_days) + list(new_days)
+    seen, days = set(), []
+    for d in sorted(merged, key=lambda x: x["date"], reverse=True):
+        k = day_key(d)
+        if k in seen:
+            continue
+        seen.add(k)
+        days.append(d)
+    return days
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--venue", default="all", choices=["all"] + ORDER)
-    ap.add_argument("--backfill", action="store_true", help="全量を取り直す")
+    ap.add_argument("--backfill", action="store_true", help="全量を取り直す(既存の日と合流する)")
+    ap.add_argument("--replace", action="store_true",
+                    help="§212 取れた日だけで置き換える(既存の日を消す= 明示したときだけ)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--out", help="days を <ここ>/{venue}_noken.json に書き出す(投入とは別)")
     ap.add_argument("--env")
@@ -3187,18 +3209,9 @@ def main():
             log(f"{name}: 索引の取得に失敗 {type(e).__name__}: {str(e)[:150]}")
             rc = 2
             continue
-        if args.backfill:
-            merged = new_days
-        else:
-            merged = stored["days"] + new_days
-        # 日付降順・同一キーは新しい方
-        seen, days = set(), []
-        for d in sorted(merged, key=lambda x: x["date"], reverse=True):
-            k = day_key(d)
-            if k in seen:
-                continue
-            seen.add(k)
-            days.append(d)
+        if not args.replace and len(new_days) < len(stored["days"]):
+            log(f"{name}: ⚠ 取れた日 {len(new_days)} < 既存 {len(stored['days'])}= 合流して書く(消さない)")
+        days = merge_days(stored["days"], new_days, day_key, args.backfill, args.replace)
         log(f"{name}: 新規 {len(new_days)} 日 / 合計 {len(days)} 日")
         # §117e 兵庫= 公式の行を「本当のレース」に入れ直す(split が無い日は no を外す)
         split_changed = False
