@@ -126,6 +126,46 @@ class AuctionGroups(unittest.TestCase):
         self.assertEqual([n for n, _ in hh.GROUP_RULES],
                          ["epistaxis", "cardiac", "musculoskeletal", "accident", "disease"])
 
+    # §205 動詞の活用を挟む打ち消し= その語は落ちる(残る語が無ければ事象にしない)
+    NEG6 = {
+        "ユリヤテソーロ": "右前肢の球節に骨膜があり、見た目にも少し大きく見えますが、歩様が乱れたことはなく、この状態でレースを使ってきていました。",
+        "ケイアイテア": "この状態で園田で3戦しており、歩様が乱れたことはありませんでした。",
+        "サンライズホープ": "昨年あたりから、右前肢の球節が腫れるようになりました。それ以降はその状態のまま出走していますが、変わりはなくずっとそのような感じです。歩様が乱れたことはありません。",
+        "ブラックパロット": "ただ、その後跛行するようなことはなく調教は順調に行うことができましたし、レースにもコンスタントに使うことができました。",
+        "サンライズシア": "復帰後、球節にむくみが出ることはありますが、痛みや熱感、歩様の乱れが出ることはなく、4戦しています。",
+        "ユマハム": "今年3月に復帰し、4戦しています。左後肢球節は慢性的に若干の腫れと熱感がありますが、冷却と馬房内でバンテージでのケアをしつつ、予定通りに出走できていました。復帰後に痛みや歩様異常が出たことはありませんでした。",
+    }
+
+    def test_s205_negated_with_verb_tail(self):
+        for name, text in self.NEG6.items():
+            self.assertEqual(hh._auction_terms(text), [], name)
+
+    def test_s205_negated_sentences_make_no_event(self):
+        for name, text in self.NEG6.items():
+            out, _review = details(text)
+            self.assertEqual(out, [], name)
+
+    def test_s205_solaro_swelling_stays(self):
+        self.assertEqual(hh._auction_terms("その後も左前腕節部の腫脹は残存したものの、跛行は認められず順調に調教を継続し、"
+                                           "2025年8月24日にはJRA新馬戦に出走し優勝。"), [("symptom", "腫脹")])
+
+    def test_s205_blackapis_edema_stays(self):
+        self.assertEqual(hh._auction_terms("右前肢の球節が若干浮腫み気味です。痛みが出たことはありませんが、"
+                                           "レース後等に若干の熱感はありました。"), [("symptom", "浮腫")])
+
+    def test_s205_kyoei_edema_stays(self):
+        self.assertEqual(hh._auction_terms("そのため球節が浮腫みやすいところがありますが、歩様に異常が出たことはありません。"),
+                         [("symptom", "浮腫")])
+
+    def test_s205_onset_still_event(self):
+        self.assertEqual(groups("2024年12月14日の競走中に左前肢跛行を発症したため競走を中止しました。"), ["symptom"])
+
+    def test_s205_comma_not_crossed(self):
+        self.assertEqual(groups("跛行が見られ、その後出ることはなく"), ["symptom"])   # 「、」の先の打ち消しは拾わない
+
+    def test_s205_parser_version(self):
+        self.assertEqual(hh.PARSER_VERSION, "health-v1.2.1")
+
 
 if __name__ == "__main__":
     unittest.main()
