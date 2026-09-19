@@ -1,7 +1,7 @@
-commit: 1a0bdf1 枝 s224a-pwin(nar-jobs・origin/master ffd79c7 の上・設計 viewer-master docs/opus_s224a_pwin_calib_20260919.md・⛔push/merge/deploy なし・⛔印(marks)・meta.p・nar_ai_record・画面・ai_feat_local_schema.sql・yml は触っていない)= **A** pipeline/ai/base_v1.py の fit に 1 着の模型 bst_w(y= y_win・PARAMS/列は同じ・ROUNDS_WIN= win_wf 12 折の早期終了の中央値)を足して model.json に同梱('win'・'rounds_win')/**B** fit の中で 12 か月ウォークフォワード(trained_to の前の月まで・月ごとにその月より前だけで学習・反復は固定)の p_win(レース内で合計 1)を 10 帯に切った較正表 `cal_win`(帯ごとの 件数・見込みの平均・実際の 1 着率)を model.json に入れる・`--wf-out` で WF の予測を parquet に残せる/predict= 走る馬の中で合計 1 → 帯の点を線で結んで実際の率へ置き換え → もう一度合計 1/**C** meta.p_win(4 桁)と meta.cal='win-v1'(⛔列は足さない・1 着の模型の無い古い model.json では出さない)・ログに p_win の帯別の頭数と較正表/**D・E** 新規 pipeline/ai/ev_coef.py(既定は読むだけ・`--write` のときだけ nar_meta 'ev_coef:v1'・'ev_check:v1' の 2 行)= 単勝オッズ帯 5 つの係数(勝った馬の 払戻÷10 分前オッズ の中央値)と、較正後 p_win × 前の月の係数 × 10 分前オッズ ≥ 1.2 の単勝 1 点ずつの回収率(較正と係数は**その月より前の月だけ**・最初の月は数えない)/**F** tests/test_ai_p_win.py(30 行)
-検品(手元・本番 DB へは書いていない= predict は --write なし・ev_coef も --write なし): `unittest discover` 111/111 緑(既存の test_ai_meta_p も緑)・git diff --check 通過/手元の特徴量(9/8 時点)で `fit --variant morning --wf-out` 完走= 帯 10 本そろう/**1 日分 predict(9/8・58 レース)を変更前の base_v1.py と同じ模型で比べた= meta.p 58/58・marks 58/58 同じ・p_win は 58/58 レースの全頭(鍵= meta.p と同じ)・合計 0.9998〜1.0003**/12 か月 WF の較正の前後= 10 帯すべてで「見込みの平均 − 実際の 1 着率」の差が縮んだ(表と ev_coef/ev_check の JSON は報告に貼った= ⛔公開リポには数字を書かない)
-通信: 本番へは今までどおり印の upsert だけ(p_win は meta の中の鍵)/nar_meta 2 行は ev_coef.py --write のときだけ
-回帰: 印・meta.p は同じ(上の比べ)・古い model.json(1 着の模型なし)でも predict は今までどおり(p_win を出さないだけ)
-変えた点: (1) D・E は便(nar-ai-feat)に組み込んでいない= 締切前オッズの履歴は手元の PC にしか無く Actions から読めない → 手元で回す道具にした。(2) 回収率の表の較正と係数は「その月より前の月だけ」で作った(同じ月で作ると見かけが良くなる)= 最初の月は数えない
-⚠: fit が長くなる= 手元(8 スレッド)で morning 1 本が約 9 分(うち WF 12 折が約 6.5 分)。便は morning と last の 2 本を fit するので Actions では +15〜30 分の見込み= 今の timeout-minutes: 45 に収まらないおそれ
-要判断: (a) push の前に nar-ai-feat.yml の timeout を延ばすか、WF を減らすか(例: 較正は月 1 回だけ作って model.json に引き継ぐ)(b) ev_coef/ev_check を本番の nar_meta に書く手順(手元で回して --write/便に締切前オッズの材料を持たせる)
+commit: fb68745 枝 s224e-first3f-survey(origin/master 437c6a6 の上)。設計 viewer-master docs/opus_s224e_first3f_estimate_survey_20260919.md= 下調べだけ。新規 tools/first3f_survey.py(読むだけ)。画面・yml・本番への書き込みなし・push なし
+検品: 手元で py -3.12 で 1 回流した(本番 DB は REST の読むだけ・場ごと・30 日の窓・一意な並び)。実測= 高知 nar_own_runs・専門紙 nar_kb_runs・紙面 nar_paper_runs、走破タイム・上り3F= nar_runs、距離= nar_races
+通信: 本番へは読むだけ(件数と所要は docs/notes_s224e.md の末尾)/書き込み 0 本
+回帰: unittest discover 緑(既存のテストは触っていない)・画面と yml の差分なし
+結論: 場×距離の中央値で補正した推定で、0.5 秒以内 80% 以上に届くのは 1400m 前後と一部の 1300m だけ。1600m 以上はどの場も届かない。表と件数は docs/notes_s224e.md(公開リポのため commit していない)
+⚠: 1200m は推定でなく恒等式(前半 3F+上り 3F= 1200m)で、そのまま出せる。高知 1300m は計測撤退済みの距離で、値の出どころの確認が要る
+要判断: notes_s224e.md(数字入り)を公開リポに commit するか・推定を出す場×距離を ✓ の組にするか、後ろ向きでも届く組に絞るか
