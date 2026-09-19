@@ -197,3 +197,56 @@ having count(*) >= 5;
 commit;
 select kind, count(*) as rows from public.nar_pair_stats group by kind order by kind;
 select pg_size_pretty(pg_total_relation_size('public.nar_pair_stats')) as table_size;
+
+-- ---------------------------------------------------------------- §227 騎手・組み合わせの競馬場別 × 通算/過去1年
+-- 上の tmp_pr・tmp_pairs を使うので**この場所(同じ psql)で**続けて作る。
+-- ⛔nar_person_stats・nar_pair_stats には行を足さない(既存の読み手が period の札・key で引く)= 別の表に分ける。
+-- しきい値は今の決まりのまま= 騎手だけ('j')は場別と同じ 10 走以上・組み合わせは nar_pair_stats と同じ 5 走以上。
+-- 'y1'= 集計した日から 365 日前以降の走(便は朝= 前日までの確定結果)。as_of= 集計した日。
+
+create table if not exists public.nar_jockey_track_stats (
+  kind       text not null,             -- 'j'(騎手だけ) | 'jt'(騎手×調教師) | 'jo'(騎手×馬主) | 'js'(騎手×父)
+  track      text not null,             -- 公式場名(nar_person_stats と同じ字)
+  period     text not null,             -- 'all' | 'y1'(過去 1 年)
+  a          text not null,             -- 騎手(公式の略称)
+  b          text not null default '',  -- 相手('j' は '')
+  stats      jsonb not null,            -- {n,w1,w2,w3,win,top2,top3,roi,roi3,from,to}(nar_pair_stats と同じ形)
+  as_of      date not null,             -- 集計した日
+  updated_at timestamptz not null default now(),
+  primary key (kind, track, period, a, b)
+);
+alter table public.nar_jockey_track_stats enable row level security;
+do $$ begin
+  if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'nar_jockey_track_stats' and policyname = 'nar_jockey_track_stats_read') then
+    create policy nar_jockey_track_stats_read on public.nar_jockey_track_stats for select to anon, authenticated using (true);
+  end if;
+end $$;
+grant select on public.nar_jockey_track_stats to anon, authenticated;
+
+-- #520 と同じ型= 消して入れ直すまでを 1 トランザクションに
+begin;
+delete from public.nar_jockey_track_stats;
+insert into public.nar_jockey_track_stats (kind, track, period, a, b, stats, as_of, updated_at)
+select s.kind, s.track, p.period, s.a, s.b,
+  jsonb_build_object(
+    'n', count(*), 'w1', count(*) filter (where s.finish = 1), 'w2', count(*) filter (where s.finish = 2), 'w3', count(*) filter (where s.finish = 3),
+    'win', round(100.0 * count(*) filter (where s.finish = 1) / nullif(count(*), 0), 1),
+    'top2', round(100.0 * count(*) filter (where s.finish <= 2) / nullif(count(*), 0), 1),
+    'top3', round(100.0 * count(*) filter (where s.finish <= 3) / nullif(count(*), 0), 1),
+    'roi', round(100.0 * sum(s.win_pay) / nullif(count(*) * 100.0, 0), 0),
+    'roi3', round(100.0 * sum(s.place_pay) / nullif(count(*) * 100.0, 0), 0),
+    'from', min(s.race_date), 'to', max(s.race_date)),
+  current_date, now()
+from (
+  select 'j'::text as kind, track, jockey as a, ''::text as b, race_date, finish, win_pay, place_pay
+    from tmp_pr where jockey is not null and jockey <> ''
+  union all
+  select kind, track, a, b, race_date, finish, win_pay, place_pay from tmp_pairs
+) s
+join (values ('all'), ('y1')) as p(period) on p.period = 'all' or s.race_date >= current_date - 365
+group by s.kind, s.track, p.period, s.a, s.b
+having count(*) >= case when s.kind = 'j' then 10 else 5 end;
+commit;
+select kind, period, count(*) as rows, pg_size_pretty(sum(octet_length(stats::text))::bigint) as json_size
+  from public.nar_jockey_track_stats group by kind, period order by kind, period;
+select pg_size_pretty(pg_total_relation_size('public.nar_jockey_track_stats')) as table_size;
