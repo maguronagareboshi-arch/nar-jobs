@@ -45,7 +45,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 90     # §224a fit に 1 着の模型+12 か月 WF の較正が乗った(手元 8 スレッドで +15〜30 分)
     env:
       PGHOST: localhost
       PGPORT: '5432'
