@@ -7,3 +7,6 @@ viewer-export/
 node_modules/
 .wrangler/
 data/
+.env*
+pipeline/.env*
+*.env.*
