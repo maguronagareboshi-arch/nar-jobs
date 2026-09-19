@@ -33,7 +33,7 @@ env:
 jobs:
   refresh:
     runs-on: ubuntu-latest
-    timeout-minutes: 60   # #520(2026-09-07) 月次便が 30 分に達して person_stats の途中で切られた(9/5 28m58s・9/6 cancelled 30m20s)。日次便は 1〜2 分なので余裕は害なし
+    timeout-minutes: 90   # §227b(2026-09-19) 朝の月次便が 60 分で打ち切られる日が続いたので 90 分へ(公開リポ= 分の上限なし)。#520(2026-09-07) 月次便が 30 分に達して person_stats の途中で切られた(9/5 28m58s・9/6 cancelled 30m20s)。日次便は 1〜2 分なので余裕は害なし
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
