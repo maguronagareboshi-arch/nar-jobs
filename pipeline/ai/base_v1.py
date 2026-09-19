@@ -2,7 +2,7 @@
 """base-v1 予想AI(§129 段階 2/3)。特徴量表 `nar_ai_feat_run`(Actions 内 Postgres で毎朝作る・§129d)から学習し、
 今日の出走馬に ◎○▲△ を付けて `nar_ai_marks`(model='base-v1')に書く。
 
-  python pipeline/ai/base_v1.py fit     --feat out/nar_ai_feat_run.csv.gz --model out/base_v1.model.json [--variant morning|last]
+  python pipeline/ai/base_v1.py fit     --feat out/nar_ai_feat_run.csv.gz --model out/base_v1.model.json [--variant morning|last] [--wf-out <parquet>]
   python pipeline/ai/base_v1.py predict --feat out/nar_ai_feat_run.csv.gz --model out/base_v1.model.json --timing morning|last [--write] [--date YYYY-MM-DD]
 
 §143(#545)2026-09-09 朝便と直前便に分けた:
@@ -23,6 +23,11 @@
   - 学習の反復回数は固定(ウォークフォワードの早期終了の中央値)= 毎朝の学習で valid を切らない。
   - 凍結= base-v0 と同じ表・同じ鍵(model, track, race_date, race_no, timing)。morning/last とも
     **既にある行は触らない**(この模型は日中に変わる入力を持たないので両方同じ印)。
+§224a(2026-09-19)1 着の見込み p_win を足した(⛔3 着内の p・印・列は 1 バイトも変えない):
+  - fit= 1 着の模型 bst_w(y= y_win・PARAMS/列は同じ・反復は win_wf 12 折の早期終了の中央値)を同梱。
+  - 較正= fit の中で 12 か月ウォークフォワード(月ごとに前だけで学習)の p_win(レース内で合計 1)を 10 帯に切り、
+    帯ごとの「実際に 1 着だった率」を model.json の cal_win に入れる。⛔市場(人気・オッズ)は較正に使わない。
+  - predict= p_win を帯の実績へ置き換え(帯の中は線形補間)→ レース内で合計 1 → meta.p_win と meta.cal。
 ⛔鍵は印字しない。⛔本番へは REST の upsert だけ(SQL は流さない)。
 """
 from __future__ import annotations
@@ -73,6 +78,11 @@ PARAMS = dict(objective='binary', learning_rate=0.05, num_leaves=63, min_data_in
               max_bin=255, verbose=-1, num_threads=0, seed=7)
 ROUNDS_BIN = 850        # ウォークフォワード 12 折の早期終了の中央値(580〜1404)
 ROUNDS_RANK = 380       # 同(258〜583)
+# §224a 1 着の模型と較正
+ROUNDS_WIN = 520        # win_wf(§170 段 2 C)12 折の早期終了の中央値(389〜775)
+CAL_ID = 'win-v1'
+CAL_MONTHS = 12         # 較正に使うウォークフォワードの月数(trained_to の前の月まで)
+CAL_EDGES = [0.0, 0.005, 0.01, 0.02, 0.04, 0.08, 0.15, 0.25, 0.40, 0.60, 1.0]   # 10 帯(0-0.5%…60-100%)
 
 
 def log(*a):
@@ -129,8 +139,82 @@ def feature_cols(df, variant='last'):
     return cols
 
 
+# ---------------------------------------------------------------- §224a 1 着の見込み
+def win_label(d):
+    """1 着の印= y_win(無ければ finish==1)"""
+    if 'y_win' in d.columns and d['y_win'].notna().all():
+        return d['y_win'].astype(int).values
+    return (d['finish'] == 1).astype(int).values
+
+
+def race_norm(p, rid):
+    """レースの中で合計 1 に(⛔合計 0 のレースは頭数で等分)"""
+    s = pd.Series(np.asarray(p, dtype='float64'), index=rid.index)
+    tot = s.groupby(rid).transform('sum')
+    n = s.groupby(rid).transform('size')
+    return np.where(tot > 0, s / tot.where(tot > 0, 1.0), 1.0 / n)
+
+
+def win_walkforward(tr, cols, yw, months=CAL_MONTHS):
+    """trained_to の前の月までの months か月を、月ごとに**その月より前だけ**で学習して当てる(反復は固定)。
+    返す= rid・track・race_date・runner_number・y・p_win(レース内で合計 1)"""
+    import lightgbm as lgb
+    last = pd.Period(tr['race_date'].max(), freq='M') - 1
+    parts = []
+    y = pd.Series(yw, index=tr.index)
+    for per in pd.period_range(last - (months - 1), last, freq='M'):
+        ts, te = per.start_time, per.end_time
+        trn = tr[tr['race_date'] < ts]
+        tst = tr[(tr['race_date'] >= ts) & (tr['race_date'] <= te)]
+        if len(tst) == 0 or len(trn) == 0:
+            continue
+        t0 = time.time()
+        bst = lgb.train(PARAMS, lgb.Dataset(trn[cols], y[trn.index]), num_boost_round=ROUNDS_WIN)
+        part = tst[['rid', 'track', 'race_date', 'runner_number']].copy()
+        part['y'] = y[tst.index].values
+        part['p_win'] = race_norm(bst.predict(tst[cols]), tst['rid'])
+        parts.append(part)
+        log('  wf', str(per), 'train', len(trn), 'test', len(tst), round(time.time() - t0), 's')
+    return pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(
+        columns=['rid', 'track', 'race_date', 'runner_number', 'y', 'p_win'])
+
+
+def cal_table(p, y):
+    """10 帯ごとの 件数・見込みの平均・実際の 1 着率(⛔件数 0 の帯は None)"""
+    p = np.asarray(p, dtype='float64')
+    y = np.asarray(y, dtype='float64')
+    b = np.clip(np.digitize(p, CAL_EDGES[1:-1], right=False), 0, len(CAL_EDGES) - 2)
+    n, pred, rate = [], [], []
+    for i in range(len(CAL_EDGES) - 1):
+        m = b == i
+        n.append(int(m.sum()))
+        pred.append(round(float(p[m].mean()), 6) if m.any() else None)
+        rate.append(round(float(y[m].mean()), 6) if m.any() else None)
+    return {'id': CAL_ID, 'edges': CAL_EDGES, 'n': n, 'pred': pred, 'rate': rate}
+
+
+def win_calibrate(p, cal):
+    """帯の実績へ置き換え= (帯の見込みの平均, 帯の実際の率) の点を線で結んで読む(端は端の値)。
+    ⛔較正表が無い/点が 2 つ未満なら元のまま"""
+    pts = [(x, r) for x, r in zip(cal.get('pred') or [], cal.get('rate') or []) if x is not None and r is not None]
+    p = np.asarray(p, dtype='float64')
+    if len(pts) < 2:
+        return p
+    xs, ys = zip(*sorted(pts))
+    return np.interp(p, xs, ys)
+
+
+def log_cal(cal):
+    log('cal_win', cal['id'], '(帯= 見込み%: 件数 / 見込みの平均% / 実際の 1 着率%)')
+    for i in range(len(cal['n'])):
+        lo, hi = cal['edges'][i] * 100, cal['edges'][i + 1] * 100
+        pr, rt = cal['pred'][i], cal['rate'][i]
+        log('   %5.1f-%5.1f: %6d / %s / %s' % (lo, hi, cal['n'][i], '-' if pr is None else '%.2f' % (pr * 100),
+                                              '-' if rt is None else '%.2f' % (rt * 100)))
+
+
 # ---------------------------------------------------------------- 学習
-def fit(feat_path, model_path, variant='last'):
+def fit(feat_path, model_path, variant='last', wf_out=None):
     import lightgbm as lgb
     if variant not in VARIANTS:
         raise SystemExit('--variant は morning か last')
@@ -152,10 +236,23 @@ def fit(feat_path, model_path, variant='last'):
     pr = dict(PARAMS, objective='lambdarank', metric='ndcg', eval_at=[3], lambdarank_truncation_level=6)
     bst_r = lgb.train(pr, lgb.Dataset(trs[cols], rel, group=grp), num_boost_round=ROUNDS_RANK)
     log('rank done', round(time.time() - t0), 's')
+    # §224a 1 着の模型(全期間)と、12 か月ウォークフォワードで作る較正表
+    t0 = time.time()
+    yw = win_label(tr)
+    bst_w = lgb.train(PARAMS, lgb.Dataset(tr[cols], yw), num_boost_round=ROUNDS_WIN)
+    log('win done', round(time.time() - t0), 's')
+    wf = win_walkforward(tr, cols, yw)
+    cal = cal_table(wf['p_win'].values, wf['y'].values)
+    cal['months'] = [str(wf['race_date'].min().date()), str(wf['race_date'].max().date())] if len(wf) else []
+    log_cal(cal)
+    if wf_out:
+        wf.to_parquet(wf_out, index=False)
+        log('wf ->', wf_out, len(wf), 'rows')
     out = {'model': MODEL_ID, 'trained_at': dt.datetime.now(JST).isoformat(timespec='seconds'),
            'trained_to': str(tr['race_date'].max().date()), 'n_rows': int(len(tr)), 'cols': cols,
            'rounds': [ROUNDS_BIN, ROUNDS_RANK], 'variant': variant, 'dropped': dropped,
-           'binary': bst_b.model_to_string(), 'rank': bst_r.model_to_string()}
+           'binary': bst_b.model_to_string(), 'rank': bst_r.model_to_string(),
+           'rounds_win': ROUNDS_WIN, 'win': bst_w.model_to_string(), 'cal_win': cal}
     Path(model_path).write_text(json.dumps(out), encoding='utf-8')
     log('saved', model_path, round(Path(model_path).stat().st_size / 1e6, 1), 'MB')
 
@@ -164,6 +261,14 @@ def load_model(model_path):
     import lightgbm as lgb
     m = json.loads(Path(model_path).read_text(encoding='utf-8'))
     return m, lgb.Booster(model_str=m['binary']), lgb.Booster(model_str=m['rank'])
+
+
+def load_win(m):
+    """§224a 1 着の模型(model.json の 'win')。⛔無い古い模型は None= p_win を出さない"""
+    if not m.get('win') or not m.get('cal_win'):
+        return None
+    import lightgbm as lgb
+    return lgb.Booster(model_str=m['win'])
 
 
 def predict_df(df, m, bst_b, bst_r):
@@ -208,11 +313,14 @@ def today_ready(runnable, need_baba=True):
     return True, ''
 
 
-def build_marks(df, day, m, bst_b, bst_r, timing):
+def build_marks(df, day, m, bst_b, bst_r, timing, bst_w=None):
     d = df[(df['race_date'] == pd.Timestamp(day)) & df['finish'].isna()].copy()
     if len(d) == 0:
         return []
     d['p'] = predict_df(d, m, bst_b, bst_r)
+    if bst_w is not None:                                          # §224a 1 着の見込み(較正前・レース内で割る前)
+        d['pw'] = bst_w.predict(d[m['cols']])
+    pw_all = []
     need = baba_tracks(df) if timing == 'last' else set()          # §143b 馬場が普段から入る場(1 回だけ数える)
     rows, skipped = [], {}
     for rid, g in d.groupby('rid', sort=False):
@@ -232,6 +340,14 @@ def build_marks(df, day, m, bst_b, bst_r, timing):
         s = runnable['p'] / runnable['p'].sum()
         # §170 B 全頭の s(= p/Σp)を残す= 期待値の検証用。⛔marks(上位 4 頭)の形は変えない
         meta['p'] = {str(int(u)): round(float(v), 4) for u, v in zip(runnable['runner_number'], s)}
+        if bst_w is not None:
+            # §224a 走る馬の中で合計 1 → 帯の実績へ置き換え → もう一度合計 1。⛔meta.p・marks は触らない
+            w = race_norm(runnable['pw'].values, runnable['rid'])
+            wc = win_calibrate(w, m['cal_win'])
+            wc = wc / wc.sum() if wc.sum() > 0 else w
+            meta['p_win'] = {str(int(u)): round(float(v), 4) for u, v in zip(runnable['runner_number'], wc)}
+            meta['cal'] = CAL_ID
+            pw_all.extend(wc)
         order = runnable.assign(s=s).sort_values(['s', 'runner_number'], ascending=[False, True]).head(4)
         marks = [{'num': int(r.runner_number), 'mark': MARKS[i], 'score': round(float(r.s) * 100, 1)}
                  for i, r in enumerate(order.itertuples())]
@@ -239,6 +355,10 @@ def build_marks(df, day, m, bst_b, bst_r, timing):
         rows.append({'track': track, 'race_date': str(day), 'race_no': int(no), 'marks': marks, 'meta': meta})
     for k in sorted(skipped):
         log('  skip', k, '=', skipped[k], 'race')            # ⛔黙って減らさない(なぜ書かないかを出す)
+    if pw_all:                                                     # §224a p_win の帯別の頭数(較正後)
+        c = np.bincount(np.clip(np.digitize(pw_all, CAL_EDGES[1:-1]), 0, len(CAL_EDGES) - 2), minlength=len(CAL_EDGES) - 1)
+        log('  p_win 帯別の頭数(較正後)', ' '.join('%g-%g%%:%d' % (CAL_EDGES[i] * 100, CAL_EDGES[i + 1] * 100, n)
+                                                  for i, n in enumerate(c)))
     return rows
 
 
@@ -302,12 +422,17 @@ def predict(feat_path, model_path, day, write, timing):
     if timing not in VARIANTS:
         raise SystemExit('--timing は morning か last')
     m, bst_b, bst_r = load_model(model_path)
+    bst_w = load_win(m)
+    if bst_w is None:
+        log('⚠1 着の模型が無い(古い model.json)= meta.p_win は出さない')
+    else:
+        log_cal(m['cal_win'])
     variant = m.get('variant') or 'last'          # variant の無い古い模型は全列= last 扱い
     if variant != timing:
         raise SystemExit(f'模型は variant={variant} なのに --timing {timing} で呼ばれた'
                          f'(⛔朝の模型で直前予想を書かない・逆も)')
     df = load_feat(feat_path)
-    rows = build_marks(df, day, m, bst_b, bst_r, timing)
+    rows = build_marks(df, day, m, bst_b, bst_r, timing, bst_w)
     log('marks for', day, timing, '=', len(rows), 'races')
     for r in rows[:6]:
         log(' ', r['track'], f"{r['race_no']}R", ' '.join(f"{x['mark']}{x['num']}({x['score']})" for x in r['marks']))
@@ -325,9 +450,10 @@ def main():
     ap.add_argument('--write', action='store_true')
     ap.add_argument('--variant', choices=VARIANTS, default='last', help='fit: 朝便の模型は morning')
     ap.add_argument('--timing', choices=VARIANTS, default=None, help='predict: 必須(既定なし)')
+    ap.add_argument('--wf-out', default=None, help='fit: §224a 1 着の 12 か月 WF の予測を parquet に残す(研究用)')
     a = ap.parse_args()
     if a.cmd == 'fit':
-        fit(a.feat, a.model, a.variant)
+        fit(a.feat, a.model, a.variant, a.wf_out)
     else:
         if not a.timing:
             raise SystemExit('predict には --timing morning|last が要ります')
