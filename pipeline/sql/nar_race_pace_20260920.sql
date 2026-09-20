@@ -1,15 +1,16 @@
 -- §232 過去のレースの「実際のペース」(2026-09-20 新設)。作るのは cloud/tenkai.py --pace-log。
--- 1 レース 1 行= そのレースで実際に 1 角先頭だった馬のテン(前半3F − 場×距離の平年値)を
--- cloud/tenkai.py の pace_word に通した言葉。⛔値の出せないレースは行を作らない(「平均」で埋めない)。
+-- 1 レース 1 行= そのレースで**いちばん速かった前半3F**と平年値の差(テン)を
+-- cloud/tenkai.py の pace_word に通した言葉。⛔平年値も同じ量(レースごとの最速)の中央値で作る=
+-- 比べる物差しをそろえる。⛔値の出せないレースは行を作らない(「平均」で埋めない)。
 -- ⛔読みは anon/authenticated の select だけ(nar_person_stats と同じ書き方)。冪等。
 create table if not exists public.nar_race_pace (
   track       text not null,              -- 公式の場名
   race_date   date not null,
   race_no     int  not null,
   pace        text not null,              -- '速い' | '平均' | '遅い'
-  lead_umaban int  not null,              -- 実際に 1 角先頭だった馬(同着で決まらないレースは行なし)
-  lead_ten    numeric not null,           -- その馬の前半3F − 平年値(マイナスが速い)
-  std_sec     numeric not null,           -- 使った平年値(場 × 距離の中央値)
+  lead_umaban int,                        -- その時計を出した馬(同じ時計が 2 頭以上なら空)
+  lead_ten    numeric not null,           -- そのレースの最速の前半3F − 平年値(マイナスが速い)
+  std_sec     numeric not null,           -- 使った平年値(場 × 距離・レースごとの最速の中央値)
   std_from    date not null,              -- 平年値を作った期間の始め(⛔レース日より前の 1 年)
   built       timestamptz not null,
   primary key (track, race_date, race_no)

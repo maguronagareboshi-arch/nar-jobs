@@ -261,14 +261,17 @@ def selftest(quiet=False):
         bad += 0 if ok else 1
         if not quiet or not ok:
             log("  %s %s %+.1f 秒 → %s" % ("OK " if ok else "NG ", track, ten, got))
-    for src, want in (("7,9,(2,10)", 7), ("(2,7)-11", None), ("", None)):
-        got = lead_umaban(corner_ranks(src))
-        ok = got == want
+    # §232 直し: レースの速さは「そのレースでいちばん速い前半3F」。同じ時計が 2 頭なら馬番は空
+    ex = {("高知", "2026-09-01", 1, 3): (38.5, 1300), ("高知", "2026-09-01", 1, 7): (39.2, 1300),
+          ("高知", "2026-09-01", 2, 1): (40.0, 1300), ("高知", "2026-09-01", 2, 5): (40.0, 1300)}
+    got = race_fastest(ex)
+    for k, want in ((("高知", "2026-09-01", 1), (38.5, 1300, 3)), (("高知", "2026-09-01", 2), (40.0, 1300, None))):
+        ok = got.get(k) == want
         bad += 0 if ok else 1
         if not quiet or not ok:
-            log("  %s 1角先頭 %-12r → %s" % ("OK " if ok else "NG ", src, got))
+            log("  %s レースの最速テン %s → %s" % ("OK " if ok else "NG ", k[2], got.get(k)))
     if not quiet:
-        n = len(SELFTEST) + len(SELFTEST_PACE) + 3
+        n = len(SELFTEST) + len(SELFTEST_PACE) + 2
         log("読み方の selftest: %d/%d" % (n - bad, n))
     return 0 if not bad else 1
 
@@ -766,21 +769,42 @@ def spearman(order, ranks):
 PACE_TABLE = "nar_race_pace"
 PACE_PUT = 500            # upsert 1 本あたりの行数
 PACE_STD_YEARS = 365      # 平年値を作る窓(そのレースの月より前の 1 年)
+PACE_STD_MIN = 30         # 平年値を出す最少レース数(⛔小標本から基準を作らない)
 
 
-def lead_umaban(ranks):
-    """1角の {馬番: 順位} → 先頭 1 頭の馬番。⛔同着で 2 頭以上なら None(決まらないレースは行を作らない)"""
-    if not ranks:
-        return None
-    firsts = [u for u, r in ranks.items() if r == 1]
-    return firsts[0] if len(firsts) == 1 else None
+def race_fastest(ten_of):
+    """テンの表 → {(場, 日, R): (いちばん速い前半3F, 距離m, その時計の馬番 or None)}。
+
+    ⛔レースの速さは**そのレースでいちばん速い前半3F**で測る(1 角先頭の馬に頼らない=
+      同着で先頭が決まらないレースも同じ物差しで測れる)。⛔同じ時計が 2 頭以上なら馬番は空。
+    """
+    out = {}
+    for (t, d, no, u), (v, dm) in ten_of.items():
+        k = (t, d, no)
+        cur = out.get(k)
+        if cur is None or v < cur[0]:
+            out[k] = (v, dm, u)
+        elif v == cur[0] and cur[2] != u:
+            out[k] = (v, cur[1], None)               # 同じ時計が 2 頭以上= 馬番は空
+    return out
+
+
+def pace_std(fastest, before=None):
+    """平年値= その場×距離の「レースごとのいちばん速い前半3F」の中央値。
+    ⛔before があればその日より前のレースだけ(レース後の走を混ぜない)・PACE_STD_MIN 未満の組は出さない"""
+    by = {}
+    for (t, d, _no), (v, dm, _u) in fastest.items():
+        if before is not None and d >= before:
+            continue
+        by.setdefault((t, dm), []).append(v)
+    return {k: statistics.median(v) for k, v in by.items() if len(v) >= PACE_STD_MIN}
 
 
 def pace_rows(base, key, days):
-    """対象日の並び → nar_race_pace の行。⛔平年値と四分位は**その月より前の 1 年**の走だけで作る
+    """対象日の並び → nar_race_pace の行。⛔平年値と四分位は**その月より前の 1 年**のレースで作る
     (レースより後の走を混ぜない)。⛔値の出せないレースは行を作らない(「平均」で埋めない)"""
     out = []
-    skip = {"通過順なし": 0, "先頭が決まらない": 0, "テンなし": 0, "平年値なし": 0, "帯なし": 0}
+    skip = {"テンなし": 0, "平年値なし": 0, "帯なし": 0}
     by_month = {}
     for d in days:
         by_month.setdefault(str(d)[:7], []).append(str(d))
@@ -789,36 +813,33 @@ def pace_rows(base, key, days):
         ds = sorted(set(by_month[ym]))
         start = ym + "-01"
         std_from = (dt.date.fromisoformat(start) - dt.timedelta(days=PACE_STD_YEARS)).isoformat()
-        ranks_of = fetch_corners(base, key, {(t, d) for t in TEN_TRACKS for d in ds})
-        if not ranks_of:
-            continue
-        need = {(t, d) for (t, d, _no) in ranks_of}
+        need = {(t, d) for t in TEN_TRACKS for d in ds}
         need |= ten_year_days(base, key, start)
-        ten_of, std, band, _off = fetch_ten(base, key, need, std_before=start)
-        n0 = len(out)
-        for (t, d, no), ranks in sorted(ranks_of.items()):
-            u = lead_umaban(ranks)
-            if u is None:
-                skip["先頭が決まらない"] += 1
+        ten_of, _std, _band, _off = fetch_ten(base, key, need, std_before=start)
+        fastest = race_fastest(ten_of)
+        std = pace_std(fastest, start)
+        # 四分位も同じ量(レースごとの最速テン)で切る= ten_band と同じ作り方・材料はその月より前だけ
+        band = ten_band(ten_of, std, None, start)
+        n0, n_race = len(out), 0
+        for (t, d, no), (v, dm, u) in sorted(fastest.items()):
+            if d not in ds:
                 continue
-            hit = ten_of.get((t, d, int(no), int(u)))
-            if not hit:
-                skip["テンなし"] += 1
-                continue
-            base_v = std.get((t, hit[1]))
+            n_race += 1
+            base_v = std.get((t, dm))
             if base_v is None:
                 skip["平年値なし"] += 1
                 continue
-            x = hit[0] - base_v
+            x = v - base_v
             w = pace_word(t, x, band)
             if not w:
                 skip["帯なし"] += 1
                 continue
             out.append({"track": t, "race_date": d, "race_no": int(no), "pace": w,
-                        "lead_umaban": int(u), "lead_ten": round(x, 2), "std_sec": round(base_v, 2),
+                        "lead_umaban": int(u) if u is not None else None,
+                        "lead_ten": round(x, 2), "std_sec": round(base_v, 2),
                         "std_from": std_from, "built": now})
-        log("  %s レース %d 本 → %d 行(平年値 %d 組・帯 %s)"
-            % (ym, len(ranks_of), len(out) - n0, len(std), sorted(band)))
+        log("  %s テンの取れたレース %d 本 → %d 行(平年値 %d 組・帯 %s)"
+            % (ym, n_race, len(out) - n0, len(std), sorted(band)))
     return out, skip
 
 

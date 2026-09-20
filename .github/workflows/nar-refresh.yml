@@ -173,10 +173,12 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+          PGSSLMODE: require
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
           if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ] || { [ $((10#$H)) -ge 1700 ] && [ $((10#$H)) -lt 1730 ]; }; then python cloud/tenkai.py --apply; else echo "tenkai は朝と 17:07 の便だけ(JST $H)=スキップ"; fi
-          if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/tenkai.py --apply --pace-log; else echo "pace log は朝の便だけ(JST $H)=スキップ"; fi
+          if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/nar_race_pace_20260920.sql | tail -n 2 && python cloud/tenkai.py --apply --pace-log; else echo "pace log は朝の便だけ(JST $H)=スキップ"; fi
 
       # §54.1 P1 券種別の総票数・返還票数(楽天 race_dividend・1日1場1リクエスト)。
       # 前日までの取りこぼしは --days 3 の窓が自己修復。未確定の日は書かず翌日また試す
