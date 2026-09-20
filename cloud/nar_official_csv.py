@@ -71,15 +71,23 @@ def _weight_mark(value: Any) -> str | None:
     return m.group(0) if m else None
 
 
-def _number(value: Any, *, integer: bool = False) -> float | int | None:
+# §237(2026-09-20) 公式の「馬体重増減」は全角や数学記号のマイナスで来る回がある。半角へ直してから読む
+_MINUS = {"－": "-", "−": "-", "‐": "-"}   # 全角・数学・ハイフンのマイナス(⛔長音「ー」は文字なので入れない)
+
+
+def _number(value: Any, *, integer: bool = False, allow_negative: bool = False) -> float | int | None:
+    """数字にする。⛔負はふつう捨てる(タイム・距離・賞金の守り)。
+    §237 **馬体重増減だけ** allow_negative=True で負を通す= 減った回が消えていた(本番に負の行が 1 つも無かった)。"""
     text = str(value or "").strip().replace(",", "")
+    for bad, good in _MINUS.items():
+        text = text.replace(bad, good)
     if not text or text in {"-", "--", "---", "取消", "除外"}:
         return None
     try:
         number = float(text)
     except ValueError:
         return None
-    if number < 0:
+    if number < 0 and not allow_negative:
         return None
     return int(number) if integer else float(number)
 
@@ -245,7 +253,8 @@ def normalize_horses(rows: Iterable[dict[str, str]]) -> list[dict[str, Any]]:
             "carried_weight": _number(_WEIGHT_MARK.sub("", str(row.get("負担重量") or ""))),
             "weight_mark": _weight_mark(row.get("負担重量")),
             "body_weight": _number(row.get("馬体重"), integer=True),
-            "body_weight_change": _number(row.get("馬体重増減"), integer=True),
+            # §237 増減だけ負を通す(⛔他の列の守りは変えない)
+            "body_weight_change": _number(row.get("馬体重増減"), integer=True, allow_negative=True),
             "finish": _number(row.get("着順"), integer=True),
             "time_raw": str(row.get("タイム") or "").strip(),
             "margin": str(row.get("着差") or "").strip(),
