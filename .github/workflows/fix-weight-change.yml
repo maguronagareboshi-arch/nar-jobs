@@ -1,0 +1,41 @@
+# §237 馬体重増減の「減った回」を当て直す 1 回きりの手動便(PC の鍵は要らない)。
+# - 入力は cloud/onetime/weight_change_minus.csv.gz(手元で --dump した控え・鍵 4 列+増減だけ)。
+# - 既定はドライラン。confirm に apply と書いたときだけ本番へ upsert する。
+# - 送るのは主キー 4 列+body_weight_change だけ。本番に無い鍵は送らない。何度流しても同じ(冪等)。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY(nar-refresh と同じもの)
+name: fix-weight-change
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'apply と書くと本番へ書きます(空ならドライラン)'
+        required: false
+        default: ''
+
+concurrency:
+  group: fix-weight-change
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  fix:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: run fix weight change
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          CONFIRM: ${{ github.event.inputs.confirm }}
+        run: |
+          set -eu
+          ARGS="--from-file cloud/onetime/weight_change_minus.csv.gz"
+          if [ "$CONFIRM" = "apply" ]; then ARGS="$ARGS --apply"; fi
+          python -X utf8 cloud/fix_weight_change.py $ARGS

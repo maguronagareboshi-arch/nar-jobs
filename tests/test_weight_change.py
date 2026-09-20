@@ -4,6 +4,7 @@
   py -3.12 -X utf8 -m unittest discover -s tests -p "test_*.py"
 """
 import sys
+import os
 import unittest
 from pathlib import Path
 
@@ -56,6 +57,33 @@ class SendShape(unittest.TestCase):
         self.assertIn("2026", text)
         self.assertIn("門別", text)
         self.assertIn("大井", text)
+
+
+class DumpAndRead(unittest.TestCase):
+    """§237b 控え(csv.gz)の書き出し/読み込み= 生 ZIP の無い GitHub Actions で当てるための道。"""
+
+    def test_round_trip_keeps_only_minus(self):
+        import tempfile
+        rows = {("門別", "2026-09-03", 1, 5): -4, ("大井", "2025-05-01", 2, 3): -6}
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "x.csv.gz")
+            fx.dump_rows(rows, path)
+            back = fx.read_rows(path)
+        self.assertEqual(back, rows, "書いて読んだら同じにならない")
+
+    def test_read_drops_zero_and_plus(self):
+        import gzip, csv, tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "y.csv.gz")
+            with gzip.open(path, "wt", encoding="utf-8", newline="") as f:
+                w = csv.writer(f)
+                w.writerow(list(fx.KEYS) + ["body_weight_change"])
+                w.writerow(["門別", "2026-09-03", 1, 5, -4])
+                w.writerow(["門別", "2026-09-03", 1, 6, 0])       # ⛔0 は当てない
+                w.writerow(["門別", "2026-09-03", 1, 7, 2])       # ⛔正は当てない(既存の値を壊さない)
+                w.writerow(["", "2026-09-03", 1, 8, -2])          # ⛔場の無い行は捨てる
+            back = fx.read_rows(path)
+        self.assertEqual(back, {("門別", "2026-09-03", 1, 5): -4})
 
 
 if __name__ == "__main__":

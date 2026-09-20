@@ -7,6 +7,8 @@ cloud/nar_official_csv.py を直した後の正規化で**生 ZIP を読み直�
   py -3.12 -X utf8 cloud/fix_weight_change.py                      # ドライラン(年別・場別の内訳だけ)
   py -3.12 -X utf8 cloud/fix_weight_change.py --since 202501       # その月以降の ZIP だけ
   py -3.12 -X utf8 cloud/fix_weight_change.py --apply              # 本番へ upsert(⛔内訳を見てから)
+  py -3.12 -X utf8 cloud/fix_weight_change.py --dump cloud/onetime/weight_change_minus.csv.gz   # 負の行を書き出す(通信 0)
+  py -3.12 -X utf8 cloud/fix_weight_change.py --from-file cloud/onetime/weight_change_minus.csv.gz --apply  # 生 ZIP なしで当てる(Actions 用)
 
 - 入力= 他場\\data\\nar_official_csv\\raw の生 ZIP(⛔読むだけ・絶対に書かない)・通信は本番 DB だけ。
 - 送るのは **主キー 4 列 + body_weight_change** だけ(⛔他の列は送らない= 既存の値を上書きしない)。
@@ -17,7 +19,9 @@ cloud/nar_official_csv.py を直した後の正規化で**生 ZIP を読み直�
 """
 import argparse
 import collections
+import csv
 import datetime as dt
+import gzip
 import json
 import os
 import re
@@ -107,6 +111,34 @@ def minus_rows(files):
     return out
 
 
+def dump_rows(rows, path):
+    """負の行を csv.gz に書き出す(鍵 4 列+増減だけ)。生 ZIP の無い所(GitHub Actions)で使うため。"""
+    p = Path(path)
+    p.parent.mkdir(parents=True, exist_ok=True)
+    with gzip.open(p, "wt", encoding="utf-8", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(list(KEYS) + ["body_weight_change"])
+        for k, v in sorted(rows.items()):
+            w.writerow(list(k) + [v])
+    return p.stat().st_size
+
+
+def read_rows(path):
+    """--dump で書いた csv.gz を読む。⛔負の行だけ(0 や正が混ざっていたら捨てる= 既存の値を壊さない)。"""
+    out = {}
+    with gzip.open(Path(path), "rt", encoding="utf-8", newline="") as f:
+        for row in csv.DictReader(f):
+            try:
+                v = int(row["body_weight_change"])
+                k = (row["track"], row["race_date"], int(row["race_no"]), int(row["runner_number"]))
+            except (KeyError, TypeError, ValueError):
+                continue
+            if v >= 0 or not k[0] or not k[1]:
+                continue
+            out[k] = v
+    return out
+
+
 def summarize(rows, nulls=None):
     by_year, by_track = collections.Counter(), collections.Counter()
     ny, nt = collections.Counter(), collections.Counter()
@@ -165,7 +197,15 @@ def main():
     ap.add_argument("--since", help="YYYYMM。この月以降の ZIP だけ")
     ap.add_argument("--env", help="接続先 .env(既定: 他場\\.env)")
     ap.add_argument("--raw", help="生 ZIP の置き場(既定: 他場\\data\\nar_official_csv\\raw)")
+    ap.add_argument("--dump", help="負の行を csv.gz に書き出して終わる(通信 0)")
+    ap.add_argument("--from-file", dest="from_file", help="生 ZIP でなく --dump の csv.gz を読む(Actions 用)")
     a = ap.parse_args()
+    if a.from_file:
+        rows = read_rows(a.from_file)
+        log("控えの csv.gz から 負の行 %d(%s)" % (len(rows), a.from_file))
+        if not rows:
+            log("⛔負の行が 1 つも無い= 控えが空。止める"); return 2
+        return apply_rows(rows, a)
     raw_dir = Path(a.raw) if a.raw else RAW_DIR
     files = [f for f in sorted(raw_dir.glob("*_race_*.zip")) if RAW_FILE_RE.fullmatch(f.name)]
     if a.since:
@@ -177,7 +217,15 @@ def main():
     log("増減が負の行 %d" % len(rows))
     if not rows:
         log("⛔負の行が 1 つも無い= 正規化の直しが効いていない。止める"); return 2
+    if a.dump:
+        size = dump_rows(rows, a.dump)
+        log("控えを書いた %s(%d 行・%.1f MB)。⛔鍵は要らない(通信 0)" % (a.dump, len(rows), size / 1048576))
+        return 0
+    return apply_rows(rows, a)
 
+
+def apply_rows(rows, a):
+    """本番にある行だけ、鍵 4 列+増減を upsert する(既定はドライラン)。"""
     load_env(a.env)
     url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     key = os.environ.get("SUPABASE_SERVICE_KEY", "")
