@@ -23,6 +23,8 @@
   py -3.12 -X utf8 cloud/tenkai.py --env pipeline/.env.nar --days 2026-09-05,2026-09-06
   py -3.12 -X utf8 cloud/tenkai.py --env pipeline/.env.nar --backtest 30  # 検品(場ごとの的中率)
   py -3.12 -X utf8 cloud/tenkai.py --env pipeline/.env.nar --backtest 60 --pace  # §99b ペース見込みの検品
+  py -3.12 -X utf8 cloud/tenkai.py --env pipeline/.env.nar --apply --pace-log   # §232 実際のペースを表に残す(前日ぶん)
+  py -3.12 -X utf8 cloud/tenkai.py --env pipeline/.env.nar --apply --pace-log --since 2025-09-20  # さかのぼり(手押し)
   py -3.12 -X utf8 cloud/tenkai.py --selftest                             # 通過順の読み方だけ(通信なし)
 環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY
   ⛔#465: --env が無いときは**環境変数だけ**で動く(手元の .env を探しに行かない)。
@@ -39,6 +41,7 @@ import json
 import os
 import statistics
 import sys
+import urllib.error
 import urllib.parse
 import urllib.request
 
@@ -231,8 +234,20 @@ SELFTEST = [
 ]
 
 
+# §232 ペースの言葉の例(通信なし)。高知は ±KOCHI_BAND 固定・他場は場の四分位
+SELFTEST_PACE = [
+    ("高知", -0.5, {}, "速い"),
+    ("高知", 0.0, {}, "平均"),
+    ("高知", 0.5, {}, "遅い"),
+    ("大井", -0.5, {"大井": [-0.3, 0.3]}, "速い"),
+    ("大井", -0.2, {"大井": [-0.3, 0.3]}, "平均"),
+    ("大井", -0.5, {}, None),
+]
+
+
 def selftest(quiet=False):
-    """⛔JS(tests/tenkai_corner_test.mjs)と**同じ5例**。本番でも毎回通してから走る(黙って通る)"""
+    """⛔JS(tests/tenkai_corner_test.mjs)と**同じ5例**。本番でも毎回通してから走る(黙って通る)。
+    §232 ペースの言葉と 1 角先頭の読み方もここで試す(どれも通信なし)"""
     bad = 0
     for src, want in SELFTEST:
         got = corner_ranks(src)
@@ -240,8 +255,21 @@ def selftest(quiet=False):
         bad += 0 if ok else 1
         if not quiet or not ok:
             log("  %s %-32r → %s" % ("OK " if ok else "NG ", src, got))
+    for track, ten, band, want in SELFTEST_PACE:
+        got = pace_word(track, ten, band)
+        ok = got == want
+        bad += 0 if ok else 1
+        if not quiet or not ok:
+            log("  %s %s %+.1f 秒 → %s" % ("OK " if ok else "NG ", track, ten, got))
+    for src, want in (("7,9,(2,10)", 7), ("(2,7)-11", None), ("", None)):
+        got = lead_umaban(corner_ranks(src))
+        ok = got == want
+        bad += 0 if ok else 1
+        if not quiet or not ok:
+            log("  %s 1角先頭 %-12r → %s" % ("OK " if ok else "NG ", src, got))
     if not quiet:
-        log("通過順の読み方 selftest: %d/%d" % (len(SELFTEST) - bad, len(SELFTEST)))
+        n = len(SELFTEST) + len(SELFTEST_PACE) + 3
+        log("読み方の selftest: %d/%d" % (n - bad, n))
     return 0 if not bad else 1
 
 
@@ -733,6 +761,108 @@ def spearman(order, ranks):
 
 # ---------------------------------------------------------------- バックテスト
 
+# ---------------------------------------------------------------- §232 実際のペースを残す(nar_race_pace)
+
+PACE_TABLE = "nar_race_pace"
+PACE_PUT = 500            # upsert 1 本あたりの行数
+PACE_STD_YEARS = 365      # 平年値を作る窓(そのレースの月より前の 1 年)
+
+
+def lead_umaban(ranks):
+    """1角の {馬番: 順位} → 先頭 1 頭の馬番。⛔同着で 2 頭以上なら None(決まらないレースは行を作らない)"""
+    if not ranks:
+        return None
+    firsts = [u for u, r in ranks.items() if r == 1]
+    return firsts[0] if len(firsts) == 1 else None
+
+
+def pace_rows(base, key, days):
+    """対象日の並び → nar_race_pace の行。⛔平年値と四分位は**その月より前の 1 年**の走だけで作る
+    (レースより後の走を混ぜない)。⛔値の出せないレースは行を作らない(「平均」で埋めない)"""
+    out = []
+    skip = {"通過順なし": 0, "先頭が決まらない": 0, "テンなし": 0, "平年値なし": 0, "帯なし": 0}
+    by_month = {}
+    for d in days:
+        by_month.setdefault(str(d)[:7], []).append(str(d))
+    now = dt.datetime.now(JST).isoformat(timespec="minutes")
+    for ym in sorted(by_month):
+        ds = sorted(set(by_month[ym]))
+        start = ym + "-01"
+        std_from = (dt.date.fromisoformat(start) - dt.timedelta(days=PACE_STD_YEARS)).isoformat()
+        ranks_of = fetch_corners(base, key, {(t, d) for t in TEN_TRACKS for d in ds})
+        if not ranks_of:
+            continue
+        need = {(t, d) for (t, d, _no) in ranks_of}
+        need |= ten_year_days(base, key, start)
+        ten_of, std, band, _off = fetch_ten(base, key, need, std_before=start)
+        n0 = len(out)
+        for (t, d, no), ranks in sorted(ranks_of.items()):
+            u = lead_umaban(ranks)
+            if u is None:
+                skip["先頭が決まらない"] += 1
+                continue
+            hit = ten_of.get((t, d, int(no), int(u)))
+            if not hit:
+                skip["テンなし"] += 1
+                continue
+            base_v = std.get((t, hit[1]))
+            if base_v is None:
+                skip["平年値なし"] += 1
+                continue
+            x = hit[0] - base_v
+            w = pace_word(t, x, band)
+            if not w:
+                skip["帯なし"] += 1
+                continue
+            out.append({"track": t, "race_date": d, "race_no": int(no), "pace": w,
+                        "lead_umaban": int(u), "lead_ten": round(x, 2), "std_sec": round(base_v, 2),
+                        "std_from": std_from, "built": now})
+        log("  %s レース %d 本 → %d 行(平年値 %d 組・帯 %s)"
+            % (ym, len(ranks_of), len(out) - n0, len(std), sorted(band)))
+    return out, skip
+
+
+def pace_log(base, key, since=None, apply=False):
+    """§232 過去のレースの実際のペースを nar_race_pace に残す。既定は**前日ぶんだけ**・--since で さかのぼる"""
+    hi = dt.datetime.now(JST).date() - dt.timedelta(days=1)
+    lo = dt.date.fromisoformat(since) if since else hi
+    if lo > hi:
+        log("⛔--since が前日より後")
+        return 2
+    days = [(lo + dt.timedelta(days=i)).isoformat() for i in range((hi - lo).days + 1)]
+    log("■ 実際のペース %s 〜 %s(%d 日)" % (lo, hi, len(days)))
+    t0 = dt.datetime.now()
+    rows, skip = pace_rows(base, key, days)
+    log("  行 %d(飛ばした= %s)・要求 %d 回・%.0f 秒"
+        % (len(rows), "・".join("%s %d" % (k, v) for k, v in skip.items() if v), N_REQ[0],
+           (dt.datetime.now() - t0).total_seconds()))
+    kinds = {}
+    for r in rows:
+        kinds.setdefault(r["track"], {}).setdefault(r["pace"], 0)
+        kinds[r["track"]][r["pace"]] += 1
+    for t in sorted(kinds):
+        log("  %s %s" % (t, kinds[t]))
+    if not rows:
+        return 0
+    if not apply:
+        log("  ドライラン(--apply なし)。例 %s" % json.dumps(rows[0], ensure_ascii=False))
+        return 0
+    for i in range(0, len(rows), PACE_PUT):
+        N_REQ[0] += 1
+        try:
+            st, _ = req(base, key, "/rest/v1/%s?on_conflict=track,race_date,race_no" % PACE_TABLE,
+                        "POST", json.dumps(rows[i:i + PACE_PUT], ensure_ascii=False).encode("utf-8"))
+        except urllib.error.HTTPError as e:
+            # ⛔表が無いときは止める(§120 と同じ作法= 先に pipeline/sql の 1 本を流す)
+            log("   投入できない(HTTP %s)。表がまだ無ければ pipeline/sql の作成 SQL を先に流すこと" % e.code)
+            return 2
+        if st not in (200, 201, 204):
+            log("   投入 %s" % st)
+            return 1
+    log("   %s 更新 %d 行" % (PACE_TABLE, len(rows)))
+    return 0
+
+
 def backtest(base, key, days, pace=False, kochi_q=False, order=False):
     """過去 days 日の完了レースを、その日より前の走だけで組み直して答え合わせする。
 
@@ -1089,6 +1219,9 @@ def main():
     ap.add_argument("--order", action="store_true", help="§169 段 2 隊列の見込み(テン+通過順)を答え合わせする")
     ap.add_argument("--kochi-q", action="store_true",
                     help="測定用: 高知も四分位で切る(本番の既定は ±0.4 秒のまま)")
+    ap.add_argument("--pace-log", action="store_true",
+                    help="§232 過去のレースの実際のペースを表に残す(既定は前日ぶん)")
+    ap.add_argument("--since", help="--pace-log をこの日からさかのぼって流す(手押しのときだけ)")
     ap.add_argument("--selftest", action="store_true", help="通過順の読み方だけ試す(通信なし)")
     ap.add_argument("--env")
     a = ap.parse_args()
@@ -1107,6 +1240,9 @@ def main():
 
     if a.backtest:
         return backtest(base, key, a.backtest, pace=a.pace, kochi_q=a.kochi_q, order=a.order)
+
+    if a.pace_log:
+        return pace_log(base, key, since=a.since, apply=a.apply)
 
     today = dt.datetime.now(JST).date()
     days = ([d.strip() for d in a.days.split(",") if d.strip()] if a.days
