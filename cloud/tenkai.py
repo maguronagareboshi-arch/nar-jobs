@@ -24,7 +24,7 @@
   py -3.12 -X utf8 cloud/tenkai.py --env pipeline/.env.nar --backtest 30  # 検品(場ごとの的中率)
   py -3.12 -X utf8 cloud/tenkai.py --env pipeline/.env.nar --backtest 60 --pace  # §99b ペース見込みの検品
   py -3.12 -X utf8 cloud/tenkai.py --env pipeline/.env.nar --apply --pace-log   # §232 実際のペースを表に残す(前日ぶん)
-  py -3.12 -X utf8 cloud/tenkai.py --env pipeline/.env.nar --apply --pace-log --since 2025-09-20  # さかのぼり(手押し)
+  py -3.12 -X utf8 cloud/tenkai.py --env pipeline/.env.nar --apply --pace-log --since 2023-09-20  # さかのぼり(手押し)
   py -3.12 -X utf8 cloud/tenkai.py --selftest                             # 通過順の読み方だけ(通信なし)
 環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY
   ⛔#465: --env が無いときは**環境変数だけ**で動く(手元の .env を探しに行かない)。
@@ -261,15 +261,15 @@ def selftest(quiet=False):
         bad += 0 if ok else 1
         if not quiet or not ok:
             log("  %s %s %+.1f 秒 → %s" % ("OK " if ok else "NG ", track, ten, got))
-    # §232 直し: レースの速さは「そのレースでいちばん速い前半3F」。同じ時計が 2 頭なら馬番は空
-    ex = {("高知", "2026-09-01", 1, 3): (38.5, 1300), ("高知", "2026-09-01", 1, 7): (39.2, 1300),
-          ("高知", "2026-09-01", 2, 1): (40.0, 1300), ("高知", "2026-09-01", 2, 5): (40.0, 1300)}
+    # §232 直し: レースの速さは「そのレースでいちばん速い前半」。同じ時計が 2 頭なら馬番は空
+    ex = [("高知", "2026-09-01", 1, 3, 38.5, 1300), ("高知", "2026-09-01", 1, 7, 39.2, 1300),
+          ("高知", "2026-09-01", 2, 1, 40.0, 1300), ("高知", "2026-09-01", 2, 5, 40.0, 1300)]
     got = race_fastest(ex)
     for k, want in ((("高知", "2026-09-01", 1), (38.5, 1300, 3)), (("高知", "2026-09-01", 2), (40.0, 1300, None))):
         ok = got.get(k) == want
         bad += 0 if ok else 1
         if not quiet or not ok:
-            log("  %s レースの最速テン %s → %s" % ("OK " if ok else "NG ", k[2], got.get(k)))
+            log("  %s レースの最速の前半 %s → %s" % ("OK " if ok else "NG ", k[2], got.get(k)))
     if not quiet:
         n = len(SELFTEST) + len(SELFTEST_PACE) + 2
         log("読み方の selftest: %d/%d" % (n - bad, n))
@@ -765,61 +765,116 @@ def spearman(order, ranks):
 # ---------------------------------------------------------------- バックテスト
 
 # ---------------------------------------------------------------- §232 実際のペースを残す(nar_race_pace)
+# §232b 前半は「距離 − 600m の通過」(走破タイム − 上がり3F)= 公式の走にある実測。⛔6 場の前半3F には頼らない=
+#   走破タイムと上がり3F のそろう場ぜんぶが対象(ばんえいは上がり3F が無いので自然に外れる)
 
 PACE_TABLE = "nar_race_pace"
 PACE_PUT = 500            # upsert 1 本あたりの行数
 PACE_STD_YEARS = 365      # 平年値を作る窓(そのレースの月より前の 1 年)
-PACE_STD_MIN = 30         # 平年値を出す最少レース数(⛔小標本から基準を作らない)
+PACE_STD_MIN = 30         # 平年値・四分位を出す最少レース数(⛔小標本から基準を作らない)
 
 
-def race_fastest(ten_of):
-    """テンの表 → {(場, 日, R): (いちばん速い前半3F, 距離m, その時計の馬番 or None)}。
+def race_fastest(items):
+    """(場, 日, R, 馬番, 前半の秒, 距離m) の並び → {(場, 日, R): (最速の前半, 距離m, 馬番 or None)}。
 
-    ⛔レースの速さは**そのレースでいちばん速い前半3F**で測る(1 角先頭の馬に頼らない=
+    ⛔レースの速さは**そのレースでいちばん速い前半**で測る(1 角先頭の馬に頼らない=
       同着で先頭が決まらないレースも同じ物差しで測れる)。⛔同じ時計が 2 頭以上なら馬番は空。
     """
     out = {}
-    for (t, d, no, u), (v, dm) in ten_of.items():
-        k = (t, d, no)
+    for t, d, no, u, v, dm in items:
+        k = (t, d, int(no))
         cur = out.get(k)
         if cur is None or v < cur[0]:
-            out[k] = (v, dm, u)
+            out[k] = (v, dm, None if u is None else int(u))
         elif v == cur[0] and cur[2] != u:
             out[k] = (v, cur[1], None)               # 同じ時計が 2 頭以上= 馬番は空
     return out
 
 
-def pace_std(fastest, before=None):
-    """平年値= その場×距離の「レースごとのいちばん速い前半3F」の中央値。
-    ⛔before があればその日より前のレースだけ(レース後の走を混ぜない)・PACE_STD_MIN 未満の組は出さない"""
+def pace_fastest(base, key, lo, hi):
+    """[lo, hi] の全場のレース → race_fastest の表。
+
+    §232b 前半= **距離 − 600m の通過**= 走破タイム − 上がり3F(公式の走にどちらもある実測・⛔按分の推定ではない)。
+    ⛔1200m 未満は前半の意味が変わるので入れない(CHIHOU_MIN_DIST・js/data.js first3fFOf と同じ線)。
+    ⛔上がり3F の無い場(ばんえい)は材料がそろわず自然に外れる。⛔着順の付いた走だけ(取消・除外は数えない)。
+    """
+    dist = {}
+    for r in rows_window(base, key,
+                         "/rest/v1/nar_races?select=track,race_date,race_no,distance_m"
+                         "&race_date=gte.{lo}&race_date=lte.{hi}"
+                         "&order=race_date.asc,track.asc,race_no.asc", lo, hi):
+        if r.get("distance_m"):
+            dist[(r["track"], r["race_date"], int(r["race_no"]))] = int(r["distance_m"])
+
+    def items():
+        for r in rows_window(base, key,
+                             "/rest/v1/nar_runs?select=track,race_date,race_no,runner_number,time_sec,last3f"
+                             "&time_sec=not.is.null&last3f=not.is.null&finish=not.is.null"
+                             "&race_date=gte.{lo}&race_date=lte.{hi}"
+                             "&order=race_date.asc,track.asc,race_no.asc,runner_number.asc", lo, hi):
+            dm = dist.get((r["track"], r["race_date"], int(r["race_no"])))
+            if not dm or dm < CHIHOU_MIN_DIST:
+                continue
+            v = round(float(r["time_sec"]) - float(r["last3f"]), 1)
+            if v <= 0:
+                continue
+            yield r["track"], r["race_date"], int(r["race_no"]), r.get("runner_number"), v, dm
+    return race_fastest(items())
+
+
+def pace_std(fastest, before, years=PACE_STD_YEARS):
+    """平年値= その場×距離の「レースごとの最速の前半」の中央値。
+    ⛔材料は **before より前の 1 年**のレースだけ(レース後の走を混ぜない)・PACE_STD_MIN 未満の組は出さない"""
+    lo = (dt.date.fromisoformat(before) - dt.timedelta(days=years)).isoformat()
     by = {}
     for (t, d, _no), (v, dm, _u) in fastest.items():
-        if before is not None and d >= before:
+        if not (lo <= d < before):
             continue
         by.setdefault((t, dm), []).append(v)
     return {k: statistics.median(v) for k, v in by.items() if len(v) >= PACE_STD_MIN}
 
 
-def pace_rows(base, key, days):
+def pace_band(fastest, std, before, years=PACE_STD_YEARS):
+    """場ごとの四分位。⛔切るのは判定するのと**同じ量**(レースごとの最速 − 平年値)の分布"""
+    lo = (dt.date.fromisoformat(before) - dt.timedelta(days=years)).isoformat()
+    pool = {}
+    for (t, d, _no), (v, dm, _u) in fastest.items():
+        if not (lo <= d < before):
+            continue
+        base_v = std.get((t, dm))
+        if base_v is None:
+            continue
+        pool.setdefault(t, []).append(v - base_v)
+    out = {}
+    for t, xs in pool.items():
+        if len(xs) >= PACE_STD_MIN:
+            q = statistics.quantiles(sorted(xs), n=4, method="inclusive")
+            out[t] = [round(q[0], 2), round(q[2], 2)]
+    return out
+
+
+def pace_rows(base, key, days, fastest=None):
     """対象日の並び → nar_race_pace の行。⛔平年値と四分位は**その月より前の 1 年**のレースで作る
     (レースより後の走を混ぜない)。⛔値の出せないレースは行を作らない(「平均」で埋めない)"""
+    ds_all = sorted({str(d) for d in days})
+    if not ds_all:
+        return [], {}
+    if fastest is None:
+        far = (dt.date.fromisoformat(ds_all[0]) - dt.timedelta(days=PACE_STD_YEARS)).isoformat()
+        fastest = pace_fastest(base, key, far, ds_all[-1])
+        log("  レース %d 本ぶんの最速の前半(平年値の材料ごと)・要求 %d 回" % (len(fastest), N_REQ[0]))
     out = []
-    skip = {"テンなし": 0, "平年値なし": 0, "帯なし": 0}
+    skip = {"平年値なし": 0, "帯なし": 0}
     by_month = {}
-    for d in days:
-        by_month.setdefault(str(d)[:7], []).append(str(d))
+    for d in ds_all:
+        by_month.setdefault(d[:7], []).append(d)
     now = dt.datetime.now(JST).isoformat(timespec="minutes")
     for ym in sorted(by_month):
-        ds = sorted(set(by_month[ym]))
+        ds = set(by_month[ym])
         start = ym + "-01"
         std_from = (dt.date.fromisoformat(start) - dt.timedelta(days=PACE_STD_YEARS)).isoformat()
-        need = {(t, d) for t in TEN_TRACKS for d in ds}
-        need |= ten_year_days(base, key, start)
-        ten_of, _std, _band, _off = fetch_ten(base, key, need, std_before=start)
-        fastest = race_fastest(ten_of)
         std = pace_std(fastest, start)
-        # 四分位も同じ量(レースごとの最速テン)で切る= ten_band と同じ作り方・材料はその月より前だけ
-        band = ten_band(ten_of, std, None, start)
+        band = pace_band(fastest, std, start)
         n0, n_race = len(out), 0
         for (t, d, no), (v, dm, u) in sorted(fastest.items()):
             if d not in ds:
@@ -835,11 +890,11 @@ def pace_rows(base, key, days):
                 skip["帯なし"] += 1
                 continue
             out.append({"track": t, "race_date": d, "race_no": int(no), "pace": w,
-                        "lead_umaban": int(u) if u is not None else None,
+                        "lead_umaban": None if u is None else int(u),
                         "lead_ten": round(x, 2), "std_sec": round(base_v, 2),
                         "std_from": std_from, "built": now})
-        log("  %s テンの取れたレース %d 本 → %d 行(平年値 %d 組・帯 %s)"
-            % (ym, n_race, len(out) - n0, len(std), sorted(band)))
+        log("  %s 前半の取れたレース %d 本 → %d 行(平年値 %d 組・帯 %d 場)"
+            % (ym, n_race, len(out) - n0, len(std), len(band)))
     return out, skip
 
 
