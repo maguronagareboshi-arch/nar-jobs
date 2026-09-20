@@ -1,5 +1,6 @@
--- §77 W4(2026-09-04): nar_odds_ticks の保持。60 日を過ぎたレースは 1 レース 6 点だけ残す(冪等・monthly 05:33 便で psql)。
---   残す 6 点= 初回 / 発走 30 分前・20 分前・10 分前・5 分前 に最も近い点 / 最終(f=true があればそれ・無ければ最後の点)。
+-- §77 W4(2026-09-04): nar_odds_ticks の保持。60 日を過ぎたレースは 1 レース 9 点だけ残す(冪等・monthly 05:33 便で psql)。
+--   残す 9 点= 初回 / 発走 240 分前・120 分前・60 分前・30 分前・20 分前・10 分前・5 分前 に最も近い点 / 最終(f=true があればそれ・無ければ最後の点)。
+--   §234(2026-09-20): 朝の車線(10 時ごろから 30 分おき)の記録が 60 日後も残るよう 240/120/60 分前を足した(6→9 点)。
 --   ⛔60 日以内は全点(2 分刻み・約 20 点/レース)。画面(odds-series.js の節目表 初回/30分前/10分前/最終)は薄めた後も同じ点を引ける。
 --   ⛔発走時刻(nar_races.post_time HHMM)が無いレースは「初回・最終」以外を決められないので、初回と最終だけ残す。
 -- 適用: psql … -f pipeline/sql/odds_ticks_retention.sql(nar-refresh.yml monthly の venue stats と同じ段)
@@ -19,7 +20,7 @@ with old as (
 near as (
   select id from (
     select o.id, m.m, row_number() over (partition by o.track, o.race_date, o.race_no, m.m order by abs(o.before_min - m.m), o.id) as rk
-    from old o cross join (values (30),(20),(10),(5)) as m(m)
+    from old o cross join (values (240),(120),(60),(30),(20),(10),(5)) as m(m)
     where o.before_min is not null
   ) x where rk = 1
 ),
