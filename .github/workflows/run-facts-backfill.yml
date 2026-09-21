@@ -1,0 +1,29 @@
+# §238a 派生表 nar_run_facts の遡り(手動便)。1 か月 約 40 秒+upsert。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: run-facts-backfill
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: 'from (YYYY-MM-DD)'
+        required: true
+        default: '2025-09-01'
+      to:
+        description: 'to (YYYY-MM-DD)'
+        required: true
+        default: '2026-09-21'
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r cloud/requirements.txt
+      - name: backfill nar_run_facts
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/run_facts.py --apply --from "${{ github.event.inputs.from }}" --to "${{ github.event.inputs.to }}"
