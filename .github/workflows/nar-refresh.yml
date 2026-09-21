@@ -309,6 +309,18 @@ jobs:
           # 2026-09-08 s132: full-kind ticks (nar_odds_full_ticks) keep the same 60d -> 6 points rule
           psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/odds_full_ticks_retention.sql | tail -n 3
 
+      # §238a 派生表 nar_run_facts(通過順の順位・脚質・前半3F・発走直前の単勝を 1 頭 1 行で先に焼く)。
+      # ⛔**結果が確定した後**の段= 当日と前日ぶんを毎便 upsert(前日は結果が入ってから焼き直す・冪等)。
+      # ⛔落ちても続行(|| echo)= 読み手が付くまでは付け足しの表なので、これで便を止めない。
+      # ⛔先に pipeline/sql/run_facts_20260921.sql を流すこと(表が無いと HTTP404 で 1 を返す)。
+      # 遡り(2025-09〜)は Actions では回さず手押し= python cloud/run_facts.py --apply --from … --to …
+      - name: run facts (daily + monthly)
+        if: '!cancelled()'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/run_facts.py --apply || echo "⚠ 派生表 nar_run_facts が焼けない(続行)"
+
       # 再生不能データ(AI印の凍結履歴・当日オッズ・成績)の日次バックアップ。artifact は90日保持
       - name: backup irreplaceables (monthly only)
         if: env.MODE != 'daily' && !cancelled()
