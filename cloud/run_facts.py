@@ -3,6 +3,8 @@
 
 既定= **当日と前日**ぶんを作り直して upsert(前日は結果が確定してから入るので毎日焼き直す)。
 `--from YYYY-MM-DD --to YYYY-MM-DD` で遡り(1 か月ずつの窓に割って回す)。何度流しても同じ結果。
+§238e: 馬の鍵は birth_date が無い行(楽天 2014〜2022-10)だけ `名前|生年`・脚質の過去走は (名前, 生年) で照合。
+ドライラン(--apply 無し)は書かず、本番の行と比べた差(style が違う数・horse_key が埋まる数など)を log に出す。
 
   py -3.12 -X utf8 cloud/run_facts.py                             # ドライラン(当日+前日)
   py -3.12 -X utf8 cloud/run_facts.py --apply
@@ -128,7 +130,7 @@ def fetch_races(base, key, lo, hi):
 
 def fetch_runs(base, key, lo, hi):
     return rows_all(base, key,
-                    "/rest/v1/nar_runs?select=track,race_date,race_no,runner_number,horse_name,birth_date,last3f"
+                    "/rest/v1/nar_runs?select=track,race_date,race_no,runner_number,horse_name,birth_date,age,last3f"
                     "&race_date=gte.%s&race_date=lte.%s"
                     "&order=race_date.asc,track.asc,race_no.asc,runner_number.asc" % (lo, hi))
 
@@ -190,26 +192,39 @@ def fetch_ticks(base, key, lo, hi):
     return out
 
 
+def match_key(r):
+    """過去走の照合の鍵= (名前, 生年)。⛔§238e 決めごと 2: 生年= birth_date の年 or レースの年 − age。
+
+    楽天(2014〜2022-10・birth_date 無し)→ 公式(2022-11〜・birth_date あり)をまたぐ馬がつながる。
+    ⛔名前か生年が無ければ None(名前だけでつながない)。名前の正規化はしない。
+    """
+    name = r.get("horse_name")
+    if not name:
+        return None
+    by = facts.birth_year_of(r.get("birth_date"), r.get("age"), r.get("race_date"))
+    return None if by is None else (name, by)
+
+
 def fetch_past_positions(base, key, lo, hi, keys):
-    """脚質の材料= 窓の 365 日前までの走の「1 角の位置 p」。{horse_key: [{track,race_date,race_no,p}]}。
+    """脚質の材料= 窓の 365 日前までの走の「1 角の位置 p」。{(名前, 生年): [{track,race_date,race_no,p}]}。
 
     ⛔as-of の切り方(その日より前だけ)は pipeline/facts.pick_past_runs がやる。ここは材料を集めるだけ。
-    ⛔引く馬は**この窓に出る馬だけ**(keys)= 全馬を舐めない。
+    ⛔引く馬は**この窓に出る馬だけ**(keys= match_key の集合)= 全馬を舐めない。
     """
     p0 = (dt.date.fromisoformat(lo) - dt.timedelta(days=facts.PAST_DAYS)).isoformat()
-    names = sorted({k.split("|", 1)[0] for k in keys if k})
+    names = sorted({k[0] for k in keys if k})
     runs = []
     for part in chunks(names, 60):
         runs.extend(rows_all(
             base, key,
-            "/rest/v1/nar_runs?select=track,race_date,race_no,runner_number,horse_name,birth_date"
+            "/rest/v1/nar_runs?select=track,race_date,race_no,runner_number,horse_name,birth_date,age"
             "&horse_name=in.(%s)&race_date=gte.%s&race_date=lte.%s"
             "&order=race_date.asc,track.asc,race_no.asc,runner_number.asc" % (q_in(part), p0, hi)))
     need = {(r["track"], str(r["race_date"])[:10], int(r["race_no"])) for r in runs}
     corners = fetch_corners(base, key, need)
     out = {}
     for r in runs:
-        hk = facts.horse_key(r.get("horse_name"), r.get("birth_date"))
+        hk = match_key(r)
         if not hk:
             continue
         d = str(r["race_date"])[:10]
@@ -255,7 +270,7 @@ def build_window(base, key, lo, hi):
     if not races or not runs:
         return []
     race_of = {(r["track"], str(r["race_date"])[:10], int(r["race_no"])): r for r in races}
-    keys = {facts.horse_key(r.get("horse_name"), r.get("birth_date")) for r in runs}
+    keys = {match_key(r) for r in runs}
     f3 = fetch_first3f(base, key, lo, hi)
     ticks = fetch_ticks(base, key, lo, hi)
     past = fetch_past_positions(base, key, lo, hi, keys)
@@ -267,16 +282,72 @@ def build_window(base, key, lo, hi):
         race = race_of.get(k)
         if race is None or r.get("runner_number") is None:
             continue                                    # ⛔レースの行が無い走は作らない(推定しない)
-        hk = facts.horse_key(r.get("horse_name"), r.get("birth_date"))
+        mk = match_key(r)
         out.append(facts.build_row(
             race={"track": k[0], "race_date": d, "race_no": k[2], "corners": race.get("corners")},
             run=r,
-            past=past.get(hk, []),
+            past=past.get(mk, []) if mk else [],
             first3f_cands=f3.get((k[0], d, k[2], int(r["runner_number"]))),
             ticks=ticks.get(k),
             computed_at=now,
             src=src_of(race)))
     return out
+
+
+def fetch_existing(base, key, lo, hi):
+    """本番に既にある派生行 {(日,場,R,馬番): {style, horse_key}}。⛔ドライランの差を数えるためだけ(読むだけ)。"""
+    out = {}
+    for r in rows_all(base, key,
+                      "/rest/v1/%s?select=race_date,track,race_no,umaban,style,horse_key"
+                      "&race_date=gte.%s&race_date=lte.%s"
+                      "&order=race_date.asc,track.asc,race_no.asc,umaban.asc" % (TABLE, lo, hi)):
+        out[(str(r["race_date"])[:10], r["track"], int(r["race_no"]), int(r["umaban"]))] = r
+    return out
+
+
+DIFF_KEYS = ("rows", "old", "new", "gone", "style_diff", "style_fill", "style_drop", "style_change",
+             "hk", "hk_fill", "style", "c1")
+
+
+def diff_counts(rows, old):
+    """§238e ドライランの差(⛔数えるだけ・書かない)。rows= 今回焼いた行 / old= fetch_existing の結果。
+
+    old / new / gone= 本番に有る / 無い(新しく入る)/ 本番にだけ有る(今回は焼かない)。
+    style_diff= 本番に有る行で style が違う数(うち 空→値 / 値→空 / 別の値)。
+    hk= horse_key が埋まる行 / hk_fill= そのうち本番で空だった行。style / c1= 埋まる行。
+    """
+    c = dict.fromkeys(DIFF_KEYS, 0)
+    seen = set()
+    for r in rows:
+        c["rows"] += 1
+        c["hk"] += 1 if r.get("horse_key") else 0
+        c["style"] += 1 if r.get("style") else 0
+        c["c1"] += 1 if r.get("c1") is not None else 0
+        pk = (r["race_date"], r["track"], r["race_no"], r["umaban"])
+        o = old.get(pk)
+        if o is None:
+            c["new"] += 1
+            continue
+        seen.add(pk)
+        c["old"] += 1
+        s0, s1 = o.get("style") or None, r.get("style") or None
+        if s0 != s1:
+            c["style_diff"] += 1
+            c["style_fill" if s0 is None else "style_drop" if s1 is None else "style_change"] += 1
+        if not o.get("horse_key") and r.get("horse_key"):
+            c["hk_fill"] += 1
+    c["gone"] = len(set(old) - seen)
+    return c
+
+
+def fmt_diff(c):
+    f = lambda n: format(n, ",")                       # noqa: E731
+    pct = lambda n: "%.1f%%" % (100.0 * n / c["rows"]) if c["rows"] else "-"   # noqa: E731
+    return ("本番に有 %s・無 %s・本番にだけ有 %s / style 違う %s(空→値 %s・値→空 %s・別の値 %s)"
+            " / horse_key 埋まる %s(%s・うち本番で空 %s)/ style 埋まる %s(%s)・c1 埋まる %s(%s)"
+            % (f(c["old"]), f(c["new"]), f(c["gone"]), f(c["style_diff"]), f(c["style_fill"]),
+               f(c["style_drop"]), f(c["style_change"]), f(c["hk"]), pct(c["hk"]), f(c["hk_fill"]),
+               f(c["style"]), pct(c["style"]), f(c["c1"]), pct(c["c1"])))
 
 
 def windows(lo, hi, days=WINDOW_DAYS):
@@ -289,7 +360,9 @@ def windows(lo, hi, days=WINDOW_DAYS):
 
 
 def run(base, key, lo, hi, apply_=False):
+    """⛔ドライラン(apply_=False)は書かない。代わりに本番の行と比べた差を窓ごと+合計で log に出す(§238e)。"""
     total, t0 = 0, time.time()
+    acc = dict.fromkeys(DIFF_KEYS, 0)
     for a, b in windows(lo, hi):
         tw = time.time()
         rows = build_window(base, key, a, b)
@@ -300,8 +373,15 @@ def run(base, key, lo, hi, apply_=False):
                 if st >= 300 or st == 0:
                     log("  %s〜%s: HTTP%s %s (batch %d)" % (a, b, st, err, i))
                     return 1
-        log("  %s〜%s: %s 行 (%.0fs)" % (a, b, format(len(rows), ","), time.time() - tw))
+            log("  %s〜%s: %s 行 (%.0fs)" % (a, b, format(len(rows), ","), time.time() - tw))
+            continue
+        c = diff_counts(rows, fetch_existing(base, key, a, b))
+        for k in DIFF_KEYS:
+            acc[k] += c[k]
+        log("  %s〜%s: %s 行 (%.0fs) %s" % (a, b, format(len(rows), ","), time.time() - tw, fmt_diff(c)))
     log("%s 行 %s (%.0f 秒)" % (format(total, ","), "投入" if apply_ else "ドライラン", time.time() - t0))
+    if not apply_:
+        log("差の合計(⛔書いていない): %s" % fmt_diff(acc))
     return 0
 
 

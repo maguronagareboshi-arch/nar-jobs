@@ -244,11 +244,49 @@ def win_odds_close(ticks, umaban):
 
 # ---------------------------------------------------------------- 5) 1 頭 1 行に組む
 
-def horse_key(horse_name, birth_date):
-    """§126 と同じ鍵。⛔どちらかが空なら None(名前だけで別の馬をつなげない)。"""
-    if not horse_name or not birth_date:
+def _int_or_none(v):
+    """数か数の字 → int。空・読めない= None(⛔0 で埋めない)。"""
+    if v is None or isinstance(v, bool):
         return None
-    return "%s|%s" % (str(horse_name), str(birth_date)[:10])
+    if isinstance(v, (int, float)):
+        return int(v)
+    s = str(v).strip()
+    return int(s) if s.isdigit() else None
+
+
+def birth_year_of(birth_date, age=None, race_date=None):
+    """生年(int)。⛔§238e 決めごと 1・2。
+
+    birth_date があれば**その年**・無ければ **レースの年 − age**(地方の馬齢は 1/1 に一斉に加算)。
+    ⛔どちらも無い/読めない/age が 0 以下= None(推定で埋めない)。
+    """
+    s = str(birth_date or "").strip()
+    if len(s) >= 4 and s[:4].isdigit():
+        return int(s[:4])
+    a = _int_or_none(age)
+    if a is None or a <= 0 or race_date is None:
+        return None
+    if isinstance(race_date, (dt.date, dt.datetime)):
+        y = race_date.year
+    else:
+        d = str(race_date).strip()
+        if len(d) < 4 or not d[:4].isdigit():
+            return None
+        y = int(d[:4])
+    return y - a
+
+
+def horse_key(horse_name, birth_date, age=None, race_date=None):
+    """§126 と同じ鍵 `名前|生年月日`。⛔§238e 決めごと 1: **birth_date が無い行だけ** `名前|生年`
+    (生年= レースの年 − age)。名前が空・birth_date も age も無ければ None
+    (⛔名前だけで別の馬をつなげない)。名前の正規化はしない(今の文字列のまま)。
+    """
+    if not horse_name:
+        return None
+    if birth_date:
+        return "%s|%s" % (str(horse_name), str(birth_date)[:10])
+    by = birth_year_of(None, age, race_date)
+    return None if by is None else "%s|%d" % (str(horse_name), by)
 
 
 def build_row(race, run, past, first3f_cands, ticks, computed_at, src="official"):
@@ -268,7 +306,7 @@ def build_row(race, run, past, first3f_cands, ticks, computed_at, src="official"
     f3, f3src = pick_first3f(first3f_cands)
     return {
         "race_date": date, "track": track, "race_no": no, "umaban": u,
-        "horse_key": horse_key(run.get("horse_name"), run.get("birth_date")),
+        "horse_key": horse_key(run.get("horse_name"), run.get("birth_date"), run.get("age"), date),
         "horse_name": run.get("horse_name"),
         "c1": cells[0][0], "n1": cells[0][1],
         "c2": cells[1][0], "n2": cells[1][1],
@@ -342,6 +380,30 @@ SELFTEST_ODDS = [
     ([], 3, None),
 ]
 
+# §238e 馬の鍵。(名前, 生年月日, age, レース日) → horse_key
+SELFTEST_KEYS = [
+    (("テスト馬", "2021-04-01"), "テスト馬|2021-04-01"),
+    (("テスト馬", "2021-04-01", 5, "2024-10-15"), "テスト馬|2021-04-01"),   # 生年月日があればそれ(age は見ない)
+    (("テスト馬", None), None),                                             # 生年月日も age も無い
+    (("テスト馬", None, 3, "2022-10-15"), "テスト馬|2019"),                 # 楽天の行= 名前|生年
+    (("テスト馬", "", "4", "2023-01-03"), "テスト馬|2019"),                 # 1/1 に一斉に加算(年明け)
+    (("テスト馬", None, "", "2022-10-15"), None),                           # ⛔age 空文字
+    (("テスト馬", None, 3, None), None),                                    # レース日が無い
+    ((None, "2021-04-01"), None),                                           # ⛔名前が無い
+    (("", None, 3, "2022-10-15"), None),
+]
+
+# §238e 生年。(生年月日, age, レース日) → 生年
+SELFTEST_BIRTH_YEAR = [
+    (("2019-04-01", 3, "2022-11-05"), 2019),
+    (("2019-04-01", 9, "2022-11-05"), 2019),   # 生年月日が先
+    ((None, 3, "2022-10-15"), 2019),
+    ((None, "3", dt.date(2022, 10, 15)), 2019),
+    ((None, "", "2022-10-15"), None),          # ⛔age 空文字
+    ((None, 0, "2022-10-15"), None),           # ⛔0 以下は読めない扱い
+    ((None, None, None), None),
+]
+
 
 def selftest(quiet=False):
     """⛔通信なし。run_facts.py は走る前に必ずこれを通す(黙って通る)。"""
@@ -380,10 +442,13 @@ def selftest(quiet=False):
     ]
     check("style_asof 同じ場 3 走", style_asof(past, "高知", "2026-09-10"), ("逃げ", 0.3666666666666667, 3))
     check("style_asof 窓の外だけ", style_asof(past[4:5], "高知", "2026-09-10"), (None, None, 0))
-    check("horse_key", horse_key("テスト馬", "2021-04-01"), "テスト馬|2021-04-01")
-    check("horse_key 生年なし", horse_key("テスト馬", None), None)
+    for args, want in SELFTEST_KEYS:
+        check("horse_key %r" % (args,), horse_key(*args), want)
+    for args, want in SELFTEST_BIRTH_YEAR:
+        check("birth_year_of %r" % (args,), birth_year_of(*args), want)
     n = (len(SELFTEST_RANKS) + len(SELFTEST_SLOTS) + len(SELFTEST_STYLE)
-         + len(SELFTEST_FIRST3F) + len(SELFTEST_ODDS) + 4)
+         + len(SELFTEST_FIRST3F) + len(SELFTEST_ODDS) + len(SELFTEST_KEYS)
+         + len(SELFTEST_BIRTH_YEAR) + 2)
     if not quiet:
         print("facts selftest: %d/%d" % (n - bad, n))
     return 0 if not bad else 1
