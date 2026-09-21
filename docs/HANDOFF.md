@@ -1,15 +1,7 @@
-作った物: 枝 s238a(origin/master 起点・push なし)に 5 コミット。`pipeline/sql/run_facts_20260921.sql`(表 nar_run_facts・anon は select だけ)/ 規則の正本 `pipeline/facts.py`(自己診断 34/34)/ 日次便 `cloud/run_facts.py`(既定= 当日+前日・`--from/--to` で遡り)/ 検算 `tests/run_facts_check.py`+`tests/run_facts_corner_node.mjs` / nar-refresh.yml に手順 1 つ(結果確定の後・落ちても続行)。
-
-検算の一致率: 2025-09-21〜2026-09-20 の 12 か月(実測 262 秒)。(a) tenkai.py= 通過順 47,705/47,705・1 角の表 15,505/15,505・脚質 159,278/159,278 すべて 100%。(b) ai_feat= c1..c4 の枠 15,505/15,505 100%・脚質 150,865/159,278 **94.72%**。(c) js/data.js を node で実行= 47,705/47,705 100%。詳細= docs/notes_s238a_check.md。
-
-差の理由: (b) 脚質だけ。ai_feat は**直近 5 走をそのまま**(365 日の窓なし・同じ場が 3 走以上ならその場だけ、も無し)、派生表は展開便と同じ窓。**定義が元から違う**ので写し間違いではない。どちらに寄せるかは要判断(⛔勝手に片方へ寄せていない)。通過順の字面と c1..c4 の枠は 3 写しと 1 つも差が無い。
-
-遡りの見込み: 手元の実測で 1 か月ぶんの読み+組み立てが 37 秒・13,331 行(2026-03)。12 か月= 約 8 分+upsert(500 行ずつ 320 本)で **合計 20 分ほど**= 合格条件の 90 分に収まる。⛔遡りは Actions に載せず手押し(`cloud/run_facts.py --apply --from 2025-09-01 --to 2026-09-20`)。
-
-Fable が当てる SQL: `pipeline/sql/run_facts_20260921.sql` を psql で 1 回(`-v ON_ERROR_STOP=1 -X -f`)。⛔これを流す前に nar-refresh の新しい手順が回ると HTTP404 で 1 を返す(便自体は `|| echo` で止まらない)。表の列= c1..c4 に **n1..n4(そのコーナーの頭数)を足してある**= 読み手が位置 p を自分で推定しないため。
-
-未了: ①本番への SQL 適用と便の初回・遡り(鍵を持つ側)②3 写し(tenkai.py・ai_feat・js/data.js)の派生表読みへの置換は指示どおり**やっていない**(§238a2)③`first3f_src` の `est`(§224f の推定)は入れていない= 今は own/paper/kb だけ。
-
-落とし穴: ⚠検算とドライランは**匿名キー(読み取り専用)**で回した= 書き込みは 1 度もしていない。`nar_ai_feat_run` は anon に出ていないので (b) は **SQL の字面を Python に写した関数**と比べている(写した箇所は check の docstring に明記)。node は PATH に無く kimi-desktop 同梱の v24 を使った。
-
-次の一手: ①この HANDOFF と notes を読んで SQL を当てる → 便を 1 日空回し → 遡り 12 か月 ②(b) 脚質の定義をどちらに寄せるかをユーザーに聞く ③決まってから §238a2(3 写しの置換)。
+commit: b698ee0・08bc5df・b3bc2e3 枝 s238e(origin/master 5321691 から)。設計 viewer-master docs/opus_s238e_facts_gap_20260922.md。⛔push なし・本番への書き込み 0・鍵は読んでいない(通信する確認はしていない)。
+変えた所: facts.horse_key(名前,生年月日,age,レース日)= 生年月日が無い行だけ「名前|生年」(レース年−age)・新 birth_year_of・build_row が age を渡す。run_facts.py= 新 match_key(名前,生年)で fetch_past_positions/build_window を照合・nar_runs の select に age。src は今のまま。
+ドライラン: --apply 無しは窓ごとに本番 nar_run_facts を読むだけ(主キー順ページング)で差を log= 本番に有/無/本番にだけ有・style 違い(空→値/値→空/別の値)・horse_key 埋まる(うち本番で空)・style/c1 埋まる率。最後に「差の合計」1 行。
+便: run-facts-backfill.yml に入力 mode(choice dry/apply・既定 dry)。apply のときだけ --apply を付ける。手順名は変えていない(「: 」なし)。nar-refresh の日次(--apply)は同じ関数を通るだけ。
+検品(手元・通信なし): facts selftest 48/48(鍵 9 例・生年 7 例を追加)。新 tests/test_facts_horse_key.py 14 本= 楽天 2022-10→公式 2022-11 がつながり逃げ/同名で生年違いはつながない/名前だけは鍵も脚質も空/dry は upsert を呼ばない。unittest 132 本中 失敗 2= test_ooi_raw_read(前からの既知)。
+⚠ 楽天期は今まで鍵が全部空= 過去走を 1 本も引いていなかった→今回から全馬ぶん引く。④ 2014-01〜2022-10 を 1 便で流すと 106 か月×約 40 秒+upsert 約 2,576 本で timeout 120 分を超える見込み→ 3 便に割る(2014-01〜2016-12/2017-01〜2019-12/2020-01〜2022-10)。
+次の一手: push(ユーザー)→ 設計側が起動の順 ①〜⑥(① dry 2025-09 で style 違う 0)。同じ馬でも楽天期は「名前|2019」・公式期は「名前|2019-04-01」と鍵の字面が 2 通り= 238a2 で画面は (名前, 生年) でつなぐ。
