@@ -192,6 +192,27 @@ jobs:
         run: gzip -6 out/nar_ai_feat_run.csv
 
       # ---------------------------------------------------------------- 成果物(研究用・14 日)
+      # base-v2 便(nar-ai-v2.yml)が同じ朝の材料を二重に写さなくて済むよう、
+      # ここで写した dump/ の 4 表をそのまま成果物に同梱する(⛔本番への読みは増えない)。
+      #   ⛔印は 182 行で書き終わっている= ここが落ちても base-v1 の朝便を赤にしない(continue-on-error)。
+      #   ⛔成果物は別名・保持 2 日(同じ artifact に足すと 14 日×60MB で保存枠を食う・銀の帯 #59)。
+      - name: gzip dumps for base-v2
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          mkdir -p out_dump
+          for t in nar_runs nar_races nar_run_facts nar_kb_runs; do
+            gzip -6 -c "dump/$t.tsv" > "out_dump/dump_$t.tsv.gz"
+          done
+          ls -l out_dump
+      - uses: actions/upload-artifact@v4
+        continue-on-error: true
+        with:
+          name: nar-ai-feat-dumps
+          path: out_dump/
+          retention-days: 2
+          if-no-files-found: error
+
       - name: export artifacts
         run: |
           set -o pipefail        # ⛔既定の bash -e は最後の gzip だけ見る= psql が落ちても気づかない

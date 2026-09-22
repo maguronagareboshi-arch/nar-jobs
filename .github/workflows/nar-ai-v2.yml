@@ -1,0 +1,151 @@
+# base-v2 便 B(設計 27 §2)。nar-ai-feat 便が終わったら、その成果物と便 A の写しから
+# 新層 v2/v3/v4 を組み直し、固定模型 relnew_v4_20260923 で当日の南関 4 場の印を作る。
+#
+# ⛔本番に触るのは最後の 1 手順だけ(nar_ai_marks の REST upsert・model='base-v2'・timing='morning')。
+#   SQL は 1 つも流さない。schedule 由来のときだけ書く(dispatch は write=yes のときだけ)。
+# ⛔学習はしない(固定模型を pipeline/ai/v2/model/ から読む)。
+# ⛔材料は成果物からだけ取る(本番からは読まない)= nar-ai-feat の dump_*.tsv.gz と nar_ai_feat_run.csv.gz、
+#   便 A(nar-ai-v2-raw)の nar_paper_runs.csv.gz。
+name: nar-ai-v2
+
+on:
+  workflow_run:
+    workflows: ["nar-ai-feat"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      date:
+        description: '推論する日(空= JST 今日)。例 2026-09-22'
+        required: false
+        default: ''
+      write:
+        description: '本番 nar_ai_marks(base-v2)に書く(yes/no)'
+        required: false
+        default: 'no'
+      feat_run_id:
+        description: '使う nar-ai-feat の run id(空= 直近の success)'
+        required: false
+        default: ''
+
+concurrency:
+  group: nar-ai-v2
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  predict:
+    if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install python packages
+        run: pip install -q "pandas>=2.2" "pyarrow>=15" "numpy<2" "lightgbm>=4.3"
+
+      # ---------------------------------------------------------------- 材料(成果物)を取る
+      - name: download nar-ai-feat artifact
+        env:
+          EV_ID: ${{ github.event.workflow_run.id }}
+          EV_NUM: ${{ github.event.workflow_run.run_number }}
+          IN_ID: ${{ github.event.inputs.feat_run_id }}
+        run: |
+          set -o pipefail
+          if [ -n "$IN_ID" ]; then
+            echo "$IN_ID" | grep -Eq '^[0-9]+$' || { echo "feat_run_id は数字で"; exit 1; }
+            RID="$IN_ID"
+            RNUM=$(gh run view "$RID" --json number -q .number)
+          elif [ -n "$EV_ID" ]; then
+            RID="$EV_ID"; RNUM="$EV_NUM"
+          else
+            RID=$(gh run list -w nar-ai-feat.yml -s success -L1 --json databaseId,number -q '.[0].databaseId')
+            RNUM=$(gh run list -w nar-ai-feat.yml -s success -L1 --json databaseId,number -q '.[0].number')
+          fi
+          [ -n "$RID" ] && [ -n "$RNUM" ] || { echo "nar-ai-feat の成功した run が見つからない"; exit 1; }
+          echo "nar-ai-feat run=$RID number=$RNUM"
+          mkdir -p in/feat
+          gh run download "$RID" -n "nar-ai-feat-$RNUM" -D in/feat
+          gh run download "$RID" -n nar-ai-feat-dumps -D in/feat
+          ls -l in/feat
+
+      - name: download nar-ai-v2-raw artifact
+        run: |
+          set -o pipefail
+          RID=$(gh run list -w nar-ai-v2-raw.yml -s success -L1 --json databaseId -q '.[0].databaseId')
+          [ -n "$RID" ] || { echo "nar-ai-v2-raw の成功した run が見つからない"; exit 1; }
+          echo "nar-ai-v2-raw run=$RID"
+          mkdir -p in/raw
+          gh run download "$RID" -n nar-ai-v2-raw -D in/raw
+          ls -l in/raw
+
+      # ---------------------------------------------------------------- 作業場所 nai/ を組む
+      - name: build work dir
+        run: |
+          set -o pipefail
+          mkdir -p nai/raw nai/work out
+          python -X utf8 pipeline/ai/v2/tsv_to_csv.py --in-dir in/feat --out-dir nai/raw
+          cp in/raw/nar_paper_runs.csv.gz nai/raw/nar_paper_runs.csv.gz
+          ls -l nai/raw
+          python -X utf8 pipeline/ai/v2/legacy_to_parquet.py \
+            --in in/feat/nar_ai_feat_run.csv.gz --out nai/legacy_feat.parquet
+          df -h / | tail -n 1
+
+      # ---------------------------------------------------------------- 新層を順に 1 回ずつ
+      - name: build feat v2
+        env:
+          NAI_ROOT: ${{ github.workspace }}/nai/
+          NAI_LEGACY: ${{ github.workspace }}/nai/legacy_feat.parquet
+        run: python -X utf8 pipeline/ai/v2/build_feat_v2.py --stage all 2>&1 | tee out/log_v2.txt
+
+      - name: build feat v3
+        env:
+          NAI_ROOT: ${{ github.workspace }}/nai/
+          NAI_LEGACY: ${{ github.workspace }}/nai/legacy_feat.parquet
+        run: python -X utf8 pipeline/ai/v2/build_feat_v3.py --stage all 2>&1 | tee out/log_v3.txt
+
+      - name: build feat v4
+        env:
+          NAI_ROOT: ${{ github.workspace }}/nai/
+          NAI_LEGACY: ${{ github.workspace }}/nai/legacy_feat.parquet
+        run: python -X utf8 pipeline/ai/v2/build_feat_v4.py --stage all 2>&1 | tee out/log_v4.txt
+
+      # ---------------------------------------------------------------- 推論(ここだけ本番の鍵を渡す)
+      - name: predict base-v2 and write marks (REST upsert only)
+        env:
+          NAI_ROOT: ${{ github.workspace }}/nai/
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          IN_DATE: ${{ github.event.inputs.date }}
+          # ⛔AUTO_WRITE= 自動起動(nar-ai-feat の schedule 完了)で本番に書くか。最初の所要の実測(#59)が済むまで 'no'。
+          AUTO_WRITE: 'no'
+          WRITE: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.write || (github.event.workflow_run.event == 'schedule' && 'auto' || 'no') }}
+        run: |
+          set -o pipefail
+          if [ -n "$IN_DATE" ]; then
+            echo "$IN_DATE" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || { echo "date は YYYY-MM-DD で"; exit 1; }
+            DAY="$IN_DATE"
+          else
+            DAY=$(TZ=Asia/Tokyo date +%F)
+          fi
+          if [ "$WRITE" = "auto" ]; then WRITE="$([ "$AUTO_WRITE" = "yes" ] && echo yes || echo no)"; fi
+          if [ "$WRITE" = "yes" ]; then W=--write; else W=; fi
+          echo "day=$DAY write=$WRITE"
+          python -X utf8 pipeline/ai/v2/predict_v2.py --date "$DAY" \
+            --out "out/pred_base_v2_$DAY.csv" $W 2>&1 | tee out/log_predict.txt
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nar-ai-v2-${{ github.run_number }}
+          path: |
+            out/*.csv
+            out/*.txt
+          retention-days: 7
+          if-no-files-found: warn

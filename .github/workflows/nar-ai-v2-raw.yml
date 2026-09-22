@@ -1,0 +1,57 @@
+# base-v2 便 A(設計 27 §2)。本番から **nar_paper_runs だけ**を読むだけで写し、成果物に残す。
+#
+# ⛔流してよいのは `\copy (select …) to` だけ(insert/update/delete/truncate/create は 1 つも書かない)。
+# ⛔重い計算はしない(group by も窓も無い・絞り込みは where だけ)。
+# ⛔select 文は nankan-copy.yml のものをそのまま写した(列は select *・header 付き CSV で列名が復元できる)。
+# ⛔他の 4 表(nar_runs・nar_races・nar_run_facts・nar_kb_runs)は nar-ai-feat 便が同じ朝に写した
+#   dump/ を使う(二重写しをしない)= ここでは触らない。
+# JST 05:00 に写す理由= 銀の帯「06:30〜08:30 に重ねない」。
+name: nar-ai-v2-raw
+
+on:
+  schedule:
+    - cron: '0 20 * * *'      # 05:00 JST
+  workflow_dispatch:
+
+concurrency:
+  group: nar-ai-v2-raw
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+      PGSSLMODE: require
+      PROD_HOST: aws-0-ap-northeast-1.pooler.supabase.com
+      PROD_PORT: '5432'
+      PROD_USER: postgres.qgsnsdjvzzeazbazjlwa
+      PROD_DB: postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: copy nar_paper_runs (read only)
+        run: |
+          set -o pipefail
+          mkdir -p out
+          psql -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_USER" -d "$PROD_DB" -v ON_ERROR_STOP=1 -X \
+            -c "set statement_timeout = '5min'" \
+            -c "\copy (select * from public.nar_paper_runs where race_date >= '2022-11-01') to 'out/nar_paper_runs.csv' with (format csv, header)"
+          wc -l out/nar_paper_runs.csv
+
+      - name: gzip csv
+        run: |
+          set -o pipefail
+          gzip -6 out/nar_paper_runs.csv
+          ls -l out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nar-ai-v2-raw
+          path: out/
+          retention-days: 3
+          if-no-files-found: error
