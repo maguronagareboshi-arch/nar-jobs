@@ -41,17 +41,16 @@
 -- ■ 馬の鍵
 --   `horse_key = horse_name || '|' || birth_date`(§126 と同じ)。birth_date は 604,037 行すべてに入っている。
 --
--- ■ コーナー通過順の読み方(⛔js/data.js `cornerRanks()` と cloud/tenkai.py `corner_ranks()` と同じ規則)
---   `nar_races.corners` = [{"name":"３角","order":"2,11,(4,6,12),10-(7,9)"}, …](走った順に並ぶ)。
---   数字= 馬番・`( )` = 横に並んだ馬(**先頭の順位を共有**し次はその頭数ぶん飛ぶ)・`-` `=` は差(順位は変えない)。
---   知らない字が出たら**そのコーナーごと捨てる**(⛔推定しない)。読めたコーナーだけを並びの順に使う。
---   ⚠ コーナーの名前は場ごとにばらばら(「正面/２角/３角/４角」「１コーナー…」「２周目４コーナー」…26 種を実測)
---     ので**名前では引かず、読めたコーナーの並びの位置**で決める:
---       pos1 = 最初        … §99a の `first_corner()` と同じ(先行度 qpts・前残りバイアスに使う)
---       pos4 = 最後        … 直線に入る前の最終コーナー(「4角」。２周目がある場でも最後が最終コーナー)
---       pos3 = 最後から2番目(コーナーが 2 つ以上あるときだけ)
---       pos2 = 2 番目      … ⛔読めたコーナーが **3 つ以上**のときだけ(2 つだと pos4 と同じものになるため NULL)
---   順位の分母は ⛔**そのコーナーに並んだ頭数**(field_size ではない。#466 で 48R 中 6 本ずれた)。
+-- ■ コーナー通過順と脚質(⛔§238a2 で**派生表 nar_run_facts を読むだけ**になった)
+--   2026-09-22 まではここに `corners` の文字列解析と脚質の算出の**写し**があった(js/data.js・
+--   cloud/tenkai.py と 3 か所)。規則は pipeline/facts.py の 1 か所に寄せ、便 cloud/run_facts.py が
+--   1 頭 1 行の nar_run_facts に焼く。この SQL は写した表から join するだけ(t_corner / t_style)。
+--     pos1..pos4 = f.c1..c4(読めたコーナーの 最初 / 2 番目 / 最後から 2 番目 / 最後)
+--     n1..n4     = f.n1..n4(⛔順位の分母は**そのコーナーに並んだ頭数**。field_size ではない)
+--     style      = f.style('逃げ'→0 '先行'→1 '差し'→2 '追込'→3・⛔発走前 as-of で焼いてある)
+--   ⚠脚質の定義は派生表に合わせて **365 日窓+同じ場 3 走以上ならその場だけ** に変わる(旧式は
+--     窓なしの直近 5 走)。差はおよそ 5%・ユーザー決定 2026-09-22 で許容。特徴量の名前と型は不変。
+--   ⛔材料の写しは `race_date >= 2014-01-01` の行だけ(nar-ai-feat.yml の \copy)。
 --
 -- ■ 着差の文字列 → 馬身(ユーザー決定 2026-09-07・標準の対応表)
 --   ハナ 0.05 / アタマ 0.1 / クビ 0.3 / 同着 0 / 大差 10 / 「1.1/2」= 1.5 / 「3/4」= 0.75 / 「3」= 3。
@@ -102,68 +101,9 @@ as $fn$
   end;
 $fn$;
 
--- 1 コーナーぶんの並び → {"馬番": 順位} の jsonb。読めなければ NULL(⛔そのコーナーごと捨てる)。
--- ⛔js/data.js `cornerRanks()` の**そのままの写し**(同じ 5 例が tests/tenkai_corner_test.mjs と
---   cloud/tenkai.py --selftest にある。どれかを直したら 3 つとも直すこと)。
-create or replace function public.nar_corner_ranks(p_order text)
-returns jsonb
-language plpgsql
-immutable
-parallel safe
-as $fn$
-declare
-  s    text := btrim(coalesce(p_order, ''));
-  n    int;
-  i    int := 1;
-  j    int;
-  e    int;
-  rk   int := 1;
-  ch   text;
-  body text;
-  part text;
-  k    text;
-  cnt  int;
-  out  jsonb := '{}'::jsonb;
-begin
-  n := length(s);
-  if n = 0 then return null; end if;
-  while i <= n loop
-    ch := substr(s, i, 1);
-    if ch = ',' or ch = '-' or ch = '=' or ch = ' ' or ch = '　' then
-      i := i + 1;
-      continue;
-    end if;
-    if ch = '(' then
-      e := position(')' in substr(s, i));
-      if e = 0 then return null; end if;                 -- 閉じない= 読めない
-      e := i + e - 1;
-      body := substr(s, i + 1, e - i - 1);
-      cnt := 0;
-      foreach part in array string_to_array(body, ',') loop
-        part := btrim(part);
-        if part !~ '^[0-9]+$' then return null; end if;   -- 知らない字= 読めない
-        if part::int <= 0 then return null; end if;
-        k := part::int::text;
-        if not (out ? k) then out := jsonb_set(out, array[k], to_jsonb(rk)); end if;
-        cnt := cnt + 1;
-      end loop;
-      if cnt = 0 then return null; end if;
-      rk := rk + cnt;                                     -- 併走は頭数ぶん飛ぶ
-      i := e + 1;
-      continue;
-    end if;
-    j := i;
-    while j <= n and substr(s, j, 1) ~ '^[0-9]$' loop j := j + 1; end loop;
-    if j = i then return null; end if;                    -- 知らない字= 読めない(⛔推定しない)
-    k := substr(s, i, j - i)::int::text;
-    if not (out ? k) then out := jsonb_set(out, array[k], to_jsonb(rk)); end if;
-    rk := rk + 1;
-    i := j;
-  end loop;
-  if out = '{}'::jsonb then return null; end if;
-  return out;
-end;
-$fn$;
+-- ⛔§238a2(2026-09-22): ここにあった nar_corner_ranks()(js/data.js と cloud/tenkai.py の写し)は
+--   消した。通過順の解析は pipeline/facts.py の 1 か所だけで、結果は派生表 nar_run_facts の
+--   c1..c4 / n1..n4 に焼いてある。この SQL はそれを**読むだけ**(下の t_corner)。
 
 -- 直近 5 走の値をまとめる小道具(⛔NULL は「無い」= 数に入れない・0 にしない)。
 create or replace function public.nar_cnt5(a real, b real, c real, d real, e real)
@@ -419,41 +359,37 @@ begin
   create index t_run_horse_idx on t_run (horse_key, race_date);
   analyze t_run;
 
-  -- ---------------------------------------------------------- 1) コーナー通過順
-  -- 読めたコーナーだけを並びの順に持つ(maps)。ns= そのコーナーに並んだ頭数(⛔順位の分母)。
-  create temp table t_cmap on commit drop as
-  with e as (
-    select r.track, r.race_date, r.race_no::smallint as race_no, t.ord,
-           public.nar_corner_ranks(t.x->>'order') as m
-    from public.nar_races r,
-         lateral jsonb_array_elements(r.corners) with ordinality t(x, ord)
-    where r.corners is not null and jsonb_typeof(r.corners) = 'array'
-  )
-  select track, race_date, race_no,
-         array_agg(m order by ord) as maps,
-         array_agg((select count(*) from jsonb_object_keys(m))::int order by ord) as ns
-  from e
-  where m is not null
-  group by 1, 2, 3;
-  create index t_cmap_key_idx on t_cmap (track, race_date, race_no);
-  analyze t_cmap;
-
+  -- ---------------------------------------------------------- 1) コーナー通過順(⛔派生表を読むだけ)
+  -- §238a2(2026-09-22): ここにあった corners の**文字列解析の写し**は消した。通過順の読み方は
+  --   pipeline/facts.py の 1 か所だけにあり、便 cloud/run_facts.py が nar_run_facts へ焼いてある。
+  --   c1..c4 / n1..n4 の決め方(名前でなく読めた並びの位置)も向こうと同じ= 列名を読み替えるだけ。
+  --   ⛔派生表に行の無い走(2014 より前・未投入)は pos1..pos4 が NULL= 今までの「読めない」と同じ。
   create temp table t_corner on commit drop as
   select b.track, b.race_date, b.race_no, b.runner_number,
-         (c.maps[1] ->> b.runner_number::text)::int as pos1,
-         c.ns[1] as n1,
-         case when array_length(c.maps, 1) >= 3
-              then (c.maps[2] ->> b.runner_number::text)::int end as pos2,
-         case when array_length(c.maps, 1) >= 3 then c.ns[2] end  as n2,
-         case when array_length(c.maps, 1) >= 2
-              then (c.maps[array_length(c.maps, 1) - 1] ->> b.runner_number::text)::int end as pos3,
-         case when array_length(c.maps, 1) >= 2 then c.ns[array_length(c.maps, 1) - 1] end  as n3,
-         (c.maps[array_length(c.maps, 1)] ->> b.runner_number::text)::int as pos4,
-         c.ns[array_length(c.maps, 1)] as n4
+         f.c1 as pos1, f.n1 as n1,
+         f.c2 as pos2, f.n2 as n2,
+         f.c3 as pos3, f.n3 as n3,
+         f.c4 as pos4, f.n4 as n4
   from t_run b
-  join t_cmap c on c.track = b.track and c.race_date = b.race_date and c.race_no = b.race_no;
+  join public.nar_run_facts f on f.track = b.track and f.race_date = b.race_date
+                             and f.race_no = b.race_no and f.umaban = b.runner_number
+  where f.c1 is not null or f.c4 is not null;
   create index t_corner_key_idx on t_corner (track, race_date, race_no, runner_number);
   analyze t_corner;
+
+  -- ---------------------------------------------------------- 1b) 脚質(⛔派生表を読むだけ)
+  -- §238a2: 型の算出(逃げ/先行/差し/追込)も pipeline/facts.py の 1 か所だけ。発走前 as-of で
+  --   焼いてある nar_run_facts.style を 0..3 に読み替える。
+  --   ⚠定義が **365 日窓+同じ場 3 走以上ならその場だけ** に揃うので、旧式(直近 5 走を窓なしで見る)
+  --     との差はおよそ 5%(ユーザー決定 2026-09-22・許容)。特徴量の名前と型(real)は不変。
+  create temp table t_style on commit drop as
+  select f.track, f.race_date, f.race_no, f.umaban as runner_number,
+         (case f.style when '逃げ' then 0 when '先行' then 1
+                       when '差し' then 2 when '追込' then 3 end)::real as style
+  from public.nar_run_facts f
+  where f.style is not null;
+  create index t_style_key_idx on t_style (track, race_date, race_no, runner_number);
+  analyze t_style;
 
   -- ---------------------------------------------------------- 2) 走ごとの as-of(1 周目)
   -- ⛔窓はすべて `range between N preceding and 1 preceding`= **前日まで**(同じ日の結果は入らない)。
@@ -1072,18 +1008,13 @@ begin
              / nullif(public.nar_cnt5(h.p1_chaku, h.p2_chaku, h.p3_chaku, h.p4_chaku, h.p5_chaku), 0)
                                                                      as fukusho_rate_5,
            public.nar_avg5(h.p1_fwd, h.p2_fwd, h.p3_fwd, h.p4_fwd, h.p5_fwd) as qpts,
-           (case when public.nar_cnt5(h.p1_fwd, h.p2_fwd, h.p3_fwd, h.p4_fwd, h.p5_fwd) < 2 then null
-                 when (coalesce((h.p1_fwd >= 0.8)::int, 0) + coalesce((h.p2_fwd >= 0.8)::int, 0)
-                     + coalesce((h.p3_fwd >= 0.8)::int, 0) + coalesce((h.p4_fwd >= 0.8)::int, 0)
-                     + coalesce((h.p5_fwd >= 0.8)::int, 0)) * 2
-                      > public.nar_cnt5(h.p1_fwd, h.p2_fwd, h.p3_fwd, h.p4_fwd, h.p5_fwd) then 0
-                 when 1 - public.nar_avg5(h.p1_fwd, h.p2_fwd, h.p3_fwd, h.p4_fwd, h.p5_fwd) <= 0.4 then 1
-                 when 1 - public.nar_avg5(h.p1_fwd, h.p2_fwd, h.p3_fwd, h.p4_fwd, h.p5_fwd) <= 0.7 then 2
-                 else 3 end)::real                                   as style
+           sty.style                                            as style  -- §238a2 派生表の写し
     from t_hist h
     join (select track, race_date, race_no, runner_number, prize_local from t_r2) pl
       on pl.track = h.track and pl.race_date = h.race_date
      and pl.race_no = h.race_no and pl.runner_number = h.runner_number
+    left join t_style sty on sty.track = h.track and sty.race_date = h.race_date
+                         and sty.race_no = h.race_no and sty.runner_number = h.runner_number
   ) k
   window wr as (partition by k.track, k.race_date, k.race_no);
   create index t_rank_idx on t_rank (track, race_date, race_no, runner_number);
@@ -1292,14 +1223,7 @@ begin
           least(3, floor((1 - public.nar_avg5(h.p1_fwd, h.p2_fwd, h.p3_fwd, h.p4_fwd, h.p5_fwd)) * 4))
             ::int::text                                             as qband,
           r.track || '|' || r.distance_m                            as trk_dist,
-          (case when public.nar_cnt5(h.p1_fwd, h.p2_fwd, h.p3_fwd, h.p4_fwd, h.p5_fwd) < 2 then null
-                when (coalesce((h.p1_fwd >= 0.8)::int, 0) + coalesce((h.p2_fwd >= 0.8)::int, 0)
-                    + coalesce((h.p3_fwd >= 0.8)::int, 0) + coalesce((h.p4_fwd >= 0.8)::int, 0)
-                    + coalesce((h.p5_fwd >= 0.8)::int, 0)) * 2
-                     > public.nar_cnt5(h.p1_fwd, h.p2_fwd, h.p3_fwd, h.p4_fwd, h.p5_fwd) then 0
-                when 1 - public.nar_avg5(h.p1_fwd, h.p2_fwd, h.p3_fwd, h.p4_fwd, h.p5_fwd) <= 0.4 then 1
-                when 1 - public.nar_avg5(h.p1_fwd, h.p2_fwd, h.p3_fwd, h.p4_fwd, h.p5_fwd) <= 0.7 then 2
-                else 3 end)::real                                   as style,
+          sty.style                                           as style,  -- §238a2 派生表の写し
           (coalesce((h.p1_chaku = 2 and h.p1_sa <= 0.05)::int, 0)
            + coalesce((h.p2_chaku = 2 and h.p2_sa <= 0.05)::int, 0)
            + coalesce((h.p3_chaku = 2 and h.p3_sa <= 0.05)::int, 0)
@@ -1352,6 +1276,8 @@ begin
         from t_r2 r
         join t_hist h on h.track = r.track and h.race_date = r.race_date
                      and h.race_no = r.race_no and h.runner_number = r.runner_number
+        left join t_style sty on sty.track = r.track and sty.race_date = r.race_date
+                             and sty.race_no = r.race_no and sty.runner_number = r.runner_number
         left join t_jc jc on jc.track = r.track and jc.race_date = r.race_date
                          and jc.race_no = r.race_no and jc.runner_number = r.runner_number
         left join t_hyr py on py.horse_key = r.horse_key and py.yr = r.yr - 1

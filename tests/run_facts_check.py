@@ -2,12 +2,14 @@
 """§238a 検算= 派生表の規則(pipeline/facts.py)と **3 つの写し**の答えが同じかを実データで数える。
 
 比べる相手:
-  (a) `cloud/tenkai.py` の corner_ranks / first_corner / pick_runs+style_of(展開の見立て)
+  (a) 旧 `cloud/tenkai.py` の corner_ranks / first_corner / pick_runs+style_of(展開の見立て)
+      ⛔§238a2 で本番からは消えたので、**消える直前のコードをこの中に凍結**して比べ続ける。
   (b) `pipeline/sql/ai_feat_20260908.sql` の t_cmap/t_corner(c1..c4 の枠の決め方)と style の式
       ⛔SQL は本番でしか動かせないので、**SQL の字面を Python に写した** ai_feat_* 関数と比べる
       (写しが正しいことは SQL のコメントと式を 1 行ずつ突き合わせた= notes に書く)。
   (c) `js/data.js cornerRanks()` を **node でそのまま呼ぶ**(tests/run_facts_corner_node.mjs)。
-      ⛔node が無ければ Python の写しで代用し、その旨を notes に書く。
+      ⛔§238a2 で画面も派生表読みになったので、今の js/data.js には cornerRanks() が無い=
+        この (c) は **§238a2 より前の data.js** を --data-js に渡したときだけ動く(無ければ飛ばす)。
 
   py -3.12 -X utf8 tests/run_facts_check.py --from 2026-06-21 --to 2026-09-20 \
       --data-js "C:/…/js/data.js" --notes docs/notes_s238a_check.md
@@ -28,7 +30,6 @@ import time
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pipeline import facts                                          # noqa: E402
 from cloud import run_facts                                          # noqa: E402
-from cloud import tenkai                                             # noqa: E402
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -36,6 +37,87 @@ except Exception:  # noqa: BLE001
     pass
 
 MAX_EXAMPLES = 10
+
+
+# ---------------------------------------------------------------- (a) 旧 cloud/tenkai.py の**凍結した写し**
+# ⛔§238a2(2026-09-22)で cloud/tenkai.py から corner_ranks / first_corner / style_of は消えた
+#   (派生表 nar_run_facts を読むだけになった)。この検算をこの先も回せるように、**消える直前の
+#   コード(commit 5f699f8)を字面のまま**ここへ凍結する。⛔ここを直すのは「昔こう動いていた」を
+#   直すことなので、直してはいけない。
+
+
+LEGACY_PAST_DAYS = 365
+LEGACY_N_RUNS = 5
+LEGACY_SAME_TRACK_MIN = 3
+LEGACY_MIN_RUNS = 2
+LEGACY_LEAD_P, LEGACY_FRONT_P, LEGACY_MID_P = 0.2, 0.4, 0.7
+
+
+def legacy_corner_ranks(order):
+    """旧 cloud/tenkai.py corner_ranks()(2026-09-22 まで)。"""
+    s = str(order or "").strip()
+    if not s:
+        return None
+    out, rank, i = {}, 1, 0
+    while i < len(s):
+        ch = s[i]
+        if ch in ",-= 　":
+            i += 1
+            continue
+        if ch == "(":
+            end = s.find(")", i)
+            if end < 0:
+                return None
+            nums = []
+            for x in s[i + 1:end].split(","):
+                x = x.strip()
+                if not x.isdigit() or int(x) <= 0:
+                    return None
+                nums.append(int(x))
+            if not nums:
+                return None
+            for n in nums:
+                out.setdefault(n, rank)
+            rank += len(nums)
+            i = end + 1
+            continue
+        j = i
+        while j < len(s) and s[j].isdigit():
+            j += 1
+        if j == i:
+            return None
+        out.setdefault(int(s[i:j]), rank)
+        rank += 1
+        i = j
+    return out or None
+
+
+def legacy_first_corner(corners):
+    """旧 cloud/tenkai.py first_corner()。"""
+    for c in (corners or []):
+        if not isinstance(c, dict):
+            continue
+        ranks = legacy_corner_ranks(c.get("order"))
+        if ranks:
+            return ranks
+    return None
+
+
+def legacy_pick_runs(runs, track):
+    """旧 cloud/tenkai.py pick_runs()。"""
+    same = [r for r in runs if r["track"] == track]
+    return (same if len(same) >= LEGACY_SAME_TRACK_MIN else runs)[:LEGACY_N_RUNS]
+
+
+def legacy_style_of(ps):
+    """旧 cloud/tenkai.py style_of()(型だけ返す)。"""
+    ps = [p for p in ps if p is not None]
+    if len(ps) < LEGACY_MIN_RUNS:
+        return None
+    m = statistics.fmean(ps)
+    if sum(1 for p in ps if p <= LEGACY_LEAD_P) * 2 > len(ps):
+        return "逃げ"
+    return "先行" if m <= LEGACY_FRONT_P else "差し" if m <= LEGACY_MID_P else "追込"
 
 
 def log(msg):
@@ -59,7 +141,7 @@ def ai_feat_slots(corners):
     for c in (corners or []):
         if not isinstance(c, dict):
             continue
-        m = tenkai.corner_ranks(c.get("order"))      # ⛔SQL の nar_corner_ranks と同じ規則
+        m = legacy_corner_ranks(c.get("order"))      # ⛔旧 SQL nar_corner_ranks と同じ規則
         if m is not None:
             maps.append(m)
     k = len(maps)
@@ -150,8 +232,8 @@ def check_window(base, key, lo, hi, data_js):
                 orders.append(str(c["order"]))
     uniq = sorted(set(orders))
     for o in uniq:
-        hit("a_ranks", facts.corner_ranks(o) == tenkai.corner_ranks(o),
-            {"order": o, "facts": facts.corner_ranks(o), "tenkai": tenkai.corner_ranks(o)})
+        hit("a_ranks", facts.corner_ranks(o) == legacy_corner_ranks(o),
+            {"order": o, "facts": facts.corner_ranks(o), "tenkai": legacy_corner_ranks(o)})
     js_map, js_why = node_corner_ranks(data_js, uniq)
     if js_map is not None:
         for o in uniq:
@@ -161,7 +243,7 @@ def check_window(base, key, lo, hi, data_js):
     # ---- (a) 1 角の表 / (b) c1..c4 の枠
     for r in races:
         c = r.get("corners")
-        hit("a_first", facts.first_corner(c) == tenkai.first_corner(c),
+        hit("a_first", facts.first_corner(c) == legacy_first_corner(c),
             {"race": [r["track"], str(r["race_date"])[:10], r["race_no"]]})
         mine = facts.corner_slots(c)
         theirs = ai_feat_slots(c)
@@ -185,10 +267,10 @@ def check_window(base, key, lo, hi, data_js):
 
         # (a) tenkai.py の選び方= 新しい順・365 日窓・同じ場 3 走以上ならその場だけ・5 走
         win = [x for x in hist
-               if (dt.date.fromisoformat(d) - dt.timedelta(days=tenkai.PAST_DAYS)).isoformat() <= x["race_date"] < d]
+               if (dt.date.fromisoformat(d) - dt.timedelta(days=LEGACY_PAST_DAYS)).isoformat() <= x["race_date"] < d]
         win.sort(key=lambda x: (x["race_date"], x["track"], x["race_no"]), reverse=True)
-        t_use = tenkai.pick_runs(win, r["track"])
-        t_style = tenkai.style_of([x["p"] for x in t_use if x["p"] is not None])[0]
+        t_use = legacy_pick_runs(win, r["track"])
+        t_style = legacy_style_of([x["p"] for x in t_use if x["p"] is not None])
         hit("a_style", mine == t_style,
             {"horse": hk, "race": list(k), "facts": mine, "tenkai": t_style, "n": len(t_use)})
 
@@ -247,9 +329,9 @@ def main():
 
 def write_notes(path, lo, hi, total, ex, js_why):
     LABEL = {
-        "a_ranks": "(a) 通過順の字面 vs cloud/tenkai.py corner_ranks",
-        "a_first": "(a) 1 角の表 vs cloud/tenkai.py first_corner",
-        "a_style": "(a) 脚質 vs cloud/tenkai.py pick_runs+style_of",
+        "a_ranks": "(a) 通過順の字面 vs 旧 cloud/tenkai.py corner_ranks(凍結)",
+        "a_first": "(a) 1 角の表 vs 旧 cloud/tenkai.py first_corner(凍結)",
+        "a_style": "(a) 脚質 vs 旧 cloud/tenkai.py pick_runs+style_of(凍結)",
         "b_slots": "(b) c1..c4 の枠 vs ai_feat SQL t_corner(Python 写し)",
         "b_style": "(b) 脚質 vs ai_feat SQL style 式(直近 5 走・窓なし)",
         "c_ranks": "(c) 通過順の字面 vs js/data.js cornerRanks(node)",

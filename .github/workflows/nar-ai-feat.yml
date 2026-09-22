@@ -8,7 +8,7 @@
 #   原因は SQL でなく器= 本番は小さい計算機(work_mem 2 MB・IO の割当が小さい)で
 #   60 万行 × 246 列の組み立てに耐えない。→ **全量の特徴量作りは本番で二度と流さない**。
 #
-# ここでやること= ①本番から材料 9 表を **読むだけ**で写す(`\copy (select * …) to` だけ)
+# ここでやること= ①本番から材料 10 表を **読むだけ**で写す(`\copy (select * …) to` だけ)
 #   ②このジョブの中に立てた Postgres 16(work_mem 256MB)に入れる
 #   ③そこで pipeline/sql/ai_feat_20260908.sql を流して refresh_nar_ai_feat() を回す
 #   ④tests/ai_feat_check.py で検算(FAIL なら job を落とす) ⑤成果物(artifact)に残す。
@@ -102,6 +102,7 @@ jobs:
           \copy (select penalty_id, track, race_date, race_no, person_kind, person_name, kind, detail, suspension_from, suspension_through, source_url, source_hash, parser_version, created_at, updated_at, horse_name from public.nar_penalties) to 'dump/nar_penalties.tsv'
           \copy (select track, race_date, race_no, votes, refunds, updated_at from public.nar_sales) to 'dump/nar_sales.tsv'
           \copy (select key, value, updated_at from public.nar_meta where key = 'noken_index') to 'dump/nar_meta.tsv'
+          \copy (select race_date, track, race_no, umaban, horse_key, horse_name, c1, n1, c2, n2, c3, n3, c4, n4, style, style_p, style_n, first3f, first3f_src, last3f, win_odds_close, src, computed_at from public.nar_run_facts where race_date >= '2014-01-01') to 'dump/nar_run_facts.tsv'
           SQL
           ls -l dump | sed -n '2,20p'
 
@@ -111,7 +112,7 @@ jobs:
           export PGPASSWORD="$LOCAL_PGPASSWORD"
           psql -v ON_ERROR_STOP=1 -X -f pipeline/sql/ai_feat_local_schema.sql
           for t in nar_runs nar_races auction_sales nar_horses nar_kb_runs \
-                   nar_horse_health_events nar_penalties nar_sales nar_meta; do
+                   nar_horse_health_events nar_penalties nar_sales nar_meta nar_run_facts; do
             echo "::group::load $t"
             psql -v ON_ERROR_STOP=1 -X -c "\copy public.$t from 'dump/$t.tsv'"
             echo "::endgroup::"

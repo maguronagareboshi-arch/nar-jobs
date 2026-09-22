@@ -14,7 +14,7 @@
   ③ 行数が nar_runs と一致・鍵の重複 0。
   ④ 設計書 B-2 の 183 列(⛔c1_dist を除く 182)+ ④ の列が表に全部ある。
   ⑤ ④ の列(3F・馬具・乗替・コース・能検)が高知の 1 レースで埋まっている。
-  ⑥ コーナーと着差の読み方が JS/Python の実装と同じ(--selftest でも通る)。
+  ⑥ 着差の読み方と、派生表 nar_run_facts の通過順が独立オラクルと同じ(--selftest でも通る分あり)。
 ⛔鍵(パスワード)は印字しない。⛔出すのは PASS/FAIL と食い違いの一覧だけ。
 """
 from __future__ import annotations
@@ -22,6 +22,7 @@ from __future__ import annotations
 import argparse
 import datetime as dt
 import io
+import json
 import os
 import re
 import sys
@@ -49,8 +50,11 @@ def ok(name, cond, detail=""):
 # ------------------------------------------------------------------ 規則の写し(SQL と同じもの)
 
 def corner_ranks(order):
-    """pipeline/sql/ai_feat_20260908.sql の `nar_corner_ranks()` の写し。
-    ⛔js/data.js `cornerRanks()` / cloud/tenkai.py `corner_ranks()` と同じ規則。"""
+    """⛔**独立オラクル**として手で書いた読み方(pipeline/facts.py の写しではない)。
+
+    §238a2 で本番の解析は pipeline/facts.py の 1 か所だけになり、結果は派生表 nar_run_facts に
+    焼いてある。この関数はその**答え合わせの相手**= わざと別実装のまま置いておく。
+    """
     s = str(order or "").strip()
     if not s:
         return None
@@ -196,11 +200,11 @@ def check_selftest():
     ok("⑥ 着差の対応表が指示どおり(13 例)", not bad2, repr(bad2))
     try:
         sys.path.insert(0, str(ROOT))
-        from cloud.tenkai import corner_ranks as ref
+        from pipeline.facts import corner_ranks as ref
         diff = [s for s, _ in SELFTEST_CORNER if ref(s) != corner_ranks(s)]
-        ok("⑥ cloud/tenkai.py の実装と一致", not diff, repr(diff))
+        ok("⑥ pipeline/facts.py の実装と一致", not diff, repr(diff))
     except Exception as e:                                  # noqa: BLE001
-        print("  --   cloud/tenkai.py を読めなかった(%s)= 比較は飛ばす" % type(e).__name__)
+        print("  --   pipeline/facts.py を読めなかった(%s)= 比較は飛ばす" % type(e).__name__)
 
 
 # ------------------------------------------------------------------ DB(読むだけ)
@@ -366,23 +370,31 @@ def check_extra_filled(con):
 
 
 def check_sql_parser(con):
-    """⑥ DB 側の nar_corner_ranks() が Python の写しと同じ答えを出すか(実データ 3,000 本)。"""
-    # ⛔to_regclass は「表」を探すので関数はいつも NULL= この比較が黙って飛んでいた(§129d で気づいた)。
-    if not con.run("select to_regproc('public.nar_corner_ranks') is not null")[0][0]:
-        print("  --   nar_corner_ranks() がまだ無い= 比較は飛ばす")
+    """⑥ §238a2: 特徴量 SQL はもう解析しない= **派生表 nar_run_facts** が独立オラクルと同じか見る
+    (実データ 3,000 レース)。⛔読むだけ。表がまだ無い環境では黙って飛ばす。"""
+    if not con.run("select to_regclass('public.nar_run_facts') is not null")[0][0]:
+        print("  --   nar_run_facts がまだ無い= 比較は飛ばす")
         return
     rows = con.run(
-        "select x->>'order' as o, public.nar_corner_ranks(x->>'order') as m"
-        " from public.nar_races r, lateral jsonb_array_elements(r.corners) x"
-        " where r.corners is not null order by r.race_date desc limit 3000")
+        "select r.track, r.race_date, r.race_no, r.corners,"
+        "       f.umaban, f.c1, f.c2, f.c3, f.c4, f.n1, f.n2, f.n3, f.n4"
+        "  from public.nar_races r"
+        "  join public.nar_run_facts f on f.track = r.track and f.race_date = r.race_date"
+        "                             and f.race_no = r.race_no"
+        " where r.corners is not null"
+        " order by r.race_date desc, r.track, r.race_no, f.umaban limit 3000")
     bad = []
-    for o, m in rows:
-        want = corner_ranks(o)
-        got = None if m is None else {int(k): int(v) for k, v in m.items()}
+    for trk, day, no, corners, umaban, *got in rows:
+        if isinstance(corners, str):
+            corners = json.loads(corners)
+        maps = readable_corners(corners)
+        p1, p2, p3, p4, n1, n2, n3, n4 = pos_of(maps, int(umaban))
+        want = [p1, p2, p3, p4, n1, n2, n3, n4]
+        got = [None if g is None else int(g) for g in got]
         if want != got:
-            bad.append(str(o)[:40])
-    ok("⑥ DB の nar_corner_ranks() が写しと一致(実データ 3,000 本)", not bad,
-       "違い %d 本 例= %s" % (len(bad), bad[:3]))
+            bad.append("%s %s %sR-%s %s≠%s" % (trk, day, no, umaban, want, got))
+    ok("⑥ 派生表 nar_run_facts の通過順が独立オラクルと一致(実データ 3,000 行)", not bad,
+       "違い %d 行 例= %s" % (len(bad), bad[:3]))
 
 
 def sample(con):

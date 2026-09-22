@@ -1,5 +1,5 @@
 -- §129d 予想AI 段階1 の**地元の器**= GitHub Actions の中に立てた Postgres に、本番から写した
--- 材料の表(9 つ)を入れるための create table。⛔本番では流さない(本番には同じ表が既にある)。
+-- 材料の表(10 個・§238a2 で nar_run_facts を足した)を入れるための create table。⛔本番では流さない(本番には同じ表が既にある)。
 --
 -- ■ なぜこれが要るのか(9/8 決定)
 --   9/7 夜に本番 DB で `refresh_nar_ai_feat()` を流したら 30 分間サイトが読めなくなった
@@ -14,11 +14,12 @@
 --
 -- ■ nar_sales_daily は**表ではなく view**(実測 relkind='v')
 --   中身は `nar_sales` の group by。本番に group by を掛けないため、材料は **`nar_sales` を写し**、
---   同じ定義の view を地元に作る(⛔値は本番と同じ)。→ 写す実体は 9 つ= 下の 9 表。
+--   同じ定義の view を地元に作る(⛔値は本番と同じ)。→ 写す実体は 10 つ= 下の 10 表
+--   (§238a2 で派生表 nar_run_facts を 1 本足した)。
 --
 -- 使い方(Actions / 手元):
 --   psql -v ON_ERROR_STOP=1 -f pipeline/sql/ai_feat_local_schema.sql
---   \copy public.nar_runs from 'nar_runs.tsv'   (以下 9 表)
+--   \copy public.nar_runs from 'nar_runs.tsv'   (以下 10 表)
 --   analyze;
 
 begin;
@@ -245,6 +246,40 @@ create or replace view public.nar_sales_daily as
                  - coalesce((s.refunds ->> k.k)::bigint, 0::bigint)) as net
         from jsonb_object_keys(s.votes) k(k)) v
    group by s.track, s.race_date;
+
+-- ---------------------------------------------------------------- 10) §238a2 派生表(通過順と脚質の一本化)
+-- ⛔2014-01-01 以降だけ写す(それより前の行は無い)。⛔列の並びは本番の attnum の順そのまま。
+-- 特徴量 SQL はこの表の c1..c4 / n1..n4 / style を**読むだけ**= 通過順の解析と型の算出は
+-- pipeline/facts.py の 1 か所だけになった(§238a2)。
+create table if not exists public.nar_run_facts (
+  race_date      date not null,
+  track          text not null,
+  race_no        integer not null,
+  umaban         integer not null,
+  horse_key      text,
+  horse_name     text,
+  c1             integer,
+  n1             integer,
+  c2             integer,
+  n2             integer,
+  c3             integer,
+  n3             integer,
+  c4             integer,
+  n4             integer,
+  style          text,
+  style_p        numeric,
+  style_n        integer,
+  first3f        numeric,
+  first3f_src    text,
+  last3f         numeric,
+  win_odds_close numeric,
+  src            text not null,
+  computed_at    timestamptz not null,
+  primary key (race_date, track, race_no, umaban)
+);
+-- 特徴量 SQL は (track, race_date, race_no, runner_number) で join する= 主キーの並びと違うので 1 本張る。
+create index if not exists nar_run_facts_join_idx
+  on public.nar_run_facts (track, race_date, race_no, umaban);
 
 -- ---------------------------------------------------------------- 9) メタ(⛔ key='noken_index' の 1 行だけ写す)
 create table if not exists public.nar_meta (

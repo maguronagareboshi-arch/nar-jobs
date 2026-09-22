@@ -117,7 +117,8 @@ const STEPS = steps(BODY);
   // ⚠nar_sales_daily は本番では **view**(中身は nar_sales の group by)。
   //   本番に group by を掛けないので、写すのは材料の nar_sales・view は地元の schema で作る。
   const COPIED = ['nar_runs', 'nar_races', 'auction_sales', 'nar_horses', 'nar_kb_runs',
-    'nar_horse_health_events', 'nar_penalties', 'nar_sales', 'nar_meta'];
+    'nar_horse_health_events', 'nar_penalties', 'nar_sales', 'nar_meta',
+    'nar_run_facts'];   // §238a2 通過順と脚質の派生表(SQL はこれを読むだけ)
   for (const t of COPIED) {
     assert.ok(BODY.includes('public.' + t + ')') || BODY.includes('public.' + t + ' where'),
       'yml が ' + t + ' を写していない');
@@ -127,10 +128,10 @@ const STEPS = steps(BODY);
   assert.match(SCHEMA, /create or replace view public\.nar_sales_daily as/,
     '地元の器に nar_sales_daily(view)が無い');
   assert.ok(SQL.includes('public.nar_sales_daily'), 'SQL が nar_sales_daily を読んでいない');
-  // SQL が読む表は、写した 9 つと view で全部まかなえている(⛔取り残しが無い)
+  // SQL が読む表は、写した 10 個と view で全部まかなえている(⛔取り残しが無い)
   const MADE = ['nar_ai_feat_run', 'nar_ai_feat_track', 'nar_ai_meta'];
   const used = [...new Set([...SQL.matchAll(/public\.(nar_[a-z_0-9]+|auction_sales)\b/g)].map((m) => m[1]))]
-    .filter((t) => !MADE.includes(t) && !/^nar_(margin_len|corner_ranks|cnt5|avg5|std5|slope5)$/.test(t))
+    .filter((t) => !MADE.includes(t) && !/^nar_(margin_len|cnt5|avg5|std5|slope5)$/.test(t))
     .filter((t) => t !== 'nar_sales_daily');
   const missing = used.filter((t) => !COPIED.includes(t));
   assert.deepEqual(missing, [], 'SQL が読む表で写していないものがある: ' + JSON.stringify(missing));
