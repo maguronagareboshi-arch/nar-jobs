@@ -87,18 +87,21 @@ jobs:
           PGSSLMODE: require
         run: |
           mkdir -p dump
+          # ⛔列は `pipeline/sql/ai_feat_local_schema.sql` の並びをそのまま書く(select * にしない)=
+          #   本番に列が 1 つ増えた日に地元への読み込みが「extra data after last expected column」で落ちるため。
+          #   ⛔列を増やすときは schema.sql と ここ の両方を同じ並びで直す(§156 F1・2026-09-22 の監査)。
           psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 \
             -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X <<'SQL'
           set statement_timeout = '10min';
-          \copy (select * from public.nar_runs)                to 'dump/nar_runs.tsv'
-          \copy (select * from public.nar_races)               to 'dump/nar_races.tsv'
-          \copy (select * from public.auction_sales)           to 'dump/auction_sales.tsv'
-          \copy (select * from public.nar_horses)              to 'dump/nar_horses.tsv'
-          \copy (select * from public.nar_kb_runs)             to 'dump/nar_kb_runs.tsv'
-          \copy (select * from public.nar_horse_health_events) to 'dump/nar_horse_health_events.tsv'
-          \copy (select * from public.nar_penalties)           to 'dump/nar_penalties.tsv'
-          \copy (select * from public.nar_sales)               to 'dump/nar_sales.tsv'
-          \copy (select * from public.nar_meta where key = 'noken_index') to 'dump/nar_meta.tsv'
+          \copy (select track, race_date, race_no, runner_number, gate, horse_name, sex, age, jockey, trainer, carried_weight, body_weight, body_weight_change, finish, finish_note, time_raw, time_sec, margin, last3f, popularity, updated_at, birth_date, trainer_area, weight_mark from public.nar_runs) to 'dump/nar_runs.tsv'
+          \copy (select track, race_date, race_no, post_time, race_name, surface, direction, distance_m, weather, going, field_size, condition, prize_yen, race_last4f, race_last3f, furlongs, corners, source, source_snapshot_hash, updated_at, race_kind, cancelled, cancel_note, nankan from public.nar_races) to 'dump/nar_races.tsv'
+          \copy (select source, item_id, horse_name, display_name, sex, age, birth_date, category, auction_date, round_no, start_price, price, bids, sold, seller, tags, other_n, jbis_id, url, fetched_at, updated_at, runs_after, first_after, sire, dam, buyer from public.auction_sales) to 'dump/auction_sales.tsv'
+          \copy (select horse_name, sex, sire, dam, broodmare_sire, owner, breeder, first_date, last_date, runs, updated_at from public.nar_horses) to 'dump/nar_horses.tsv'
+          \copy (select track, race_date, race_no, umaban, horse_name, kb_race_id, blinker, gear, first3f, avg_f, pace, kimete, start_note, updated_at from public.nar_kb_runs) to 'dump/nar_kb_runs.tsv'
+          \copy (select event_id, horse_name, birth_date, horse_code, jbis_id, track, race_date, race_no, runner_number, event_date, reported_date, stage, event_type, condition_group, race_status, detail, restriction_from, restriction_through, source_kind, source_ref, source_url, source_hash, source_line_hash, match_method, displayable, parser_version, created_at, updated_at, event_key, support_detail, support_condition_group, support_reported_date, support_restriction_from, support_restriction_through, support_source_kind, support_source_ref, support_source_url, racing_ability_lost, condition_term from public.nar_horse_health_events) to 'dump/nar_horse_health_events.tsv'
+          \copy (select penalty_id, track, race_date, race_no, person_kind, person_name, kind, detail, suspension_from, suspension_through, source_url, source_hash, parser_version, created_at, updated_at, horse_name from public.nar_penalties) to 'dump/nar_penalties.tsv'
+          \copy (select track, race_date, race_no, votes, refunds, updated_at from public.nar_sales) to 'dump/nar_sales.tsv'
+          \copy (select key, value, updated_at from public.nar_meta where key = 'noken_index') to 'dump/nar_meta.tsv'
           SQL
           ls -l dump | sed -n '2,20p'
 
