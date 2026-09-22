@@ -45,7 +45,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 90     # §224a fit に 1 着の模型+12 か月 WF の較正が乗った(手元 8 スレッドで +15〜30 分)
+    timeout-minutes: 180    # §243 学習行が 10 年分で 3 倍(187 万行)= 90 分で打ち切られた(9/22)。§224a fit に 1 着の模型+12 か月 WF の較正が乗った(手元 8 スレッドで +15〜30 分)
     env:
       PGHOST: localhost
       PGPORT: '5432'
