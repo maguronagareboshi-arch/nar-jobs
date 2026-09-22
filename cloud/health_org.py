@@ -291,6 +291,11 @@ def upsert(client, rows):
 
 # ---------------------------------------------------------------- 本体
 
+# ⛔「取れなかった(先方 403 / Worker が止まっている)」の印。壊れた(None)とは分けて返す=
+#   便は赤くしない(遅れの検知は nar-watchdog の MISSING の役)。
+UNAVAILABLE = "unavailable"
+
+
 def run(adapter, *, since, until, apply, client):
     limiter = Limiter()
     n = {"documents": 0, "parsed_rows": 0, "matched": 0, "unmatched": 0,
@@ -300,6 +305,9 @@ def run(adapter, *, since, until, apply, client):
     try:
         docs = adapter.list_documents(lambda u: fetch(u, limiter=limiter), since, until)
     except Exception as err:
+        if getattr(err, "source_unavailable", False):
+            log("取れなかった(403): 一覧の頁がありません: %s" % str(err)[:120])
+            return UNAVAILABLE, n
         log("一覧を読めませんでした: %s" % str(err)[:120])
         return None, n
     log("対象の文書 %d 件(%s〜%s)" % (len(docs), since, until))
@@ -391,6 +399,9 @@ def main(argv=None):
 
     rows, n = run(adapter, since=since, until=until, apply=args.apply, client=client)
     log("REST 要求 %d 本" % N_REQ[0])
+    if rows is UNAVAILABLE:
+        log("取れなかった(403)ので何も書きません= 失敗にしません(遅れは nar-watchdog の MISSING が見る)")
+        return 0
     if rows is None:
         return 1
     return 0
