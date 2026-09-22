@@ -14,6 +14,7 @@
 #   ④tests/ai_feat_check.py で検算(FAIL なら job を落とす) ⑤成果物(artifact)に残す。
 #   ⛔本番への書き込みは 0(この便では印も書かない)。段階 2(学習)・段階 3(推論)は次の便で同じジョブに足す。
 #
+# §243 学習の範囲= 2022-11 以降+高知 2014〜(10 年分の楽天由来は表示用・学習には入れない= ユーザー決定 9/22)
 # ⛔cron はまだ付けない= 所要を実測してから Fable が決める(workflow_dispatch だけ)。
 name: nar-ai-feat
 
@@ -45,7 +46,7 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
-    timeout-minutes: 90     # §224a fit に 1 着の模型+12 か月 WF の較正が乗った(手元 8 スレッドで +15〜30 分)
+    timeout-minutes: 180    # §243 学習行が 10 年分で 3 倍(187 万行)= 90 分で打ち切られた(9/22)。§224a fit に 1 着の模型+12 か月 WF の較正が乗った(手元 8 スレッドで +15〜30 分)
     env:
       PGHOST: localhost
       PGPORT: '5432'
@@ -93,8 +94,8 @@ jobs:
           psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 \
             -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X <<'SQL'
           set statement_timeout = '10min';
-          \copy (select track, race_date, race_no, runner_number, gate, horse_name, sex, age, jockey, trainer, carried_weight, body_weight, body_weight_change, finish, finish_note, time_raw, time_sec, margin, last3f, popularity, updated_at, birth_date, trainer_area, weight_mark from public.nar_runs) to 'dump/nar_runs.tsv'
-          \copy (select track, race_date, race_no, post_time, race_name, surface, direction, distance_m, weather, going, field_size, condition, prize_yen, race_last4f, race_last3f, furlongs, corners, source, source_snapshot_hash, updated_at, race_kind, cancelled, cancel_note, nankan from public.nar_races) to 'dump/nar_races.tsv'
+          \copy (select track, race_date, race_no, runner_number, gate, horse_name, sex, age, jockey, trainer, carried_weight, body_weight, body_weight_change, finish, finish_note, time_raw, time_sec, margin, last3f, popularity, updated_at, birth_date, trainer_area, weight_mark from public.nar_runs where (race_date >= '2022-11-01' or track = '高知')) to 'dump/nar_runs.tsv'
+          \copy (select track, race_date, race_no, post_time, race_name, surface, direction, distance_m, weather, going, field_size, condition, prize_yen, race_last4f, race_last3f, furlongs, corners, source, source_snapshot_hash, updated_at, race_kind, cancelled, cancel_note, nankan from public.nar_races where (race_date >= '2022-11-01' or track = '高知')) to 'dump/nar_races.tsv'
           \copy (select source, item_id, horse_name, display_name, sex, age, birth_date, category, auction_date, round_no, start_price, price, bids, sold, seller, tags, other_n, jbis_id, url, fetched_at, updated_at, runs_after, first_after, sire, dam, buyer from public.auction_sales) to 'dump/auction_sales.tsv'
           \copy (select horse_name, sex, sire, dam, broodmare_sire, owner, breeder, first_date, last_date, runs, updated_at from public.nar_horses) to 'dump/nar_horses.tsv'
           \copy (select track, race_date, race_no, umaban, horse_name, kb_race_id, blinker, gear, first3f, avg_f, pace, kimete, start_note, updated_at from public.nar_kb_runs) to 'dump/nar_kb_runs.tsv'
