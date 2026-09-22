@@ -1,0 +1,49 @@
+# §224 段 2a 脚質 × ペースの「3 着内率の倍率」を月 1 で焼く便。書き先は nar_meta 'pace_lift:v1' の 1 行だけ。
+# 入力 mode= dry(既定・書かずに log に出す)/ apply(書く)。from / to は YYYY-MM(空= 直前の月で終わる 12 か月)。
+# 数えるのはこの runner の中(⛔本番 DB では集計しない)。1 回およそ 5 分・月 1 なので無料枠への影響はほぼ無い。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: pace-lift
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'dry (no write) or apply (write)'
+        required: true
+        default: 'dry'
+        type: choice
+        options:
+          - dry
+          - apply
+      from:
+        description: 'first month YYYY-MM (empty = 12 months back)'
+        required: false
+        default: ''
+      to:
+        description: 'last month YYYY-MM (empty = previous month)'
+        required: false
+        default: ''
+  schedule:
+    - cron: '40 19 1 * *'        # 毎月 2 日 04:40 JST(= 前月 1 日 19:40 UTC)
+jobs:
+  lift:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r cloud/requirements.txt
+      - name: pace lift
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          MODE: ${{ github.event.inputs.mode }}
+          M_FROM: ${{ github.event.inputs.from }}
+          M_TO: ${{ github.event.inputs.to }}
+        run: |
+          set --
+          if [ "$MODE" = "dry" ]; then set -- "$@" --dry; else set -- "$@" --apply; fi
+          if [ -n "$M_FROM" ]; then set -- "$@" --from "$M_FROM"; fi
+          if [ -n "$M_TO" ]; then set -- "$@" --to "$M_TO"; fi
+          python cloud/pace_lift.py "$@"
