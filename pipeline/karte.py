@@ -16,7 +16,8 @@
   track, race_date('YYYY-MM-DD' か date), race_no, umaban, finish(int|None), note(着の注記),
   pop(人気), time(走破タイム 秒), win_time(そのレースの 1 着のタイム 秒), post_time('1330' 等),
   race_name, noken(能力検査なら True), c1/n1/c4/n4(nar_run_facts), late(True 出遅れ / False 記録あり出遅れ無し /
-  None 記録なし)
+  None 記録なし)。⛔runs には取消・取りやめの行も入れてよい(ここで is_start で外す。脚質の回数だけは
+  run_facts と同じく全行から 5 走を選ぶ)
 
   py -3.12 -X utf8 pipeline/karte.py --selftest     # 通信なしの自己診断
 """
@@ -24,6 +25,11 @@ import datetime as dt
 import re
 import sys
 from decimal import ROUND_HALF_UP, Decimal
+
+try:
+    from pipeline import facts                 # 脚質の窓・閾値(⛔nar_run_facts.style と同じ物を使う)
+except ImportError:                            # py pipeline/karte.py --selftest で直に走らせたとき
+    import facts                               # noqa: E402
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -153,6 +159,15 @@ def late_count(starts):
     return sum(1 for r in use if r.get("late")), len(use)
 
 
+def late_runs(starts):
+    """出遅れた走の位置= 直近 5 走の中で何走前か(1= 前走)の並び。⛔記録が 1 本も無ければ None・出遅れ 0 回は []。
+    モックの「前走・2走前」と同じ数え方(位置は記録の無い走も含めた直近 5 走の中の順番)。"""
+    use = starts[:LAST_RUNS]
+    if not any(r.get("late") is not None for r in use):
+        return None
+    return [i + 1 for i, r in enumerate(use) if r.get("late")]
+
+
 def late_next_pct(late_n, table):
     """割合表(nar_meta karte:late_next:v1)を引くだけ。⛔表が無い・回数が無い= None。"""
     if late_n is None or not isinstance(table, dict):
@@ -165,6 +180,31 @@ def late_next_pct(late_n, table):
 
 
 # ---------------------------------------------------------------- 走り方
+
+STYLE_KEYS = ("逃", "先", "差", "追")
+
+
+def run_style(p):
+    """1 走の型= 1 角の位置 p を nar_run_facts.style と同じ閾値で切る(⛔facts.LEAD_P/FRONT_P/MID_P)。"""
+    return "逃" if p <= facts.LEAD_P else "先" if p <= facts.FRONT_P else "差" if p <= facts.MID_P else "追"
+
+
+def style_counts(runs, track, race_date):
+    """脚質の回数 {逃, 先, 差, 追}= nar_run_facts.style と**同じ 5 走**(facts.pick_past_runs= その日より前・365 日・
+    同じ場が 3 走以上ならその場だけ)を 1 走ずつ型に切って数える。⛔位置の読めた走が 1 本も無ければ None。"""
+    past = []
+    for r in runs or []:
+        c1, n1 = int_or_none(r.get("c1")), int_or_none(r.get("n1"))
+        past.append({"track": r.get("track"), "race_date": r["race_date"], "race_no": r.get("race_no"),
+                     "p": (c1 / n1) if c1 is not None and n1 else None})
+    ps = [r["p"] for r in facts.pick_past_runs(past, track, race_date) if r["p"] is not None]
+    if not ps:
+        return None
+    out = dict.fromkeys(STYLE_KEYS, 0)
+    for p in ps:
+        out[run_style(p)] += 1
+    return out
+
 
 def pos_range(starts):
     """直近 5 走の最初のコーナーの順位(c1)の幅 → ('3〜7', 使えた走数)。同じなら '5'。c1 が 1 本も無ければ (None, None)。"""
@@ -219,6 +259,11 @@ def since_layoff(starts, race_date):
         if (days[i] - days[i - 1]).days > LAYOFF_DAYS:
             last = i
     return None if last is None else len(days) - last
+
+
+def gap_days(starts, race_date):
+    """今回の間隔= 前走(直近の実走)からの日数(⛔馬柱の currentGap/gapText と同じ前走の選び方)。前走が無ければ None。"""
+    return (to_date(race_date) - to_date(starts[0]["race_date"])).days if starts else None
 
 
 # ---------------------------------------------------------------- 条件との相性(通算・南関の走だけ)
@@ -368,6 +413,7 @@ def build_row(entry, runs, opponents, style, late_table, computed_at):
         return row
     st = past_starts(runs, d)
     ln, lden = late_count(st)
+    lruns = late_runs(st)
     pv, pvn = pos_range(st)
     lh, lhn = lead_hold(st, d)
     fd, fdn = fade4(st, d)
@@ -376,15 +422,17 @@ def build_row(entry, runs, opponents, style, late_table, computed_at):
     hh, hw, hl = h2h(st, [(no, nm, past_starts(rs, d)) for no, nm, rs in opponents])
     fm = form(st, d)
     row.update({
-        "late_n": ln, "late_den": lden, "late_next_pct": late_next_pct(ln, late_table),
+        "late_n": ln, "late_den": lden, "late_next_pct": late_next_pct(ln, late_table), "late_runs": lruns,
+        "style_counts": style_counts(runs, entry["track"], d),
         "lead_hold_rate": ratio(lh, lhn), "lead_hold_n": lhn,
         "fade4_rate": ratio(fd, fdn), "fade4_n": fdn,
         "pos_var": pv, "pos_var_n": pvn,
         "runs_30d": runs_30d(st, d), "run_of_year": run_of_year(st, d), "since_layoff": since_layoff(st, d),
+        "gap_days": gap_days(st, d),
         "oi_top3_rate": ratio(ok, on), "oi_n": on, "other3_top3_rate": ratio(tk, tn), "other3_n": tn,
         "night_top3_rate": ratio(nk, nn), "night_n": nn, "day_top3_rate": ratio(dk, dn), "day_n": dn,
         "h2h": hh, "h2h_w": hw, "h2h_l": hl,
-        "best_margin": fm["best_margin"], "best_margin_date": fm["best_margin_date"],
+        "best_margin": fm["best_margin"], "best_margin_date": fm["best_margin_date"], "best_finish": fm["best_finish"],
         "recent3_margin": fm["recent3_margin"],
         "pop_beat_rate": ratio(*fm["pop_beat"]), "pop_beat_n": fm["pop_beat"][1],
         "win_conv_rate": ratio(*fm["win_conv"]), "win_conv_n": fm["win_conv"][1],
@@ -395,12 +443,12 @@ def build_row(entry, runs, opponents, style, late_table, computed_at):
 # 表の列(⛔pipeline/sql/karte_facts_20260922.sql と同じ並び)
 COLUMNS = (
     "race_date", "track", "race_no", "umaban", "horse_key", "horse_name",
-    "late_n", "late_den", "late_next_pct",
-    "style", "lead_hold_rate", "lead_hold_n", "fade4_rate", "fade4_n", "pos_var", "pos_var_n",
-    "runs_30d", "run_of_year", "since_layoff",
+    "late_n", "late_den", "late_next_pct", "late_runs",
+    "style", "style_counts", "lead_hold_rate", "lead_hold_n", "fade4_rate", "fade4_n", "pos_var", "pos_var_n",
+    "runs_30d", "run_of_year", "since_layoff", "gap_days",
     "oi_top3_rate", "oi_n", "other3_top3_rate", "other3_n", "night_top3_rate", "night_n", "day_top3_rate", "day_n",
     "h2h", "h2h_w", "h2h_l",
-    "best_margin", "best_margin_date", "recent3_margin", "pop_beat_rate", "pop_beat_n", "win_conv_rate", "win_conv_n",
+    "best_margin", "best_margin_date", "best_finish", "recent3_margin", "pop_beat_rate", "pop_beat_n", "win_conv_rate", "win_conv_n",
     "computed_at",
 )
 
@@ -441,6 +489,13 @@ def selftest(quiet=False):
           ["2026-09-01", "2026-08-10", "2026-07-01", "2025-01-01"])
     check("late_count 記録なしは分母から外す", late_count(st), (1, 2))
     check("late_count 空", late_count([]), (None, None))
+    check("late_runs 前走", late_runs(st), [1])
+    check("late_runs 記録なし", late_runs(st[2:]), None)
+    check("gap_days", gap_days(st, D), 21)
+    # 浦和の行が 3 つ以上(取消の行も数える= run_facts と同じ)→ 浦和だけ: 9/1 p0.2 逃・7/1 p0.8 追(大井 8/10 は外れる)
+    check("style_counts 同じ場だけ", style_counts([dict(r, n1=10) for r in runs], "浦和", D),
+          {"逃": 1, "先": 0, "差": 0, "追": 1})
+    check("style_counts 位置なし", style_counts([dict(r, c1=None) for r in runs], "浦和", D), None)
     check("late_next_pct", late_next_pct(5, {"buckets": [{"k": 3, "pct": 40.0}]}), 40.0)
     check("late_next_pct 表なし", late_next_pct(1, None), None)
     check("pos_range", pos_range(st), ("1〜8", 4))

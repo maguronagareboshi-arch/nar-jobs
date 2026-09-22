@@ -348,15 +348,20 @@ def _kn(rate, n):
 
 def fmt_row(r):
     late = "-" if r["late_n"] is None else "%d/%d" % (r["late_n"], r["late_den"])
+    if r["late_runs"]:
+        late += "(%s)" % "・".join("前走" if i == 1 else "%d走前" % i for i in r["late_runs"])
     pct = "-" if r["late_next_pct"] is None else "%g%%" % r["late_next_pct"]
+    sc = "" if not r["style_counts"] else "(%s)" % "".join("%s%d" % kv for kv in r["style_counts"].items())
     h2h = "-" if r["h2h"] is None else "%d勝%d敗(%d頭)" % (r["h2h_w"], r["h2h_l"], len(r["h2h"]))
-    best = "-" if r["best_margin"] is None else "%.1f(%s)" % (r["best_margin"], r["best_margin_date"])
+    best = "-" if r["best_margin"] is None else "%.1f(%s・%s着)" % (r["best_margin"], r["best_margin_date"],
+                                                                  r["best_finish"])
     rec = "-" if r["recent3_margin"] is None else "%.1f" % r["recent3_margin"]
-    return ("%s%2dR %2d %-10s 出遅%s 次%s | %s 位置%s | 粘%s 失速%s | 30日%s 今年%s 休明%s | 大井%s 他3%s 夜%s 昼%s"
+    return ("%s%2dR %2d %-10s 出遅%s 次%s | %s%s 位置%s | 粘%s 失速%s | 30日%s 今年%s 休明%s 間%s日 | 大井%s 他3%s 夜%s 昼%s"
             " | 相手%s | 良%s 近%s 人気上%s 勝切%s"
-            % (r["track"], r["race_no"], r["umaban"], r["horse_name"], late, pct, r["style"] or "-",
+            % (r["track"], r["race_no"], r["umaban"], r["horse_name"], late, pct, r["style"] or "-", sc,
                r["pos_var"] or "-", _kn(r["lead_hold_rate"], r["lead_hold_n"]), _kn(r["fade4_rate"], r["fade4_n"]),
                r["runs_30d"], r["run_of_year"], r["since_layoff"] if r["since_layoff"] is not None else "-",
+               r["gap_days"] if r["gap_days"] is not None else "-",
                _kn(r["oi_top3_rate"], r["oi_n"]), _kn(r["other3_top3_rate"], r["other3_n"]),
                _kn(r["night_top3_rate"], r["night_n"]), _kn(r["day_top3_rate"], r["day_n"]),
                h2h, best, rec, _kn(r["pop_beat_rate"], r["pop_beat_n"]), _kn(r["win_conv_rate"], r["win_conv_n"])))

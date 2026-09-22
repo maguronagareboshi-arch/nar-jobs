@@ -10,7 +10,9 @@
 --   ・割合(*_rate)は 0〜1。分母(*_n)が 0 のときは割合 NULL。材料が 1 本も無いときは分母も NULL。
 --   ・出遅れ= 直近 5 走のうち記録(nar_kb_runs の行)のある走で start_note に「出遅」の回数(late_n)/記録のある走数(late_den)。
 --     late_next_pct(%)= nar_meta 'karte:late_next:v1'(南関 2025-09〜2026-08 で数え直した割合表)を引くだけ。
---   ・style= nar_run_facts.style をそのまま(⛔ここで数え直さない= 決めごと 4)。
+--   ・style= nar_run_facts.style をそのまま(⛔ここで数え直さない= 決めごと 4)。style_counts= その 5 走
+--     (facts.pick_past_runs)を 1 走ずつ 1 角の位置 p で 逃(<=0.2)/先(<=0.4)/差(<=0.7)/追 に切った回数。
+--   ・late_runs= 出遅れた走が直近 5 走の何走前か(1= 前走)。gap_days= 前走(直近の実走)からの日数。
 --   ・pos_var= 直近 5 走の最初のコーナーの順位(nar_run_facts.c1)の幅の字 '3〜7'(同じなら '5')/ pos_var_n= 使えた走数。
 --   ・先行して粘った= c1 が 3 番手以内の走のうち 3 着以内 / 4角から失速= c4 が 3 番手以内の走のうち 4 着以下(直近 365 日)。
 --   ・使われ方= 前日までの 30 日の走数・今年何戦目・180 日超の休みの後から何戦目(無ければ NULL)。
@@ -34,8 +36,10 @@ create table if not exists public.nar_karte_facts (
   late_n            int,                        -- 直近 5 走のうち出遅れの記録がある回数
   late_den          int,                        -- ⛔記録のある走数(記録の無い走は分母から外す)
   late_next_pct     numeric,                    -- 次も出遅れる割合(%)= 割合表を引くだけ
+  late_runs         jsonb,                      -- 出遅れた走の位置 [1, 2](1= 前走・n= n 走前)。0 回は []・記録なしは NULL
   -- 走り方
   style             text,                       -- nar_run_facts.style(今日の行)
+  style_counts      jsonb,                      -- 脚質の回数 {"逃":n,"先":n,"差":n,"追":n}= style と同じ 5 走を 1 走ずつ同じ閾値で
   lead_hold_rate    numeric,
   lead_hold_n       int,                        -- 最初のコーナー 3 番手以内の走数(直近 365 日)
   fade4_rate        numeric,
@@ -46,6 +50,7 @@ create table if not exists public.nar_karte_facts (
   runs_30d          int,
   run_of_year       int,
   since_layoff      int,                        -- 休み明け何戦目(180 日超の休みが無ければ NULL)
+  gap_days          int,                        -- 今回の間隔= 前走からの日数(画面が gapText で「中◯週」等にする)
   -- 条件との相性(通算・南関の走だけ)
   oi_top3_rate      numeric,
   oi_n              int,
@@ -62,6 +67,7 @@ create table if not exists public.nar_karte_facts (
   -- 調子(直近 365 日)
   best_margin       numeric,                    -- 1 着との差(秒)のいちばん小さい走
   best_margin_date  date,
+  best_finish       int,                        -- いちばん良い走の着順
   recent3_margin    numeric,                    -- 直近 3 走の 1 着との差の平均(秒・0.1 に四捨五入)
   pop_beat_rate     numeric,
   pop_beat_n        int,                        -- 着順と人気が両方ある走数
