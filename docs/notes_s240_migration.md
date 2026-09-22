@@ -31,9 +31,10 @@
    本番の `pg_cron` の予定を確認。⛔他セッションの本番作業も止める。
 2. `00_baseline_counts.sql` を流して **0-1 の 5 行を貼って控える**(これが無いと検算できない)。0-2 で
    「どの年も 25 万行未満」を確認。0-4 でディスクの空きを確認。
-3. 各表の `§0` を流して、写しと本番の実物を答え合わせ。⛔1 つでも違ったら §1 の DDL を直してから進む。
-   特に見るもの= 列の並び(0-1)・索引(0-2)・check(0-3)・policy(0-4)・trigger(0-6)・
-   この表を指す外部キー(0-7)・この表に依存する view(0-9)。**0-6 / 0-7 / 0-9 が 0 行でなければ止めて相談**。
+3. 各表の `§0` を流して答え合わせ。**SQL は 2026-09-22 18:10 の本番の読み取りに合わせてある**ので、
+   §0 は「読み取りから当てるまでの間に本番が変わっていないか」の最後の確認。⛔違ったら §1 を直す。
+   期待値は各ファイルの §0 に書いてある。⛔`0-6 trigger` と `0-7 外部キー` は 5 表とも 0 行、
+   `0-9 依存 view` は **nar_races だけ 1 行(nar_sales_hourly)・他の 4 表は 0 行**。ここがずれたら止めて相談。
 
 ## 2. 当てる順(⛔小さい表から。1 表を §1〜§5 まで終わらせてから次へ)
 
@@ -92,13 +93,24 @@
 
 - **(a) PK に区画キー**= 5 表とも `race_date` が PK に入っている(nar_run_facts だけ PK の**先頭**)。
   unique 制約はほかに無い見込み(§0-3 で確認)。
-- **(b) 旧表名に依存するもの**= git grep した結果、外部キー 0・trigger 0・view 0。
+- **(b) 旧表名に依存するもの**= 外部キー 0・trigger 0(5 表とも実測)。
+  ⚠**view は 0 ではなかった**= `nar_sales_hourly` が `nar_races` に依存している(2026-09-22 実測。
+  手元の git grep だけでは見つからず「view 0」と書いていた= 誤り)。view は OID で表に結び付くので
+  rename しても向き先が `nar_races_archive_part` に残る → **`30_nar_races.sql` の §4' の中(rename の
+  直後・同じトランザクション)で `create or replace view` して親に結び直す**。定義は本番の
+  `pg_get_viewdef` の写しそのまま(列名・型を変えると replace できない)。検算は 99_verify の 4-5。
   `nar_search_runs` / `nar_search_runs_v2` は plpgsql の中で表名を書いているだけ= **実行時に名前で引く**ので
   rename の影響なし。`nar_sales_daily` view は `nar_sales`(対象外)の view。
   Actions の `\copy (select * from …)` と `js/data.js` の REST も表名が変わらないので変更 0。
 - **(c) PostgREST の upsert**= PG17 の partitioned table は `on conflict (…) do update` が使える
   (競合を見る unique 索引が区画キーを含むとき)。5 表とも PK がそれを満たす= `on_conflict=` は今のまま。
   §4'(i) の差分もこれと同じ形なので、ここで動けば便も動く。
+- **(c-2) policy と grant**= 5 表とも RLS 有効・`<表>_read`(select / anon,authenticated / true)。
+  ⛔`nar_races` だけ **2 本目 `nar_races_marks_writer_read`**(印の書き手 marks_writer に select)があるので、
+  親と区画の両方に 2 本置く。grant は 5 表とも anon / authenticated / service_role に**全権限**
+  (読みだけに絞っているのは RLS の側)= 親と区画も `grant all privileges` にする。⛔select だけにすると
+  便(service_role)の書きが止まる。`nar_races` は marks_writer にも select。
+  comment が付いているのは **nar_run_facts だけ**= 他の 4 表の親には付けない。
 - **(d) 索引の名前**= 旧表の索引名(`nar_runs_pkey` / `nar_runs_horse_idx` …)は rename しても残るので、
   親の索引は `<表>_p_<名前>`(例 `nar_runs_p_horse_idx`)で作る。PK 制約は create table が自動で
   `<表>_p_pkey` にする。rename 後も `_p_` が名前に残るが害はない。
@@ -109,7 +121,12 @@
   0 行になり得る。だから §5 は「有効化+ポリシー+grant」を必ず一組で流す。
 - **(g) 区画は 2030 まで作った**= 区画の無い日付を入れると upsert が落ちるため、先に 8 つ作って
   毎年足す手作業を減らした(2031 年以降のぶんは 2030 年中に足す)。
-- **(h) `nar_race_payouts` の create table は手元に無い**= 列は `load_nar_official.py` からの推定。
-  §0-1 が正。⛔違ったら `20_…` の §1 を直してから流す。
+- **(h) `nar_race_payouts` の列は確認が取れた**(2026-09-22 実測・6 列)= 以前の「推定」の注記は消した。
+  索引は **PK だけ**・check なし・comment なし。
+- **(j) 索引の実物との差分 3 件**(2026-09-22 実測で判明)=
+  ①`nar_runs_race_idx` は**存在しない**(設計の「drop 候補」の話は消えた)。
+  ②`nar_runs` に `(horse_name text_pattern_ops)` があり、手元のリポジトリのどこにも無かった
+  (馬名の前方一致用)。⛔親にも張る= 張らないと attach のときに索引の作り直しが始まる。
+  ③`nar_races` に `(race_date desc, track)` があり、これも手元には無かった。親に張る。
 - **(i) §4'(i) の差分の幅**= `race_date >= '2026-09-15'`(固定)。便を止めてから §2 を流し終えるまでの
   間に書かれた行を拾うためで、1 週間の余裕をとっている。⛔§2 に 1 週間以上かけるなら日付を早める。

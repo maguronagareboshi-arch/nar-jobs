@@ -90,7 +90,9 @@ select c.relname as part, count(*) as idx_n
   from pg_class c join pg_index i on i.indrelid = c.oid
  where c.oid in (select relid from pg_partition_tree('public.nar_runs') where isleaf)
  group by 1 order by 1;
--- 期待= どの区画も同じ本数。⛔archive 区画だけ多いのは元からある nar_runs_race_idx のぶん(想定どおり)。
+-- 期待= どの区画も同じ本数(nar_runs は PK+5 本= 6)。⛔2026-09-22 実測で nar_runs_race_idx は
+--   本番に存在しないので、archive 区画だけ本数が多くなることは無い。ずれたら attach で索引が
+--   作り直された(または繋がらなかった)ということ= 4-1 の indisvalid も見る。
 
 -- 4-3 RLS と policy(⛔親と区画の両方に要る。抜けると親越しの select が 0 行になり得る)
 select c.relname, c.relrowsecurity,
@@ -98,6 +100,26 @@ select c.relname, c.relrowsecurity,
   from pg_class c join pg_namespace n on n.oid = c.relnamespace
  where n.nspname = 'public' and c.relname like 'nar_run%' and c.relkind in ('r', 'p')
  order by 1;
+
+-- =====================================================================
+-- 4-4 ⛔nar_races だけ policy が 2 本(marks_writer 用)。親と区画の両方にそろっているか
+-- =====================================================================
+select tablename, policyname, roles, cmd
+  from pg_policies where schemaname = 'public' and tablename like 'nar_races%'
+ order by tablename, policyname;
+-- 期待= 親 nar_races に 2 本(nar_races_read / nar_races_marks_writer_read)・
+--   区画 9 つにも 2 本ずつ(*_part_read / nar_races_marks_writer_read_part)。
+
+-- =====================================================================
+-- 4-5 ⛔nar_races に依存する view が親を指しているか(2026-09-22 実測で見つかった 1 本)
+-- =====================================================================
+select count(*) as hourly_rows from public.nar_sales_hourly;
+select distinct refobjid::regclass as view_points_at
+  from pg_depend d join pg_rewrite r on r.oid = d.objid
+ where r.ev_class = 'public.nar_sales_hourly'::regclass and d.classid = 'pg_rewrite'::regclass
+   and d.refclassid = 'pg_class'::regclass;
+-- 期待= hourly_rows が 0 でない・向き先に nar_races が出る(nar_races_archive_part なら結び直しに失敗)。
+-- ⛔0 行 / archive_part が出たら 30_nar_races.sql の (ii-b) をもう一度流す(トランザクション外でも可)。
 
 -- =====================================================================
 -- 5) 匿名キーで実際に読めるか(⛔ここが本番の画面と同じ道)
@@ -111,6 +133,12 @@ select count(*) from public.nar_race_payouts where race_date = '2026-09-22';
 select count(*) from public.nar_race_votes where race_date = '2016-05-01';
 reset role;
 -- 期待= どれも 0 でない(archive 側も読める)。⛔0 なら 4-3 の policy/grant が抜けている。
+
+-- 5-b ⛔印の書き手のロールでも nar_races が読めるか(2 本目の policy の確認)
+set role marks_writer;
+select count(*) from public.nar_races where race_date = current_date;
+reset role;
+-- 期待= 0 でない。⛔0 なら nar_races_marks_writer_read が親か区画に無い。
 
 -- =====================================================================
 -- 6) upsert(PostgREST の on_conflict)が親で動くか

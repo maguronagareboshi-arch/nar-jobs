@@ -10,6 +10,8 @@
   7) 差分+rename 2 本+notify が同じトランザクション・delete は rename より後で相手が _archive_part
   8) insert/delete の刻みに statement_timeout が付いている
   9) notify pgrst がある
+ 10) grant all privileges がある(本番は anon/authenticated/service_role に全権限)
+ 11) nar_races だけ= 依存 view nar_sales_hourly を rename の後・同じトランザクションで作り直している
 ⛔見ていないもの= 本番の実物との一致(それは各ファイルの §0 を流して人が確かめる)。
 使い方: py -3.12 tests/test_partition_s240_sql.py
 """
@@ -149,6 +151,28 @@ def check_one(fn, path, is_migration):
     # 9) PostgREST の読み直し
     if "notify pgrst" not in nocomment.lower():
         fail(fn, "notify pgrst, 'reload schema' が無い")
+
+    # 10) grant は本番と同じ「全権限」(⛔select だけにすると便の書きが止まる)
+    if "grant all privileges" not in nocomment.lower():
+        fail(fn, "grant all privileges が無い(本番は anon/authenticated/service_role に全権限)")
+
+    # 11) nar_races だけ= 依存 view `nar_sales_hourly` を §4' の rename の**後**・同じ
+    #     トランザクションの中で create or replace view している(⛔view は OID で結び付くため)
+    if fn.startswith("30_"):
+        v = nocomment.lower().find("create or replace view public.nar_sales_hourly")
+        ren2 = [mm.start() for mm in
+                re.finditer(r"(?i)alter\s+table\s+public\.[a-z0-9_]+\s+rename\s+to", nocomment)]
+        c2 = nocomment.find("commit;", ren2[-1]) if ren2 else -1
+        if v < 0:
+            fail(fn, "依存 view nar_sales_hourly の create or replace view が無い")
+        elif not ren2 or v < ren2[-1]:
+            fail(fn, "view の作り直しが rename より先にある(⛔rename の後でないと親に結び直せない)")
+        elif c2 < 0 or v > c2:
+            fail(fn, "view の作り直しが rename と同じトランザクションの中に無い")
+        if "marks_writer" not in nocomment:
+            fail(fn, "nar_races だけの 2 本目の policy / grant(marks_writer)が無い")
+    elif "nar_sales_hourly" in nocomment:
+        fail(fn, "nar_races 以外のファイルに nar_sales_hourly が書かれている")
 
 
 def main():
