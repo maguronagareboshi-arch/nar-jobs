@@ -23,10 +23,25 @@ class HealthExit(unittest.TestCase):
         hh.count_skip_reason(stats, "complete_after_window")
         self.assertEqual((stats["reparse_waiting"], stats["review_waiting"], stats["attention"]), (871, 1, 0))
         self.assertEqual(hh.exit_count(stats), 0, "取り直し待ち・review 待ちで exit 1 にした")
-        # 本物の要確認(changed・error・新しい review)は今までどおり exit 1
+        # 2026-09-22 の監査= changed・review は「人が見る待ち」なので exit 1 に効かせない(数は出す)
         hh.count_skip_reason(stats, "changed_waiting_review")
-        self.assertEqual(hh.exit_count(stats), 1)
-        self.assertEqual(hh.exit_count(dict(stats, error=2, review=3)), 6)
+        self.assertEqual(stats["changed"], 1, "changed の数は今までどおり数える")
+        self.assertEqual(hh.exit_count(stats), 0, "changed で exit 1 にした")
+
+    def test_exit_count_combinations(self):
+        """数の組み合わせ 4 例= 効くのは not_ready・error・attention だけ。"""
+        base = {"review": 0, "changed": 0, "not_ready": 0, "error": 0, "attention": 0,
+                "review_waiting": 0, "reparse_waiting": 0}
+        # ① 何も無い= 0
+        self.assertEqual(hh.exit_count(dict(base)), 0)
+        # ② review 3 + changed 5 だけ= 0(前は 8 で毎日赤だった)
+        self.assertEqual(hh.exit_count(dict(base, review=3, changed=5)), 0)
+        # ③ error 2 + not_ready 1 + attention 4 = 7
+        self.assertEqual(hh.exit_count(dict(base, error=2, not_ready=1, attention=4)), 7)
+        # ④ 混ざり= review/changed/待ちは数えず error 1 + attention 2 = 3
+        self.assertEqual(
+            hh.exit_count(dict(base, review=9, changed=9, review_waiting=9, reparse_waiting=9,
+                               error=1, attention=2)), 3)
 
 
 if __name__ == "__main__":

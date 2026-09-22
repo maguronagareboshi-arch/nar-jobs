@@ -1,0 +1,43 @@
+# §238c 網羅表(nar_meta 'coverage:v1' / 'coverage:v1:YYYY')の全期間の焼き直し(手押し)。
+# 毎朝の便は直近 2 か月だけ数え直すので、初回と作り直しのときだけこれを回す。
+# 実測(手元・2026-08 の 1 か月)= 通信 31 回・12 秒。2014-01〜当月 は約 150 か月。
+# 入力 mode= dry(既定・書かずに枡の数と大きさを log に出す)/ apply(nar_meta へ書く)。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: coverage-backfill
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: 'from (YYYY-MM)'
+        required: true
+        default: '2014-01'
+      to:
+        description: 'to (YYYY-MM)'
+        required: true
+        default: '2026-09'
+      mode:
+        description: 'dry (count only, no write) or apply (write)'
+        required: true
+        default: 'dry'
+        type: choice
+        options:
+          - dry
+          - apply
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r cloud/requirements.txt
+      - name: backfill coverage matrix
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          MODE: ${{ github.event.inputs.mode }}
+        run: |
+          if [ "$MODE" = "apply" ]; then APPLY="--apply"; else APPLY=""; fi
+          python cloud/coverage_matrix.py $APPLY --from "${{ github.event.inputs.from }}" --to "${{ github.event.inputs.to }}"

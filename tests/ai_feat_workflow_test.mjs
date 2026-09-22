@@ -70,7 +70,7 @@ const STEPS = steps(BODY);
 {
   const prod = STEPS.find((s) => s.text.includes(PROD_HOST));
   const sqlish = prod.text.split('\n').map((l) => l.trim())
-    .filter((l) => l && !l.startsWith('-') && !/^[a-z_]+:$/.test(l));
+    .filter((l) => l && !l.startsWith('-') && !l.startsWith('#') && !/^[a-z_]+:$/.test(l));
   const NG = /\b(insert|update|delete|truncate|create|drop|alter|grant|revoke|vacuum|analyze)\b/i;
   const bad = sqlish.filter((l) => NG.test(l));
   assert.deepEqual(bad, [], '本番に繋ぐ step に書き込みの語がある: ' + JSON.stringify(bad));
@@ -78,8 +78,10 @@ const STEPS = steps(BODY);
   const copies = sqlish.filter((l) => l.includes('\\copy'));
   assert.ok(copies.length >= 9, '本番からの \\copy が 9 本ない: ' + copies.length);
   for (const c of copies) {
-    assert.match(c, /^\\copy \(select \* from public\.[a-z_]+( where [^)]*)?\)\s+to /,
-      '本番の \\copy が「(select * from …) to」の形でない: ' + c);
+    // ⛔列名を明記する(2026-09-22)= 本番に列が増えても地元への読み込みが落ちないように。`select *` は禁止。
+    assert.ok(!/select \* from/.test(c), '本番の \\copy が select * のまま: ' + c);
+    assert.match(c, /^\\copy \(select [a-z0-9_]+(, [a-z0-9_]+)+ from public\.[a-z_]+( where [^)]*)?\)\s+to /,
+      '本番の \\copy が「(select 列名… from …) to」の形でない: ' + c);
   }
   assert.ok(!/\bfrom '/.test(prod.text), '本番に繋ぐ step に \\copy … from(書き込み)がある');
   console.log('2) 本番は read only(\\copy … to が ' + copies.length + ' 本・書き込みの語 0): OK');

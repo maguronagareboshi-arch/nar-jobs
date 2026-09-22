@@ -201,7 +201,11 @@ def list_documents(fetch, since, until, rows=None):
     for why in dropped:
         log("  ⚠ 使えない頁 %s" % why)
     if not pages:
-        raise RuntimeError("%s に使える頁がありません(Worker が止まっている疑い)" % RAW_TABLE)
+        # ⛔「取れなかった」であって「壊れた」ではない= 呼び出し側が exit 0 にできるよう印を付ける
+        #   (先方は GitHub ランナーの IP に 403・取るのは Worker の役。§195/§195c)
+        err = RuntimeError("%s に使える頁がありません(先方 403 / Worker が止まっている疑い)" % RAW_TABLE)
+        err.source_unavailable = True
+        raise err
     out = []
     seen = set()
     for page in range(1, MAX_PAGES + 1):

@@ -321,6 +321,24 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: python cloud/run_facts.py --apply || echo "⚠ 派生表 nar_run_facts が焼けない(続行)"
 
+      # §238c 網羅表(場 × 年月の枡= 何レース入っていて、どの項目が何 % 埋まっているか)を
+      # nar_meta 'coverage:v1'(索引)と 'coverage:v1:YYYY' に焼く。画面 /coverage が読む。
+      # ⛔派生表 nar_run_facts の後に置く(同じ朝の値を数えるため)。朝の便だけ・直近 2 か月だけ数え直す。
+      # ⛔落ちても続行(|| echo)= 数えるだけの表なので、これで便を止めない。
+      # 全期間の焼き直しは coverage-backfill.yml(手押し)。
+      - name: coverage matrix (morning only)
+        if: env.MODE != 'monthly' && !cancelled()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          H=$(TZ=Asia/Tokyo date +%H%M)
+          if [ $((10#$H)) -lt 930 ]; then
+            python cloud/coverage_matrix.py --apply || echo "⚠ 網羅表が焼けない(続行)"
+          else
+            echo "coverage matrix は朝の便だけ(JST $H)=スキップ"
+          fi
+
       # §239a 分析タブ(南関)の事実 nar_karte_facts(1 頭 1 行・発走前の値だけ)。JST の今日と明日の出走表ぶんを upsert(冪等)。
       # 設計= 「前日の出走表が出た後と当日朝」= 朝の便(JST 09:30 前・monthly 05:33 を含む)と 17:00 以降の便だけ。
       # ⛔落ちても続行(|| echo)。⛔先に pipeline/sql/karte_facts_20260922.sql を流すこと(表が無いと HTTP404 で 1 を返す)。

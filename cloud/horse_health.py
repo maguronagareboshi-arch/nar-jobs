@@ -1980,8 +1980,12 @@ def count_skip_reason(stats: dict[str, int], reason: str | None) -> None:
 
 
 def exit_count(stats: dict[str, int]) -> int:
-    """exit 1 に効かせる数= review・changed・not_ready・error・attention(⛔review_waiting・reparse_waiting は数えない)"""
-    return sum(stats.get(k, 0) for k in ("review", "changed", "not_ready", "error", "attention"))
+    """exit 1 に効かせる数= not_ready・error・attention の 3 つだけ。
+
+    ⛔review・changed は「人が見れば済む待ち」で、直せば消えるものではない= 毎日 exit 1 が続いて
+      便の赤が意味を失う(2026-09-22 の監査)。数は summary / JSON にそのまま出す(消していない)が、
+      便の成否には効かせない。⛔review_waiting・reparse_waiting も今までどおり数えない。"""
+    return sum(stats.get(k, 0) for k in ("not_ready", "error", "attention"))
 
 
 if __name__ == "__main__":
