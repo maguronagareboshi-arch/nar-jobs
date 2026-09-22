@@ -45,6 +45,7 @@
 import argparse
 import bisect
 import datetime as dt
+from zoneinfo import ZoneInfo
 import io
 import json
 import os
@@ -215,6 +216,11 @@ def day_cell(day_rows, by_band, by_dist, d, baseline):
     return round(statistics.median(devs), 1), len(devs), devs
 
 
+def _today_jst():
+    """⛔GitHub の runner は UTC。日の境目は日本時間で決める(JST 00:00〜08:59 に UTC 日付を使うと前日が「途中まで」のまま残る)"""
+    return dt.datetime.now(ZoneInfo("Asia/Tokyo")).date()
+
+
 def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=False):
     """as-of の馬場差を組む。
       samples  : [(track, date, dist, band, time, going)]  勝ち時計(標準の窓ぶん全部)
@@ -223,7 +229,7 @@ def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=
       戻り     : ({日: {場prefix: {d,n[,p]}}}, 組み直した場日の数, {(日,場): 偏差列})
     ⛔p=true(暫定)= その日がまだ終わっていない(=当日)。終わったレースだけから出した途中の値。
     """
-    today = today or dt.date.today()
+    today = today or _today_jst()
     frozen = frozen or {}
     by_band_all, by_dist_all = {}, {}
     for track, date, dist, band, t, _g in sorted(samples, key=lambda s: s[1]):
@@ -291,7 +297,7 @@ def main():
         log("SUPABASE_URL / SUPABASE_SERVICE_KEY が無い")
         return 2
 
-    today = dt.date.today()
+    today = _today_jst()
     # ⛔表示する一番古い日(today-90)から見て、その日の標準ぶんまで遡って読む(as-of なので日ごとに窓が動く)
     since = (today - dt.timedelta(days=WINDOW_DAYS + fetch_days(a.baseline))).isoformat()
     wins = rows_all(base, key, "/rest/v1/nar_runs?select=track,race_date,race_no,time_sec"
