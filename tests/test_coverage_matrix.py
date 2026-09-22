@@ -9,6 +9,8 @@
   ③母数 0 は None(「欠けて 0%」と区別する)
   ④出どころの内訳= official / rakuten / kochi_legacy / unknown
   ⑤月の並び(ym_add / ym_range / ym_bounds)と 枡の差し替え(merge_cells)
+  ⑥年ごとの区切り(year_groups)・索引の年の足し算(merge_years / build_index)
+  ⑦読みの出直し= 6 回・10/20/40/60/90/120 秒・駄目なら ReadFailed(⛔途中の結果を捨てない)
 """
 import sys
 import unittest
@@ -16,8 +18,10 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from cloud.coverage_matrix import (COLS, count_month, merge_cells, rate,      # noqa: E402
-                                   src_of, venue_of, ym_add, ym_bounds, ym_range)
+from cloud.coverage_matrix import (COLS, RETRY_WAITS, ReadFailed,             # noqa: E402
+                                   build_index, count_month, get, merge_cells,
+                                   merge_years, rate, src_of, venue_of, year_groups,
+                                   ym_add, ym_bounds, ym_range)
 
 RACES = [
     {"track": "大井", "race_date": "2026-08-01", "race_no": 1, "source": "official"},
@@ -130,6 +134,82 @@ class Bits(unittest.TestCase):
         got = merge_cells(old, new)
         self.assertEqual([(c["v"], c["ym"], c["races"]) for c in got],
                          [("ooi", "2026-07", 1), ("ooi", "2026-08", 2), ("kochi", "2026-08", 3)])
+
+
+class Years(unittest.TestCase):
+    """⛔年が終わるごとに焼くための区切りと、索引の年の足し算。"""
+
+    def test_year_groups(self):
+        self.assertEqual(year_groups(["2014-11", "2014-12", "2015-01", "2015-02"]),
+                         [("2014", ["2014-11", "2014-12"]), ("2015", ["2015-01", "2015-02"])])
+        self.assertEqual(year_groups(["2026-09"]), [("2026", ["2026-09"])])
+        self.assertEqual(year_groups([]), [])
+
+    def test_merge_years_keeps_old(self):
+        # ⛔前に焼いた年(2014)を今回数えていなくても索引から消さない
+        self.assertEqual(merge_years(["2014", "2015"], ["2016"]), ["2014", "2015", "2016"])
+        self.assertEqual(merge_years([], ["2015", "2015"]), ["2015"])
+        self.assertEqual(merge_years(None, None), [])
+
+    def test_build_index(self):
+        idx = build_index("2026-09-22T09:00+09:00", "2026-09", ["2014", "2015"])
+        self.assertEqual(idx["years"], ["2014", "2015"])
+        self.assertEqual(idx["keys"], ["coverage:v1:2014", "coverage:v1:2015"])
+        self.assertEqual((idx["from"], idx["to"]), ("2014-01", "2026-09"))
+        self.assertEqual(idx["cols"], COLS)
+
+
+class Retry(unittest.TestCase):
+    """⛔9/21 の事故= 3 回で諦めて途中の結果を全部捨てた。6 回・10〜120 秒に直した。"""
+
+    def test_waits(self):
+        self.assertEqual(RETRY_WAITS, [10, 20, 40, 60, 90, 120])
+
+    def test_get_retries_then_succeeds(self):
+        import cloud.coverage_matrix as cm
+        slept, calls = [], [0]
+
+        class Res:
+            def __enter__(self_inner):
+                return self_inner
+
+            def __exit__(self_inner, *_a):
+                return False
+
+            def read(self_inner):
+                return b'[{"ok": 1}]'
+
+        def fake_urlopen(_req, timeout=None):
+            self.assertEqual(timeout, cm.READ_TIMEOUT)      # ⛔待ちは 120 秒
+            calls[0] += 1
+            if calls[0] < 4:
+                raise OSError("The read operation timed out")
+            return Res()
+
+        real = cm.urllib.request.urlopen
+        cm.urllib.request.urlopen = fake_urlopen
+        try:
+            got = get("https://x", "k", "/rest/v1/nar_meta", sleep=slept.append)
+        finally:
+            cm.urllib.request.urlopen = real
+        self.assertEqual(got, [{"ok": 1}])
+        self.assertEqual(slept, [10, 20, 40])               # 3 回待って 4 回目で通った
+
+    def test_get_raises_after_six_retries(self):
+        import cloud.coverage_matrix as cm
+        slept = []
+
+        def fake_urlopen(_req, timeout=None):
+            raise OSError("The read operation timed out")
+
+        real = cm.urllib.request.urlopen
+        cm.urllib.request.urlopen = fake_urlopen
+        try:
+            with self.assertRaises(ReadFailed):
+                get("https://x", "k", "/rest/v1/nar_meta", sleep=slept.append)
+        finally:
+            cm.urllib.request.urlopen = real
+        self.assertEqual(slept, RETRY_WAITS)                # 7 回試して 6 回待つ
 
 
 if __name__ == "__main__":
