@@ -1,3 +1,6 @@
+# HANDOFF(2 案件を 1 本に: §238a2 / §224 段 2a)
+
+## §238a2
 commit: 02e2f2e, 34b65f7(枝 s238a2・2 コミット= A-1 展開便 / A-2 予想 AI の材料・push なし)
 検品: ⛔本番 DB に 1 行も書いていない(読みは anon で nar_races を 900 レース 1 回だけ= B-1 の可否を測るため)。手元は `py -3.12 -m unittest discover -s tests` が 184 本中 180 本緑(落ちる 4 本は本件と無関係の既存= 大井の取得 2 本と ai_meta/ai_p_win の import)・`cloud/tenkai.py --selftest` 8/8・`tests/ai_feat_check.py --selftest` 全 OK・凍結した旧実装が pipeline/facts.py と 6 例で一致。node が手元に無いので `tests/ai_feat_workflow_test.mjs` は字面で確認しただけ(⚠Actions で要再走)。
 通信: 展開便は corners を引く要求が丸ごと消えて nar_run_facts が 2 本(その日の型 1 本+過去走の c1/n1 は場ごと)。予想 AI は本番から写す表が 9→10(nar_run_facts・2014-01-01 以降)。画面の通信は +0(B-1 未着手)。
@@ -5,3 +8,12 @@ commit: 02e2f2e, 34b65f7(枝 s238a2・2 コミット= A-1 展開便 / A-2 予想
 変えた点(写しを消した箇所): `cloud/tenkai.py:183 corner_ranks` / `:279 first_corner` / `:297 style_of` / `:356 fetch_corners` / `:227 SELFTEST`(通過順の 5 例)を削除→ `fetch_pos`(c1,n1)と `fetch_style`/`fetch_style_window`(style,style_p,style_n)に置換。`pipeline/sql/ai_feat_20260908.sql:108 nar_corner_ranks()` と `:424 t_cmap` を削除→ `t_corner` は nar_run_facts の読み替え・`:1074-1082` と `:1295-1302` の style の case 式 2 本は `t_style` の join に置換。ほか `cloud/baba_trend.py:53` と `cloud/course_stats.py:49` の first_corner の輸入元を pipeline.facts へ・`nar-ai-feat.yml` に \copy 1 本と地元の器 `ai_feat_local_schema.sql` に表 1 枚・`nar-refresh.yml` の tenkai 段を run facts / karte facts の**後ろ**へ移動(今日と明日の行が焼けてから読むため)・tests 3 本更新(`test_tenkai_pick.py` は派生表の型を渡す形へ・`ai_feat_check.py` の ⑥ は nar_run_facts と独立オラクルの突合へ・`run_facts_check.py` は消えた 3 写しを**凍結した写し**として抱え直した)。
 ⚠: B-1(画面 js/data.js)は**着手していない**= 派生表の c1..c4 では今の「通過」の字が作れないため。実測(9/1〜9/20・900 レース)= 読めたコーナーが 4 つ 559 本・2 つ 175 本・3 つ 39 本・5〜6 つ 27 本・0 本(帯広ばと笠松)100 本。c1..c4 だけだと 2 つの場は 3 つに増え・3 つの場は 4 つに増え・5〜6 つの場は真ん中が消える= 8,120 走中 2,763 走で字が変わる。**そのまま置換すると画面の通過が約 3 割のレースで変わり、3% は情報が消える**ので止めた。
 要判断: ①B-1 の直し方= (a) 派生表に `passing`('3-3-5' の全コーナーの字)を 1 列足して画面はそれを読む(⛔表の焼き直しが要る)/ (b) 画面は今のまま corners を読み続ける(写しは 3→1 でなく 3→2 で止める)/ (c) 2 つと 3 つを見分ける印(読めたコーナーの数)を 1 列足す。②A-2 の脚質 5% 差は学習し直しが要るか(base_v1 の再 fit)。③`nar-refresh.yml` の段の入れ替えでよいか(tenkai が便の終わりの方へ動く)。④本番の SQL(run_facts・ai_feat)を当てるのは鍵を持つ担当= 未実施。
+
+## §224 段 2a
+commit: 7dd7e0e(枝 s224s2・1 コミット・push なし)
+検品: `--from 2025-09 --to 2026-09 --dry` を公開の読み取り鍵で実測= 所要 27 秒・枡 471(20 走未満 30 枡= 6.4%)・場×距離帯 40・51,554 バイト(200KB 未満なので鍵は 1 行のまま)。答え合わせ= kochi|1400|逃げ|速い を**サーバ側で脚質・ペース・着順を絞る別の道**で数え直し n=363 top3=143 が完全一致。`py -3.12 -m unittest discover -s tests -p "test_pace_lift*.py"` 9 本 OK。
+通信: +0(本番 DB への書きは無し。読みは REST を月ごと 4 本 × 13 か月)
+回帰: 追加だけ= 既存の便・表・yml は 1 行も触っていない
+変えた点: `cloud/pace_lift.py`= 過去 12 か月を月ごとに REST で読み**手元で**数えて nar_meta `pace_lift:v1` に upsert(場 × 距離帯 200m 刻み × 脚質 4 × ペース 3・分母は「走った」= 着順あり/競走中止/失格・1200m 未満と表に無い場とペース行の無いレースは入れない・20 走未満は rate と lift を null・base_rate= その場×距離帯の全体・200KB 超なら場ごとの鍵+索引 1 行・`--out` で JSON にも書ける)。`.github/workflows/pace-lift.yml`= 手で回す(dry/apply・from/to)+ 毎月 2 日 04:40 JST。`tests/test_pace_lift.py`。
+⚠: 列名は `pace`(`pace_word` は cloud/tenkai.py の**関数名**で列ではない)。距離帯の丸めは**半分は上**(1300→1400)= Python の round() は偶数丸めで画面の Math.round とずれるため使っていない。
+要判断: 本番へ書くのはユーザー(pace-lift.yml を mode=apply で 1 回・以後は月 1 の cron)。書くまで画面(統合ビューア 枝 s224s2)は「この表はまだ作られていません」と出る。
