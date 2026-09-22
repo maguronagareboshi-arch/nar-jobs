@@ -36,6 +36,39 @@
    期待値は各ファイルの §0 に書いてある。⛔`0-6 trigger` と `0-7 外部キー` は 5 表とも 0 行、
    `0-9 依存 view` は **nar_races だけ 1 行(nar_sales_hourly)・他の 4 表は 0 行**。ここがずれたら止めて相談。
 
+## 1-b Fable の当て方(⛔手元に psql が無いので GitHub Actions で流す)
+
+便= `.github/workflows/partition-s240.yml`(手で回すだけ・cron なし)。節を `run_section.py` で切り出して
+`psql -v ON_ERROR_STOP=1 -X -f` に渡す。先頭に `	iming on` が入るので、各文の所要が Actions のログに出る。
+
+```
+# 0) 控えを取る(⛔便を止めたあと)
+gh workflow run partition-s240.yml -f table=baseline
+
+# 1) 表ごとに 節の順で。⛔confirm=apply を付けないと §0(読みだけ)しか流れない
+gh workflow run partition-s240.yml -f table=votes -f section=0                    # 実物の確認(読みだけ)
+gh workflow run partition-s240.yml -f table=votes -f section=1 -f confirm=apply   # 親と区画
+gh workflow run partition-s240.yml -f table=votes -f section=2 -f confirm=apply   # 年ごとの写し
+gh workflow run partition-s240.yml -f table=votes -f section=4 -f confirm=apply   # 差分+rename+notify
+gh workflow run partition-s240.yml -f table=votes -f section=3 -f confirm=apply   # archive の掃除と attach
+gh workflow run partition-s240.yml -f table=votes -f section=5 -f confirm=apply   # 区画の grant と vacuum
+
+# 2) 検算(読みだけ・合否が 7) の表と 7-b の NOTICE に出る)
+gh workflow run partition-s240.yml -f table=verify
+
+# 3) 巻き戻しが要るとき= ⛔自動では流さない。全文をログに出すだけなので、段 A〜G を選んで手で流す
+gh workflow run partition-s240.yml -f table=rollback
+```
+
+- `table` は votes → payouts → races → runs → run_facts の順。`section` は 0 → 1 → 2 → **4** → **3** → 5。
+  (入力の `4` は `§4'`、`3` は `§3'` を指す。⛔`4` の前に `3` を流さない= 順序を入れ替えた意味が消える)
+- ⛔1 回の実行で 1 節だけ。**節の間で必ずログを読む**(§2 の行数の突き合わせ・§4' の当日の行数と view の確認)。
+- `concurrency` で同時に 2 本は走らない。`timeout-minutes: 120` なので nar_runs の §2 でも足りる。
+- 行数の合否を機械で出したいときは、控えの数を psql の変数で渡す(99_verify の 7) の頭にコメントあり)。
+  Actions からは渡していないので、その行は `(控え無し)` になる= 数は 2) と 7-b のログを目で見比べる。
+- ⛔`table=rollback` は print だけ。段を選んで流すのは人(Supabase の SQL エディタか、この便の SQL を
+  一時的に書き換えて流す)。
+
 ## 2. 当てる順(⛔小さい表から。1 表を §1〜§5 まで終わらせてから次へ)
 
 | 順 | ファイル | 行(移す側) | 見込み | 止めどころ |

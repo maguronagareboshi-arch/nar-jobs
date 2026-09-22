@@ -152,3 +152,109 @@ reset role;
 -- -- 期待= nar_races_2026 に入る・2 回流しても 1 行のまま
 -- delete from public.nar_races where track = '__test__';
 -- commit;
+
+-- =====================================================================
+-- 7) 機械で合否(⛔Actions のログでこの 1 表だけ見れば足りる)
+--    ⛔まだ移していない表は「その表は親ではない」ので NG ではなく `-` を返す。
+--    行数の突き合わせは 00_baseline_counts.sql の控えを psql の変数で渡す(既定 -1= 見ない):
+--      psql -v exp_votes=150000 -v exp_payouts=150000 -v exp_races=150000 \
+--           -v exp_runs=1290000 -v exp_facts=1457000 -f 99_verify.sql
+-- =====================================================================
+\if :{?exp_votes}
+\else
+\set exp_votes -1
+\endif
+\if :{?exp_payouts}
+\else
+\set exp_payouts -1
+\endif
+\if :{?exp_races}
+\else
+\set exp_races -1
+\endif
+\if :{?exp_runs}
+\else
+\set exp_runs -1
+\endif
+\if :{?exp_facts}
+\else
+\set exp_facts -1
+\endif
+
+-- ⛔控えは一時表に入れる。psql の `:変数` は `$$ … $$` の中では置き換わらないので、
+--   7-b の do ブロックはこの表から読む。
+drop table if exists s240_expect;
+create temp table s240_expect (tbl text primary key, expect bigint);
+insert into s240_expect values
+  ('nar_race_votes',   (:exp_votes)::bigint),
+  ('nar_race_payouts', (:exp_payouts)::bigint),
+  ('nar_races',        (:exp_races)::bigint),
+  ('nar_runs',         (:exp_runs)::bigint),
+  ('nar_run_facts',    (:exp_facts)::bigint);
+
+with k as (
+  select e.tbl, e.expect,
+         (select relkind from pg_class where oid = ('public.' || e.tbl)::regclass) as kind
+    from s240_expect e
+), leaf as (
+  select k.*,
+         (select count(*) from pg_partition_tree(('public.' || k.tbl)::regclass) where isleaf) as leaves,
+         (select count(*) from pg_index i
+           where i.indrelid = ('public.' || k.tbl)::regclass and not i.indisvalid) as bad_idx
+    from k where k.kind = 'p'
+  union all
+  select k.*, 0, 0 from k where k.kind is distinct from 'p'
+), part as (
+  select leaf.*,
+         (select count(*) from pg_class c
+           where c.oid in (select relid from pg_partition_tree(('public.' || leaf.tbl)::regclass) where isleaf)
+             and not c.relrowsecurity) as rls_missing,
+         (select count(*) from pg_class c
+           where c.oid in (select relid from pg_partition_tree(('public.' || leaf.tbl)::regclass) where isleaf)
+             and not exists (select 1 from pg_policies p
+                              where p.schemaname = 'public' and p.tablename = c.relname)) as policy_missing
+    from leaf where leaf.kind = 'p'
+  union all
+  select leaf.*, 0, 0 from leaf where leaf.kind is distinct from 'p'
+)
+select tbl,
+       case when kind is distinct from 'p' then '-' when leaves = 9 then 'OK' else 'NG' end as part9,
+       case when kind is distinct from 'p' then '-' when bad_idx = 0 then 'OK' else 'NG' end as idx_valid,
+       case when kind is distinct from 'p' then '-' when rls_missing = 0 then 'OK' else 'NG' end as part_rls,
+       case when kind is distinct from 'p' then '-' when policy_missing = 0 then 'OK' else 'NG' end as part_policy,
+       leaves, bad_idx, rls_missing, policy_missing, expect
+  from part order by tbl;
+-- 期待= 移した表は 4 列とも OK(まだの表は -)。⛔1 つでも NG なら 98_rollback.sql の 段 G か 段 F を見る。
+
+-- 7-b 行数と archive の日付の上限と区画の剪定(⛔親になっている表だけ調べる・結果は NOTICE)
+do $$
+declare
+  v_tbl text; v_kind "char"; v_rows bigint; v_expect bigint; v_max date; v_n int; v_txt text;
+begin
+  foreach v_tbl in array array['nar_race_votes', 'nar_race_payouts', 'nar_races', 'nar_runs', 'nar_run_facts'] loop
+    select relkind into v_kind from pg_class where oid = ('public.' || v_tbl)::regclass;
+    if v_kind is distinct from 'p' then
+      raise notice '%  まだ区切っていない(relkind=%)', rpad(v_tbl, 18), v_kind;
+      continue;
+    end if;
+    select expect into v_expect from s240_expect where tbl = v_tbl;
+    execute format('select count(*) from public.%I', v_tbl) into v_rows;
+    raise notice '%  行数= % / 控え= % → %', rpad(v_tbl, 18), v_rows, v_expect,
+      case when v_expect is null or v_expect < 0 then '(控え無し)'
+           when v_rows = v_expect then 'OK' else 'NG' end;
+
+    execute format('select max(race_date) from public.%I_archive_part', v_tbl) into v_max;
+    raise notice '%  archive の最大日= % → %', rpad(v_tbl, 18), v_max,
+      case when v_max is null or v_max < date '2022-11-01' then 'OK' else 'NG' end;
+
+    -- 区画の剪定= 日付 1 日の指定でいくつの区画を読むか
+    execute format('explain (format json) select * from public.%I where race_date = current_date', v_tbl)
+      into v_txt;
+    select count(*) into v_n
+      from jsonb_path_query(v_txt::jsonb, '$.**."Relation Name"') x
+     where (x #>> '{}') like v_tbl || '%';
+    raise notice '%  日付指定で読む区画= % → %', rpad(v_tbl, 18), v_n,
+      case when v_n = 1 then 'OK' else 'NG(剪定が効いていない)' end;
+  end loop;
+end $$;
+-- ⛔NOTICE で出るので Actions のログにそのまま残る。NG があったら次の節へ進まない。

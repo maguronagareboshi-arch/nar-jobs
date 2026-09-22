@@ -12,6 +12,8 @@
   9) notify pgrst がある
  10) grant all privileges がある(本番は anon/authenticated/service_role に全権限)
  11) nar_races だけ= 依存 view nar_sales_hourly を rename の後・同じトランザクションで作り直している
+ 12) run_section.py の切り出し 3 例(§1 / 入力 4→§4' / 入力 3→§3')と vacuum 検査
+ 13) 便 .github/workflows/partition-s240.yml の守り(手順名に「: 」なし・timeout 120・confirm)
 ⛔見ていないもの= 本番の実物との一致(それは各ファイルの §0 を流して人が確かめる)。
 使い方: py -3.12 tests/test_partition_s240_sql.py
 """
@@ -175,6 +177,94 @@ def check_one(fn, path, is_migration):
         fail(fn, "nar_races 以外のファイルに nar_sales_hourly が書かれている")
 
 
+def check_run_section():
+    """run_section.py の切り出しを 3 例で確かめる(⛔DB には触らない)。"""
+    sys.path.insert(0, SQL_DIR)
+    try:
+        import run_section
+    except Exception as e:                                  # noqa: BLE001
+        fail("run_section.py", "読み込めない: %s" % e)
+        return
+    path = os.path.join(SQL_DIR, "40_nar_runs.sql")
+    text = io.open(path, encoding="utf-8").read()
+
+    # 例 1) §1 だけ= 親と区画を作る所。create table … partition by range が入り、delete は入らない。
+    s1 = run_section.pick(text, "1")
+    if "partition by range (race_date)" not in s1:
+        fail("run_section.py", "例 1 §1 に create table … partition by range が無い")
+    if re.search(r"(?im)^\s*delete\s+from", s1):
+        fail("run_section.py", "例 1 §1 に delete が混ざっている")
+    if "attach partition" in s1:
+        fail("run_section.py", "例 1 §1 に attach が混ざっている")
+
+    # 例 2) 入力 `4` は見出し `§4'` を指す= 差分の insert と rename 2 本と notify がそろう。
+    s4 = run_section.pick(text, "4")
+    if "§4'" not in s4:
+        fail("run_section.py", "例 2 入力 4 で §4' が取れていない")
+    if len(re.findall(r"(?i)rename\s+to", s4)) != 2:
+        fail("run_section.py", "例 2 §4' の rename が 2 本でない")
+    if "on conflict" not in s4 or "notify pgrst" not in s4:
+        fail("run_section.py", "例 2 §4' に差分の upsert か notify が無い")
+    if re.search(r"(?im)^\s*delete\s+from", s4):
+        fail("run_section.py", "例 2 §4' に delete が混ざっている")
+
+    # 例 3) 入力 `3` は `§3'`= archive_part の掃除。vacuum はトランザクションの外(検査が通る)。
+    s3 = run_section.pick(text, "3")
+    if not re.search(r"(?im)^\s*delete\s+from\s+public\.nar_runs_archive_part", s3):
+        fail("run_section.py", "例 3 §3' に archive_part の delete が無い")
+    if "attach partition" not in s3:
+        fail("run_section.py", "例 3 §3' に attach が無い")
+    try:
+        run_section.check_vacuum_outside_tx(s3)
+    except SystemExit as e:
+        fail("run_section.py", "例 3 vacuum の検査で落ちた= %s" % e)
+
+    # 例 3-b) わざとトランザクションの中に vacuum を入れたら落ちること
+    try:
+        run_section.check_vacuum_outside_tx("begin;\nvacuum (analyze) public.x;\ncommit;\n")
+        fail("run_section.py", "例 3-b トランザクション内の vacuum を見逃した")
+    except SystemExit:
+        pass
+
+    # 節が無い番号は落ちること
+    try:
+        run_section.pick(text, "9")
+        fail("run_section.py", "無い節 §9 を落とさなかった")
+    except SystemExit:
+        pass
+
+    # 節を指定しなければ丸ごと返ること
+    if run_section.pick(text, None) != text:
+        fail("run_section.py", "節を指定しないときに全文が返らない")
+
+    # 5 表とも 6 節(0/1/2/4'/3'/5)そろっていること
+    for m in MIGRATIONS:
+        t = io.open(os.path.join(SQL_DIR, m), encoding="utf-8").read()
+        secs = [s for s, _, _ in run_section.find_sections(t.split("\n"))]
+        if secs != ["0", "1", "2", "4'", "3'", "5"]:
+            fail(m, "節の並びが 0/1/2/4'/3'/5 でない= %s" % secs)
+
+
+def check_workflow():
+    """便の yml= 手順名に「: 」が無い・timeout 120・confirm で守っている。"""
+    wf = os.path.join(ROOT, ".github", "workflows", "partition-s240.yml")
+    if not os.path.exists(wf):
+        fail("partition-s240.yml", "ファイルが無い")
+        return
+    y = io.open(wf, encoding="utf-8").read()
+    for m in re.finditer(r"(?m)^\s*-?\s*name:\s*(.+)$", y):
+        if ": " in m.group(1):
+            fail("partition-s240.yml", "手順名に「: 」がある= %s" % m.group(1).strip())
+    if "timeout-minutes: 120" not in y:
+        fail("partition-s240.yml", "timeout-minutes 120 が無い")
+    if 'IN_CONFIRM" != "apply"' not in y:
+        fail("partition-s240.yml", "confirm が apply でないときに §0 へ落とす守りが無い")
+    if "run_section.py" not in y:
+        fail("partition-s240.yml", "run_section.py を呼んでいない")
+    if "98_rollback.sql" not in y or "mode=print" not in y:
+        fail("partition-s240.yml", "巻き戻しを print だけにする分岐が無い")
+
+
 def main():
     if not os.path.isdir(SQL_DIR):
         print("NG: %s が無い" % SQL_DIR)
@@ -191,12 +281,15 @@ def main():
         if not fn.endswith(t + ".sql"):
             fail(fn, "表とファイル名が対応していない(%s)" % t)
 
+    check_run_section()
+    check_workflow()
+
     if errors:
         print("NG (%d 件)" % len(errors))
         for e in errors:
             print("  -", e)
         return 1
-    print("ALL PASS (%d ファイル)" % (len(MIGRATIONS) + len(OTHERS)))
+    print("ALL PASS (SQL %d ファイル + run_section 3 例 + 便の yml)" % (len(MIGRATIONS) + len(OTHERS)))
     return 0
 
 

@@ -1,0 +1,137 @@
+# §240 表を年で区切る(宣言的パーティション)を本番へ当てる便。⛔手で回すだけ(cron なし)。
+# 設計= docs/proposal_s240_partition_20260922.md ・順と所要= docs/notes_s240_migration.md
+# SQL= pipeline/sql/partition_s240/(1 表 1 ファイル・節ごとに当てる)
+#
+# ■ なぜ Actions で流すのか
+#   手元に psql が無く、MCP は destructive な文で止まる。Actions の ubuntu には psql が入っているので、
+#   節を切り出して `psql -f` に渡す。ログに `\timing on` の所要が出るので、次の節へ進む判断ができる。
+#
+# ■ 安全の決めごと
+#   ・`confirm` が **文字列 "apply" でなければ §0(読みだけ)しか流さない**。打ち間違いで DDL が走らない。
+#   ・`table=rollback` は**流さない**= ファイルをログに出すだけ(段 A〜G のどれを使うかは人が決める)。
+#   ・1 回の実行で 1 節だけ。⛔節をまたいで自動で進めない(間で人が結果を読む)。
+#   ・同時に 2 本走らせない(concurrency)。
+#   ・Actions の無料枠は private のみ(#528)。この便は手で回すだけなので分数はほぼ増えない。
+name: partition-s240
+
+on:
+  workflow_dispatch:
+    inputs:
+      table:
+        description: どの表か(votes/payouts/races/runs/run_facts/baseline/verify/rollback)
+        required: true
+        type: choice
+        options: [votes, payouts, races, runs, run_facts, baseline, verify, rollback]
+      section:
+        description: どの節か(0=読みの確認 1=親と区画 2=写し 4=差分とrename 3=archiveの掃除とattach 5=grantとvacuum。baseline/verify/rollback は空でよい)
+        required: false
+        type: choice
+        options: ['', '0', '1', '2', '4', '3', '5']
+        default: ''
+      confirm:
+        description: 書き込む節を流すときだけ apply と打つ(それ以外は §0 の読みだけ)
+        required: false
+        type: string
+        default: ''
+
+concurrency:
+  group: partition-s240
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  apply:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    env:
+      SQLDIR: pipeline/sql/partition_s240
+      IN_TABLE: ${{ inputs.table }}
+      IN_SECTION: ${{ inputs.section }}
+      IN_CONFIRM: ${{ inputs.confirm }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: show psql version
+        run: psql --version
+
+      # 入力 → ファイル名と節を決める。⛔confirm が apply でなければ節を 0(読みだけ)に落とす。
+      - name: decide file and section
+        id: plan
+        run: |
+          set -euo pipefail
+          case "$IN_TABLE" in
+            votes)     f=10_nar_race_votes.sql ;;
+            payouts)   f=20_nar_race_payouts.sql ;;
+            races)     f=30_nar_races.sql ;;
+            runs)      f=40_nar_runs.sql ;;
+            run_facts) f=50_nar_run_facts.sql ;;
+            baseline)  f=00_baseline_counts.sql ;;
+            verify)    f=99_verify.sql ;;
+            rollback)  f=98_rollback.sql ;;
+            *) echo "知らない table= $IN_TABLE"; exit 1 ;;
+          esac
+          sec="$IN_SECTION"
+          mode=run
+          case "$IN_TABLE" in
+            baseline|verify)
+              # 読みだけのファイル= 節は無い・confirm も要らない
+              sec=''
+              ;;
+            rollback)
+              mode=print
+              sec=''
+              ;;
+            *)
+              if [ -z "$sec" ]; then echo "この table には section が要る"; exit 1; fi
+              if [ "$IN_CONFIRM" != "apply" ]; then
+                echo "::warning::confirm が apply でないので §0(読みだけ)に落とす(指定は §$sec)"
+                sec=0
+              fi
+              ;;
+          esac
+          echo "file=$f"    >> "$GITHUB_OUTPUT"
+          echo "section=$sec" >> "$GITHUB_OUTPUT"
+          echo "mode=$mode"   >> "$GITHUB_OUTPUT"
+          echo "## $IN_TABLE / $f / section=${sec:-all} / mode=$mode" >> "$GITHUB_STEP_SUMMARY"
+
+      # 節を切り出す(⛔vacuum がトランザクションの中にあったらここで落ちる)
+      - name: cut out the section
+        run: |
+          set -euo pipefail
+          python -X utf8 "$SQLDIR/run_section.py" \
+            "$SQLDIR/${{ steps.plan.outputs.file }}" "${{ steps.plan.outputs.section }}" > /tmp/s240.sql
+          echo "----- 流す SQL(先頭 60 行) -----"
+          head -n 60 /tmp/s240.sql
+          echo "----- 行数 -----"
+          wc -l /tmp/s240.sql
+
+      # 巻き戻しは流さない= 全文をログに出すだけ。人が段を選んで psql に貼る。
+      - name: print rollback file only
+        if: steps.plan.outputs.mode == 'print'
+        run: |
+          echo "::notice::98_rollback.sql は自動では流さない。下の全文から段 A〜G のどれかを選んで手で流す"
+          cat /tmp/s240.sql
+
+      - name: run the section on production
+        if: steps.plan.outputs.mode == 'run'
+        env:
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+          PGSSLMODE: require
+        run: |
+          set -o pipefail
+          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 \
+            -U postgres.qgsnsdjvzzeazbazjlwa -d postgres \
+            -v ON_ERROR_STOP=1 -X -f /tmp/s240.sql
+          echo "::notice::§${{ steps.plan.outputs.section }} が最後まで通った。ログの Time を読んで次の節へ"
+
+      - name: what to do next
+        if: always()
+        run: |
+          echo "次の節= 0 読みの確認 → 1 親と区画 → 2 写し → 4 差分とrename → 3 archiveの掃除とattach → 5 grantとvacuum" >> "$GITHUB_STEP_SUMMARY"
+          echo "表の順= votes → payouts → races → runs → run_facts" >> "$GITHUB_STEP_SUMMARY"
+          echo "行数と合否は table=verify で読む" >> "$GITHUB_STEP_SUMMARY"
