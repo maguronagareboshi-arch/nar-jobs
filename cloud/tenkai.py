@@ -1,9 +1,12 @@
 # -*- coding: utf-8 -*-
 """本体 cloud: 展開の見立て(全15場・§99a 位置だけ)。
 
-各馬の**直近5走の1番目のコーナー通過順**(公式・§41-B)から 逃げ/先行/差し/追込 の型を推定し、
-レースごとに1枚ぶんの材料を nar_meta `tenkai:YYYY-MM-DD` へ入れる。画面(js/pages/race.js)は
-出馬表タブの一番上にカードを出す。
+各馬の**直近5走の1番目のコーナー通過順**から 逃げ/先行/差し/追込 の型を出し、レースごとに
+1枚ぶんの材料を nar_meta `tenkai:YYYY-MM-DD` へ入れる。画面(js/pages/race.js)は出馬表タブの
+一番上にカードを出す。
+⛔§238a2(2026-09-22): 通過順の解析と型の規則の**写しはここから消えた**。どちらも派生表
+  nar_run_facts(書き手= cloud/run_facts.py / 規則= pipeline/facts.py)から**読むだけ**。
+  ⛔この便より先に nar_run_facts が焼けていること(nar-refresh.yml で run facts を先に置く)。
 
   出力 = {"built":"2026-09-05T07:20+09:00",
           "races": {"saga-1": {"n":10,"k":8,
@@ -25,7 +28,7 @@
   py -3.12 -X utf8 cloud/tenkai.py --env pipeline/.env.nar --backtest 60 --pace  # §99b ペース見込みの検品
   py -3.12 -X utf8 cloud/tenkai.py --env pipeline/.env.nar --apply --pace-log   # §232 実際のペースを表に残す(前日ぶん)
   py -3.12 -X utf8 cloud/tenkai.py --env pipeline/.env.nar --apply --pace-log --since 2023-09-20  # さかのぼり(手押し)
-  py -3.12 -X utf8 cloud/tenkai.py --selftest                             # 通過順の読み方だけ(通信なし)
+  py -3.12 -X utf8 cloud/tenkai.py --selftest                             # この便の規則だけ(通信なし)
 環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY
   ⛔#465: --env が無いときは**環境変数だけ**で動く(手元の .env を探しに行かない)。
 終了コード: 0 正常 / 1 投入失敗 / 2 前提の読み取りに失敗
@@ -178,60 +181,62 @@ def chunks(seq, n=CHUNK):
         yield seq[i:i + n]
 
 
-# ---------------------------------------------------------------- 通過順の読み方
+# ---------------------------------------------------------------- 通過順(派生表 nar_run_facts)
+# ⛔§238a2(2026-09-22): ここにあった corner_ranks() / first_corner() の**写し**は消した。
+#   通過順の解析は pipeline/facts.py に 1 つだけあり、その結果は便 cloud/run_facts.py が
+#   派生表 nar_run_facts(c1..c4 / n1..n4)に焼いてある。この便は**焼いた値を読むだけ**。
+#   ⛔派生表に行の無い走(初出走・未投入の古い日)は「読めない」と同じ扱い= 位置を作らない(推定しない)。
 
-def corner_ranks(order):
-    """1コーナーぶんの並び → {馬番: 順位}。⛔js/data.js `cornerRanks()` の**そのままの写し**。
 
-    同着(並走)は先頭の順位を共有し、次はその頭数ぶん飛ぶ。知らない字が出たら読めない(=None)。
-    ⛔同じ規則が JS と Python の2か所にあるので、tests/tenkai_corner_test.mjs と --selftest に
-      **同じ5例**を置いて両方が同じ答えを出すことを確かめる。
+def fetch_pos(base, key, need):
+    """need = {(場, 日)} → {(場, 日, R): {馬番: (c1, n1)}}。⛔派生表 nar_run_facts から読むだけ。
+
+    c1= 読めた最初のコーナーの順位 / n1= そのコーナーに並んだ頭数(位置 p の分母)。
+    どちらかが空の行は入れない(⛔0 で埋めない・分母を推定しない)。場ごと・日付 80 個ずつ。
     """
-    s = str(order or "").strip()
-    if not s:
-        return None
-    out, rank, i = {}, 1, 0
-    while i < len(s):
-        ch = s[i]
-        if ch in ",-= 　":
-            i += 1
-            continue
-        if ch == "(":
-            end = s.find(")", i)
-            if end < 0:
-                return None                       # 閉じない=読めない
-            nums = []
-            for x in s[i + 1:end].split(","):
-                x = x.strip()
-                if not x.isdigit() or int(x) <= 0:
-                    return None
-                nums.append(int(x))
-            if not nums:
-                return None
-            for n in nums:
-                out.setdefault(n, rank)
-            rank += len(nums)
-            i = end + 1
-            continue
-        j = i
-        while j < len(s) and s[j].isdigit():
-            j += 1
-        if j == i:
-            return None                           # 知らない字=読めない(推定しない)
-        out.setdefault(int(s[i:j]), rank)
-        rank += 1
-        i = j
-    return out or None
+    by_track = {}
+    for t, d in need:
+        by_track.setdefault(t, set()).add(d)
+    out = {}
+    for t, dates in sorted(by_track.items()):
+        for part in chunks(sorted(dates)):
+            rows = rows_all(
+                base, key,
+                "/rest/v1/nar_run_facts?select=track,race_date,race_no,umaban,c1,n1"
+                f"&track=eq.{urllib.parse.quote(t)}&race_date=in.({q_in(part)})&c1=not.is.null"
+                "&order=race_date.asc,race_no.asc,umaban.asc")
+            for r in rows:
+                c1, n1 = r.get("c1"), r.get("n1")
+                if c1 is None or not n1:
+                    continue
+                out.setdefault((r["track"], r["race_date"], r["race_no"]), {})[int(r["umaban"])] = (int(c1), int(n1))
+    return out
 
 
-SELFTEST = [
-    ("7,9,(2,10)-11,6-(1,3,8),5-4",
-     {7: 1, 9: 2, 2: 3, 10: 3, 11: 5, 6: 6, 1: 7, 3: 7, 8: 7, 5: 10, 4: 11}),
-    ("(2,7)-11", {2: 1, 7: 1, 11: 3}),
-    ("3=4,1", {3: 1, 4: 2, 1: 3}),
-    ("", None),
-    ("3,x", None),
-]
+def fetch_style(base, key, date):
+    """その日の出走馬の脚質 → {(場, R, 馬番): (style, style_p, style_n)}。⛔派生表を読むだけ。
+
+    ⛔派生表の style は**発走前 as-of**(その日より前の走だけ・直近 5 走・365 日窓)で焼いてあり、
+      §99a でここが自前で出していた型と同じ規則(pipeline/facts.style_asof)。
+    ⛔行が無い/style が空の馬は型を付けない(= `none` に入る)。
+    """
+    return {(t, no, u): v for (t, _d, no, u), v in fetch_style_window(base, key, [date]).items()}
+
+
+def fetch_style_window(base, key, days):
+    """日の集まり → {(場, 日, R, 馬番): (style, style_p, style_n)}。⛔派生表を読むだけ・80 日ずつ。"""
+    out = {}
+    for part in chunks(sorted(set(days))):
+        rows = rows_all(base, key,
+                        "/rest/v1/nar_run_facts?select=track,race_date,race_no,umaban,style,style_p,style_n"
+                        f"&race_date=in.({q_in(part)})&style=not.is.null"
+                        "&order=race_date.asc,track.asc,race_no.asc,umaban.asc")
+        for r in rows:
+            if r.get("umaban") is None:
+                continue
+            out[(r["track"], r["race_date"], r["race_no"], int(r["umaban"]))] = (
+                r.get("style"), r.get("style_p"), r.get("style_n"))
+    return out
 
 
 # §232 ペースの言葉の例(通信なし)。高知は ±KOCHI_BAND 固定・他場は場の四分位
@@ -246,15 +251,13 @@ SELFTEST_PACE = [
 
 
 def selftest(quiet=False):
-    """⛔JS(tests/tenkai_corner_test.mjs)と**同じ5例**。本番でも毎回通してから走る(黙って通る)。
-    §232 ペースの言葉と 1 角先頭の読み方もここで試す(どれも通信なし)"""
+    """通信なしの自己診断。本番でも毎回通してから走る(黙って通る)。
+
+    ⛔§238a2: 通過順の読み方の例はここから消えた(解析は pipeline/facts.py の 1 か所だけ=
+      その例は pipeline/facts.py --selftest と tests/run_facts_check.py にある)。
+    ここに残るのは この便だけの規則= §232 ペースの言葉と レースの最速の前半。
+    """
     bad = 0
-    for src, want in SELFTEST:
-        got = corner_ranks(src)
-        ok = got == want
-        bad += 0 if ok else 1
-        if not quiet or not ok:
-            log("  %s %-32r → %s" % ("OK " if ok else "NG ", src, got))
     for track, ten, band, want in SELFTEST_PACE:
         got = pace_word(track, ten, band)
         ok = got == want
@@ -271,40 +274,17 @@ def selftest(quiet=False):
         if not quiet or not ok:
             log("  %s レースの最速の前半 %s → %s" % ("OK " if ok else "NG ", k[2], got.get(k)))
     if not quiet:
-        n = len(SELFTEST) + len(SELFTEST_PACE) + 2
+        n = len(SELFTEST_PACE) + 2
         log("読み方の selftest: %d/%d" % (n - bad, n))
     return 0 if not bad else 1
 
 
-def first_corner(corners):
-    """レースの corners(公式・走った順に並んでいる)→ 1番目のコーナーの {馬番: 順位}。
-
-    ⛔並びの先頭を採る。「１コーナー」がある場でもそれが先頭なので同じ。
-      (先頭が「正面」「３コーナー」になる場もある= その場でいちばん早い通過点がそれ)
-    ⛔order が空の要素は飛ばす(js/data.js cornerList と同じ扱い)。
-    """
-    for c in (corners or []):
-        if not isinstance(c, dict):
-            continue
-        ranks = corner_ranks(c.get("order"))
-        if ranks:
-            return ranks
-    return None
-
-
 # ---------------------------------------------------------------- 1頭の型
 
-def style_of(ps):
-    """位置(p)の並び → (型, 平均p) または (None, None)。⛔MIN_RUNS 未満は型を付けない。
-
-    逃げ候補= p<=LEAD_P の走が**過半数**(2走なら2走とも= `2*2>2` で同じことになる)。
-    """
-    if len(ps) < MIN_RUNS:
-        return None, None
-    m = statistics.fmean(ps)
-    if sum(1 for p in ps if p <= LEAD_P) * 2 > len(ps):
-        return "逃げ", m
-    return ("先行" if m <= FRONT_P else "差し" if m <= MID_P else "追込"), m
+# ⛔§238a2(2026-09-22): ここにあった style_of() の**写し**は消した。型の規則は
+#   pipeline/facts.py:style_of / style_asof に 1 つだけあり、便 cloud/run_facts.py が
+#   発走前 as-of で nar_run_facts.style / style_p / style_n に焼く。この便は読むだけ。
+#   ⛔閾値(LEAD_P/FRONT_P/MID_P/MIN_RUNS)も pipeline/facts.py 側の定数が本物。
 
 
 def pick_order(hh):
@@ -353,26 +333,6 @@ def fetch_runs_for(base, key, names, lo, hi):
     return out
 
 
-def fetch_corners(base, key, need):
-    """need = {(track, race_date)} → {(track, date, race_no): {馬番: 順位}}。場ごと・日付80個ずつ"""
-    by_track = {}
-    for t, d in need:
-        by_track.setdefault(t, set()).add(d)
-    out = {}
-    for t, dates in sorted(by_track.items()):
-        for part in chunks(sorted(dates)):
-            rows = rows_all(
-                base, key,
-                "/rest/v1/nar_races?select=track,race_date,race_no,corners"
-                f"&track=eq.{urllib.parse.quote(t)}&race_date=in.({q_in(part)})"
-                "&order=race_date.asc,race_no.asc")
-            for r in rows:
-                ranks = first_corner(r.get("corners"))
-                if ranks:
-                    out[(r["track"], r["race_date"], r["race_no"])] = ranks
-    return out
-
-
 def pick_runs(runs, track):
     """1頭の走(新しい順)→ 見る5走。⛔同じ場が3走以上あれば同じ場だけ"""
     same = [r for r in runs if r["track"] == track]
@@ -384,26 +344,31 @@ def same_horse(a_birth, b_birth):
     return (not a_birth) or (not b_birth) or a_birth == b_birth
 
 
-def positions(runs, ranks_of):
-    """走の並び → 位置 p の並び(読めた走だけ)。p= 順位 ÷ その通過順に並んだ頭数"""
+def positions(runs, pos_of):
+    """走の並び → 位置 p の並び(派生表に行のあった走だけ)。p= c1 ÷ n1。
+
+    ⛔§238a2: 分母は派生表の n1(そのコーナーに並んだ頭数)。⛔手元の行数で割らない
+      (1 頭でも行が欠けると分母がずれる= それが今回直した病)。
+    """
     ps = []
     for r in runs:
-        ranks = ranks_of.get((r["track"], r["race_date"], r["race_no"]))
-        if not ranks:
+        cell = (pos_of.get((r["track"], r["race_date"], r["race_no"])) or {}).get(
+            int(r["runner_number"]) if r.get("runner_number") is not None else -1)
+        if not cell or not cell[1]:
             continue
-        u = r.get("runner_number")
-        if u is None or int(u) not in ranks:
-            continue
-        ps.append(ranks[int(u)] / len(ranks))
+        ps.append(cell[0] / cell[1])
     return ps
 
 
-def build_races(day_races, day_runs, past_by_horse, ranks_of, ten=None):
+def build_races(day_races, day_runs, past_by_horse, style_of_row, ten=None):
     """1日ぶんの races ブロックを組む。
 
     ⛔`ten`(§99b・(ten_of, std, band, day_off))を渡したときだけ `h[馬番].ten/tn` と `pace/pace_by/pace_ten`
       を**足す**。渡さなければ §99a と1バイトも変わらない。
     §169 day_off を渡したとき(TEN_DAY_ADJ)は `ten` が補正後の値・`tna`= 補正の入った走数
+    ⛔§238a2: 型(s/p/m)は派生表 nar_run_facts の style/style_p/style_n をそのまま写す
+      (`style_of_row` = {(場, R, 馬番): (style, style_p, style_n)})。⛔ここで型を出し直さない。
+      過去走(`past_by_horse`)はテン(前半3F)の材料としてだけ使う。
     """
     ten_of, std, band, day_off = ten if ten else ({}, {}, {}, None)
     runs_by_race = {}
@@ -427,13 +392,12 @@ def build_races(day_races, day_runs, past_by_horse, ranks_of, ten=None):
             hist = [x for x in past_by_horse.get(e["horse_name"], [])
                     if same_horse(e.get("birth_date"), x.get("birth_date"))]
             picked = pick_runs(hist, t)
-            ps = positions(picked, ranks_of)
-            s, m = style_of(ps)
-            if not s:
-                none.append(u)
+            s, m, mn = style_of_row.get((t, no, u)) or (None, None, None)
+            if not s or m is None:
+                none.append(u)             # ⛔派生表に型が無い馬(初出走・走数が足りない)は推定しない
                 continue
             buckets[s].append(u)
-            hh[str(u)] = {"s": s, "p": round(m, 2), "m": len(ps)}
+            hh[str(u)] = {"s": s, "p": round(float(m), 2), "m": int(mn or 0)}
             # §99b テン。⛔3走未満は出さない・型の付いた馬にだけ足す(h の鍵を増やさない)
             tv = ten_values(picked, ten_of, std, day_off) if ten_of else []
             if len(tv) >= TEN_MIN_RUNS:
@@ -482,22 +446,23 @@ def day_block(base, key, date):
         by_horse.setdefault(r["horse_name"], []).append(r)
     for v in by_horse.values():
         v.sort(key=lambda x: (x["race_date"], x["race_no"]), reverse=True)
-    # 見る走だけに絞ってから corners を取りに行く(⛔要らない日を引かない)
+    # 見る走だけに絞ってからテンを取りに行く(⛔要らない日を引かない)
     need = set()
     for e in runs:
         hist = [x for x in by_horse.get(e["horse_name"], [])
                 if same_horse(e.get("birth_date"), x.get("birth_date"))]
         for x in pick_runs(hist, e["track"]):
             need.add((x["track"], x["race_date"]))
-    ranks_of = fetch_corners(base, key, need)
+    # §238a2 型は派生表 nar_run_facts(その日の行・発走前 as-of)から読む。⛔ここで出し直さない
+    style_of_row = fetch_style(base, key, date)
     # §99b テン。⛔前半3F のある6場の日だけ旧DBへ行く(他9場は今までどおり通信ゼロ)
     ten = fetch_ten(base, key, {(t, d) for t, d in need if t in TEN_TRACKS} | ten_year_days(base, key, date))
-    out, k_ratios = build_races(races, runs, by_horse, ranks_of, ten)
+    out, k_ratios = build_races(races, runs, by_horse, style_of_row, ten)
     n_ten = sum(1 for r in out.values() for h in r["h"].values() if h.get("ten") is not None)
     n_pace = sum(1 for r in out.values() if r.get("pace"))
-    memo = ("レース %d / 出走 %d / 過去走 %d(馬 %d)・通過順の読めたレース %d / 見立てを出す %d 本"
+    memo = ("レース %d / 出走 %d / 過去走 %d(馬 %d)・派生表の型 %d 頭 / 見立てを出す %d 本"
             "・テン %d頭 / ペース見込み %d本"
-            % (len(races), len(runs), len(past), len(names), len(ranks_of), len(out), n_ten, n_pace))
+            % (len(races), len(runs), len(past), len(names), len(style_of_row), len(out), n_ten, n_pace))
     if k_ratios:
         memo += "・k/N 平均 %.2f" % statistics.fmean(k_ratios)
     return out, memo
@@ -729,7 +694,7 @@ def order_of(qs):
 
 def style_of_q(q):
     """q → 型。⛔閾値は LEAD_P/FRONT_P/MID_P のまま。
-    ⛔テンの入らない馬(qs='pos')は呼ぶ側で style_of(逃げ= 過半数の規則)の型を残す"""
+    ⛔テンの入らない馬(qs='pos')は呼ぶ側で派生表の型(逃げ= 過半数の規則)を残す"""
     if q is None:
         return None
     return "逃げ" if q <= LEAD_P else "先行" if q <= FRONT_P else "差し" if q <= MID_P else "追込"
@@ -957,17 +922,15 @@ def backtest(base, key, days, pace=False, kochi_q=False, order=False):
     far = (lo - dt.timedelta(days=PAST_DAYS)).isoformat()
     log("バックテスト %s 〜 %s(過去走は %s から)" % (lo, hi - dt.timedelta(days=1), far))
     races = rows_window(base, key,
-                        "/rest/v1/nar_races?select=track,race_date,race_no,corners"
+                        "/rest/v1/nar_races?select=track,race_date,race_no"
                         "&race_date=gte.{lo}&race_date=lte.{hi}"
                         "&order=race_date.asc,track.asc,race_no.asc",
                         far, (hi - dt.timedelta(days=1)).isoformat())
     races = [r for r in races if r["track"] in TRACK2PREFIX]
-    ranks_of = {}
-    for r in races:
-        ranks = first_corner(r.get("corners"))
-        if ranks:
-            ranks_of[(r["track"], r["race_date"], r["race_no"])] = ranks
-    log("  レース %d 本(うち通過順が読めた %d 本)・要求 %d 回" % (len(races), len(ranks_of), N_REQ[0]))
+    # §238a2 通過順は派生表 nar_run_facts から読む(⛔corners をここで解析し直さない)
+    pos_of = fetch_pos(base, key, {(r["track"], r["race_date"]) for r in races})
+    ranks_of = {k: {u: c[0] for u, c in v.items()} for k, v in pos_of.items()}
+    log("  レース %d 本(うち派生表に通過順のある %d 本)・要求 %d 回" % (len(races), len(pos_of), N_REQ[0]))
     runs = rows_window(base, key,
                        "/rest/v1/nar_runs?select=track,race_date,race_no,runner_number,"
                        "horse_name,birth_date&race_date=gte.{lo}&race_date=lte.{hi}&finish=not.is.null"
@@ -997,6 +960,10 @@ def backtest(base, key, days, pace=False, kochi_q=False, order=False):
         log("  テン: %d走 / 標準 %d組(%s より前) / 四分位 旧 %s 新 %s / 窓の場日 %d(%d 本未満 %d)・要求 %d 回"
             % (len(ten_of), len(std), lo, band, band_new, n_day, TEN_DAY_MIN, n_small, N_REQ[0]))
 
+    # §238a2 型も派生表から(⛔as-of で焼いてあるので、その日より前の走だけで出した型と同じ)
+    style_at = fetch_style_window(base, key, {r["race_date"] for r in races if r["race_date"] >= lo.isoformat()})
+    log("  派生表の型 %d 頭・要求 %d 回" % (len(style_at), N_REQ[0]))
+
     stat = {}
     for (t, d, no), ranks in sorted(ranks_of.items()):
         if d < lo.isoformat():
@@ -1020,8 +987,9 @@ def backtest(base, key, days, pace=False, kochi_q=False, order=False):
                     if same_horse(e.get("birth_date"), x.get("birth_date"))
                     and (x["race_date"], x["race_no"]) < (d, no)]
             picked = pick_runs(hist, t)
-            pp = positions(picked, ranks_of)
-            st, m = style_of(pp)
+            pp = positions(picked, pos_of)
+            st, m, _mn = style_at.get((t, d, no, u)) or (None, None, None)
+            m = float(m) if m is not None else None
             if pp:
                 prev[u] = pp[0]                   # §169 段 2 比べる相手= 前走の 1 角の位置
             if (pace or order) and t in TEN_TRACKS:
@@ -1298,7 +1266,7 @@ def main():
     ap.add_argument("--pace-log", action="store_true",
                     help="§232 過去のレースの実際のペースを表に残す(既定は前日ぶん)")
     ap.add_argument("--since", help="--pace-log をこの日からさかのぼって流す(手押しのときだけ)")
-    ap.add_argument("--selftest", action="store_true", help="通過順の読み方だけ試す(通信なし)")
+    ap.add_argument("--selftest", action="store_true", help="この便の規則だけ試す(通信なし)")
     ap.add_argument("--env")
     a = ap.parse_args()
     if a.selftest:
@@ -1311,7 +1279,7 @@ def main():
         log("SUPABASE_URL / SUPABASE_SERVICE_KEY が無い")
         return 2
     if selftest(quiet=True):
-        log("⛔通過順の読み方が壊れている。中断")
+        log("⛔ペースの読み方が壊れている。中断")
         return 2
 
     if a.backtest:

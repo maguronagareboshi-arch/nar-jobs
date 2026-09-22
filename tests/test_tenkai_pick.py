@@ -5,7 +5,7 @@
 
 確かめるのは=
   ①pick_order= 1 角の平均位置 p が最小の馬・同点は馬番の小さい方・型なし(p の無い馬)は入れない
-  ②build_races= 各レースに pick と order を足す・既存の鍵(n/k/lead/front/mid/back/none/h/w)はそのまま
+  ②build_races= 派生表 nar_run_facts の型をそのまま写し、pick と order を足す(既存の鍵はそのまま)
 """
 import sys
 import unittest
@@ -25,25 +25,22 @@ class Pick(unittest.TestCase):
         self.assertEqual(pick_order({"2": {"s": "追込"}}), (None, []), "p の無い馬を並べている")
 
     def test_build_races(self):
-        # 1 レース 3 頭。過去 2 走ずつの 1 角の順位(頭数 10)で型を付ける。4 番は過去走なし= 型なし
+        # §238a2 型は派生表 nar_run_facts の写し(style/style_p/style_n)を渡すだけ。4 番は行なし= 型なし
         day_races = [{"track": "大井", "race_no": 5}]
         day_runs = [{"track": "大井", "race_no": 5, "runner_number": u, "horse_name": nm}
                     for u, nm in ((1, "A"), (2, "B"), (3, "C"), (4, "D"))]
-        ranks_of = {("大井", "2026-08-01", 1): {11: 1, 12: 5, 13: 9},
-                    ("大井", "2026-08-08", 1): {11: 2, 12: 4, 13: 10}}
-        for k in ranks_of:
-            for x in range(1, 11):
-                ranks_of[k].setdefault(20 + x, x)   # 頭数を 10 に(順位の重複はしない)
-        ranks_of[("大井", "2026-08-01", 1)] = {11: 1, 12: 5, 13: 9, 21: 2, 22: 3, 23: 4, 24: 6, 25: 7, 26: 8, 27: 10}
-        ranks_of[("大井", "2026-08-08", 1)] = {11: 2, 12: 4, 13: 10, 21: 1, 22: 3, 23: 5, 24: 6, 25: 7, 26: 8, 27: 9}
         past = {nm: [{"track": "大井", "race_date": d, "race_no": 1, "runner_number": u}
                      for d in ("2026-08-08", "2026-08-01")]
                 for nm, u in (("A", 13), ("B", 11), ("C", 12))}
-        out, _k = build_races(day_races, day_runs, past, ranks_of)
+        style_of_row = {("大井", 5, 1): ("差し", 0.95, 2),      # A= 9,10 着位置 / 10 頭
+                        ("大井", 5, 2): ("逃げ", 0.15, 2),      # B= 1,2 番手
+                        ("大井", 5, 3): ("先行", 0.45, 2)}      # C= 5,4 番手
+        out, _k = build_races(day_races, day_runs, past, style_of_row)
         rec = out["ooi-5"]
         self.assertEqual(rec["pick"], 2)                       # B= 平均位置 0.15
         self.assertEqual(rec["order"], [2, 3, 1])              # 型なしの 4 番は入れない
         self.assertEqual(rec["none"], [4])
+        self.assertEqual(rec["h"]["1"], {"s": "差し", "p": 0.95, "m": 2})
         for key in ("n", "k", "lead", "front", "mid", "back", "none", "h", "w"):
             self.assertIn(key, rec)
         self.assertEqual(rec["lead"], [2])

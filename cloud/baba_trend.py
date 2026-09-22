@@ -49,8 +49,9 @@ except Exception:
 HERE = os.path.dirname(os.path.abspath(__file__))
 ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
-# ⛔§99 の読み方をそのまま使う(3か所目を作らない)。first_corner の中で corner_ranks を呼んでいる
-from tenkai import first_corner                          # noqa: E402
+# ⛔§238a2: 通過順の読み方は pipeline/facts.py の 1 か所だけ(cloud/tenkai.py の写しは消えた)
+sys.path.insert(0, ROOT)
+from pipeline.facts import first_corner                  # noqa: E402
 
 UA = "nar-jobs/1.0"
 META_KEY = "baba_trend"

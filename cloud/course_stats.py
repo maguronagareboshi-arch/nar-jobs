@@ -46,7 +46,10 @@ ROOT = os.path.dirname(HERE)
 sys.path.insert(0, HERE)
 # ⛔§99 の読み方・取得の割り方・場の表をそのまま使う(§5.4)
 import tenkai                                                   # noqa: E402
-from tenkai import TRACK2PREFIX, first_corner, rows_window        # noqa: E402
+from tenkai import TRACK2PREFIX, rows_window                      # noqa: E402
+# ⛔§238a2: 通過順の読み方は pipeline/facts.py の 1 か所だけ(cloud/tenkai.py の写しは消えた)
+sys.path.insert(0, ROOT)
+from pipeline.facts import first_corner                          # noqa: E402
 # ⛔クラス帯の読み方(race_name からの粗い抽出)は cloud/baba.py の 1 か所だけ(§5.4)
 from baba import band_of                                          # noqa: E402
 
