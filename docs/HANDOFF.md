@@ -1,7 +1,7 @@
-commit: b698ee0・08bc5df・b3bc2e3 枝 s238e(origin/master 5321691 から)。設計 viewer-master docs/opus_s238e_facts_gap_20260922.md。⛔push なし・本番への書き込み 0・鍵は読んでいない(通信する確認はしていない)。
-変えた所: facts.horse_key(名前,生年月日,age,レース日)= 生年月日が無い行だけ「名前|生年」(レース年−age)・新 birth_year_of・build_row が age を渡す。run_facts.py= 新 match_key(名前,生年)で fetch_past_positions/build_window を照合・select に age。src は今のまま。
-ドライラン: --apply 無しは窓ごとに本番 nar_run_facts を読むだけ(主キー順ページング)で差を log= 本番に有/無/本番にだけ有・style 違い(空→値/値→空/別の値)・horse_key 埋まる(うち本番で空)・style/c1 埋まる率。最後に「差の合計」1 行。
-便: run-facts-backfill.yml に入力 mode(choice dry/apply・既定 dry)。apply のときだけ --apply を付ける。手順名は変えていない(「: 」なし)。nar-refresh の日次(--apply)は同じ関数を通るだけ。
-検品(手元・通信なし): selftest 48/48(鍵 9 例・生年 7 例を追加)。新 tests/test_facts_horse_key.py 14 本= 楽天 2022-10→公式 2022-11 がつながる/同名で生年違いはつながない/名前だけは鍵も脚質も空/dry は upsert を呼ばない。unittest 132 本中 失敗 2= test_ooi_raw_read(既知)。
-⚠ 楽天期は今まで鍵が全部空= 過去走を 1 本も引いていなかった→今回から全馬ぶん引く。④ 2014-01〜2022-10 を 1 便で流すと 106 か月×約 40 秒+upsert 約 2,576 本で timeout 120 分を超える見込み→ 3 便に割る(2014-01〜2016-12/2017-01〜2019-12/2020-01〜2022-10)。
-次の一手: push(ユーザー)→ 設計側が起動の順 ①〜⑥(① dry 2025-09 で style 違う 0)。同じ馬でも楽天期は「名前|2019」・公式期は「名前|2019-04-01」と鍵の字面が 2 通り= 238a2 で画面は (名前, 生年) でつなぐ。
+commit: 10410e9・ae6ae8f・311e37f 枝 s239a(origin/master 57588fc から)。指示書 viewer-master docs/opus_s239a_karte_facts_job_20260922.md。⛔push なし・本番への書き込み 0・DDL 未適用・service key は読んでいない。
+作った物: DDL pipeline/sql/karte_facts_20260922.sql(nar_karte_facts・主キー 日/場/R/馬番・列は指示書どおり・RLS は run_facts と同じ)。数え方 pipeline/karte.py(純関数)・便 cloud/karte_facts.py(--date/--track/--apply/--late-table)。
+便: 手動 karte-facts.yml(date/track/mode dry|apply・late_table)。nar-refresh の run facts の次に karte facts(朝 9:30 前と 17:00 以降の便・今日と明日・|| echo で続行)。
+検品: tests/test_karte.py 28 本緑・unittest 160 本中 失敗 2= test_ooi_raw_read(既知)。selftest karte 23/23・facts 48/48。割合表の道筋は anon で 1 日ぶん読むだけで通した(9 本)。
+浦和 9/22 1R(anon 読むだけ・9 秒): 161/216 一致。出遅れ・使われ方・大井・相手関係・調子は 12 頭全部一致。違いは割合表が未作成(次も)とモック側の数え方(取りやめ/取消を走に数える・併走の括弧を順に数える・通算・全場)。
+設計側へ: ①粘り/失速の窓= 365 日(設計の表)か通算(モック)か ②pos_var は字 '3〜7' で持った ③ベストの着順・出遅れた走の位置・脚質の回数の列は無い ④明日の style は run_facts が明日を焼かない間は空。
+次の一手: push(ユーザー)→ 設計側が DDL を流す → karte-facts を late_table=true・mode=apply で 1 回(割合表)→ 以後 nar-refresh。239b/239c(viewer)は nar_karte_facts を 1 レース 1 読み。
