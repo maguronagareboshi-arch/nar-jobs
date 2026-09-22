@@ -1,10 +1,11 @@
 -- §240 表を年で区切る(宣言的パーティション)/ 5 表目 = nar_run_facts
 --   派生表(通過順・脚質・前半3F・発走直前の単勝)
 -- 設計= docs/proposal_s240_partition_20260922.md ・規則= docs/opus_rules.md
--- 書いたのは Opus 実装(2026-09-22)。⛔本番 DB には一切触っていない。
---   下の DDL は手元のコードから**読み取った写し**= 本番の実物と違う可能性がある。
---   ⛔必ず §0 を先に流して答え合わせをしてから §1 へ進む。
--- 出どころ= pipeline/sql/run_facts_20260921.sql(§238a でこの形のまま本番に流した create table)
+-- 書いたのは Opus 実装(2026-09-22)。⛔Opus は本番 DB に一切触っていない。
+--   下の DDL は **検品役が 2026-09-22 18:10 に本番を読んだ結果**に合わせてある(列・PK・check・
+--   索引・RLS/policy・grant・comment・trigger・外部キー・依存 view)。
+--   ⛔それでも §0 を先に流す= 読み取りから当てるまでの間に本番が変わっていないかの最後の確認。
+-- 出どころ= 本番の実物(2026-09-22 18:10 に検品役が pg_indexes / pg_policies / information_schema.columns を読んだ結果)。23 列・索引 2 本・check 3 本・comment 1 つで §238a の create table と一致
 -- 行の見込み= 1 年 約 19 万行(全体 約 145.7 万行・2014〜)
 -- なぜこの順番か= 大きい表の 2 つ目(約 145.7 万行・681MB)。⛔一番最後。
 -- 流す人= 鍵を持つ担当(検品役)。⛔1 ステップ 1 トランザクション。
@@ -76,7 +77,8 @@ select relkind, relrowsecurity, relforcerowsecurity, reltuples::bigint as est_ro
 select policyname, permissive, roles, cmd, qual, with_check
   from pg_policies where schemaname = 'public' and tablename = 'nar_run_facts' order by policyname;
 
--- 0-5 grant。期待= anon / authenticated に SELECT・service_role に読み書き。
+-- 0-5 grant。期待= anon / authenticated / service_role に**全権限**(select, insert, update,
+--   delete, truncate, references, trigger)。⛔読みだけに絞っているのは RLS の側= grant は広い。
 select grantee, privilege_type from information_schema.role_table_grants
  where table_schema = 'public' and table_name = 'nar_run_facts' order by grantee, privilege_type;
 
@@ -96,9 +98,11 @@ select conname, pg_get_constraintdef(oid) from pg_constraint
  where conrelid = 'public.nar_run_facts'::regclass and contype = 'f';
 
 -- 0-9 この表に依存する view / matview。期待= 0 行。
---   ⛔rename は view の向き先を**旧表に残す**。1 行でも出たら §4 の前に view を作り直す手順を足す。
---   (手元で洗った結果= nar_sales_daily は nar_sales の view で無関係。nar_search_runs /
---    nar_search_runs_v2 は plpgsql の中で表名を書いているだけ= 実行時に名前で引くので影響なし。)
+--   ⛔view は OID で表に結び付く= rename しても向き先が**旧表(archive_part)に残る**。
+--   期待と違う行が出たら、§4' の中(rename の後)に `create or replace view` を足す。
+--   (2026-09-22 に洗った結果= nar_sales_daily は nar_sales の view で無関係。nar_search_runs /
+--    nar_search_runs_v2 は plpgsql の中で表名を書いているだけ= 実行時に名前で引くので影響なし。
+--    ⛔nar_sales_hourly だけが nar_races に依存している= 30_ の §4' で結び直す。)
 select distinct dependent.relname, dependent.relkind
   from pg_depend d
   join pg_rewrite r on r.oid = d.objid
@@ -180,10 +184,9 @@ create index nar_run_facts_p_horse_idx on public.nar_run_facts_p (horse_key, rac
 alter table public.nar_run_facts_p enable row level security;
 create policy nar_run_facts_read on public.nar_run_facts_p
   for select to anon, authenticated using (true);
-grant select on public.nar_run_facts_p to anon, authenticated;
--- ⛔書き手(便)は service_role で入る。Supabase の既定で service_role は RLS を素通りするが、
---   grant は要る= 旧表と同じものを付ける。§0-5 の結果と見比べて足りない行を足す。
-grant select, insert, update, delete on public.nar_run_facts_p to service_role;
+-- ⛔grant は本番と同じ「全権限」にする(2026-09-22 実測。読みだけに絞っているのは RLS の側)。
+--   ⛔select だけにすると便(service_role)の書きが止まる。§0-5 の結果と見比べる。
+grant all privileges on public.nar_run_facts_p to anon, authenticated, service_role;
 
 comment on table public.nar_run_facts_p is
   '§238a 1 頭 1 行の派生表。通過順の順位・脚質(発走前 as-of)・前半3F(出どころ付き)・発走直前の単勝。書き手は cloud/run_facts.py。§240 で race_date の年ごとに区切った親表';
@@ -420,50 +423,42 @@ begin;
 alter table public.nar_run_facts_2022_11_2023 enable row level security;
 create policy nar_run_facts_part_read on public.nar_run_facts_2022_11_2023
   for select to anon, authenticated using (true);
-grant select on public.nar_run_facts_2022_11_2023 to anon, authenticated;
-grant select, insert, update, delete on public.nar_run_facts_2022_11_2023 to service_role;
+grant all privileges on public.nar_run_facts_2022_11_2023 to anon, authenticated, service_role;
 
 alter table public.nar_run_facts_2024 enable row level security;
 create policy nar_run_facts_part_read on public.nar_run_facts_2024
   for select to anon, authenticated using (true);
-grant select on public.nar_run_facts_2024 to anon, authenticated;
-grant select, insert, update, delete on public.nar_run_facts_2024 to service_role;
+grant all privileges on public.nar_run_facts_2024 to anon, authenticated, service_role;
 
 alter table public.nar_run_facts_2025 enable row level security;
 create policy nar_run_facts_part_read on public.nar_run_facts_2025
   for select to anon, authenticated using (true);
-grant select on public.nar_run_facts_2025 to anon, authenticated;
-grant select, insert, update, delete on public.nar_run_facts_2025 to service_role;
+grant all privileges on public.nar_run_facts_2025 to anon, authenticated, service_role;
 
 alter table public.nar_run_facts_2026 enable row level security;
 create policy nar_run_facts_part_read on public.nar_run_facts_2026
   for select to anon, authenticated using (true);
-grant select on public.nar_run_facts_2026 to anon, authenticated;
-grant select, insert, update, delete on public.nar_run_facts_2026 to service_role;
+grant all privileges on public.nar_run_facts_2026 to anon, authenticated, service_role;
 
 alter table public.nar_run_facts_2027 enable row level security;
 create policy nar_run_facts_part_read on public.nar_run_facts_2027
   for select to anon, authenticated using (true);
-grant select on public.nar_run_facts_2027 to anon, authenticated;
-grant select, insert, update, delete on public.nar_run_facts_2027 to service_role;
+grant all privileges on public.nar_run_facts_2027 to anon, authenticated, service_role;
 
 alter table public.nar_run_facts_2028 enable row level security;
 create policy nar_run_facts_part_read on public.nar_run_facts_2028
   for select to anon, authenticated using (true);
-grant select on public.nar_run_facts_2028 to anon, authenticated;
-grant select, insert, update, delete on public.nar_run_facts_2028 to service_role;
+grant all privileges on public.nar_run_facts_2028 to anon, authenticated, service_role;
 
 alter table public.nar_run_facts_2029 enable row level security;
 create policy nar_run_facts_part_read on public.nar_run_facts_2029
   for select to anon, authenticated using (true);
-grant select on public.nar_run_facts_2029 to anon, authenticated;
-grant select, insert, update, delete on public.nar_run_facts_2029 to service_role;
+grant all privileges on public.nar_run_facts_2029 to anon, authenticated, service_role;
 
 alter table public.nar_run_facts_2030 enable row level security;
 create policy nar_run_facts_part_read on public.nar_run_facts_2030
   for select to anon, authenticated using (true);
-grant select on public.nar_run_facts_2030 to anon, authenticated;
-grant select, insert, update, delete on public.nar_run_facts_2030 to service_role;
+grant all privileges on public.nar_run_facts_2030 to anon, authenticated, service_role;
 
 commit;
 
