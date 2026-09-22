@@ -3339,8 +3339,10 @@ export function nokenPlaceName(rec) {
   return nd ? nd.name : d;
 }
 
-// §48 K-1b 馬場差。cloud/baba.py が夜間に書く `nar_meta 'baba_diff'` = {days:{日:{場:{d,n}}}, built}。
-// ⚠**当サイトの推定**(同じ場・距離・クラス帯の過去3年の中央値との差)であって公式発表ではない。
+// §48 K-1b 馬場差。cloud/baba.py が書く `nar_meta 'baba_diff'` = {days:{日:{場:{d,n[,p]}}}, built, base}。
+// ⚠**当サイトの推定**(同じ場・距離・クラス帯の、前日までの過去1年の中央値との差)であって公式発表ではない。
+// ⛔`p:true` = その日のまだ終わっていない= 終わったレースだけで出した途中の値(翌朝に確定して p が消える)。
+//   ⛔日 d の標準は d より前のレースだけで作る(as-of)・一度確定した日の値は組み直さない(§17 の直し)。
 // ⚠帯広ば(ばんえい)は対象外・その日の対象レースが少ない場も入っていない(=出さない)。
 // 全期間は 11KB あるので、**1日だけ要るページ(レース・その日の結果)は JSON セレクタで切り出す**(実測 107バイト)。
 // 索引ぜんぶが手元にあるときは通信ゼロで済ませる(getNokenFor と同じ作法)
@@ -3351,7 +3353,7 @@ function babaDayOf(v) {
     const o = v[p];
     const d = num(o && o.d);
     if (d === null) continue;
-    out.set(p, { diff: d, n: num(o && o.n) });
+    out.set(p, { diff: d, n: num(o && o.n), prov: !!(o && o.p) });
   }
   return out;
 }
