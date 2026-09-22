@@ -1,10 +1,11 @@
 -- §240 表を年で区切る(宣言的パーティション)/ 4 表目 = nar_runs
 --   走(1 頭 1 行・画面と便が一番よく読む表)
 -- 設計= docs/proposal_s240_partition_20260922.md ・規則= docs/opus_rules.md
--- 書いたのは Opus 実装(2026-09-22)。⛔本番 DB には一切触っていない。
---   下の DDL は手元のコードから**読み取った写し**= 本番の実物と違う可能性がある。
---   ⛔必ず §0 を先に流して答え合わせをしてから §1 へ進む。
--- 出どころ= pipeline/sql/ai_feat_local_schema.sql の 1)(⛔本番の pg_attribute を attnum の順で写したもの・2026-09-08 実測) + search_runs_20260919.sql の索引 3 本
+-- 書いたのは Opus 実装(2026-09-22)。⛔Opus は本番 DB に一切触っていない。
+--   下の DDL は **検品役が 2026-09-22 18:10 に本番を読んだ結果**に合わせてある(列・PK・check・
+--   索引・RLS/policy・grant・comment・trigger・外部キー・依存 view)。
+--   ⛔それでも §0 を先に流す= 読み取りから当てるまでの間に本番が変わっていないかの最後の確認。
+-- 出どころ= 本番の実物(2026-09-22 18:10 に検品役が pg_indexes / pg_policies / information_schema.columns を読んだ結果)。24 列で一致・索引は PK 以外に 5 本
 -- 行の見込み= 1 年 約 13 万行(全体 約 129 万行・2022-11 以降で 約 61 万行)
 -- なぜこの順番か= 大きい表の 1 つ目(約 129 万行・685MB)。⛔ここが今回の本命。小さい 3 表が通ってから流す。
 -- 流す人= 鍵を持つ担当(検品役)。⛔1 ステップ 1 トランザクション。
@@ -16,8 +17,10 @@
 --   rakuten_backfill / pg_cron)。⛔止めていていい範囲は **§1 から §4' まで**。
 --   §4' が終われば書き手は親へ入る= §3' は便を動かしたまま流してよい。
 -- ⚠ この表だけの注意:
---   ⛔`nar_runs_race_idx`(PK と同じ列集合)は**親に作り直さない**= 設計の drop 候補。旧表に残ったものは
---   §4' の rename 後に archive 区画の索引として残るので、要らなければ別の回に drop する(今回は触らない)。
+--   ⛔`nar_runs_race_idx` は**本番に存在しない**(2026-09-22 実測)= 設計にあった drop 候補の話は消えた。
+--   ⛔`(horse_name text_pattern_ops)` は手元のリポジトリに無かった索引= 馬名の前方一致用。親にも張る
+--   (張らないと attach のときに作り直しが始まる)。
+--   ⛔check 制約は無い(race_no の 1..12 が付いているのは nar_races だけ)。⛔comment も無い。
 --   ⛔`nar_runs_jockey_idx`(式索引)は**地元の検算道具だけ**のもの= 本番には無い。作らない。
 --   ⛔trgm の GIN を親に張るには `create extension pg_trgm` が要る(§213 で既に入っている)。
 --   ⛔search_runs_20260919.sql / search_runs_v2_20260919.sql を後で流し直しても、旧名の索引が
@@ -51,11 +54,11 @@
 --     trainer_area       text         ,
 --     weight_mark        text         ,
 --     primary key (track, race_date, race_no, runner_number));
---   create index nar_runs_horse_idx on public.nar_runs (horse_name, race_date desc);
 --   create index nar_runs_date_idx on public.nar_runs (race_date desc);
+--   create index nar_runs_horse_idx on public.nar_runs (horse_name, race_date desc);
+--   create index (名前は §0-2 で確認・馬名の前方一致用) on public.nar_runs (horse_name text_pattern_ops);
 --   create index nar_runs_jockey_trgm on public.nar_runs using gin (jockey gin_trgm_ops);
 --   create index nar_runs_trainer_trgm on public.nar_runs using gin (trainer gin_trgm_ops);
---   constraint nar_runs_race_no_ck check (race_no between 1 and 12)
 --   → PK に race_date が入っている= 区画キーにできる(設計の前提 (a) を満たす)
 
 
@@ -68,22 +71,23 @@ select ordinal_position, column_name, data_type, is_nullable, column_default
  where table_schema = 'public' and table_name = 'nar_runs'
  order by ordinal_position;
 
--- 0-2 索引。期待= nar_runs_pkey・nar_runs_horse_idx・nar_runs_date_idx・nar_runs_jockey_trgm・nar_runs_trainer_trgm
---   +(設計の見込み)nar_runs_race_idx= PK と同じ列集合。
+-- 0-2 索引。期待= nar_runs_pkey + (race_date desc)・(horse_name, race_date desc)・(horse_name text_pattern_ops)・
+--   gin(jockey gin_trgm_ops)・gin(trainer gin_trgm_ops) の 5 本。
 select indexname, indexdef
   from pg_indexes where schemaname = 'public' and tablename = 'nar_runs' order by indexname;
 
--- 0-3 制約。期待= PK と check(race_no_ck)。⛔知らない制約が出たら §1 に写す。
+-- 0-3 制約。期待= PK。⛔知らない制約が出たら §1 に写す。
 select conname, contype, pg_get_constraintdef(oid) as def
   from pg_constraint where conrelid = 'public.nar_runs'::regclass order by conname;
 
--- 0-4 RLS と policy。期待= relrowsecurity = true・policy は読みだけ 1 本の見込み。
+-- 0-4 RLS と policy。期待= relrowsecurity = true・policy は nar_runs_read 1 本(select / {anon,authenticated} / true)。
 select relkind, relrowsecurity, relforcerowsecurity, reltuples::bigint as est_rows
   from pg_class where oid = 'public.nar_runs'::regclass;
 select policyname, permissive, roles, cmd, qual, with_check
   from pg_policies where schemaname = 'public' and tablename = 'nar_runs' order by policyname;
 
--- 0-5 grant。期待= anon / authenticated に SELECT・service_role に読み書き。
+-- 0-5 grant。期待= anon / authenticated / service_role に**全権限**(select, insert, update,
+--   delete, truncate, references, trigger)。⛔読みだけに絞っているのは RLS の側= grant は広い。
 select grantee, privilege_type from information_schema.role_table_grants
  where table_schema = 'public' and table_name = 'nar_runs' order by grantee, privilege_type;
 
@@ -103,9 +107,11 @@ select conname, pg_get_constraintdef(oid) from pg_constraint
  where conrelid = 'public.nar_runs'::regclass and contype = 'f';
 
 -- 0-9 この表に依存する view / matview。期待= 0 行。
---   ⛔rename は view の向き先を**旧表に残す**。1 行でも出たら §4 の前に view を作り直す手順を足す。
---   (手元で洗った結果= nar_sales_daily は nar_sales の view で無関係。nar_search_runs /
---    nar_search_runs_v2 は plpgsql の中で表名を書いているだけ= 実行時に名前で引くので影響なし。)
+--   ⛔view は OID で表に結び付く= rename しても向き先が**旧表(archive_part)に残る**。
+--   期待と違う行が出たら、§4' の中(rename の後)に `create or replace view` を足す。
+--   (2026-09-22 に洗った結果= nar_sales_daily は nar_sales の view で無関係。nar_search_runs /
+--    nar_search_runs_v2 は plpgsql の中で表名を書いているだけ= 実行時に名前で引くので影響なし。
+--    ⛔nar_sales_hourly だけが nar_races に依存している= 30_ の §4' で結び直す。)
 select distinct dependent.relname, dependent.relkind
   from pg_depend d
   join pg_rewrite r on r.oid = d.objid
@@ -158,7 +164,6 @@ create table public.nar_runs_p (
   birth_date         date         ,
   trainer_area       text         ,
   weight_mark        text         ,
-  constraint nar_runs_p_race_no_ck check (race_no between 1 and 12),
   primary key (track, race_date, race_no, runner_number)
 ) partition by range (race_date);
 
@@ -183,21 +188,20 @@ create table public.nar_runs_2030 partition of public.nar_runs_p
 
 -- 親に索引(区画ごとに自動で作られる)。⛔旧表と**同じ定義**にしておくと §3 の attach で
 --   旧表の索引がそのまま繋がる(作り直しが起きない)。名前だけ変える。
-create index nar_runs_p_horse_idx on public.nar_runs_p (horse_name, race_date desc);
 create index nar_runs_p_date_idx on public.nar_runs_p (race_date desc);
+create index nar_runs_p_horse_idx on public.nar_runs_p (horse_name, race_date desc);
+create index nar_runs_p_horse_pattern_idx on public.nar_runs_p (horse_name text_pattern_ops);
 create index nar_runs_p_jockey_trgm on public.nar_runs_p using gin (jockey gin_trgm_ops);
 create index nar_runs_p_trainer_trgm on public.nar_runs_p using gin (trainer gin_trgm_ops);
 
 alter table public.nar_runs_p enable row level security;
 create policy nar_runs_read on public.nar_runs_p
   for select to anon, authenticated using (true);
-grant select on public.nar_runs_p to anon, authenticated;
--- ⛔書き手(便)は service_role で入る。Supabase の既定で service_role は RLS を素通りするが、
---   grant は要る= 旧表と同じものを付ける。§0-5 の結果と見比べて足りない行を足す。
-grant select, insert, update, delete on public.nar_runs_p to service_role;
+-- ⛔grant は本番と同じ「全権限」にする(2026-09-22 実測。読みだけに絞っているのは RLS の側)。
+--   ⛔select だけにすると便(service_role)の書きが止まる。§0-5 の結果と見比べる。
+grant all privileges on public.nar_runs_p to anon, authenticated, service_role;
 
-comment on table public.nar_runs_p is
-  'NAR 公式の走(1 頭 1 行)。§240 で race_date の年ごとに区切った親表';
+-- ⛔この表には comment が付いていない(2026-09-22 実測)= 親にも付けない。
 
 commit;
 
@@ -432,50 +436,42 @@ begin;
 alter table public.nar_runs_2022_11_2023 enable row level security;
 create policy nar_runs_part_read on public.nar_runs_2022_11_2023
   for select to anon, authenticated using (true);
-grant select on public.nar_runs_2022_11_2023 to anon, authenticated;
-grant select, insert, update, delete on public.nar_runs_2022_11_2023 to service_role;
+grant all privileges on public.nar_runs_2022_11_2023 to anon, authenticated, service_role;
 
 alter table public.nar_runs_2024 enable row level security;
 create policy nar_runs_part_read on public.nar_runs_2024
   for select to anon, authenticated using (true);
-grant select on public.nar_runs_2024 to anon, authenticated;
-grant select, insert, update, delete on public.nar_runs_2024 to service_role;
+grant all privileges on public.nar_runs_2024 to anon, authenticated, service_role;
 
 alter table public.nar_runs_2025 enable row level security;
 create policy nar_runs_part_read on public.nar_runs_2025
   for select to anon, authenticated using (true);
-grant select on public.nar_runs_2025 to anon, authenticated;
-grant select, insert, update, delete on public.nar_runs_2025 to service_role;
+grant all privileges on public.nar_runs_2025 to anon, authenticated, service_role;
 
 alter table public.nar_runs_2026 enable row level security;
 create policy nar_runs_part_read on public.nar_runs_2026
   for select to anon, authenticated using (true);
-grant select on public.nar_runs_2026 to anon, authenticated;
-grant select, insert, update, delete on public.nar_runs_2026 to service_role;
+grant all privileges on public.nar_runs_2026 to anon, authenticated, service_role;
 
 alter table public.nar_runs_2027 enable row level security;
 create policy nar_runs_part_read on public.nar_runs_2027
   for select to anon, authenticated using (true);
-grant select on public.nar_runs_2027 to anon, authenticated;
-grant select, insert, update, delete on public.nar_runs_2027 to service_role;
+grant all privileges on public.nar_runs_2027 to anon, authenticated, service_role;
 
 alter table public.nar_runs_2028 enable row level security;
 create policy nar_runs_part_read on public.nar_runs_2028
   for select to anon, authenticated using (true);
-grant select on public.nar_runs_2028 to anon, authenticated;
-grant select, insert, update, delete on public.nar_runs_2028 to service_role;
+grant all privileges on public.nar_runs_2028 to anon, authenticated, service_role;
 
 alter table public.nar_runs_2029 enable row level security;
 create policy nar_runs_part_read on public.nar_runs_2029
   for select to anon, authenticated using (true);
-grant select on public.nar_runs_2029 to anon, authenticated;
-grant select, insert, update, delete on public.nar_runs_2029 to service_role;
+grant all privileges on public.nar_runs_2029 to anon, authenticated, service_role;
 
 alter table public.nar_runs_2030 enable row level security;
 create policy nar_runs_part_read on public.nar_runs_2030
   for select to anon, authenticated using (true);
-grant select on public.nar_runs_2030 to anon, authenticated;
-grant select, insert, update, delete on public.nar_runs_2030 to service_role;
+grant all privileges on public.nar_runs_2030 to anon, authenticated, service_role;
 
 commit;
 
