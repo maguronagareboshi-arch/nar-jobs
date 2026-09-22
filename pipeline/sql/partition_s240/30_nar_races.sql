@@ -1,10 +1,11 @@
 -- §240 表を年で区切る(宣言的パーティション)/ 3 表目 = nar_races
 --   レース(1 レース 1 行)
 -- 設計= docs/proposal_s240_partition_20260922.md ・規則= docs/opus_rules.md
--- 書いたのは Opus 実装(2026-09-22)。⛔本番 DB には一切触っていない。
---   下の DDL は手元のコードから**読み取った写し**= 本番の実物と違う可能性がある。
---   ⛔必ず §0 を先に流して答え合わせをしてから §1 へ進む。
--- 出どころ= pipeline/sql/ai_feat_local_schema.sql の 2)(⛔本番の pg_attribute を attnum の順で写したもの・2026-09-08 実測) + nankan_hist_20260917.sql の `add column nankan jsonb`
+-- 書いたのは Opus 実装(2026-09-22)。⛔Opus は本番 DB に一切触っていない。
+--   下の DDL は **検品役が 2026-09-22 18:10 に本番を読んだ結果**に合わせてある(列・PK・check・
+--   索引・RLS/policy・grant・comment・trigger・外部キー・依存 view)。
+--   ⛔それでも §0 を先に流す= 読み取りから当てるまでの間に本番が変わっていないかの最後の確認。
+-- 出どころ= 本番の実物(2026-09-22 18:10 に検品役が pg_indexes / pg_policies / information_schema.columns を読んだ結果)。24 列・nankan は一番後ろで一致
 -- 行の見込み= 1 年 約 1.5 万行(全体 約 15 万行)
 -- なぜこの順番か= 小さい表の 3 つ目。ここまで通ったら大きい 2 表へ進む。
 -- 流す人= 鍵を持つ担当(検品役)。⛔1 ステップ 1 トランザクション。
@@ -16,8 +17,10 @@
 --   rakuten_backfill / pg_cron)。⛔止めていていい範囲は **§1 から §4' まで**。
 --   §4' が終われば書き手は親へ入る= §3' は便を動かしたまま流してよい。
 -- ⚠ この表だけの注意:
---   ⛔`nankan` は 2026-09-17 に後から足した列= 並びは一番後ろのはず。§0-1 で位置を確かめる。
---   ⛔`source` は not null・check は race_no(1..12)だけ(§238b で本番を見た結果・2026-09-21)。
+--   ⛔この表だけ policy が 2 本(印の書き手 marks_writer にも読みが要る)= 親と区画の両方に 2 本置く。
+--   ⛔この表だけ **view `nar_sales_hourly` が依存している**(2026-09-22 実測)。view は OID で表に
+--   結び付くので rename では付いてこない= §4' の中で create or replace view で親へ結び直す。
+--   ⛔check は race_no(1..12)だけ・comment は無いので親にも付けない。
 --
 -- 今の形と思っているもの(⛔§0-1 が正):
 --   create table public.nar_races (
@@ -46,6 +49,7 @@
 --     cancel_note          text         ,
 --     nankan               jsonb        ,
 --     primary key (track, race_date, race_no));
+--   create index (名前は §0-2 で確認・定義は race_date desc, track) on public.nar_races (race_date desc, track);
 --   constraint nar_races_race_no_ck check (race_no between 1 and 12)
 --   → PK に race_date が入っている= 区画キーにできる(設計の前提 (a) を満たす)
 
@@ -59,7 +63,7 @@ select ordinal_position, column_name, data_type, is_nullable, column_default
  where table_schema = 'public' and table_name = 'nar_races'
  order by ordinal_position;
 
--- 0-2 索引。期待= nar_races_pkey だけの見込み(§0-2 で確かめる)。
+-- 0-2 索引。期待= nar_races_pkey と (race_date desc, track) の 2 本。
 select indexname, indexdef
   from pg_indexes where schemaname = 'public' and tablename = 'nar_races' order by indexname;
 
@@ -67,13 +71,15 @@ select indexname, indexdef
 select conname, contype, pg_get_constraintdef(oid) as def
   from pg_constraint where conrelid = 'public.nar_races'::regclass order by conname;
 
--- 0-4 RLS と policy。期待= relrowsecurity = true・policy は読みだけ 1 本の見込み。
+-- 0-4 RLS と policy。期待= relrowsecurity = true・policy が **2 本**= nar_races_read(anon,authenticated)と nar_races_marks_writer_read(marks_writer)。
 select relkind, relrowsecurity, relforcerowsecurity, reltuples::bigint as est_rows
   from pg_class where oid = 'public.nar_races'::regclass;
 select policyname, permissive, roles, cmd, qual, with_check
   from pg_policies where schemaname = 'public' and tablename = 'nar_races' order by policyname;
 
--- 0-5 grant。期待= anon / authenticated に SELECT・service_role に読み書き。
+-- 0-5 grant。期待= anon / authenticated / service_role に**全権限**(select, insert, update,
+--   delete, truncate, references, trigger)。⛔読みだけに絞っているのは RLS の側= grant は広い。
+--   ⛔この表だけ marks_writer にも select が付いている。
 select grantee, privilege_type from information_schema.role_table_grants
  where table_schema = 'public' and table_name = 'nar_races' order by grantee, privilege_type;
 
@@ -92,16 +98,25 @@ select c.relname as referencing_table, k.conname, pg_get_constraintdef(k.oid) as
 select conname, pg_get_constraintdef(oid) from pg_constraint
  where conrelid = 'public.nar_races'::regclass and contype = 'f';
 
--- 0-9 この表に依存する view / matview。期待= 0 行。
---   ⛔rename は view の向き先を**旧表に残す**。1 行でも出たら §4 の前に view を作り直す手順を足す。
---   (手元で洗った結果= nar_sales_daily は nar_sales の view で無関係。nar_search_runs /
---    nar_search_runs_v2 は plpgsql の中で表名を書いているだけ= 実行時に名前で引くので影響なし。)
+-- 0-9 この表に依存する view / matview。期待= **1 行= nar_sales_hourly**(⛔0 行ではない)。
+--   ⛔view は OID で表に結び付く= rename しても向き先が**旧表(archive_part)に残る**。
+--   期待と違う行が出たら、§4' の中(rename の後)に `create or replace view` を足す。
+--   (2026-09-22 に洗った結果= nar_sales_daily は nar_sales の view で無関係。nar_search_runs /
+--    nar_search_runs_v2 は plpgsql の中で表名を書いているだけ= 実行時に名前で引くので影響なし。
+--    ⛔nar_sales_hourly だけが nar_races に依存している= 30_ の §4' で結び直す。)
 select distinct dependent.relname, dependent.relkind
   from pg_depend d
   join pg_rewrite r on r.oid = d.objid
   join pg_class dependent on dependent.oid = r.ev_class
  where d.refobjid = 'public.nar_races'::regclass and d.classid = 'pg_rewrite'::regclass
    and dependent.relname <> 'nar_races';
+
+-- 0-11 依存する view の今の定義と grant(⛔§4' で作り直すので、写しと一致することを確かめる)。
+select pg_get_viewdef('public.nar_sales_hourly'::regclass, true);
+select grantee, privilege_type from information_schema.role_table_grants
+ where table_schema = 'public' and table_name = 'nar_sales_hourly' order by grantee, privilege_type;
+-- 期待= 定義が §4'(ii-b) の写しと同じ・grant は anon / authenticated に SELECT。
+--   ⛔定義が 1 文字でも違ったら、こちらの写しを本番の方に合わせてから §1 へ。
 
 -- 0-10 移行前の行数の控え(⛔00_baseline_counts.sql でまとめて取ってもよい。99_verify.sql で使う)。
 select count(*) as rows_all,
@@ -168,17 +183,22 @@ create table public.nar_races_2029 partition of public.nar_races_p
 create table public.nar_races_2030 partition of public.nar_races_p
   for values from ('2030-01-01') to ('2031-01-01');
 
+-- 親に索引(区画ごとに自動で作られる)。⛔旧表と**同じ定義**にしておくと §3 の attach で
+--   旧表の索引がそのまま繋がる(作り直しが起きない)。名前だけ変える。
+create index nar_races_p_date_track_idx on public.nar_races_p (race_date desc, track);
 
 alter table public.nar_races_p enable row level security;
 create policy nar_races_read on public.nar_races_p
   for select to anon, authenticated using (true);
-grant select on public.nar_races_p to anon, authenticated;
--- ⛔書き手(便)は service_role で入る。Supabase の既定で service_role は RLS を素通りするが、
---   grant は要る= 旧表と同じものを付ける。§0-5 の結果と見比べて足りない行を足す。
-grant select, insert, update, delete on public.nar_races_p to service_role;
+-- ⛔この表だけの 2 本目(2026-09-22 実測)= 印の書き手にも読みが要る。
+create policy nar_races_marks_writer_read on public.nar_races_p
+  for select to marks_writer using (true);
+-- ⛔grant は本番と同じ「全権限」にする(2026-09-22 実測。読みだけに絞っているのは RLS の側)。
+--   ⛔select だけにすると便(service_role)の書きが止まる。§0-5 の結果と見比べる。
+grant all privileges on public.nar_races_p to anon, authenticated, service_role;
+grant select on public.nar_races_p to marks_writer;
 
-comment on table public.nar_races_p is
-  'NAR 公式のレース。§240 で race_date の年ごとに区切った親表';
+-- ⛔この表には comment が付いていない(2026-09-22 実測)= 親にも付けない。
 
 commit;
 
@@ -293,6 +313,25 @@ on conflict (track, race_date, race_no) do update set
 alter table public.nar_races   rename to nar_races_archive_part;
 alter table public.nar_races_p rename to nar_races;
 
+-- (ii-b) ⛔nar_races に依存する view を親へ結び直す(2026-09-22 18:10 実測で発見)。
+--   view は OID で表に結び付く= rename しただけでは nar_races_archive_part を指したままになり、
+--   「今年の売得の時間帯別」が空になる。⛔定義は本番の pg_get_viewdef の写しそのまま(列名・型を変えない)。
+create or replace view public.nar_sales_hourly as
+  with r as (
+    select s.track, s.race_date, s.race_no, v.net,
+           substr(r_1.post_time, 1, 2)::integer * 60 + substr(r_1.post_time, 3, 2)::integer as post_min
+      from nar_sales s
+      join nar_races r_1 on r_1.track = s.track and r_1.race_date = s.race_date and r_1.race_no = s.race_no
+      cross join lateral (
+        select sum(coalesce((s.votes ->> k.k)::bigint, 0) - coalesce((s.refunds ->> k.k)::bigint, 0)) as net
+          from jsonb_object_keys(s.votes) k(k)) v
+     where s.race_date >= (current_date - 365) and r_1.post_time ~ '^[0-9]{4}$')
+  select track, post_min / 30 * 30 as slot_min, count(*)::integer as races,
+         avg(net)::bigint as avg_race_votes
+    from r group by track, (post_min / 30 * 30);
+-- ⛔view の grant は create or replace では消えないが、§0-11 の結果と見比べて足りなければ足す。
+grant select on public.nar_sales_hourly to anon, authenticated;
+
 -- (iii) PostgREST にスキーマを読み直させる
 notify pgrst, 'reload schema';
 
@@ -303,6 +342,14 @@ commit;
 select count(*) as today_rows from public.nar_races where race_date = current_date;
 select tableoid::regclass as part, count(*) from public.nar_races group by 1 order by 1;
 -- 期待= 区画は 8 個(archive はまだ付いていない)・当日の行が 0 でない。
+
+-- ⛔依存 view が親に結び直せたかの確認(⛔archive_part を指したままなら 0 行になる)。
+select count(*) as hourly_rows from public.nar_sales_hourly;
+select distinct refobjid::regclass as view_points_at
+  from pg_depend d join pg_rewrite r on r.oid = d.objid
+ where r.ev_class = 'public.nar_sales_hourly'::regclass and d.classid = 'pg_rewrite'::regclass
+   and d.refclassid = 'pg_class'::regclass;
+-- 期待= hourly_rows が 0 でない・向き先に nar_races(archive_part ではない)が出る。
 
 -- ⛔便はここから動かしてよい(書き手は親へ入る)。§3' は便と並行で流せる。
 
@@ -400,50 +447,66 @@ begin;
 alter table public.nar_races_2022_11_2023 enable row level security;
 create policy nar_races_part_read on public.nar_races_2022_11_2023
   for select to anon, authenticated using (true);
-grant select on public.nar_races_2022_11_2023 to anon, authenticated;
-grant select, insert, update, delete on public.nar_races_2022_11_2023 to service_role;
+create policy nar_races_marks_writer_read_part on public.nar_races_2022_11_2023
+  for select to marks_writer using (true);
+grant all privileges on public.nar_races_2022_11_2023 to anon, authenticated, service_role;
+grant select on public.nar_races_2022_11_2023 to marks_writer;
 
 alter table public.nar_races_2024 enable row level security;
 create policy nar_races_part_read on public.nar_races_2024
   for select to anon, authenticated using (true);
-grant select on public.nar_races_2024 to anon, authenticated;
-grant select, insert, update, delete on public.nar_races_2024 to service_role;
+create policy nar_races_marks_writer_read_part on public.nar_races_2024
+  for select to marks_writer using (true);
+grant all privileges on public.nar_races_2024 to anon, authenticated, service_role;
+grant select on public.nar_races_2024 to marks_writer;
 
 alter table public.nar_races_2025 enable row level security;
 create policy nar_races_part_read on public.nar_races_2025
   for select to anon, authenticated using (true);
-grant select on public.nar_races_2025 to anon, authenticated;
-grant select, insert, update, delete on public.nar_races_2025 to service_role;
+create policy nar_races_marks_writer_read_part on public.nar_races_2025
+  for select to marks_writer using (true);
+grant all privileges on public.nar_races_2025 to anon, authenticated, service_role;
+grant select on public.nar_races_2025 to marks_writer;
 
 alter table public.nar_races_2026 enable row level security;
 create policy nar_races_part_read on public.nar_races_2026
   for select to anon, authenticated using (true);
-grant select on public.nar_races_2026 to anon, authenticated;
-grant select, insert, update, delete on public.nar_races_2026 to service_role;
+create policy nar_races_marks_writer_read_part on public.nar_races_2026
+  for select to marks_writer using (true);
+grant all privileges on public.nar_races_2026 to anon, authenticated, service_role;
+grant select on public.nar_races_2026 to marks_writer;
 
 alter table public.nar_races_2027 enable row level security;
 create policy nar_races_part_read on public.nar_races_2027
   for select to anon, authenticated using (true);
-grant select on public.nar_races_2027 to anon, authenticated;
-grant select, insert, update, delete on public.nar_races_2027 to service_role;
+create policy nar_races_marks_writer_read_part on public.nar_races_2027
+  for select to marks_writer using (true);
+grant all privileges on public.nar_races_2027 to anon, authenticated, service_role;
+grant select on public.nar_races_2027 to marks_writer;
 
 alter table public.nar_races_2028 enable row level security;
 create policy nar_races_part_read on public.nar_races_2028
   for select to anon, authenticated using (true);
-grant select on public.nar_races_2028 to anon, authenticated;
-grant select, insert, update, delete on public.nar_races_2028 to service_role;
+create policy nar_races_marks_writer_read_part on public.nar_races_2028
+  for select to marks_writer using (true);
+grant all privileges on public.nar_races_2028 to anon, authenticated, service_role;
+grant select on public.nar_races_2028 to marks_writer;
 
 alter table public.nar_races_2029 enable row level security;
 create policy nar_races_part_read on public.nar_races_2029
   for select to anon, authenticated using (true);
-grant select on public.nar_races_2029 to anon, authenticated;
-grant select, insert, update, delete on public.nar_races_2029 to service_role;
+create policy nar_races_marks_writer_read_part on public.nar_races_2029
+  for select to marks_writer using (true);
+grant all privileges on public.nar_races_2029 to anon, authenticated, service_role;
+grant select on public.nar_races_2029 to marks_writer;
 
 alter table public.nar_races_2030 enable row level security;
 create policy nar_races_part_read on public.nar_races_2030
   for select to anon, authenticated using (true);
-grant select on public.nar_races_2030 to anon, authenticated;
-grant select, insert, update, delete on public.nar_races_2030 to service_role;
+create policy nar_races_marks_writer_read_part on public.nar_races_2030
+  for select to marks_writer using (true);
+grant all privileges on public.nar_races_2030 to anon, authenticated, service_role;
+grant select on public.nar_races_2030 to marks_writer;
 
 commit;
 
