@@ -162,6 +162,7 @@ jobs:
 
       # ---------------------------------------------------------------- 畳んで渡す
       - name: gzip csv
+        if: always()
         run: |
           set -o pipefail
           ls -l out
@@ -170,8 +171,9 @@ jobs:
           du -sh out
 
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: nankan-copy
           path: out/
           retention-days: 3
-          if-no-files-found: error
+          if-no-files-found: warn
