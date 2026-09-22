@@ -1,0 +1,54 @@
+# §239a 分析タブ(南関)の事実 nar_karte_facts を焼く手動便。日々の分は nar-refresh の karte facts 段が回す。
+# 入力 mode= dry(既定・書かずに表で log に出す)/ apply(書く)。late_table= 出遅れの割合表を数え直す(apply なら nar_meta へ)。
+# ⛔先に pipeline/sql/karte_facts_20260922.sql を流すこと(表が無いと apply が HTTP404 で 1 を返す)。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: karte-facts
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'date (YYYY-MM-DD / empty = JST today and tomorrow)'
+        required: false
+        default: ''
+      track:
+        description: 'track (empty = 4 tracks / 大井 船橋 川崎 浦和)'
+        required: false
+        default: ''
+      mode:
+        description: 'dry (no write) or apply (write)'
+        required: true
+        default: 'dry'
+        type: choice
+        options:
+          - dry
+          - apply
+      late_table:
+        description: 'rebuild the late-start table (nar_meta karte:late_next:v1)'
+        required: false
+        default: false
+        type: boolean
+jobs:
+  karte:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r cloud/requirements.txt
+      - name: karte facts
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          MODE: ${{ github.event.inputs.mode }}
+          DATE: ${{ github.event.inputs.date }}
+          TRACK: ${{ github.event.inputs.track }}
+          LATE: ${{ github.event.inputs.late_table }}
+        run: |
+          set --
+          if [ "$MODE" = "apply" ]; then set -- "$@" --apply; fi
+          if [ -n "$DATE" ]; then set -- "$@" --date "$DATE"; fi
+          if [ -n "$TRACK" ]; then set -- "$@" --track "$TRACK"; fi
+          if [ "$LATE" = "true" ]; then set -- "$@" --late-table; fi
+          python cloud/karte_facts.py "$@"
