@@ -9,6 +9,8 @@
   ③能力検査・取消・除外・取りやめ(着なし)を走数に数えない
   ④その日と未来の走を数えない(発走前の値だけ)
   ⑤便= 同名で生年の違う馬をつながない・ドライランは書かない・割合表の数え方
+  ⑥追加の 4 列(出遅れた走の位置・脚質の回数・今回の間隔・ベストの着順)
+  ⑦run_facts が出走前の行(着順・通過が空)を焼ける= 夕方に明日の脚質を先に焼く段の前提
 """
 import io
 import sys
@@ -20,7 +22,7 @@ from unittest import mock
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from pipeline import karte                                            # noqa: E402
-from cloud import karte_facts                                         # noqa: E402
+from cloud import karte_facts, run_facts                              # noqa: E402
 
 D = "2026-09-22"
 
@@ -60,6 +62,15 @@ class Start(unittest.TestCase):
         # 直近 5 走= 20,15,10,5,2 → 記録あり 20(T),10(F),5(T),2(T)= 3/4(1 日の走は 6 走目)
         self.assertEqual(karte.late_count(st), (3, 4))
 
+    def test_late_runs_positions(self):
+        st = karte.past_starts([R("2026-09-%02d" % d, late=v) for d, v in
+                                ((20, True), (15, None), (10, False), (5, True), (2, True), (1, True))], D)
+        self.assertEqual(karte.late_runs(st), [1, 4, 5], "位置は記録の無い走も含めた直近 5 走の順番(6 走目は入れない)")
+        st = karte.past_starts([R("2026-09-01", late=False)], D)
+        self.assertEqual(karte.late_runs(st), [], "記録はあって出遅れ 0 回= 空の並び")
+        self.assertIsNone(karte.late_runs(karte.past_starts([R("2026-09-01", late=None)], D)))
+        self.assertIsNone(karte.late_runs([]))
+
     def test_late_empty_is_none(self):
         self.assertEqual(karte.late_count([]), (None, None))
         st = karte.past_starts([R("2026-09-01", late=None)], D)
@@ -92,6 +103,15 @@ class Style(unittest.TestCase):
         self.assertEqual(karte.lead_hold(st, D), (1, 3))
         self.assertEqual(karte.fade4(st, D), (2, 3))
 
+    def test_style_counts_same_runs_as_style(self):
+        runs = [R("2026-09-%02d" % d, c1=c, n1=10) for d, c in ((20, 1), (15, 3), (10, 6), (5, 9), (3, 5), (1, 1))]
+        runs.append(R("2025-09-01", c1=1, n1=10))                                # ⛔365 日より前
+        runs.append(R("2026-09-18", track="園田", c1=10, n1=10))                  # 浦和が 3 走以上= 園田は外れる
+        runs.append(R(D, c1=1, n1=10))                                           # ⛔今日
+        self.assertEqual(karte.style_counts(runs, "浦和", D), {"逃": 1, "先": 1, "差": 2, "追": 1})
+        self.assertIsNone(karte.style_counts([R("2026-09-01")], "浦和", D), "位置が無いのに 0 回と書いた")
+        self.assertIsNone(karte.style_counts([], "浦和", D))
+
     def test_style_rates_empty_is_none(self):
         st = karte.past_starts([R("2026-09-01", finish=2)], D)                 # c1/c4 の読めない走だけ
         self.assertEqual(karte.lead_hold(st, D), (None, None))
@@ -105,6 +125,11 @@ class Usage(unittest.TestCase):
     def test_runs_30d_window(self):
         st = karte.past_starts([R("2026-08-23"), R("2026-08-22"), R("2026-09-21")], D)
         self.assertEqual(karte.runs_30d(st, D), 2, "30 日前の日は入る・31 日前は入らない")
+
+    def test_gap_days(self):
+        st = karte.past_starts([R("2026-09-01"), R("2026-09-15", finish=None, note="出走取消"), R("2026-08-01")], D)
+        self.assertEqual(karte.gap_days(st, D), 21, "取消を前走にした")
+        self.assertIsNone(karte.gap_days([], D))
 
     def test_run_of_year(self):
         st = karte.past_starts([R("2026-01-01"), R("2025-12-31"), R("2026-05-01")], D)
@@ -161,7 +186,8 @@ class Form(unittest.TestCase):
             R("2025-01-01", finish=1, pop=9, time=80.0, win_time=80.0),                # ⛔365 日より前
         ], D)
         f = karte.form(st, D)
-        self.assertEqual((f["best_margin"], f["best_margin_date"]), (0.0, "2026-08-01"), "同じ差は新しい方")
+        self.assertEqual((f["best_margin"], f["best_margin_date"], f["best_finish"]), (0.0, "2026-08-01", 1),
+                         "同じ差は新しい方")
         self.assertEqual(f["recent3_margin"], 0.4)                                   # (0.8+0.0+0.4)/3
         self.assertEqual(f["pop_beat"], (2, 5))                                      # 8/1(1<3)・7/1(3<6)
         self.assertEqual(f["win_conv"], (2, 4))
@@ -188,8 +214,9 @@ class Row(unittest.TestCase):
 
     def test_debut_is_not_zero_filled(self):
         row = karte.build_row(self.ENTRY, [], [], "差し", None, "t")
-        for c in ("late_n", "late_den", "late_next_pct", "lead_hold_rate", "lead_hold_n", "pos_var", "oi_n", "night_n",
-                  "h2h", "h2h_w", "best_margin", "recent3_margin", "pop_beat_n", "win_conv_n", "since_layoff"):
+        for c in ("late_n", "late_den", "late_next_pct", "late_runs", "style_counts", "lead_hold_rate", "lead_hold_n",
+                  "pos_var", "oi_n", "night_n", "h2h", "h2h_w", "best_margin", "best_finish", "recent3_margin",
+                  "pop_beat_n", "win_conv_n", "since_layoff", "gap_days"):
             self.assertIsNone(row[c], c)
         self.assertEqual((row["runs_30d"], row["run_of_year"], row["style"]), (0, 1, "差し"))
 
@@ -279,6 +306,9 @@ class Job(unittest.TestCase):
         self.assertEqual((b["h2h_w"], b["h2h_l"]), (0, 1))
         self.assertEqual((a["pos_var"], a["lead_hold_n"], a["best_margin"], a["best_margin_date"]),
                          ("2", 1, 0.0, "2026-09-01"))
+        self.assertEqual((a["late_runs"], a["gap_days"], a["best_finish"]), ([1], 21, 1))
+        self.assertEqual(a["style_counts"], {"逃": 1, "先": 0, "差": 0, "追": 0}, "p= 2/12 の 1 走だけ")
+        self.assertIsNone(b["style_counts"], "位置の無い馬に 0 回と書いた")
 
     def test_dry_run_does_not_write(self):
         ps = self.patches() + [
@@ -306,6 +336,30 @@ class Job(unittest.TestCase):
             with redirect_stdout(io.StringIO()):
                 self.assertEqual(karte_facts.main(), 2)
             e.assert_not_called()
+
+
+class RunFactsPreRace(unittest.TestCase):
+    """④ 夕方に明日の出走表の行へ脚質を焼く= run_facts.build_window が着順・通過・上がり・オッズの空な行を焼けること。"""
+
+    def test_pre_race_rows(self):
+        tomorrow = "2026-09-23"
+        races = [{"track": "浦和", "race_date": tomorrow, "race_no": 1, "corners": None, "source": "nar_official_csv"}]
+        runs = [{"track": "浦和", "race_date": tomorrow, "race_no": 1, "runner_number": 1, "horse_name": "マエノウマ",
+                 "birth_date": "2021-04-01", "age": 5, "last3f": None},
+                {"track": "浦和", "race_date": tomorrow, "race_no": 1, "runner_number": 2, "horse_name": "シンバ",
+                 "birth_date": "2023-04-01", "age": 3, "last3f": None}]                # 初出走= 過去走なし
+        past = [{"track": "浦和", "race_date": "2026-09-%02d" % d, "race_no": 2, "runner_number": 1,
+                 "horse_name": "マエノウマ", "birth_date": "2021-04-01", "age": 5} for d in (1, 10)]
+        corners = {("浦和", "2026-09-01", 2): [{"name": "1角", "order": "1,2,3,4,5,6,7,8,9,10"}],
+                   ("浦和", "2026-09-10", 2): [{"name": "1角", "order": "1,2,3,4,5,6,7,8,9,10"}]}
+        with mock.patch.object(run_facts, "fetch_races", return_value=races),                 mock.patch.object(run_facts, "fetch_runs", return_value=runs),                 mock.patch.object(run_facts, "fetch_first3f", return_value={}),                 mock.patch.object(run_facts, "fetch_ticks", return_value={}),                 mock.patch.object(run_facts, "fetch_corners", return_value=corners),                 mock.patch.object(run_facts, "rows_all", return_value=past + runs):
+            rows = {r["umaban"]: r for r in run_facts.build_window("http://x", "k", tomorrow, tomorrow)}
+        a, b = rows[1], rows[2]
+        self.assertEqual((a["style"], a["style_n"]), ("逃げ", 2), "明日の行に過去走の脚質が付かない")
+        for c in ("c1", "n1", "c2", "n2", "c3", "n3", "c4", "n4", "first3f", "first3f_src", "last3f", "win_odds_close"):
+            self.assertIsNone(a[c], c + " は出走前なので空のはず")
+        self.assertEqual((b["style"], b["style_n"]), (None, 0))
+        self.assertEqual((a["horse_key"], a["src"]), ("マエノウマ|2021-04-01", "official"))
 
 
 if __name__ == "__main__":
