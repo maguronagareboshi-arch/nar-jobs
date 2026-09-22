@@ -5,9 +5,9 @@
   2) vacuum がトランザクションの中に入っていない(⛔中で流すと必ず落ちる)
   3) `$$ ... $$`(do ブロック)が閉じている・最後が ; で終わっている
   4) 親に作る索引の名前が旧表の索引名とぶつかっていない(`_p_` が入っている)
-  5) 区画の範囲が 2022-11-01 〜 2028-01-01 まで隙間なく続いている
-  6) archive の attach が (minvalue) → 2022-11-01
-  7) rename が 2 本そろっている
+  5) 区画の範囲が 2022-11-01 〜 2031-01-01 まで隙間なく続いている(2030 まで)
+  6) archive の attach が `_archive_part` を (minvalue) → 2022-11-01
+  7) 差分+rename 2 本+notify が同じトランザクション・delete は rename より後で相手が _archive_part
   8) insert/delete の刻みに statement_timeout が付いている
   9) notify pgrst がある
 ⛔見ていないもの= 本番の実物との一致(それは各ファイルの §0 を流して人が確かめる)。
@@ -99,27 +99,48 @@ def check_one(fn, path, is_migration):
         if tbl.endswith("_p") and "_p_" not in idx:
             fail(fn, "親の索引名に `_p_` が無い= 旧表の索引名とぶつかる恐れ: %s" % idx)
 
-    # 5) 区画の範囲が 2022-11-01 から 2028-01-01 まで隙間なく続いていること
+    # 5) 区画の範囲が 2022-11-01 から 2031-01-01 まで隙間なく続いていること(2030 まで先に作る)
     ranges = re.findall(r"for\s+values\s+from\s+\('(\d{4}-\d{2}-\d{2})'\)\s+to\s+\('(\d{4}-\d{2}-\d{2})'\)", nocomment)
-    if len(ranges) != 5:
-        fail(fn, "区画の範囲が 5 つでない(%d 個)" % len(ranges))
+    if len(ranges) != 8:
+        fail(fn, "区画の範囲が 8 つでない(%d 個)" % len(ranges))
     else:
         if ranges[0][0] != "2022-11-01":
             fail(fn, "最初の区画が 2022-11-01 から始まっていない: %s" % ranges[0][0])
         for a, b in zip(ranges, ranges[1:]):
             if a[1] != b[0]:
                 fail(fn, "区画に隙間か重なり: %s → %s" % (a[1], b[0]))
-        if ranges[-1][1] != "2028-01-01":
-            fail(fn, "最後の区画が 2028-01-01 で終わっていない: %s" % ranges[-1][1])
+        if ranges[-1][1] != "2031-01-01":
+            fail(fn, "最後の区画が 2031-01-01 で終わっていない: %s" % ranges[-1][1])
 
-    # 6) archive の attach は (minvalue) to ('2022-11-01')
-    if not re.search(r"attach\s+partition\s+public\.[a-z0-9_]+\s+for\s+values\s+from\s+\(minvalue\)\s+to\s+\('2022-11-01'\)",
-                     nocomment, re.I):
+    # 6) archive の attach は `<表>_archive_part` を (minvalue) to ('2022-11-01') で付ける
+    #    ⛔新しい順では rename が先= attach するのは `_archive_part` に改名された側。
+    m = re.search(r"attach\s+partition\s+public\.([a-z0-9_]+)\s+for\s+values\s+from\s+\(minvalue\)\s+to\s+\('2022-11-01'\)",
+                  nocomment, re.I)
+    if not m:
         fail(fn, "archive 区画の attach(minvalue → 2022-11-01)が見つからない")
+    elif not m.group(1).endswith("_archive_part"):
+        fail(fn, "attach する先が `_archive_part` でない: %s" % m.group(1))
 
-    # 7) §4 の rename が 1 つのトランザクションに 2 本そろっている
-    if len(re.findall(r"(?i)alter\s+table\s+public\.[a-z0-9_]+\s+rename\s+to", outside)) < 2:
+    # 7) §4' の 差分 + rename 2 本 + notify が**同じトランザクション**に入っていること
+    ren = [mm.start() for mm in re.finditer(r"(?i)alter\s+table\s+public\.[a-z0-9_]+\s+rename\s+to", nocomment)]
+    if len(ren) < 2:
         fail(fn, "rename が 2 本そろっていない")
+    else:
+        b = nocomment.rfind("begin;", 0, ren[0])
+        c = nocomment.find("commit;", ren[-1])
+        if b < 0 or c < 0:
+            fail(fn, "rename がトランザクションの中に入っていない")
+        elif "notify pgrst" not in nocomment[b:c].lower():
+            fail(fn, "notify pgrst が rename と同じトランザクションの中に無い")
+        elif "insert into" not in nocomment[b:ren[0]].lower():
+            fail(fn, "§4'(i) の差分の取り直しが rename と同じトランザクションの中に無い")
+
+        # 7-b ⛔順序= rename(§4')が最初の delete(§3')より前にあること
+        d = re.search(r"(?im)^\s*delete\s+from\s+public\.([a-z0-9_]+)", nocomment)
+        if d and d.start() < ren[0]:
+            fail(fn, "delete が rename より先にある(旧い順= 今年のデータが消える窓ができる)")
+        if d and not d.group(1).endswith("_archive_part"):
+            fail(fn, "delete の相手が `_archive_part` でない(§3' は改名後の表を掃除する): %s" % d.group(1))
 
     # 8) statement_timeout が insert / delete のステップに入っている
     if nocomment.lower().count("set local statement_timeout = '30min'") < 4:

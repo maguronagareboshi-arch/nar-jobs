@@ -12,8 +12,15 @@ union all select 'nar_races',        relid::regclass, level, isleaf from pg_part
 union all select 'nar_runs',         relid::regclass, level, isleaf from pg_partition_tree('public.nar_runs')
 union all select 'nar_run_facts',    relid::regclass, level, isleaf from pg_partition_tree('public.nar_run_facts')
  order by 1, 3, 2;
--- 期待= 1 表につき 7 行(親 1 + 区画 6)。区画= *_archive_part / *_2022_11_2023 / *_2024 / *_2025 / *_2026 / *_2027。
+-- 期待= 1 表につき 10 行(親 1 + 区画 9)。区画= *_archive_part / *_2022_11_2023 / *_2024 / *_2025 /
+--   *_2026 / *_2027 / *_2028 / *_2029 / *_2030(2030 まで先に作る= 毎年足す手作業を減らす)。
 -- ⛔まだ移していない表は「その表は親ではない」で 1 行(level 0)だけ返る= それが正しい。
+-- ⛔§4' が終わって §3' の attach がまだなら 9 行(archive がまだ付いていない)= それも正しい。
+
+-- 1-b §4' が終わった直後の確認(⛔attach 前でも今年の行が見えていること)
+select count(*) as today_rows from public.nar_runs where race_date = current_date;
+select count(*) as old_rows   from public.nar_runs where race_date < '2022-11-01';
+-- 期待= today_rows が 0 でない。old_rows は attach 前は 0・attach 後は控えの rows_archive と一致。
 
 -- =====================================================================
 -- 2) 行数(⛔移行前の控えと突き合わせる。1 行でも違ったら 98_rollback.sql)
