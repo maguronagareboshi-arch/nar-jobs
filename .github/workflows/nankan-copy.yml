@@ -1,0 +1,177 @@
+# 南関 AI 用の写しを 1 回だけ取る便(手動起動のみ)。
+#
+# ここでやること= 本番から 14 表を **読むだけ**で CSV に写し、gzip して成果物(artifact)で受け取る。
+#   ⛔本番への書き込みは 0。流すのは `\copy (select …) to` だけ(insert/update/delete/truncate/create は 1 つも書かない)。
+#   ⛔1 表ずつ順に(並列にしない)= 本番の接続と IO を増やさない。
+#   ⛔重い計算は一切しない(group by も窓も無し)。絞り込みは where だけ。
+#   ⛔schedule は付けない。要るときにユーザーが手で回す。
+#
+# 列の書き方が 2 通りある理由:
+#   ① 9 表(nar_races, nar_runs, nar_horses, nar_kb_runs, nar_horse_health_events,
+#      nar_penalties, nar_sales, auction_sales, nar_meta)は `pipeline/sql/ai_feat_local_schema.sql` に
+#      列定義があるので、その並びのまま **列名を明記**する(select * にしない)。
+#   ② 追加 5 表(nar_run_facts, nar_paper_runs, nar_race_payouts, nar_race_votes, nar_odds_full_ticks)は
+#      手元に列定義が無い。当てずっぽうの列名で落とすより、**header 付き CSV の `select *`** で取る。
+#      header 行に列名が入るので、受け取った側で列は復元できる。
+#      さらに最初の手順で information_schema.columns から 14 表の列一覧を out/_columns.csv に写しておく
+#      (1 行 1 列の軽い読み)ので、次に列名を書き起こすときはこれを見ればよい。
+name: nankan-copy
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: nankan-copy-oneshot
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  copy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      # 本番(pooler)への接続。既存の nar-ai-feat.yml と同じ宛先・同じ使い方。
+      PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+      PGSSLMODE: require
+      PROD_HOST: aws-0-ap-northeast-1.pooler.supabase.com
+      PROD_PORT: '5432'
+      PROD_USER: postgres.qgsnsdjvzzeazbazjlwa
+      PROD_DB: postgres
+    steps:
+      - uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------- 列一覧(軽い読み)
+      - name: dump column list from information_schema
+        run: |
+          set -o pipefail
+          mkdir -p out
+          psql -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_USER" -d "$PROD_DB" -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '30min';
+          \copy (select table_name, ordinal_position, column_name, data_type, is_nullable from information_schema.columns where table_schema = 'public' and table_name in ('nar_races','nar_runs','nar_horses','nar_kb_runs','nar_horse_health_events','nar_penalties','nar_sales','auction_sales','nar_meta','nar_run_facts','nar_paper_runs','nar_race_payouts','nar_race_votes','nar_odds_full_ticks') order by table_name, ordinal_position) to 'out/_columns.csv' with (format csv, header)
+          SQL
+          wc -l out/_columns.csv
+
+      # ---------------------------------------------------------------- 列定義がある 9 表(列名を明記)
+      # 絞り込み= race_date のある表は 2022-11-01 以降。nar_meta は key='noken_index' の 1 行だけ。
+      #   auction_sales と nar_horses は race_date が無いので全件。
+      #   nar_horse_health_events の race_date は null を許す列なので、
+      #   `or race_date is null` を足して行を落とさない(レースに紐づかない記録も南関 AI で要る)。
+      - name: copy nar_races
+        run: |
+          psql -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_USER" -d "$PROD_DB" -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '30min';
+          \copy (select track, race_date, race_no, post_time, race_name, surface, direction, distance_m, weather, going, field_size, condition, prize_yen, race_last4f, race_last3f, furlongs, corners, source, source_snapshot_hash, updated_at, race_kind, cancelled, cancel_note, nankan from public.nar_races where race_date >= '2022-11-01') to 'out/nar_races.csv' with (format csv, header)
+          SQL
+
+      - name: copy nar_runs
+        run: |
+          psql -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_USER" -d "$PROD_DB" -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '30min';
+          \copy (select track, race_date, race_no, runner_number, gate, horse_name, sex, age, jockey, trainer, carried_weight, body_weight, body_weight_change, finish, finish_note, time_raw, time_sec, margin, last3f, popularity, updated_at, birth_date, trainer_area, weight_mark from public.nar_runs where race_date >= '2022-11-01') to 'out/nar_runs.csv' with (format csv, header)
+          SQL
+
+      - name: copy nar_horses
+        run: |
+          psql -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_USER" -d "$PROD_DB" -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '30min';
+          \copy (select horse_name, sex, sire, dam, broodmare_sire, owner, breeder, first_date, last_date, runs, updated_at from public.nar_horses) to 'out/nar_horses.csv' with (format csv, header)
+          SQL
+
+      - name: copy nar_kb_runs
+        run: |
+          psql -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_USER" -d "$PROD_DB" -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '30min';
+          \copy (select track, race_date, race_no, umaban, horse_name, kb_race_id, blinker, gear, first3f, avg_f, pace, kimete, start_note, updated_at from public.nar_kb_runs where race_date >= '2022-11-01') to 'out/nar_kb_runs.csv' with (format csv, header)
+          SQL
+
+      - name: copy nar_horse_health_events
+        run: |
+          psql -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_USER" -d "$PROD_DB" -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '30min';
+          \copy (select event_id, horse_name, birth_date, horse_code, jbis_id, track, race_date, race_no, runner_number, event_date, reported_date, stage, event_type, condition_group, race_status, detail, restriction_from, restriction_through, source_kind, source_ref, source_url, source_hash, source_line_hash, match_method, displayable, parser_version, created_at, updated_at, event_key, support_detail, support_condition_group, support_reported_date, support_restriction_from, support_restriction_through, support_source_kind, support_source_ref, support_source_url, racing_ability_lost, condition_term from public.nar_horse_health_events where race_date >= '2022-11-01' or race_date is null) to 'out/nar_horse_health_events.csv' with (format csv, header)
+          SQL
+
+      - name: copy nar_penalties
+        run: |
+          psql -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_USER" -d "$PROD_DB" -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '30min';
+          \copy (select penalty_id, track, race_date, race_no, person_kind, person_name, kind, detail, suspension_from, suspension_through, source_url, source_hash, parser_version, created_at, updated_at, horse_name from public.nar_penalties where race_date >= '2022-11-01') to 'out/nar_penalties.csv' with (format csv, header)
+          SQL
+
+      - name: copy nar_sales
+        run: |
+          psql -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_USER" -d "$PROD_DB" -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '30min';
+          \copy (select track, race_date, race_no, votes, refunds, updated_at from public.nar_sales where race_date >= '2022-11-01') to 'out/nar_sales.csv' with (format csv, header)
+          SQL
+
+      - name: copy auction_sales
+        run: |
+          psql -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_USER" -d "$PROD_DB" -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '30min';
+          \copy (select source, item_id, horse_name, display_name, sex, age, birth_date, category, auction_date, round_no, start_price, price, bids, sold, seller, tags, other_n, jbis_id, url, fetched_at, updated_at, runs_after, first_after, sire, dam, buyer from public.auction_sales) to 'out/auction_sales.csv' with (format csv, header)
+          SQL
+
+      - name: copy nar_meta
+        run: |
+          psql -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_USER" -d "$PROD_DB" -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '30min';
+          \copy (select key, value, updated_at from public.nar_meta where key = 'noken_index') to 'out/nar_meta.csv' with (format csv, header)
+          SQL
+
+      # ---------------------------------------------------------------- 列定義が手元に無い 5 表
+      # ⛔ここだけ `select *`。理由は冒頭の②= 列定義が手元に無く、header 付き CSV なら列は復元できるため。
+      #   列名が要るようになったら out/_columns.csv を見て、上の 9 表と同じように列名を明記する形へ直す。
+      - name: copy nar_run_facts
+        run: |
+          psql -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_USER" -d "$PROD_DB" -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '30min';
+          \copy (select * from public.nar_run_facts where race_date >= '2022-11-01') to 'out/nar_run_facts.csv' with (format csv, header)
+          SQL
+
+      - name: copy nar_paper_runs
+        run: |
+          psql -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_USER" -d "$PROD_DB" -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '30min';
+          \copy (select * from public.nar_paper_runs where race_date >= '2022-11-01') to 'out/nar_paper_runs.csv' with (format csv, header)
+          SQL
+
+      - name: copy nar_race_payouts
+        run: |
+          psql -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_USER" -d "$PROD_DB" -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '30min';
+          \copy (select * from public.nar_race_payouts where race_date >= '2022-11-01') to 'out/nar_race_payouts.csv' with (format csv, header)
+          SQL
+
+      - name: copy nar_race_votes
+        run: |
+          psql -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_USER" -d "$PROD_DB" -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '30min';
+          \copy (select * from public.nar_race_votes where race_date >= '2022-11-01') to 'out/nar_race_votes.csv' with (format csv, header)
+          SQL
+
+      # 刻みのオッズは行が桁違いに多いので、窓を 2026-09-02 以降に狭める。
+      - name: copy nar_odds_full_ticks
+        run: |
+          psql -h "$PROD_HOST" -p "$PROD_PORT" -U "$PROD_USER" -d "$PROD_DB" -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '30min';
+          \copy (select * from public.nar_odds_full_ticks where race_date >= '2026-09-02') to 'out/nar_odds_full_ticks.csv' with (format csv, header)
+          SQL
+
+      # ---------------------------------------------------------------- 畳んで渡す
+      - name: gzip csv
+        run: |
+          set -o pipefail
+          ls -l out
+          gzip -6 out/*.csv
+          ls -l out
+          du -sh out
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nankan-copy
+          path: out/
+          retention-days: 3
+          if-no-files-found: error
