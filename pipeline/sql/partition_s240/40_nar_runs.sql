@@ -8,12 +8,16 @@
 -- 行の見込み= 1 年 約 13 万行(全体 約 129 万行・2022-11 以降で 約 61 万行)
 -- なぜこの順番か= 大きい表の 1 つ目(約 129 万行・685MB)。⛔ここが今回の本命。小さい 3 表が通ってから流す。
 -- 流す人= 鍵を持つ担当(検品役)。⛔1 ステップ 1 トランザクション。
+-- ⛔流す順は §1 → §2 → **§4'** → **§3'** → §5(2026-09-22 に入れ替えた)。
+--   前の版は「§3 delete → §4 rename」の順で、その間 15〜25 分ぶん、旧表を見ている画面から
+--   **今年のデータが消える**窓があった。入れ替えた今は、先に名前を入れ替えて画面を親へ向ける=
+--   今年の行は最初からそろっていて、一時的に見えないのは **2022-10 以前だけ**(数分〜十数分)。
 --   ⛔始める前に便を止める(nar-refresh / nar-ai-feat / nar-ai-last / run-facts-backfill /
---   rakuten_backfill / pg_cron)。§2 で写した行に §3 の delete が後から当たるため、
---   1 表ぶんの §1〜§4 が終わるまで書き手を入れない。
+--   rakuten_backfill / pg_cron)。⛔止めていていい範囲は **§1 から §4' まで**。
+--   §4' が終われば書き手は親へ入る= §3' は便を動かしたまま流してよい。
 -- ⚠ この表だけの注意:
 --   ⛔`nar_runs_race_idx`(PK と同じ列集合)は**親に作り直さない**= 設計の drop 候補。旧表に残ったものは
---   §4 の rename 後に archive 区画の索引として残るので、要らなければ別の回に drop する(今回は触らない)。
+--   §4' の rename 後に archive 区画の索引として残るので、要らなければ別の回に drop する(今回は触らない)。
 --   ⛔`nar_runs_jockey_idx`(式索引)は**地元の検算道具だけ**のもの= 本番には無い。作らない。
 --   ⛔trgm の GIN を親に張るには `create extension pg_trgm` が要る(§213 で既に入っている)。
 --   ⛔search_runs_20260919.sql / search_runs_v2_20260919.sql を後で流し直しても、旧名の索引が
@@ -119,11 +123,11 @@ select count(*) as rows_all,
 
 -- =====================================================================
 -- §1 親表 nar_runs_p と区画を作る(1 トランザクション)
---   ⛔索引・制約の**名前**は旧表とぶつからないよう `_p_` を挟む。理由= §4 の rename の後も
+--   ⛔索引・制約の**名前**は旧表とぶつからないよう `_p_` を挟む。理由= §4' の rename の後も
 --   旧表の索引名(nar_runs_pkey など)はそのまま残るため、同じ名前を先に使うと §1 が落ちる。
 --   PK 制約の名前は create table が自動で `nar_runs_p_pkey` にする= 衝突しない。
 -- =====================================================================
--- 1-0 trgm の GIN を親に張るのに要る(— §213 で既に入っている見込み、念のため)。
+-- 1-0 trgm の GIN を親に張るのに要る(§213 で既に入っている見込み・念のため)。
 create extension if not exists pg_trgm;
 
 begin;
@@ -158,7 +162,8 @@ create table public.nar_runs_p (
   primary key (track, race_date, race_no, runner_number)
 ) partition by range (race_date);
 
--- 〜2022-11-01 の区画は**作らない**= §3 で旧表をそのまま attach するために空けておく。
+-- 〜2022-11-01 の区画は**作らない**= §3' で旧表をそのまま attach するために空けておく。
+-- ⛔2030 まで先に作る(毎年 12 月に足す手作業を減らすため。区画の無い日付を upsert すると便が落ちる)。
 create table public.nar_runs_2022_11_2023 partition of public.nar_runs_p
   for values from ('2022-11-01') to ('2024-01-01');
 create table public.nar_runs_2024 partition of public.nar_runs_p
@@ -169,9 +174,15 @@ create table public.nar_runs_2026 partition of public.nar_runs_p
   for values from ('2026-01-01') to ('2027-01-01');
 create table public.nar_runs_2027 partition of public.nar_runs_p
   for values from ('2027-01-01') to ('2028-01-01');
+create table public.nar_runs_2028 partition of public.nar_runs_p
+  for values from ('2028-01-01') to ('2029-01-01');
+create table public.nar_runs_2029 partition of public.nar_runs_p
+  for values from ('2029-01-01') to ('2030-01-01');
+create table public.nar_runs_2030 partition of public.nar_runs_p
+  for values from ('2030-01-01') to ('2031-01-01');
 
 -- 親に索引(区画ごとに自動で作られる)。⛔旧表と**同じ定義**にしておくと §3 の attach で
---   旧表の索引がそのまま繋がる(1,000 万行の作り直しが起きない)。名前だけ変える。
+--   旧表の索引がそのまま繋がる(作り直しが起きない)。名前だけ変える。
 create index nar_runs_p_horse_idx on public.nar_runs_p (horse_name, race_date desc);
 create index nar_runs_p_date_idx on public.nar_runs_p (race_date desc);
 create index nar_runs_p_jockey_trgm on public.nar_runs_p using gin (jockey gin_trgm_ops);
@@ -258,100 +269,156 @@ select * from public.nar_runs
  where race_date >= '2027-01-01';
 commit;
 
--- 2-7 突き合わせ(⛔合わなければ §3 へ進まない)
+-- 2-7 突き合わせ(⛔合わなければ §4' へ進まない)
 select (select count(*) from public.nar_runs where race_date >= '2022-11-01') as old_move,
        (select count(*) from public.nar_runs_p) as new_rows;
 
 
 -- =====================================================================
--- §3 旧表から 2022-11-01 以降を消し、check を付けて archive 区画として attach
+-- §4' 差分の取り直し → 名前の入れ替え → PostgREST(⛔**全部で 1 トランザクション**)
+--   ここを 1 つにする理由= 途中で切れると「親に今年の行が無いのに画面は親を見る」状態が残る。
+--   (i) §2 の写しの後に便が書いた行を拾う(2026-09-15 以降だけを見る)
+--   (ii) 旧表 nar_runs → nar_runs_archive_part / 親 nar_runs_p → nar_runs
+--   (iii) notify pgrst(⛔commit のときに配られる= トランザクションの中で書いてよい)
+--   ⛔この commit の直後から画面は親を見る= **今年の行はそろっている**。
+--   一時的に見えないのは 2022-10 以前だけ(§3' の attach で戻る・数分〜十数分)。
+--   ⛔lock_timeout を短くして、長い select の後ろに並んで全部を待たせない。落ちても
+--   トランザクションごと巻き戻るだけ= 数分後にもう一度流せばよい。
+-- =====================================================================
+begin;
+set local lock_timeout = '5s';
+set local statement_timeout = '10min';
+
+-- (i) 差分の取り直し。⛔`updated_at >= …` で絞ってもよいが、日付で絞る方が索引が効く。
+--     便を止めてから §2 を流し終えるまでの間に書かれた行を、上書きで拾う。
+insert into public.nar_runs_p
+select * from public.nar_runs where race_date >= '2026-09-15'
+on conflict (track, race_date, race_no, runner_number) do update set
+  gate = excluded.gate,
+  horse_name = excluded.horse_name,
+  sex = excluded.sex,
+  age = excluded.age,
+  jockey = excluded.jockey,
+  trainer = excluded.trainer,
+  carried_weight = excluded.carried_weight,
+  body_weight = excluded.body_weight,
+  body_weight_change = excluded.body_weight_change,
+  finish = excluded.finish,
+  finish_note = excluded.finish_note,
+  time_raw = excluded.time_raw,
+  time_sec = excluded.time_sec,
+  margin = excluded.margin,
+  last3f = excluded.last3f,
+  popularity = excluded.popularity,
+  updated_at = excluded.updated_at,
+  birth_date = excluded.birth_date,
+  trainer_area = excluded.trainer_area,
+  weight_mark = excluded.weight_mark;
+
+-- (ii) 名前の入れ替え(区画の名前はそのまま)
+alter table public.nar_runs   rename to nar_runs_archive_part;
+alter table public.nar_runs_p rename to nar_runs;
+
+-- (iii) PostgREST にスキーマを読み直させる
+notify pgrst, 'reload schema';
+
+commit;
+
+-- ⛔ここで画面を 1 本開いて見る(当日のレース画面)。今年の行が出ていれば先へ進む。
+--   出ていなければ 98_rollback.sql の 段 E(rename を戻すだけ)。
+select count(*) as today_rows from public.nar_runs where race_date = current_date;
+select tableoid::regclass as part, count(*) from public.nar_runs group by 1 order by 1;
+-- 期待= 区画は 8 個(archive はまだ付いていない)・当日の行が 0 でない。
+
+-- ⛔便はここから動かしてよい(書き手は親へ入る)。§3' は便と並行で流せる。
+
+
+-- =====================================================================
+-- §3' archive_part から 2022-11-01 以降を消し、check を付けて archive 区画として attach
+--   ⛔この間、2022-10 以前の行は**画面から見えない**(親にまだ付いていない)。
+--   ⛔逆に、この間に 2022-10 以前の日付を upsert すると「区画が無い」で落ちる=
+--   遡りの便(rakuten_backfill)だけは attach が終わるまで止めたままにする。
+--   だから 3'-5 の attach まではできるだけ続けて流す(見込み= 小さい表 3 分・nar_runs 20 分)。
 -- =====================================================================
 
--- 3-1 delete(刻みごと・1 刻み 1 トランザクション)
+-- 3'-0 今どうなっているかの確認(⛔読みだけ)
+select count(*) as archive_all,
+       count(*) filter (where race_date >= '2022-11-01') as to_delete
+  from public.nar_runs_archive_part;
+-- 期待= to_delete が §2 で写した行数と同じ(+ §4'(i) で拾った差分のぶん)
+
+-- 3'-1 delete(刻みごと・1 刻み 1 トランザクション)
+--   ⛔消す行は親にコピー済み= 情報は落ちない。⛔不安なら 3'-0 の数を先に控える。
 --   2022-11 〜 2022-12
 begin;
 set local statement_timeout = '30min';
-delete from public.nar_runs where race_date >= '2022-11-01' and race_date < '2023-01-01';
+delete from public.nar_runs_archive_part where race_date >= '2022-11-01' and race_date < '2023-01-01';
 commit;
 
 --   2023
 begin;
 set local statement_timeout = '30min';
-delete from public.nar_runs where race_date >= '2023-01-01' and race_date < '2024-01-01';
+delete from public.nar_runs_archive_part where race_date >= '2023-01-01' and race_date < '2024-01-01';
 commit;
 
 --   2024
 begin;
 set local statement_timeout = '30min';
-delete from public.nar_runs where race_date >= '2024-01-01' and race_date < '2025-01-01';
+delete from public.nar_runs_archive_part where race_date >= '2024-01-01' and race_date < '2025-01-01';
 commit;
 
 --   2025
 begin;
 set local statement_timeout = '30min';
-delete from public.nar_runs where race_date >= '2025-01-01' and race_date < '2026-01-01';
+delete from public.nar_runs_archive_part where race_date >= '2025-01-01' and race_date < '2026-01-01';
 commit;
 
 --   2026(今年)
 begin;
 set local statement_timeout = '30min';
-delete from public.nar_runs where race_date >= '2026-01-01' and race_date < '2027-01-01';
+delete from public.nar_runs_archive_part where race_date >= '2026-01-01' and race_date < '2027-01-01';
 commit;
 
 --   2027 以降
 begin;
 set local statement_timeout = '30min';
-delete from public.nar_runs where race_date >= '2027-01-01';
+delete from public.nar_runs_archive_part where race_date >= '2027-01-01';
 commit;
 
--- 3-2 delete で空いた場所を返す(⛔vacuum はトランザクションの中では流せない。
+-- 3'-2 delete で空いた場所を返す(⛔vacuum はトランザクションの中では流せない。
 --   ⛔vacuum full は使わない= 表と同じ大きさの場所を新しく要求し、排他ロックで画面が止まる)
-vacuum (analyze) public.nar_runs;
+vacuum (analyze) public.nar_runs_archive_part;
 
--- 3-3 archive の check を not valid で付ける(短い排他・既存行は見ない= 数ミリ秒)
+-- 3'-3 archive の check を not valid で付ける(短い排他・既存行は見ない= 数ミリ秒)
 begin;
 set local lock_timeout = '10s';
-alter table public.nar_runs
+alter table public.nar_runs_archive_part
   add constraint nar_runs_archive_ck check (race_date < '2022-11-01') not valid;
 commit;
 
--- 3-4 validate(⛔読みだけの走査。SHARE UPDATE EXCLUSIVE なので select は止まらない)
+-- 3'-4 validate(⛔読みだけの走査。SHARE UPDATE EXCLUSIVE なので select は止まらない)
 begin;
 set local statement_timeout = '30min';
-alter table public.nar_runs validate constraint nar_runs_archive_ck;
+alter table public.nar_runs_archive_part validate constraint nar_runs_archive_ck;
 commit;
 
--- 3-5 attach(check があるので全行走査は起きない。⛔親に一瞬 ACCESS EXCLUSIVE がかかる)
---   ⛔attach のとき、親の索引ごとに「同じ定義の索引」を旧表から探して繋ぐ。無ければ**その場で作る**
---   (= 旧表の行数ぶん待つ)。§1 で定義を揃えてあるので、繋ぐだけで終わるはず。
+-- 3'-5 attach(check があるので全行走査は起きない。⛔親に一瞬 ACCESS EXCLUSIVE がかかる)
+--   ⛔attach のとき、親の索引ごとに「同じ定義の索引」を attach 先から探して繋ぐ。無ければ
+--   **その場で作る**(= 行数ぶん待つ)。§1 で定義を揃えてあるので、繋ぐだけで終わるはず。
+--   ⛔長引くようなら止めて 98_rollback.sql の 段 D' を読む(古い年が見えない時間が伸びるだけで、
+--   今年の行は見えているので画面は動いている)。
 begin;
 set local lock_timeout = '10s';
 set local statement_timeout = '30min';
-alter table public.nar_runs_p
-  attach partition public.nar_runs for values from (minvalue) to ('2022-11-01');
+alter table public.nar_runs
+  attach partition public.nar_runs_archive_part for values from (minvalue) to ('2022-11-01');
 commit;
 
--- 3-6 確認= 区画が 6 つ・親の索引がすべて indisvalid
-select relid::regclass as part, level from pg_partition_tree('public.nar_runs_p');
+-- 3'-6 確認= 区画が 9 つ(親の下に archive を含む)・親の索引がすべて indisvalid
+select relid::regclass as part, level from pg_partition_tree('public.nar_runs');
 select i.indexrelid::regclass as idx, i.indisvalid
-  from pg_index i where i.indrelid = 'public.nar_runs_p'::regclass;
-
-
--- =====================================================================
--- §4 名前の入れ替え(⛔ここだけ短い排他。区画の名前はそのまま)
---   旧表 nar_runs → nar_runs_archive_part(親の下の archive 区画のまま)
---   親   nar_runs_p → nar_runs(画面・便・PostgREST の URL は変わらない)
---   ⛔lock_timeout を短くして、長い select の後ろに並んで全部を待たせないようにする。
---   落ちたら数分後にもう一度流すだけでよい(この 2 行は同じトランザクションの中で不可分)。
--- =====================================================================
-begin;
-set local lock_timeout = '5s';
-alter table public.nar_runs   rename to nar_runs_archive_part;
-alter table public.nar_runs_p rename to nar_runs;
-commit;
-
--- PostgREST にスキーマを読み直させる(⛔commit の後・トランザクションの外)
-notify pgrst, 'reload schema';
+  from pg_index i where i.indrelid = 'public.nar_runs'::regclass;
+-- ⛔ここで遡りの便(rakuten_backfill)を戻してよい。
 
 
 -- =====================================================================
@@ -392,6 +459,24 @@ create policy nar_runs_part_read on public.nar_runs_2027
 grant select on public.nar_runs_2027 to anon, authenticated;
 grant select, insert, update, delete on public.nar_runs_2027 to service_role;
 
+alter table public.nar_runs_2028 enable row level security;
+create policy nar_runs_part_read on public.nar_runs_2028
+  for select to anon, authenticated using (true);
+grant select on public.nar_runs_2028 to anon, authenticated;
+grant select, insert, update, delete on public.nar_runs_2028 to service_role;
+
+alter table public.nar_runs_2029 enable row level security;
+create policy nar_runs_part_read on public.nar_runs_2029
+  for select to anon, authenticated using (true);
+grant select on public.nar_runs_2029 to anon, authenticated;
+grant select, insert, update, delete on public.nar_runs_2029 to service_role;
+
+alter table public.nar_runs_2030 enable row level security;
+create policy nar_runs_part_read on public.nar_runs_2030
+  for select to anon, authenticated using (true);
+grant select on public.nar_runs_2030 to anon, authenticated;
+grant select, insert, update, delete on public.nar_runs_2030 to service_role;
+
 commit;
 
 -- ⛔vacuum はトランザクションの外・区画ごとに 1 本ずつ
@@ -400,6 +485,9 @@ vacuum (analyze) public.nar_runs_2024;
 vacuum (analyze) public.nar_runs_2025;
 vacuum (analyze) public.nar_runs_2026;
 vacuum (analyze) public.nar_runs_2027;
+vacuum (analyze) public.nar_runs_2028;
+vacuum (analyze) public.nar_runs_2029;
+vacuum (analyze) public.nar_runs_2030;
 vacuum (analyze) public.nar_runs_archive_part;
 analyze public.nar_runs;
 
