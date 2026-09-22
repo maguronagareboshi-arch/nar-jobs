@@ -75,6 +75,45 @@ jobs:
           raise SystemExit(0 if 0 <= age <= 12 else 1)
           PY
 
+  # §245(2026-09-23) 7 券種の板の見張り= 前日に開催があったのに nar_odds_full の板が 1 レースも無い場があれば赤。
+  # 出どころ= 9/11 に collect.yml の手順名の「: 」で便が 1 日止まり、船橋など 4 場の板が無いと後で分かった(静かに欠けていた)。
+  # 読みは 2 本だけ(nar_races の前日・nar_odds_full の前日 馬連)= 軽い。⛔本番 DB で集計はしない。
+  boards-yesterday:
+    if: github.event.schedule == '40 23 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: check full odds boards for yesterday (fail if a track raced but has no board)
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          python - <<'PY'
+          import os, json, urllib.request, datetime as dt
+          JST = dt.timezone(dt.timedelta(hours=9))
+          day = (dt.datetime.now(JST).date() - dt.timedelta(days=1)).isoformat()
+          def get(path):
+              req = urllib.request.Request(os.environ['SUPABASE_URL'] + '/rest/v1/' + path,
+                  headers={'apikey': os.environ['SUPABASE_SERVICE_KEY'], 'Authorization': 'Bearer ' + os.environ['SUPABASE_SERVICE_KEY']})
+              return json.loads(urllib.request.urlopen(req, timeout=30).read())
+          races = get(f'nar_races?select=track,race_no&race_date=eq.{day}&limit=1000')
+          boards = get(f'nar_odds_full?select=track,race_no&race_date=eq.{day}&kind=eq.umaren&limit=1000')
+          want, have = {}, {}
+          for r in races: want.setdefault(r['track'], set()).add(int(r['race_no']))
+          for r in boards: have.setdefault(r['track'], set()).add(int(r['race_no']))
+          print(f'{day}: tracks={len(want)} races={len(races)} boards={len(boards)}')
+          if not want:
+              print('no racing yesterday'); raise SystemExit(0)
+          bad = []
+          for t, rs in sorted(want.items()):
+              got = len(have.get(t, set()) & rs)
+              print(f'  {t}: board {got}/{len(rs)}')
+              if got == 0: bad.append(t)
+          if bad:
+              print('NO BOARD AT ALL: ' + ', '.join(bad))
+          raise SystemExit(1 if bad else 0)
+          PY
+
   # 高知の自前計測(前半3F)の見張り。§157 段 3(2026-09-12)で旧 DB の見張りは外し、本体の nar_own_runs を見る
   kochi-results:
     if: github.event.schedule == '40 23 * * *' || github.event_name == 'workflow_dispatch'
