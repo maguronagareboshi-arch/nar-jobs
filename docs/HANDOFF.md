@@ -1,15 +1,7 @@
-commit: 10410e9・ae6ae8f・311e37f・6423014+設計の回答 ca71af9・89f66be・c99dad7 枝 s239a(origin/master 57588fc から)。⛔push なし・本番への書き込み 0・DDL 未適用・service key は読んでいない。
-作った物: DDL pipeline/sql/karte_facts_20260922.sql(nar_karte_facts 42 列= 指示書の列+late_runs/style_counts/gap_days/best_finish)。数え方 pipeline/karte.py・便 cloud/karte_facts.py。
-便: 手動 karte-facts.yml(date/track/mode dry|apply・late_table)。nar-refresh の karte facts 段= 朝 9:30 前と 17:00 以降。17:00 以降は先に run_facts.py --apply --from 明日 --to 明日 → karte_facts。
-前提: 明日の nar_run_facts は着順・通過・上がり・オッズが空の行。当日と翌日の run facts 段(今日と前日を毎便 upsert)が結果の入った値で同じ行を上書きする。脚質は過去走だけで決まるので変わらない。
-検品: tests/test_karte.py 32 本緑(run_facts が出走前の行を焼ける 1 本込み)・unittest 164 本中 失敗 2= test_ooi_raw_read(既知)・selftest karte 28/28・facts 48/48。
-浦和 9/22 1R: 198/264 一致。出遅れ・出遅れた走・使われ方・間隔・大井・相手関係・調子・ベストの着順は 12 頭一致。違い= 割合表まだ・脚質と回数・モック側の数え方(取りやめ/取消・併走の括弧・通算・全場)。
-次の一手: push(ユーザー)→ 設計側が DDL を流す → karte-facts を late_table=true・mode=apply で 1 回(割合表)→ 以後 nar-refresh。239b/239c(viewer)は nar_karte_facts を 1 レース 1 読み。
-
-commit: 7acc513 (枝 s238c2 / origin/master から・push なし)
-検品: 通信なしの検算のみ= `py -3.12 -m unittest discover -s tests -p "test_coverage_matrix.py"` 19 本 ALL PASS・`cloud/coverage_matrix.py --selftest` OK。⛔本番 DB には触っていない(読みも書きもしていない)
-通信: +0(表は増やしていない。読む先は今までと同じ nar_races/nar_runs/nar_run_facts/nar_race_payouts/nar_race_votes/nar_meta)
-回帰: 触ったのは網羅表の便だけ / 他の便への影響= なし(coverage_matrix.py と その tests しか変えていない)
-変えた点: cloud/coverage_matrix.py= ①年が終わるごとに coverage:v1:YYYY と索引を upsert(落ちても焼けた年は残る・書けなかった年は索引に載せない)②読みは 6 回出直す(10/20/40/60/90/120 秒・待ち 120 秒)③止まると「続きは --from YYYY-MM」と出る / tests= 検算 13→19 本
-⚠: 9/21 の run 35670543476 は 2015-11 まで数えた結果を全部捨てて rc=2・本番 nar_meta に coverage:v1* が 1 行も無い= **2014-01 からやり直しが要る**。同時刻に票数の遡り 10 本が本番へ書いていたのが重さの元なので、⛔網羅表と票数の遡りを同時に流さない
-要判断: push の可否(公開リポはユーザー)。流し直しは coverage-backfill を from=2014-01 to=2026-09 mode=apply で 1 本・票数の便が止まっている時間に
+commit: e4fdca7..0b0ab4d(枝 s240・7 コミット= 土台 / 表ごと 5 本 / 検算と巻き戻し・push なし)
+検品: ⛔本番 DB には一切触っていない(SQL も REST も無し)。手元は `py -3.12 tests/test_partition_s240_sql.py` が ALL PASS(8 ファイル)= begin と commit の数・vacuum がトランザクションの外・$$ の閉じ・区画の範囲が隙間なく続く・attach が minvalue→2022-11-01・rename 2 本・statement_timeout・notify pgrst。実物との一致は各ファイルの §0 を流して人が確かめる。
+通信: +0(表を増やしていない。読む先も今までと同じ 5 表)
+回帰: SQL と覚書と検査だけ= 画面・便のコードは 1 行も触っていない。既存の読み手(js/data.js の約 35 本・Actions の \copy・nar_search_runs / _v2)は表名が変わらないので変更 0。
+変えた点: `pipeline/sql/partition_s240/` に 8 本(00 控え / 10 votes / 20 payouts / 30 races / 40 runs / 50 run_facts / 98 巻き戻し / 99 検算)。各表 §0 実物の確認 → §1 親と区画 6 → §2 年ごとの写し → §3 delete と check と attach → §4 rename → §5 grant と vacuum。ほか `docs/notes_s240_migration.md`(夜に当てる順・所要・止めどころ)・`tests/test_partition_s240_sql.py`・設計書の写し。
+⚠: `nar_race_payouts` の create table が手元のどこにも無く、列(payouts / source_snapshot_hash / updated_at)は `load_nar_official.py` の conv_payout からの**推定**= §0-1 の結果と違ったら `20_…` の §1 を直してから流す。残りの注意点(索引名の付け方・区画の RLS が抜けると匿名キーで 0 行・2028 の区画が無い)は notes_s240_migration.md §5。
+要判断: ①当てる順と夜の時間割(全部で 2.5〜3 時間・小さい 3 表だけで止めてもよい)②`nar_runs_race_idx` の drop は今回やらず別の回に回した ③`nar_run_facts` の読み手 0 の列を落とすかは未着手(ユーザー判断のまま)④`docs/opus_rules.md` は写しただけで commit していない(公開リポに本体名・メールを書かない規則のため)。
