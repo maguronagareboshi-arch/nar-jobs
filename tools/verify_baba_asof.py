@@ -9,6 +9,7 @@
   1. as-of= 日 d の標準に d 以降の時計が1本も混ざらない(窓の上限が d であること・値が B 版と一致)
   2. 凍結= 同じ過去日を2回組んでも値が動かない(2回目は frozen を渡して据え置き)
   3. 当日暫定= 終わったレース(勝ち時計のある走)だけから出て "p":true が付く
+  ⛔2・3 は既定の窓(season)で回す。--baseline で切替。標本が薄いセルの 365 退避("b":"365")の数も出す。
 """
 import argparse
 import csv
@@ -74,7 +75,10 @@ def run(samples, targets, baseline, today, frozen=None, rebuild_all=False):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--md", action="store_true")
+    ap.add_argument("--baseline", choices=baba.BASELINES, default="season",
+                    help="2・3 の検証に使う窓(既定= 本番と同じ season)")
     a = ap.parse_args()
+    BL = a.baseline
     samples = load_samples()
     print("勝ち時計 %d本(南関4場)" % len(samples))
     targets = days_in(samples, FROM, TO)
@@ -127,9 +131,12 @@ def main():
 
     # ── 2. 凍結: 同じ過去日を2回組んでも動かない
     today = TO + dt.timedelta(days=1)
-    first, _, _ = run(samples, targets, "365", today)
+    first, _, _ = run(samples, targets, BL, today)
+    nfb = sum(1 for d in first for c in first[d].values() if c.get("b"))
+    print("   窓= %s / 365 へ退避したセル %d(全 %d 場日)"
+          % (BL, nfb, sum(len(v) for v in first.values())))
     # 2回目は「材料が増えた」状態を模して today を1か月進める(昔なら値が動いていた場面)
-    second, rebuilt2, _ = run(samples, targets, "365", today + dt.timedelta(days=30), frozen=first)
+    second, rebuilt2, _ = run(samples, targets, BL, today + dt.timedelta(days=30), frozen=first)
     moved = [(d, p, first[d][p]["d"], second[d][p]["d"])
              for d in first for p in first[d]
              if p in second.get(d, {}) and first[d][p]["d"] != second[d][p]["d"]]
@@ -140,13 +147,13 @@ def main():
         print("   例 %s" % moved[:5])
     ok &= not moved and not lost
     # --rebuild-all のときだけ動くこと(凍結が効いているかの裏取り)
-    third, rebuilt3, _ = run(samples, targets, "365", today, frozen=first, rebuild_all=True)
+    third, rebuilt3, _ = run(samples, targets, BL, today, frozen=first, rebuild_all=True)
     print("   --rebuild-all では組み直す: %d 場日 → %s" % (rebuilt3, "OK" if rebuilt3 > 0 else "NG"))
 
     # ── 3. 当日暫定: 終わったレースだけ・p フラグ
     day = max(targets)
     d = dt.date.fromisoformat(day)
-    cur, _, _ = run(samples, {day}, "365", d)          # today = その日 = 開催中
+    cur, _, _ = run(samples, {day}, BL, d)            # today = その日 = 開催中
     prov = {p: c for p in cur.get(day, {}) for c in [cur[day][p]]}
     allp = all(c.get("p") for c in prov.values()) and prov
     nfin = {}
@@ -154,7 +161,7 @@ def main():
         if s[1] == day:
             nfin[NANKAN[s[0]]] = nfin.get(NANKAN[s[0]], 0) + 1
     same_n = all(c["n"] <= nfin.get(p, 0) for p, c in prov.items())
-    fin, _, _ = run(samples, {day}, "365", d + dt.timedelta(days=1))
+    fin, _, _ = run(samples, {day}, BL, d + dt.timedelta(days=1))
     noprov = not any(c.get("p") for c in fin.get(day, {}).values())
     print("3. 当日暫定: %s → p 印 %s / 終わったレース数以内 %s / 翌日は確定 %s"
           % ({p: (c["d"], c["n"]) for p, c in prov.items()},

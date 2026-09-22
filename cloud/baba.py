@@ -4,7 +4,7 @@
 公式の勝ち時計(nar_runs.time_sec, finish=1)を「場×距離×クラス帯の**過去3年**中央値」と比べ、
 **日×場の中央値**を馬場差(秒)として nar_meta `baba_diff` に入れる。マイナス=速い馬場。
 
-  出力 = {"built":"YYYY-MM-DD", "base":"365"|"season",
+  出力 = {"built":"YYYY-MM-DD", "base":"season"|"365"|"1095",
           "days": {"2026-08-28": {"ooi": {"d": -0.8, "n": 9}, …}, …}}   # 直近90日+当日
           # まだ終わっていない日(=当日)は {"d":…,"n":…,"p":true}= 暫定。翌朝の便で確定して p が消える
 
@@ -18,10 +18,15 @@
   ⛔当日の値は「その日の**終わったレース**(勝ち時計のある走)だけ」から出した暫定値。
     "p":true が付き、画面は「途中まで」と断って出す(js/ui.js babaWord/babaLabel)。
 
-  標準の窓は2案あり --baseline で切替(既定 365)。⛔どちらを見せるかはユーザー判断。
-    365    : [d-365, d)  前日までの直近1年。場の常時オフセット(大井 −0.4 など)の大半が消える
+  標準の窓は --baseline で切替。**既定は season(2026-09-22 ユーザー決定)**。
     season : 同じ場の「同じ暦の前後45日」×過去3年(すべて d 未満)。季節の波を標準に入れるので
-             「例年のこの時期と比べて」の値になる
+             「例年のこの時期と比べて」の値になる(既定)
+    365    : [d-365, d)  前日までの直近1年。場の常時オフセットの大半が消えるが季節の波は残る
+    1095   : 旧§104(3年ぶん一括)
+
+  ⛔season の退避(標本が薄いセル): 改修直後・新しい距離・開催の並びなどで season の窓から
+    MIN_SEASON(8)本ぶんの偏差が取れないセルは、その1セルだけ **365 の窓で組み直す**。
+    退避したセルには **"b":"365"** を付ける(blob の印。トップの "base" は "season" のまま)。
   - ⚠その日の対象レースが4本未満の場は出さない(小サンプルから言わない)
   - ⚠帯広ばは対象外(#111: ばんえいは馬場の型が違う。水分率が公式にある)
   - クラス帯は race_name の粗い抽出(Ａ/Ｂ/Ｃ+数字・2歳/3歳)。抽出できない走は場×距離の全体中央値に落とす
@@ -30,7 +35,7 @@
   py -3 -X utf8 cloud/baba.py --env pipeline/.env.nar            # ドライラン(集計と検証だけ)
   py -3 -X utf8 cloud/baba.py --env pipeline/.env.nar --verify   # +公式の馬場状態(going)との相関
   py -3 -X utf8 cloud/baba.py --env pipeline/.env.nar --apply    # nar_meta へ upsert(確定済みの日は据え置き)
-  py -3 -X utf8 cloud/baba.py --env pipeline/.env.nar --baseline season   # 季節版で試す
+  py -3 -X utf8 cloud/baba.py --env pipeline/.env.nar --baseline 365      # 1年版で試す
   py -3 -X utf8 cloud/baba.py --env pipeline/.env.nar --apply --rebuild-all  # 全部作り直す
 環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY
 終了コード: 0 正常 / 1 投入失敗 / 2 前提の読み取りに失敗
@@ -62,6 +67,7 @@ TRACK2PREFIX = {"門別": "monbetsu", "盛岡": "morioka", "水沢": "mizusawa",
                 "高知": "kochi", "佐賀": "saga"}
 MIN_BAND = 8            # 帯の基準に要る標本数
 MIN_RACES = 4           # 日×場の馬場差を出す最少レース数
+MIN_SEASON = 8          # season 版: これ未満の標本しか取れないセルは 365 版に退避("b":"365")
 WINDOW_DAYS = 90        # blob に載せる日数(⛔§104 でも変えない= 出す日数と標準の窓は別物)
 # 標準(場×距離×クラス帯の中央値)を作る窓。⛔2026-09-05 ユーザーFB「1年では弱い」で 365→1095 日にしたが、
 # §17 監査(2026-09-22)で「3年フラットだと場の常時オフセットと季節の波をその日の馬場として出してしまう」と
@@ -244,11 +250,21 @@ def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=
                 if old and not rebuild_all:
                     out.setdefault(date, {})[prefix] = old
                 continue
+            dd = dt.date.fromisoformat(date)
             r = day_cell(rows, by_band_all.get(track, {}), by_dist_all.get(track, {}),
-                         dt.date.fromisoformat(date), baseline)
+                         dd, baseline)
+            fallback = False
+            # ⛔season で標本が薄いセル(改修直後など)は 365 の窓に退避して "b":"365" を付ける
+            if baseline == "season" and (not r or r[1] < MIN_SEASON):
+                r2 = day_cell(rows, by_band_all.get(track, {}), by_dist_all.get(track, {}),
+                              dd, "365")
+                if r2 and (not r or r2[1] > r[1]):
+                    r, fallback = r2, True
             if not r:
                 continue
             cell = {"d": r[0], "n": r[1]}
+            if fallback:
+                cell["b"] = "365"       # 退避= このセルだけ1年版の標準で出した
             if date >= tstr:
                 cell["p"] = True        # 当日= 暫定(終わったレースだけ)
             out.setdefault(date, {})[prefix] = cell
@@ -261,8 +277,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--verify", action="store_true", help="公式の馬場状態(going)との相関を出す")
     ap.add_argument("--apply", action="store_true", help="nar_meta へ upsert(既定はドライラン)")
-    ap.add_argument("--baseline", choices=BASELINES, default="365",
-                    help="標準の窓。365=前日までの直近1年(既定) / 1095=旧§104 / season=同じ暦±45日×3年")
+    ap.add_argument("--baseline", choices=BASELINES, default="season",
+                    help="標準の窓。season=同じ暦±45日×3年(既定) / 365=前日までの直近1年 / 1095=旧§104")
     ap.add_argument("--rebuild-all", action="store_true",
                     help="⛔確定済みの日も作り直す(定義を変えたときだけ。ふだんは付けない)")
     ap.add_argument("--env")
@@ -320,7 +336,9 @@ def main():
     days = {d: v for d, v in days.items() if d >= lo}      # 90日の窓から出た日は落とす
     n_cells = sum(len(v) for v in days.values())
     n_prov = sum(1 for v in days.values() for c in v.values() if c.get("p"))
+    n_fb = sum(1 for v in days.values() for c in v.values() if c.get("b"))
     log(f"馬場差: {len(days)}日 / {n_cells}場日(組み直し {rebuilt}・暫定 {n_prov}・"
+        f"365へ退避 {n_fb}・"
         f"確定済みは据え置き・レース{MIN_RACES}本未満の場日は出さない)")
 
     if a.verify:
@@ -350,7 +368,7 @@ def main():
     st, _ = req(base, key, "/rest/v1/nar_meta?on_conflict=key", "POST",
                 json.dumps([{"key": META_KEY, "value": value,
                              "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()}]).encode("utf-8"))
-    log(f"nar_meta/{META_KEY} 更新 {st}({len(days)}日 {n_cells}場日・暫定 {n_prov})")
+    log(f"nar_meta/{META_KEY} 更新 {st}({len(days)}日 {n_cells}場日・暫定 {n_prov}・退避 {n_fb})")
     return 0 if st in (200, 201) else 1
 
 

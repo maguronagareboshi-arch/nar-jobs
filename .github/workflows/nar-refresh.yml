@@ -228,7 +228,8 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: python cloud/sale_results.py --apply --hba-pages 3
 
-      # §48 K-1b 馬場差の全15場一括計算(過去1年の勝ち時計→日×場の中央値・帯広ば除外)
+      # §48 K-1b 馬場差の全15場一括計算(日×場の中央値・帯広ば除外)
+      # 2026-09-22 S1 標準の窓は季節版(同じ暦±45日×3年)が既定= 引数は要らない(--baseline で切替)
       # 2026-09-05 ユーザーFB「最近の馬場の時計が出ていない日がある」= monthly だけだったのを 朝の便(JST 09:30 前)でも回す(手元 24 秒)
       - name: baba diff (monthly + morning)
         env:
