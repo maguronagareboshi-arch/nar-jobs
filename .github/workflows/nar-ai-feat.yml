@@ -102,7 +102,7 @@ jobs:
           \copy (select penalty_id, track, race_date, race_no, person_kind, person_name, kind, detail, suspension_from, suspension_through, source_url, source_hash, parser_version, created_at, updated_at, horse_name from public.nar_penalties) to 'dump/nar_penalties.tsv'
           \copy (select track, race_date, race_no, votes, refunds, updated_at from public.nar_sales) to 'dump/nar_sales.tsv'
           \copy (select key, value, updated_at from public.nar_meta where key = 'noken_index') to 'dump/nar_meta.tsv'
-          \copy (select race_date, track, race_no, umaban, horse_key, horse_name, c1, n1, c2, n2, c3, n3, c4, n4, style, style_p, style_n, first3f, first3f_src, last3f, win_odds_close, src, computed_at from public.nar_run_facts where race_date >= '2014-01-01') to 'dump/nar_run_facts.tsv'
+          \copy (select race_date, track, race_no, umaban, horse_key, horse_name, c1, n1, c2, n2, c3, n3, c4, n4, style, style_p, style_n, first3f, first3f_src, last3f, win_odds_close, src, computed_at from public.nar_run_facts where (race_date >= '2022-11-01' or track = '高知')) to 'dump/nar_run_facts.tsv'
           SQL
           ls -l dump | sed -n '2,20p'
 
