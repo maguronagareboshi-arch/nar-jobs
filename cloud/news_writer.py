@@ -376,9 +376,44 @@ def person_link(kind, nm, nar):
     return None
 
 
-def relate(entities, *, nar, kinds=(), title=""):
+HOMONYM_KEY = "horse_homonyms"             # 監査 #21 案 乙: 同名の馬名の配列(nar_meta・nar-jobs が毎朝足す)
+
+
+def homonym_names(nar):
+    """同名表(馬名の集合)。読めない・無いときは空= 全部 nar:<馬名>(viewer の選び分けページが受ける)"""
+    rows = nar("nar_meta?select=value&key=eq.%s" % HOMONYM_KEY)
+    v = rows[0].get("value") if rows and isinstance(rows[0], dict) else None
+    return set(v) if isinstance(v, list) else set()
+
+
+def article_birth_year(nm, dates, nar):
+    """同名馬の生年を記事の日付(と本文に出た開催日)の走から決める。生年= 生年月日の年、無ければ 開催年 − 馬齢。
+    ⛔ちょうど 1 つに決まるときだけ返す(決められなければ None= リンクを付けない)"""
+    ds = sorted({d for d in dates if re.match(r"^\d{4}-\d{2}-\d{2}$", str(d or ""))})
+    if not ds:
+        return None
+    rows = nar("nar_runs?select=race_date,age,birth_date&horse_name=eq.%s&race_date=in.(%s)&limit=50"
+               % (_q(nm), ",".join(ds)))
+    ys = set()
+    for r in rows:
+        bd = str(r.get("birth_date") or "")
+        if re.match(r"^\d{4}", bd):
+            ys.add(int(bd[:4]))
+            continue
+        try:
+            a = int(r.get("age"))
+        except (TypeError, ValueError):
+            continue
+        rd = str(r.get("race_date") or "")
+        if a > 0 and re.match(r"^\d{4}", rd):
+            ys.add(int(rd[:4]) - a)
+    return ys.pop() if len(ys) == 1 else None
+
+
+def relate(entities, *, nar, kinds=(), title="", date=""):
     """固有名詞 → うちのページ [{label, path}](≤5)。⛔一致しないものは付けない・失敗したら []
 
+    ⚠`date`(記事の日付)は同名馬の生年を決めるのにだけ使う(監査 #21)。
     ⚠`kinds` と `title` は能検の行(§4 の 5 行目)にだけ要る。設計の呼び方
       `relate(entities, nar=nar)` はそのまま通る(既定あり)。
     """
@@ -400,11 +435,18 @@ def relate(entities, *, nar, kinds=(), title=""):
                 got = person_link(kind, nm, nar)
                 if got:
                     add("%s %sの成績" % (got, word), "/%s/%s" % (kind, _q(got)))
+        homos = homonym_names(nar) if e.get("horses") else set()
         for raw in (e.get("horses") or [])[:RELATED_MAX]:
             if len(out) >= RELATED_MAX:
                 break
             nm = _name(raw)
             if not nm:
+                continue
+            if nm in homos:
+                # 監査 #21 案 乙: 同名馬は /horse/nary:<生年>:<馬名>。生年が決められなければ付けない
+                y = article_birth_year(nm, list(e.get("dates") or []) + [date], nar)
+                if y:
+                    add("%s の成績" % nm, "/horse/%s" % _q("nary:%d:%s" % (y, nm)))
                 continue
             # ⛔同名 2 頭のときは付けない(別の馬のページへ飛ばさない)= ちょうど 1 行のときだけ
             rows = nar("nar_horses?select=horse_name&horse_name=eq.%s&limit=2" % _q(nm))
@@ -626,7 +668,8 @@ def main():
         draft = write_one(item, body, client=client)
         bad = check_draft(draft, body) if draft is not None else []
         rel = relate(draft.get("entities") if draft else None, nar=nar,
-                     kinds=(draft or {}).get("kinds") or (), title=item.get("t") or "") if (
+                     kinds=(draft or {}).get("kinds") or (), title=item.get("t") or "",
+                     date=item.get("d") or "") if (
             draft and not bad) else []
         row = row_for(item, body, draft, bad, rel, model)
         if err and not row["why"]:

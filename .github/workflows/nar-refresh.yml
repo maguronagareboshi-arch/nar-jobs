@@ -151,6 +151,18 @@ jobs:
           H=$(TZ=Asia/Tokyo date +%H%M)
           if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/horse_ledger.py --apply --max-horses 1200; else echo "horse ledger は朝の便だけ(JST $H)=スキップ"; fi
 
+      # 監査 #21 案 乙: 同名表 nar_meta 'horse_homonyms' の軽い追記(昨日〜明日の出走馬 × nar_horse_profiles の生年)。
+      # horse ledger(③ profiles.code の埋め)の直後・朝の便だけ。表がまだ無ければ警告して 0。⛔落ちても続行
+      # 全期間から作り直すのは手で回す便 horse-homonyms.yml
+      - name: horse homonyms (morning only)
+        if: '!cancelled()'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          H=$(TZ=Asia/Tokyo date +%H%M)
+          if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/horse_homonyms.py --apply || echo "⚠ 同名表の追記に失敗(続行)"; else echo "horse homonyms は朝の便だけ(JST $H)=スキップ"; fi
+
       # §38 1-C 南関東4場の「格」「格付ポイント」(主催者 nankankeiba の馬ページ・1.5秒/本)。直近2日に走った馬だけ=
       # 日次 100〜300 本・数分。**朝の便だけ**(分予算)。他場PCの fetch_nankan_points.py(大井だけ・chihou_meta)の置き換え
       - name: nankan points (morning only)

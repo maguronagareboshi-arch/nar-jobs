@@ -1,0 +1,39 @@
+# 監査 #21 案 乙(2026-09-23): 同名表 nar_meta 'horse_homonyms' を全期間から作る初回便。⛔手で回すだけ(cron なし)。
+# SQL= pipeline/sql/horse_homonyms.sql(nar_runs 全表を 1 回走査= 重いので本番 DB の手元実行はしない・Actions 内で流す)
+# 以後の毎朝の追記は nar-refresh.yml の horse homonyms 段(cloud/horse_homonyms.py・軽い)。
+# 束ね表 nar_meta 'horse_homonym_merge' を直したら、この便をもう一度流すと反映される(冪等)。
+# ・confirm が文字列 apply でなければ数を出すだけ(書かない)。
+name: horse-homonyms
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: nar_meta へ書くときだけ apply と打つ(それ以外は数を出すだけ)
+        required: false
+        type: string
+        default: ''
+
+concurrency:
+  group: horse-homonyms
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: build homonym list
+        env:
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+          PGSSLMODE: require
+          IN_CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -o pipefail
+          APPLY=false; if [ "$IN_CONFIRM" = "apply" ]; then APPLY=true; fi
+          echo "apply=$APPLY"
+          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -v apply=$APPLY -X -f pipeline/sql/horse_homonyms.sql

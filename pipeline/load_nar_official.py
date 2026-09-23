@@ -170,13 +170,34 @@ KEYS = {
     "payouts": ("nar_race_payouts", "track,race_date,race_no"),
     # 同日: 血統・馬主・生産者は馬テーブル(nar_horses)へ分離(nar_runs から列を削除)
     "horses": ("nar_horses", "horse_name"),
+    # 監査 #21 案 乙(2026-09-23): 同名の別馬を分ける表。鍵= (馬名, 生年月日)。nar_horses は互換のため今のまま二重書き
+    # ⛔表がまだ無い(DDL 前)ときは 404 = 警告 1 行で profiles だけ飛ばす(upsert_all)
+    "profiles": ("nar_horse_profiles", "horse_name,birth_date"),
 }
-TABLES = ("races", "runs", "payouts", "horses")
+TABLES = ("races", "runs", "payouts", "horses", "profiles")
 HORSE_ATTRS = ("sex", "sire", "dam", "broodmare_sire", "owner", "breeder")
 
 
 def conv_horse(h):
     return {"horse_name": h.get("horse_name"), **{k: blank(h.get(k)) for k in HORSE_ATTRS}, "updated_at": RUN_TS}
+
+
+ISO_DATE_RE = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def profile_key(h):
+    """(馬名, 生年月日) か None。⛔生年月日の無い行(古い正規化JSON・旧期)は profiles に入れない"""
+    name = blank(h.get("horse_name")); bd = blank(h.get("birth_date"))
+    if not name or not bd or not ISO_DATE_RE.fullmatch(bd):
+        return None
+    return name, bd
+
+
+def conv_profile(h):
+    """nar_horse_profiles の行。code は horse_ledger が埋める= 送らない(null で消さない)。
+    first_seen/last_seen も送らない(遡り投入で戻さないため。移しの SQL が nar_horses から写す)"""
+    name, bd = profile_key(h)
+    return {"horse_name": name, "birth_date": bd, **{k: blank(h.get(k)) for k in HORSE_ATTRS}, "updated_at": RUN_TS}
 
 
 def group_payouts(rows):
@@ -219,7 +240,7 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="実際に書き込む(既定はドライラン)")
     ap.add_argument("--since", help="YYYYMM。この月以降のファイルだけ")
-    ap.add_argument("--only", choices=["races", "runs", "payouts", "horses"], help="1テーブルだけ")
+    ap.add_argument("--only", choices=list(TABLES), help="1テーブルだけ(profiles= 監査 #21 の nar_horse_profiles)")
     ap.add_argument("--env", help="接続先 .env のパス(既定: 他場\\.env。第2プロジェクトは pipeline\\.env.nar)")
     ap.add_argument("--batch", type=int, default=BATCH, help="1リクエストの行数(既定500)")
     ap.add_argument("--from-raw", action="store_true",
@@ -322,9 +343,10 @@ def build_dedup(docs):
     戻り値: (dedup, stats)。dedup = {"races": {key: row}, "runs": {...}, "payouts": {...}}
     """
     docs = sorted(docs, key=lambda x: (x[0] or "", x[1]))
-    dedup = {"races": {}, "runs": {}, "payouts": {}, "horses": {}}
+    dedup = {"races": {}, "runs": {}, "payouts": {}, "horses": {}, "profiles": {}}
     pay_rows = {}                        # 組番ごと(最新が勝つ)→ 最後に 1レース1行へ畳む
     horse_seen = {}                      # 馬名 -> 最後に見た (race_date, race_no)。新しい走の属性で上書き
+    prof_seen = {}                       # 監査 #21 (馬名, 生年月日) -> 最後に見た走。同名の別馬を上書きしない
     race_done = {}                       # (場,日,R) -> その行が「結果あり」のスナップショット由来か
     per_track = collections.Counter()
     kept_stale = 0
@@ -347,6 +369,9 @@ def build_dedup(docs):
                 when = (row["race_date"] or "", row["race_no"] or 0)
                 if name not in horse_seen or when >= horse_seen[name]:
                     horse_seen[name] = when; dedup["horses"][name] = conv_horse(h)
+                pk = profile_key(h)
+                if pk and (pk not in prof_seen or when >= prof_seen[pk]):
+                    prof_seen[pk] = when; dedup["profiles"][pk] = conv_profile(h)
             old = dedup["runs"].get(k)
             if old is not None and has_result(old) and not has_result(row):
                 kept_stale += 1; continue
@@ -465,14 +490,21 @@ def upsert_all(url, key, dedup, batch=BATCH, only=None, log=print):
         groups = by_columns(rows)
         if len(groups) > 1:
             log(f"  {table}: 列の組み合わせ {len(groups)} 通り " + " / ".join(f"{len(g):,}行" for g in groups))
+        missing = False
         for group in groups:
             for i in range(0, len(group), batch):
                 st, err = upsert(url, key, table, conflict, group[i:i + batch])
+                if st == 404 and k == "profiles":   # 監査 #21 表がまだ無い(DDL 前)= profiles だけ飛ばす
+                    missing = True; break
                 if st >= 300 or st == 0:
                     log(f"  {table}: HTTP{st} {err} (batch {i})"); return 1
                 done += len(group[i:i + batch])
                 if done % 5000 < batch:
                     log(f"  {table}: {done:,}/{len(rows):,} ({time.time() - t0:.0f}s)")
+            if missing:
+                break
+        if missing:
+            log(f"  ⚠{table} が無い(HTTP404)= profiles を飛ばす(DDL は docs/s21_ddl_20260923.sql)"); continue
         log(f"  {table}: 完了 {done:,} 行 ({time.time() - t0:.0f}s)")
     return 0
 

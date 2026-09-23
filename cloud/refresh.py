@@ -48,6 +48,8 @@ def main():
     ap.add_argument("--env", help="ローカル試験用 .env(既定は環境変数)")
     ap.add_argument("--dry-run", action="store_true", help="取得・集計だけして投入しない")
     ap.add_argument("--months", help="遡り: '2026-06,2026-07' のように月次 ZIP だけを取り直す(daily は付けない・2026-09-04 減量記号の修理で新設)")
+    ap.add_argument("--only", choices=["races", "runs", "payouts", "horses", "profiles"],
+                    help="1 表だけ投入(監査 #21: 過去の血統の取り直しは --months … --only profiles)")
     args = ap.parse_args()
     if args.env:
         load_env(args.env)
@@ -106,7 +108,7 @@ def main():
     if args.dry_run:
         log("dry-run: 投入しない"); return 0
     log(f"投入先: {url}")
-    rc = upsert_all(url, key, dedup, batch=1000, log=log)
+    rc = upsert_all(url, key, dedup, batch=1000, only=args.only, log=log)
     return 1 if rc else (2 if failed else 0)
 
 

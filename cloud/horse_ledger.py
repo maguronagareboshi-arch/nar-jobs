@@ -115,6 +115,54 @@ def parse_horse(page):
 
 # ---------------------------------------------------------------- DB
 
+T_PROFILES = "nar_horse_profiles"   # 監査 #21 案 乙(同名の別馬を分ける表。DDL 前は無い= 飛ばす)
+
+
+def profile_code_rows(profiles, codes):
+    """code の空いた profiles [{horse_name, birth_date}] に番号を埋める行。
+    ⛔同じ (馬名, 生年月日) に番号が 1 つのときだけ(2 つ以上・生年月日の無い番号は埋めない)"""
+    by = {}
+    for c in codes:
+        if c.get("code") and c.get("horse_name") and c.get("birth_date"):
+            by.setdefault((c["horse_name"], str(c["birth_date"])[:10]), set()).add(c["code"])
+    out = []
+    for p in profiles:
+        got = by.get((p.get("horse_name"), str(p.get("birth_date") or "")[:10]))
+        if got and len(got) == 1:
+            out.append({"horse_name": p["horse_name"], "birth_date": str(p["birth_date"])[:10], "code": next(iter(got))})
+    return out
+
+
+def is_404(e):
+    return getattr(e, "code", None) == 404 or getattr(getattr(e, "response", None), "status_code", None) == 404
+
+
+def fill_profile_codes(url, key, codes, apply, read=None, write=None):
+    """③ 監査 #21: nar_horse_profiles.code を nar_horse_codes から埋める。戻り値= 終了コード(0 / 1)。
+    表がまだ無い(404)・読めないときは警告 1 行で飛ばす(便は止めない)"""
+    try:
+        profiles = (read or sb_all)(url, key, f"{T_PROFILES}?select=horse_name,birth_date&code=is.null"
+                                              "&order=horse_name.asc,birth_date.asc")
+    except Exception as e:                       # noqa: BLE001
+        if is_404(e):
+            log(f"③ ⚠{T_PROFILES} が無い(HTTP404)= 番号の埋めを飛ばす")
+        else:
+            log(f"③ ⚠{T_PROFILES} が読めない= 番号の埋めを飛ばす: {type(e).__name__}: {str(e)[:120]}")
+        return 0
+    rows = profile_code_rows(profiles, codes)
+    log(f"③ profiles の番号 空き {len(profiles)} / 埋める {len(rows)}")
+    if not apply:
+        return 0
+    for i in range(0, len(rows), 500):
+        st, msg = (write or upsert)(url, key, T_PROFILES, "horse_name,birth_date", rows[i:i + 500])
+        if st >= 300 or st == 0:
+            log(f"投入失敗 {T_PROFILES} status={st} {msg}")
+            return 1
+    if rows:
+        log(f"投入 {len(rows)} 行 -> {T_PROFILES}.code")
+    return 0
+
+
 def sb_all(url, key, path, page=1000):
     """PostgREST を 1000 行ずつ全部読む(Range ヘッダ)。"""
     out, lo = [], 0
@@ -264,6 +312,9 @@ def main():
                 log(f"投入失敗 {T_PRIZE} status={st} {msg}")
                 return 1
             log(f"投入 {len(rows)} 行 -> {T_PRIZE}")
+    # ---- ③ 監査 #21: profiles.code を埋める(同じ (馬名,生年月日) に番号 1 つのときだけ)
+    if fill_profile_codes(url, key, [c for cs in code_by_name.values() for c in cs], args.apply):
+        return 1
     if not args.apply:
         log("dry-run: 書かない")
     return 0
