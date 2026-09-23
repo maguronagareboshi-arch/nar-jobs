@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """監査 #21 案 乙: 同名表 nar_meta `horse_homonyms`(馬名の配列)を毎朝 軽く足す。
 
-「同名」= 同じ馬名で 生年 が 2 つ以上。生年= 生年月日の年、無ければ 開催年 − 馬齢(日本の馬齢は 1/1 加算)。
+「同名」= 同じ馬名で 生年 が 2 つ以上、かつ生年の群どうしの走った期間(最初〜最後の開催日)が重ならない群が 2 つ以上
+(同じ馬名の登録は同時期に 2 頭いない= 重なる群は馬齢の書き誤りで割れた同じ馬)。生年= 生年月日の年、無ければ 開催年 − 馬齢(日本の馬齢は 1/1 加算)。
 nar_meta `horse_homonym_merge`(手で持つ束ね表・無ければ空)を反映する。形:
   {"<馬名>": [[2019, 2020], ...]}   内側の配列 1 つ= 同じ馬(馬齢の書き誤りで割れた生年を束ねる)
 
@@ -89,14 +90,47 @@ def year_groups(name, years, merge):
     return {m.get(y, y) for y in years if y is not None}
 
 
+def count_horses(periods):
+    """生年の群ごとの走った期間 [(最初, 最後) or None] → 別の馬の数。
+    同じ馬名の登録は同時期に 2 頭いない= 期間が重なる群は同じ馬(馬齢の書き誤りで割れた)とみなして畳む。
+    期間の分からない群(None)はそれぞれ別の馬と数える"""
+    known = sorted(x for x in periods if x)
+    n = len(periods) - len(known)
+    end = None
+    for first, last in known:
+        if end is None or first > end:
+            n += 1; end = last
+        else:
+            end = max(end, last)
+    return n
+
+
 def homonyms_from_pairs(pairs, merge=None):
-    """[(馬名, 生年)] → 同名の馬名(並べた配列)。merge= merge_map の戻り"""
+    """[(馬名, 生年) か (馬名, 生年, 開催日)] → 同名の馬名(並べた配列)。merge= merge_map の戻り。
+    同名= 束ね表で畳んだ生年の群のうち、走った期間(最初〜最後の開催日)が重ならない群が 2 つ以上"""
     merge = merge or {}
     by = {}
-    for name, y in pairs:
-        if name and y is not None:
-            by.setdefault(name, set()).add(y)
-    return sorted(n for n, ys in by.items() if len(year_groups(n, ys, merge)) >= 2)
+    for t in pairs:
+        name, y = t[0], t[1]
+        d = str(t[2])[:10] if len(t) > 2 and t[2] else None
+        if not name or y is None:
+            continue
+        y = (merge.get(name) or {}).get(y, y)
+        g = by.setdefault(name, {}).setdefault(y, None)
+        if d:
+            by[name][y] = (min(g[0], d), max(g[1], d)) if g else (d, d)
+    return sorted(n for n, ys in by.items() if len(ys) >= 2 and count_horses(list(ys.values())) >= 2)
+
+
+def confirm_additions(cands, fetch, merge=None):
+    """候補の馬名ごとに全走 [{race_date, age, birth_date}] を fetch(馬名) で引き、期間の規則で同名か確かめる"""
+    out = []
+    for n in cands:
+        pairs = [(n, birth_year(r.get("race_date"), r.get("age"), r.get("birth_date")), r.get("race_date"))
+                 for r in fetch(n)]
+        if homonyms_from_pairs(pairs, merge):
+            out.append(n)
+    return out
 
 
 def daily_additions(runs, profiles, current, merge=None):
@@ -184,8 +218,14 @@ def main():
         if is_404(e):
             log(f"⚠{T_PROFILES} が無い(HTTP404)= 同名表の追記を飛ばす(DDL は docs/s21_ddl_20260923.sql)"); return 0
         log(f"{T_PROFILES} の読み取りに失敗: {type(e).__name__}: {str(e)[:200]}"); return 2
-    add = daily_additions(runs, profiles, current, merge)
-    log(f"{lo}〜{hi}: 走 {len(runs)} / 同名表 {len(current)} 名 / profiles {len(profiles)} 行 / 足す {len(add)} 名 {add[:10]}")
+    cands = daily_additions(runs, profiles, current, merge)
+    try:                                         # 候補(数名)だけ全走を引いて期間の重なりで確かめる
+        add = confirm_additions(cands, lambda n: rest_all(
+            url, key, f"nar_runs?select=race_date,age,birth_date&horse_name=eq.{urllib.parse.quote(n, safe='')}"
+                      "&order=track.asc,race_date.asc,race_no.asc,runner_number.asc"), merge)
+    except Exception as e:                       # noqa: BLE001
+        log(f"候補の走の読み取りに失敗: {type(e).__name__}: {str(e)[:200]}"); return 2
+    log(f"{lo}〜{hi}: 走 {len(runs)} / 同名表 {len(current)} 名 / profiles {len(profiles)} 行 / 候補 {len(cands)} / 足す {len(add)} 名 {add[:10]}")
     if not add:
         return 0
     if not args.apply:

@@ -135,6 +135,19 @@ class Homonyms(unittest.TestCase):
         self.assertEqual(HH.homonyms_from_pairs(pairs, merge), ["ア"])
         self.assertEqual(HH.merge_map([1, 2]), {})
 
+    def test_overlapping_periods_are_one_horse(self):
+        # 馬齢の書き誤り: 同じ時期に 2 生年= 1 頭。期間が離れた 2 生年= 同名の別馬
+        typo = [("ア", 2020, "2023-01-05"), ("ア", 2020, "2024-06-01"), ("ア", 2019, "2023-08-10")]
+        apart = [("イ", 2010, "2012-04-01"), ("イ", 2010, "2016-03-01"), ("イ", 2020, "2023-05-01"),
+                 ("イ", 2019, "2023-06-01")]                         # 2019/2020 は重なる= 1 頭・2010 と合わせ 2 頭
+        self.assertEqual(HH.homonyms_from_pairs(typo + apart), ["イ"])
+        self.assertEqual(HH.count_horses([("2012-04-01", "2016-03-01"), ("2023-05-01", "2023-05-01"),
+                                          ("2023-01-01", "2023-06-01")]), 2)
+        runs = {"ア": [{"race_date": "2023-01-05", "age": 3}, {"race_date": "2023-08-10", "age": 4},
+                       {"race_date": "2024-06-01", "birth_date": "2020-03-01"}],
+                "イ": [{"race_date": "2012-04-01", "age": 2}, {"race_date": "2023-05-01", "birth_date": "2020-01-01"}]}
+        self.assertEqual(HH.confirm_additions(["ア", "イ"], runs.get), ["イ"])
+
     def test_daily_additions(self):
         runs = [{"horse_name": "ア", "birth_date": "2022-03-03", "age": 4, "race_date": "2026-09-23"},
                 {"horse_name": "イ", "birth_date": "2021-01-01", "age": 5, "race_date": "2026-09-23"},
