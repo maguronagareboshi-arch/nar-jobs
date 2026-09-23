@@ -272,7 +272,8 @@ def main(argv=None):
     try:
         if a.date:
             d = dt.date.fromisoformat(a.date)
-            if not pick_dates([d], today, 1):
+            # --dry-run は消さない= 60 日以内の日でも書き出しと照合だけ試せる(本番の消去は 60 日超だけ)
+            if not a.dry_run and not pick_dates([d], today, 1):
                 log("%s は 60 日超でない(境目 %s より前だけ)" % (d, cut)); return 1
             dates = [d]
         else:
