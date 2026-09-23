@@ -759,10 +759,15 @@ TOKAI_Y2, TOKAI_Y3 = 4_500_000, 4_400_000
 #   (実際の級ごと: ３歳 99.9 / Ｃ級 98.6 / Ｂ級 93.0。計算した級ごとの精度: Ｃ級 96.9 / Ｂ級 96.5 = 画面に出す判断の物差し)。
 #   j=+70万(中央歴) q=四半期調整 e=編入控除 t=岐阜↔愛知の移籍は換算し直し i=孤立した1走は転入でない
 #   (試して落ちたもの: f=転入直後の初回調整を飛ばす p=調整の基礎から転入額を除く r=四半期に走った馬だけ調整 n z)
-TOKAI_V = os.environ.get("TOKAI_V", "jqeti")
+#   u(監査 #13 2026-09-23)= 3 歳の一斉編入を**東海 2 場共通の日**に(9 月に終わる最後の開催の遅い方の翌日)。
+#     旧は所属場ごとの 9 月の調整日で編入していたので、名古屋所属の 3 歳だけ 9/19 に一般格・笠松所属は 3 歳格のまま=
+#     同じ笠松 9/23「３歳３」で「あと98.8万でＢ級」と「あと251.5万で一般格」が並んだ(名古屋の 3 歳が 9/23 に 3 歳戦へ出ている
+#     = 公式はまだ 3 歳格)。10 月の東海の開催が台帳に入るまでは 9 月の最後が確定しないので、編入しない
+TOKAI_V = os.environ.get("TOKAI_V", "jqetiu")
 TOKAI_PARKED = False
 TOKAI_ADJ = {}        # 場 → 調整日の一覧(四半期末の月の最終開催日の翌日。tokai_adj_dates で作る)
 TOKAI_BLOCKS = {}     # 場 → [(開催初日, 最終日)](tokai_adj_dates で作る)
+TOKAI_HEN = {}        # 年 → 3 歳の一斉編入日(読み方 u・tokai_adj_dates で作る。10 月の開催が見えるまでは無い)
 
 
 def tokai_adj_dates(races):
@@ -787,6 +792,12 @@ def tokai_adj_dates(races):
                 if k not in last or b > last[k]:
                     last[k] = b
         out[tr] = sorted(v + dt.timedelta(days=1) for v in last.values())
+    TOKAI_HEN.clear()
+    later = max((d for ds in days.values() for d in ds), default=None)
+    for y in sorted({d.year for ds in out.values() for d in ds}):
+        sep = [d for ds in out.values() for d in ds if d.year == y and d.month in (9, 10) and d <= dt.date(y, 10, 1)]
+        if sep and later and later >= dt.date(y, 10, 1):   # 10 月の開催が見えて初めて 9 月の最後が確定
+            TOKAI_HEN[y] = max(sep)
     return out
 
 
@@ -905,6 +916,10 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
             for e in ds:
                 if first < e < cutoff:
                     events.append(("adj", e, tr))
+    if "u" in TOKAI_V:
+        for e in TOKAI_HEN.values():
+            if first < e < cutoff:
+                events.append(("hen", e, None))
     events.sort(key=lambda t: (t[1], 0 if t[0] != "run" else 1))
     recent = []                                    # 直近の東海の走の場(所属の推定)
     value = 0
@@ -933,12 +948,23 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
         a = age(d)
         if a == 2:
             return v < TOKAI_Y2
+        if a == 3 and "u" in TOKAI_V:
+            hen = TOKAI_HEN.get(d.year)
+            return v < TOKAI_Y3 and (d < hen if hen else d.month <= 9)
         if a == 3 and d.month <= 9:
             return v < TOKAI_Y3
         return False
 
     for kind, d, r in events:
         a = age(d)
+        if kind == "hen":                          # u: 3 歳の一斉編入(東海 2 場共通の日)
+            if resident and young and a == 3:
+                cut = min(_thou(value * TOKAI_CUT_RATE[origin]), TOKAI_CUT[origin]) if "e" in TOKAI_V else 0
+                value = max(0, value - cut)
+                young = False
+            if trace:
+                print(f"  {d} 一斉編入 → value {value:>10,} young={young}")
+            continue
         if kind == "adj":
             if r is not None and home is not None and r != home:
                 continue                           # 他県の調整日(所属でない場)は飛ばす
@@ -950,7 +976,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
                 if not won and gained < adj:
                     value = max(0, value - (adj - gained))
             gained, won, ran_q = 0, False, False
-            if d.month in (9, 10) and resident and young and a == 3:  # 3歳の一斉編入(9月末の開催後)
+            if "u" not in TOKAI_V and d.month in (9, 10) and resident and young and a == 3:  # 3歳の一斉編入(9月末の開催後)
                 cut = min(_thou(value * TOKAI_CUT_RATE[origin]), TOKAI_CUT[origin]) if "e" in TOKAI_V else 0
                 value = max(0, value - cut)
                 young = False
@@ -1199,7 +1225,8 @@ def main_tokai(a):
         rows, births, entered, races = fetch_tokai(url, key, since)
     log(f"台帳 {len(rows)} 頭(東海の走が {since} 以降にある馬)・レース {len(races)}")
     TOKAI_ADJ.update(tokai_adj_dates(races))
-    log("調整日:", {k: [x.isoformat() for x in v if x.year >= 2025] for k, v in TOKAI_ADJ.items()})
+    log("調整日:", {k: [x.isoformat() for x in v if x.year >= 2025] for k, v in TOKAI_ADJ.items()},
+        "3歳の一斉編入:", {y: d.isoformat() for y, d in TOKAI_HEN.items()} if "u" in TOKAI_V else "所属場の調整日")
     if a.verify:
         lags = [a.lag] if a.lag is not None else [0, 3, 7]
         rep = verify_tokai(lines, rows, births, races, since, lags)
