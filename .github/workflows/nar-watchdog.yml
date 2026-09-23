@@ -228,3 +228,62 @@ jobs:
               raise SystemExit(1)
           raise SystemExit(0)
           PY
+
+  # 監査 A8(2026-09-24) 定期便の最終成功時刻(表 nar_job_heartbeat)を外から見る。どれかに当たれば赤(= 所有者へ失敗メール)
+  #   ① dispatch か odds_watch の last_status が 'fail'(本番 DB の起動係・オッズ見張りが自分で失敗を書いた)
+  #   ② JST 09:30〜22:00 に refresh の last_ok が 70 分より古い(daily 便は 30 分おき)
+  #   ③ JST 09:30 以降に ai_feat・stats の last_ok が今日でない
+  #   ④ JST 10:30 以降に votes の last_ok が今日でない
+  #   表がまだ無い/読めないときは警告だけで緑(本番 DB に表を当てる前でも赤にしない)。
+  heartbeat:
+    if: github.event.schedule != '40 23 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: cloud/beat.py
+          sparse-checkout-cone-mode: false
+      - name: check job heartbeats
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          python3 - <<'PY'
+          import sys, datetime as dt
+          sys.path.insert(0, 'cloud')
+          import beat
+          got = beat.rows()
+          if got is None:
+              print('::warning::nar_job_heartbeat が読めない(表がまだ無い?)= 警告だけで緑')
+              raise SystemExit(0)
+          now = dt.datetime.now(beat.JST); today = now.date(); hm = now.hour * 100 + now.minute
+          def last_ok(job):
+              r = got.get(job) or {}
+              v = r.get('last_ok')
+              return dt.datetime.fromisoformat(str(v).replace('Z', '+00:00')).astimezone(beat.JST) if v else None
+          for job in sorted(got):
+              r = got[job]
+              print(f"{job:24s} ok={r.get('last_ok')} try={r.get('last_try')} status={r.get('last_status')} note={r.get('note')}")
+          bad = []
+          for job in ('dispatch', 'odds_watch'):
+              if (got.get(job) or {}).get('last_status') == 'fail':
+                  bad.append(f"{job} の last_status= fail(note={(got.get(job) or {}).get('note')})")
+          if 930 <= hm < 2200:
+              t = last_ok('refresh')
+              if t is None or (now - t).total_seconds() > 70 * 60:
+                  bad.append(f"refresh の最終成功が 70 分より古い({t})")
+          if hm >= 930:
+              for job in ('ai_feat', 'stats'):
+                  t = last_ok(job)
+                  if t is None or t.date() != today:
+                      bad.append(f"{job} が今日まだ成功していない(最終 {t})")
+          if hm >= 1030:
+              t = last_ok('votes')
+              if t is None or t.date() != today:
+                  bad.append(f"votes が今日まだ成功していない(最終 {t})")
+          for b in bad:
+              print('::error::' + b)
+          print('異常なし' if not bad else f'異常 {len(bad)} 件')
+          raise SystemExit(1 if bad else 0)
+          PY

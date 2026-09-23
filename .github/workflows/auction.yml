@@ -35,7 +35,38 @@ permissions:
   contents: write
 
 jobs:
+  # 監査 A2(2026-09-24): 本命は本番 DB(pg_cron)の dispatch・GitHub の schedule は予備として残す。
+  #   予備の schedule で起きたとき、今日の成功(heartbeat 'auction_daily' の last_ok が JST 今日)があれば残りを飛ばして成功で終わる。
+  #   表がまだ無い/読めないときは従来どおり走る。
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.g.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: cloud/beat.py
+          sparse-checkout-cone-mode: false
+      - name: skip when today's run is already done
+        id: g
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          EVENT: ${{ github.event_name }}
+          SCHED: ${{ github.event.schedule }}
+        run: |
+          S=0
+          if [ "$EVENT" = "schedule" ] && [ "$SCHED" = "23 21 * * *" ]; then
+            T=$(python3 cloud/beat.py --today auction_daily || echo '?')
+            echo "auction_daily の今日の成功= $T(1= 済・0= 未・?= 読めない)"
+            if [ "$T" = "1" ]; then S=1; echo "今日は済み= 予備の schedule は何もせず終わる"; fi
+          fi
+          echo "skip=$S" >> "$GITHUB_OUTPUT"
+
   archive:
+    needs: gate
+    if: needs.gate.outputs.skip != '1'
     runs-on: ubuntu-latest
     timeout-minutes: 350   # sat-backfill(Playwright・1ページ4〜6秒)が最長。rakuten-items は #357 の API 化で
                            #   8件/秒=全史30分。⛔切られても state は500件ブロックごとに保存+if:always() の
@@ -150,3 +181,23 @@ jobs:
           git commit -m "data(auction): 保全 $(TZ=Asia/Tokyo date '+%m/%d %H:%M') [CI Skip]"
           git pull --rebase origin master
           git push origin HEAD:master
+
+      # 監査 A8(2026-09-24) 最終成功時刻(表 nar_job_heartbeat)。mode ごとの鍵= daily / rakuten-list / rakuten-close / 週次(sat-weekly・rakuten-items-weekly)
+      #   ほかの mode(遡り・load-only)は書かない。⛔表が無くても落ちない
+      - name: heartbeat
+        if: '!cancelled()'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          MODE: ${{ steps.m.outputs.mode }}
+          OK: ${{ job.status == 'success' && 'ok' || 'fail' }}
+        run: |
+          case "$MODE" in
+            daily)                K=auction_daily;;
+            rakuten-list)         K=auction_rakuten_list;;
+            rakuten-close)        K=auction_rakuten_close;;
+            sat-weekly|rakuten-items-weekly) K=auction_weekly;;
+            *)                    K=;;
+          esac
+          if [ -z "$K" ]; then echo "mode $MODE は heartbeat を書かない"; exit 0; fi
+          if [ "$OK" = "ok" ]; then python3 cloud/beat.py "$K" ok "$MODE"; else python3 cloud/beat.py "$K" fail "失敗 $MODE"; fi

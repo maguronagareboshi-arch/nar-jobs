@@ -36,17 +36,66 @@ env:
   PACE_SINCE: ${{ github.event.inputs.pace_since }}
 
 jobs:
+  # 監査 A2(2026-09-24): 月次は本番 DB(pg_cron)の dispatch が本命・GitHub の schedule('33 20')は予備として残す。
+  #   予備の schedule で起きたとき、今日の月次が済んでいれば(heartbeat 'stats' の last_ok が JST 今日)残りを飛ばして成功で終わる。
+  #   表がまだ無い/読めないときは従来どおり走る。
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.g.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: cloud/beat.py
+          sparse-checkout-cone-mode: false
+      - name: skip when today's monthly run is already done
+        id: g
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          S=0
+          if [ "$EVENT" = "schedule" ] && [ "$MODE" = "monthly" ]; then
+            T=$(python3 cloud/beat.py --today stats || echo '?')
+            echo "stats の今日の成功= $T(1= 済・0= 未・?= 読めない)"
+            if [ "$T" = "1" ]; then S=1; echo "今日の月次は済み= 予備の schedule は何もせず終わる"; fi
+          fi
+          echo "skip=$S" >> "$GITHUB_OUTPUT"
+
   refresh:
+    needs: gate
+    if: needs.gate.outputs.skip != '1'
     runs-on: ubuntu-latest
     timeout-minutes: 90   # §227b(2026-09-19) 朝の月次便が 60 分で打ち切られる日が続いたので 90 分へ(公開リポ= 分の上限なし)。#520(2026-09-07) 月次便が 30 分に達して person_stats の途中で切られた(9/5 28m58s・9/6 cancelled 30m20s)。日次便は 1〜2 分なので余裕は害なし
     steps:
       - uses: actions/checkout@v4
+      # 監査 A1(2026-09-24): 朝の段は「JST 09:30 前の便」ではなく「今日まだ済んでいない(heartbeat 'refresh_morning')かつ JST 09:00 以降」の便で回す。
+      #   時刻だけで決めると、朝の便が月次に待たされて 09:30 を越えた日に「スキップ」で黙って 1 日抜けた(9/22)。
+      #   済みの印は便の最後(全段成功)で書く= 朝の段が落ちた日は次の便でもう一度回る。表が読めないときは従来の 09:30 前に戻る。
+      #   以下の段の `[ "$MORNING" = 1 ]` がこの判定(元は JST 09:30 前か)。EVENING= JST 17:00 以降。
+      - name: morning or not
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          H=$(TZ=Asia/Tokyo date +%H%M)
+          D=$(python3 cloud/beat.py --today refresh_morning || echo '?')
+          if [ "$D" = "?" ]; then
+            if [ $((10#$H)) -lt 930 ]; then M=1; else M=0; fi
+          elif [ "$D" = "0" ] && [ $((10#$H)) -ge 900 ]; then M=1; else M=0; fi
+          if [ $((10#$H)) -ge 1700 ]; then E=1; else E=0; fi
+          echo "MORNING=$M" >> "$GITHUB_ENV"
+          echo "EVENING=$E" >> "$GITHUB_ENV"
+          echo "朝の段= $M(refresh_morning の今日= $D・JST $H)/ 夕の段= $E"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
       - run: pip install -r cloud/requirements.txt
       - run: sudo apt-get install -y -qq tesseract-ocr >/dev/null   # §146 名古屋の砂厚(画像の断面)を文字認識で読む
       - name: refresh
+        if: '!cancelled()'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -81,7 +130,7 @@ jobs:
 
       # §32a 公式サイトの能検(岩手・兵庫)。差分だけ・数ページ/日
       - name: noken public (monthly only)
-        if: env.MODE != 'daily'
+        if: env.MODE != 'daily' && !cancelled()
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -96,11 +145,12 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ $((10#$H)) -lt 930 ]; then for v in monbetsu ooi funabashi kawasaki urawa; do python cloud/noken_public.py --venue $v || echo "⚠ $v の能検が取れない(続行)"; done; else echo "5場の能検は朝の便だけ(JST $H)=スキップ"; fi
+          if [ "$MORNING" = 1 ]; then for v in monbetsu ooi funabashi kawasaki urawa; do python cloud/noken_public.py --venue $v || echo "⚠ $v の能検が取れない(続行)"; done; else echo "5場の能検は朝の便だけ(JST $H)=スキップ"; fi
 
       # §45 能検組の初出走(今日+明日の出馬表×能検索引 → nar_meta 'noken_debuts')。3〜5クエリ・数秒・冪等。
       # daily でも回す=明日の出馬表は日中に入るため(⛔出馬表は翌日ぶんまでしか出ない #146)
       - name: noken debuts (daily + monthly)
+        if: '!cancelled()'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -113,24 +163,26 @@ jobs:
       # (⛔ran は「一度付いたら戻らない」向きだけの旗なので、遅れても誤りにはならない=画面が生照会で補う)
       # 2026-09-02 分予算対策: 毎回 1 分弱かかるので **朝の便(monthly 05:33 と daily 09:07)だけ**に減らす
       - name: noken index (morning only)
+        if: '!cancelled()'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/noken_index.py --apply; else echo "noken index は朝の便だけ(JST $H)=スキップ"; fi
+          if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/noken_index.py --apply; else echo "noken index は朝の便だけ(JST $H)=スキップ"; fi
 
       # §139 各競馬場の主催者公式のお知らせを1か所に集めた索引(見出し・日付・公式リンクだけ・本文は取らない)。
       # ⛔**朝の便だけ**= 公式サイトを1日に何度も叩かない(笠松は番号を辿るので1回あたり30回ほど出す)。
       # ⛔**落ちても続行**(|| echo)= 索引は付け足しの機能なので、これで朝の便を止めない。
       # 新しい便は作らない(Actions の分予算。ここに相乗りで実測10秒ほど)。
       - name: official news (morning only)
+        if: '!cancelled()'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/official_news.py --apply || echo "⚠ 各場のお知らせが取れない(続行)"; else echo "official news は朝の便だけ(JST $H)=スキップ"; fi
+          if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/official_news.py --apply || echo "⚠ 各場のお知らせが取れない(続行)"; else echo "official news は朝の便だけ(JST $H)=スキップ"; fi
 
       # §140 段 1 主催者の発表を読んで記事の下書きを作る(#542)。official news の直後・**朝の便だけ**。
 
@@ -144,12 +196,13 @@ jobs:
         run: python cloud/sand_depth.py --apply || echo "⚠ 砂厚が取れない(続行)"
 
       - name: horse ledger (morning only)
+        if: '!cancelled()'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/horse_ledger.py --apply --max-horses 1200; else echo "horse ledger は朝の便だけ(JST $H)=スキップ"; fi
+          if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/horse_ledger.py --apply --max-horses 1200; else echo "horse ledger は朝の便だけ(JST $H)=スキップ"; fi
 
       # 監査 #21 案 乙: 同名表 nar_meta 'horse_homonyms' の軽い追記(昨日〜明日の出走馬 × nar_horse_profiles の生年)。
       # horse ledger(③ profiles.code の埋め)の直後・朝の便だけ。表がまだ無ければ警告して 0。⛔落ちても続行
@@ -161,19 +214,20 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/horse_homonyms.py --apply || echo "⚠ 同名表の追記に失敗(続行)"; else echo "horse homonyms は朝の便だけ(JST $H)=スキップ"; fi
+          if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/horse_homonyms.py --apply || echo "⚠ 同名表の追記に失敗(続行)"; else echo "horse homonyms は朝の便だけ(JST $H)=スキップ"; fi
 
       # §38 1-C 南関東4場の「格」「格付ポイント」(主催者 nankankeiba の馬ページ・1.5秒/本)。直近2日に走った馬だけ=
       # 日次 100〜300 本・数分。**朝の便だけ**(分予算)。他場PCの fetch_nankan_points.py(大井だけ・chihou_meta)の置き換え
       - name: nankan points (morning only)
+        if: '!cancelled()'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/nankan_points.py --apply --days 2 --max-horses 400; else echo "nankan points は朝の便だけ(JST $H)=スキップ"; fi
+          if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/nankan_points.py --apply --days 2 --max-horses 400; else echo "nankan points は朝の便だけ(JST $H)=スキップ"; fi
           # §196b 第 2 段= 走った馬の格付ポイントの履歴(表 nar_nankan_point_hist)。nankan_points の直後・朝の便だけ
-          if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/nankan_hist.py --apply --days 3; fi
+          if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/nankan_hist.py --apply --days 3; fi
 
       # §79 P3 場ごとの「番組賞金(当サイトの計算)」と「あと◯」を台帳の calc 列へ(通信は DB だけ・数秒)。
       # 線の表は class.js を node で読む(tests/class_const_dump.mjs)。検算= docs/s79_p3_verify_20260903.md
@@ -183,11 +237,12 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/class_calc.py --apply --hist-days 3 --prefix kochi && python cloud/class_calc.py --apply --hist-days 3 --prefix obihiro && python cloud/class_calc.py --apply --hist-days 3 --prefix saga && python cloud/class_calc.py --apply --hist-days 3 --prefix tokai && python cloud/class_calc.py --apply --hist-days 3 --prefix hyogo; else echo "class calc は朝の便だけ(JST $H)=スキップ"; fi
+          if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/class_calc.py --apply --hist-days 3 --prefix kochi && python cloud/class_calc.py --apply --hist-days 3 --prefix obihiro && python cloud/class_calc.py --apply --hist-days 3 --prefix saga && python cloud/class_calc.py --apply --hist-days 3 --prefix tokai && python cloud/class_calc.py --apply --hist-days 3 --prefix hyogo; else echo "class calc は朝の便だけ(JST $H)=スキップ"; fi
 
       # §54.1 P1 券種別の総票数・返還票数(楽天 race_dividend・1日1場1リクエスト)。
       # 前日までの取りこぼしは --days 3 の窓が自己修復。未確定の日は書かず翌日また試す
       - name: rakuten sales (daily + monthly)
+        if: '!cancelled()'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -200,7 +255,7 @@ jobs:
       # ⚠**この段は Opus の提案**(§120)= Fable が確かめること。⛔先に
       #   pipeline/sql/nar_race_comments_20260907.sql を流すこと(表が無いと exit 2 で止まる)。
       - name: kochi comments (daily)
-        if: env.MODE != 'monthly'
+        if: env.MODE != 'monthly' && !cancelled()
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -210,7 +265,7 @@ jobs:
       # 毎朝1回で足りるので monthly 便(05:33 JST=このリポジトリの日次集計の置き場)に置く。
       # 検出は DB 側の1文(window 関数・実測2秒)= pg8000 で流す(SUPABASE_DB_PASSWORD)
       - name: horse changes (monthly only)
-        if: env.MODE != 'daily'
+        if: env.MODE != 'daily' && !cancelled()
         env:
           SUPABASE_DB_PASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
         run: python cloud/horse_changes.py --apply
@@ -218,7 +273,7 @@ jobs:
       # §126 乗り替わり分析の集計表(全 15 場・DB 側の refresh_nar_jc() で全部作り直し= 実測 181 秒)。
       #   monthly 便(05:33 JST)に 1 日 1 回。画面は集計表を anon で読むだけ。
       - name: jockey change stats (monthly only)
-        if: env.MODE != 'daily'
+        if: env.MODE != 'daily' && !cancelled()
         env:
           SUPABASE_DB_PASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
         run: python cloud/jockey_change.py --apply
@@ -226,7 +281,7 @@ jobs:
       # §38 1-E 門別の級別表(公式PDF・最新回だけ・冪等・古い回では上書きしない)。級別表は毎年上書きされる
       # ローリング公開なので、この毎朝実行そのものがアーカイブの保険になる(笠松能検と同じ性質)
       - name: monbetsu class (monthly only)
-        if: env.MODE != 'daily'
+        if: env.MODE != 'daily' && !cancelled()
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -234,7 +289,7 @@ jobs:
 
       # §54.6 せり市場(JRHA セレクトセール・HBA 北海道市場)の取引結果を auction_sales へ(月次便・JRHA 2 年ぶん 2 本+HBA 新しい順 3 ページ・1 秒間隔)
       - name: sale results (monthly only)
-        if: env.MODE != 'daily'
+        if: env.MODE != 'daily' && !cancelled()
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -244,12 +299,13 @@ jobs:
       # 2026-09-22 S1 標準の窓は季節版(同じ暦±45日×3年)が既定= 引数は要らない(--baseline で切替)
       # 2026-09-05 ユーザーFB「最近の馬場の時計が出ていない日がある」= monthly だけだったのを 朝の便(JST 09:30 前)でも回す(手元 24 秒)
       - name: baba diff (monthly + morning)
+        if: '!cancelled()'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then python cloud/baba.py --apply; else echo "baba diff は monthly と朝の便だけ(JST $H)=スキップ"; fi
+          if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/baba.py --apply; else echo "baba diff は monthly と朝の便だけ(JST $H)=スキップ"; fi
 
       # §100 馬場傾向(時計=baba_diff・前後=1角順位×着順ρ・内外=枠×着順ρ)。朝の便は 90 日組み直し、日中の便は当日だけ
       - name: baba trend
@@ -259,18 +315,18 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ $((10#$H)) -lt 930 ]; then python cloud/baba_trend.py --apply; else python cloud/baba_trend.py --apply --today; fi
+          if [ "$MORNING" = 1 ]; then python cloud/baba_trend.py --apply; else python cloud/baba_trend.py --apply --today; fi
 
       # §103 コース別データ(場×距離の枠番・序盤の位置・逃げ馬)。前日までの過去1年の数なので朝の便だけ
       # (手元の実測= 14場ぶんで 32 秒・要求 187 回)
       - name: course stats (morning only)
-        if: env.MODE != 'monthly'
+        if: env.MODE != 'monthly' && !cancelled()
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ $((10#$H)) -lt 930 ]; then python cloud/course_stats.py --apply; else echo "course stats は朝の便だけ(JST $H)=スキップ"; fi
+          if [ "$MORNING" = 1 ]; then python cloud/course_stats.py --apply; else echo "course stats は朝の便だけ(JST $H)=スキップ"; fi
 
       # §118 データの状態= 取り込めたかを行数で数えて nar_meta coverage に 1 枚(朝の便の最後・前段が落ちても数える)
       - name: coverage (morning only)
@@ -280,11 +336,11 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ $((10#$H)) -lt 930 ]; then python cloud/coverage.py --apply; else echo "coverage は朝の便だけ(JST $H)=スキップ"; fi
+          if [ "$MORNING" = 1 ]; then python cloud/coverage.py --apply && python3 cloud/beat.py coverage ok; else echo "coverage は朝の便だけ(JST $H)=スキップ"; fi
 
       # §46.2 先の開催日程(公式の月別開催日程・当月+先2か月・3リクエスト)。/calendar と週間日程が読む
       - name: kaisai schedule (monthly only)
-        if: env.MODE != 'daily'
+        if: env.MODE != 'daily' && !cancelled()
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -337,7 +393,7 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ $((10#$H)) -lt 930 ]; then
+          if [ "$MORNING" = 1 ]; then
             python cloud/coverage_matrix.py --apply || echo "⚠ 網羅表が焼けない(続行)"
           else
             echo "coverage matrix は朝の便だけ(JST $H)=スキップ"
@@ -356,7 +412,7 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ] || [ $((10#$H)) -ge 1700 ]; then
+          if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ] || [ $((10#$H)) -ge 1700 ]; then
             if [ $((10#$H)) -ge 1700 ]; then T=$(TZ=Asia/Tokyo date -d tomorrow +%F); python cloud/run_facts.py --apply --from "$T" --to "$T" || echo "⚠ 明日($T)の nar_run_facts が焼けない(続行)"; fi
             python cloud/karte_facts.py --apply || echo "⚠ 分析タブの事実 nar_karte_facts が焼けない(続行)"
           else echo "karte facts は朝と 17:00 以降の便だけ(JST $H)=スキップ"; fi
@@ -373,8 +429,8 @@ jobs:
           PGSSLMODE: require
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ] || { [ $((10#$H)) -ge 1700 ] && [ $((10#$H)) -lt 1730 ]; }; then python cloud/tenkai.py --apply; else echo "tenkai は朝と 17:07 の便だけ(JST $H)=スキップ"; fi
-          if [ -n "$PACE_SINCE" ] || [ "$MODE" != "daily" ] || [ $((10#$H)) -lt 930 ]; then psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/nar_race_pace_20260920.sql | tail -n 2 && python cloud/tenkai.py --apply --pace-log ${PACE_SINCE:+--since "$PACE_SINCE"}; else echo "pace log は朝の便だけ(JST $H)=スキップ"; fi
+          if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ] || { [ $((10#$H)) -ge 1700 ] && [ $((10#$H)) -lt 1730 ]; }; then python cloud/tenkai.py --apply; else echo "tenkai は朝と 17:07 の便だけ(JST $H)=スキップ"; fi
+          if [ -n "$PACE_SINCE" ] || [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/nar_race_pace_20260920.sql | tail -n 2 && python cloud/tenkai.py --apply --pace-log ${PACE_SINCE:+--since "$PACE_SINCE"}; else echo "pace log は朝の便だけ(JST $H)=スキップ"; fi
 
       # 再生不能データ(AI印の凍結履歴・当日オッズ・成績)の日次バックアップ。artifact は90日保持
       - name: backup irreplaceables (monthly only)
@@ -409,4 +465,27 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ $((10#$H)) -lt 930 ]; then python cloud/odds_archive.py --max-days 3; else echo "odds archive は朝の便だけ(JST $H)=スキップ"; fi
+          if [ "$MORNING" = 1 ]; then python cloud/odds_archive.py --max-days 3; else echo "odds archive は朝の便だけ(JST $H)=スキップ"; fi
+
+      # 監査 A8(2026-09-24) 最終成功時刻(表 nar_job_heartbeat)。外の見張り nar-watchdog と画面が読む。⛔表が無くても落ちない
+      #   refresh= daily の成功ごと / stats= monthly の成功 / refresh_morning= 朝の段を回した便の成功 / refresh_evening= 17 時以降の便の成功
+      - name: heartbeat ok
+        if: success()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ "$MODE" != "monthly" ]; then python3 cloud/beat.py refresh ok "JST $(TZ=Asia/Tokyo date +%H:%M)"; fi
+          if [ "$MODE" != "daily" ]; then python3 cloud/beat.py stats ok; fi
+          if [ "$MODE" != "monthly" ] && [ "$MORNING" = 1 ]; then python3 cloud/beat.py refresh_morning ok; fi
+          if [ "$MODE" != "monthly" ] && [ "$EVENING" = 1 ]; then python3 cloud/beat.py refresh_evening ok; fi
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ "$MODE" != "monthly" ]; then python3 cloud/beat.py refresh fail 失敗; fi
+          if [ "$MODE" != "daily" ]; then python3 cloud/beat.py stats fail 失敗; fi
+          if [ "$MODE" != "monthly" ] && [ "$MORNING" = 1 ]; then python3 cloud/beat.py refresh_morning fail 失敗; fi
+          if [ "$MODE" != "monthly" ] && [ "$EVENING" = 1 ]; then python3 cloud/beat.py refresh_evening fail 失敗; fi

@@ -51,7 +51,38 @@ permissions:
   contents: read
 
 jobs:
+  # 監査 A2(2026-09-24): 本命は本番 DB(pg_cron)の dispatch・GitHub の schedule は予備として残す。
+  #   予備の schedule で起きたとき、今日の成功(heartbeat 'horse_health' の last_ok が JST 今日)があれば残りを飛ばして成功で終わる。
+  #   表がまだ無い/読めないときは従来どおり走る。
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.g.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: cloud/beat.py
+          sparse-checkout-cone-mode: false
+      - name: skip when today's run is already done
+        id: g
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          EVENT: ${{ github.event_name }}
+          SCHED: ${{ github.event.schedule }}
+        run: |
+          S=0
+          if [ "$EVENT" = "schedule" ]; then
+            T=$(python3 cloud/beat.py --today horse_health || echo '?')
+            echo "horse_health の今日の成功= $T(1= 済・0= 未・?= 読めない)"
+            if [ "$T" = "1" ]; then S=1; echo "今日は済み= 予備の schedule は何もせず終わる"; fi
+          fi
+          echo "skip=$S" >> "$GITHUB_OUTPUT"
+
   import:
+    needs: gate
+    if: needs.gate.outputs.skip != '1'
     runs-on: ubuntu-latest
     # 通常7日分は短時間。初回2026年NARを月単位dispatchしても途中打切りにしない安全幅。
     timeout-minutes: 330
@@ -144,3 +175,15 @@ jobs:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: python cloud/penalties.py --apply
+
+      # 監査 A8(2026-09-24) 最終成功時刻(表 nar_job_heartbeat 'horse_health')。dry_run の便は書かない。⛔表が無くても落ちない
+      - name: heartbeat
+        if: '!cancelled()'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+          OK: ${{ job.status == 'success' && 'ok' || 'fail' }}
+        run: |
+          if [ "$DRY" = "true" ]; then echo "dry_run= heartbeat は書かない"; exit 0; fi
+          if [ "$OK" = "ok" ]; then python3 cloud/beat.py horse_health ok; else python3 cloud/beat.py horse_health fail 失敗; fi

@@ -62,6 +62,8 @@ jobs:
             verify) python -X utf8 cloud/persons.py --verify ;;
             full)   python -X utf8 cloud/persons.py --full --apply ;;
           esac
+          # 監査 A8(2026-09-24) 最終成功時刻(表 nar_job_heartbeat)。⛔表が無くても落ちない
+          if [ "$MODE" = "full" ]; then python3 cloud/beat.py persons ok; fi
 
       # 入った中身を数で見せる(⛔「入れた」と言うだけにしない)
       - name: 検算
@@ -76,3 +78,11 @@ jobs:
                     count(distinct name_short) shorts,
                     count(*) filter (where birth is null) no_birth
              from public.nar_persons group by kind order by kind;"
+
+      # 監査 A8(2026-09-24) 失敗の印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py persons fail 失敗

@@ -51,14 +51,23 @@ jobs:
       - name: install
         run: pip install -q "pg8000>=1.30" "lightgbm>=4.3" "pandas>=2.2" "pyarrow>=15" "numpy<2" "requests>=2.31"
 
-      # ---------------------------------------------------------------- 全列の模型= 朝便(schedule)の最新の成功から
+      # ---------------------------------------------------------------- 全列の模型= nar-ai-feat の最新の成功から(event 不問)
+      # 監査 A4(2026-09-24): 元は `-e schedule` の便だけ= 予備 schedule の朝便は 09:08 の起動より後に終わるので常に前日以前のモデルだった。
+      #   今は event を問わず最新の成功便。今日(JST)の便でなければ log と heartbeat の note に「前日のモデル」と残す(止めない)。
       - name: fetch morning-run artifact (model)
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          ID=$(gh run list -R "$GITHUB_REPOSITORY" -w nar-ai-feat.yml -e schedule -s success -L 1 --json databaseId --jq '.[0].databaseId')
-          [ -n "$ID" ] || { echo "朝便の成功が見つからない"; exit 1; }
-          echo "morning run = $ID"
+          R=$(gh run list -R "$GITHUB_REPOSITORY" -w nar-ai-feat.yml -s success -L 1 --json databaseId,createdAt,event --jq '.[0] | "\(.databaseId) \(.createdAt) \(.event)"')
+          ID=${R%% *}
+          { [ -n "$ID" ] && [ "$ID" != "null" ]; } || { echo "朝便の成功が見つからない"; exit 1; }
+          CREATED=$(echo "$R" | cut -d' ' -f2)
+          RUN_DAY=$(TZ=Asia/Tokyo date -d "$CREATED" +%F)
+          echo "morning run = $R(JST $RUN_DAY)"
+          if [ "$RUN_DAY" != "$(TZ=Asia/Tokyo date +%F)" ]; then
+            echo "::warning::今日の nar-ai-feat の成功便が無い= 前日のモデル(run $ID・$RUN_DAY)で続ける"
+            echo "MODEL_NOTE=前日のモデル $RUN_DAY" >> "$GITHUB_ENV"
+          fi
           gh run download "$ID" -R "$GITHUB_REPOSITORY" -p 'nar-ai-feat-*' -D model
           M=$(ls model/*/base_v1.model.json | head -n 1)
           [ -n "$M" ] || { echo "base_v1.model.json が無い"; exit 1; }
@@ -168,6 +177,8 @@ jobs:
             psql -v ON_ERROR_STOP=1 -X \
               -c "\copy (select * from public.nar_ai_feat_run where race_date = '$DAY') to 'today/feat.csv' with (format csv, header)"
             python -X utf8 pipeline/ai/base_v1.py predict --feat today/feat.csv --model base_v1.model.json --date "$DAY" --timing last $W
+            # 監査 A8(2026-09-24) 各周の成功= heartbeat 'ai_last'(書く便だけ)。⛔表が無くても落ちない
+            if [ "$WRITE" = "yes" ]; then python3 cloud/beat.py ai_last ok "round $n${MODEL_NOTE:+・$MODEL_NOTE}"; fi
             echo "round $n took $(( $(date +%s) - T0 )) s"
             echo "::endgroup::"
             [ "$ONCE" = "yes" ] && break
@@ -184,3 +195,11 @@ jobs:
       - name: stop local postgres
         if: always()
         run: docker rm -f feat || true
+
+      # 監査 A8(2026-09-24) 失敗の印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py ai_last fail 失敗

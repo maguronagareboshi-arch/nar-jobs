@@ -69,3 +69,13 @@ jobs:
           if [ -n "$DATES" ]; then set -- "$@" "--dates=$DATES"; fi
           if [ "$FORCE" = "true" ]; then set -- "$@" --force; fi
           python -X utf8 cloud/paper_first3f.py "$@"
+          # 監査 A8(2026-09-24) 最終成功時刻(表 nar_job_heartbeat)。⛔表が無くても落ちない
+          python3 cloud/beat.py paper_first3f ok
+
+      # 監査 A8(2026-09-24) 失敗の印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py paper_first3f fail 失敗

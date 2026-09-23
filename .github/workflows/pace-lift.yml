@@ -47,3 +47,13 @@ jobs:
           if [ -n "$M_FROM" ]; then set -- "$@" --from "$M_FROM"; fi
           if [ -n "$M_TO" ]; then set -- "$@" --to "$M_TO"; fi
           python cloud/pace_lift.py "$@"
+          # 監査 A8(2026-09-24) 最終成功時刻(表 nar_job_heartbeat)。⛔表が無くても落ちない
+          if [ "$MODE" != "dry" ]; then python3 cloud/beat.py pace_lift ok; fi
+
+      # 監査 A8(2026-09-24) 失敗の印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py pace_lift fail 失敗

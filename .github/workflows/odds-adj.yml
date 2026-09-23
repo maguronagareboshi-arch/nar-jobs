@@ -45,3 +45,13 @@ jobs:
           if [ -n "$DATE_IN" ]; then set -- "$@" --date "$DATE_IN"; fi
           if [ "$DRY" = "true" ]; then set -- "$@" --dry-run; fi
           node cloud/odds_adj.mjs "$@"
+          # 監査 A8(2026-09-24) 最終成功時刻(表 nar_job_heartbeat)。⛔表が無くても落ちない
+          if [ "$DRY" != "true" ]; then python3 cloud/beat.py odds_adj ok; fi
+
+      # 監査 A8(2026-09-24) 失敗の印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py odds_adj fail 失敗

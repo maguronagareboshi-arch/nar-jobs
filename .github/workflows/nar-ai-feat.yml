@@ -44,7 +44,38 @@ permissions:
   contents: read
 
 jobs:
+  # 監査 A2(2026-09-24): 本命は本番 DB(pg_cron)の dispatch・GitHub の schedule は予備として残す。
+  #   予備の schedule で起きたとき、今日の成功(heartbeat 'ai_feat' の last_ok が JST 今日)があれば残りを飛ばして成功で終わる。
+  #   表がまだ無い/読めないときは従来どおり走る。
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.g.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: cloud/beat.py
+          sparse-checkout-cone-mode: false
+      - name: skip when today's run is already done
+        id: g
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          EVENT: ${{ github.event_name }}
+          SCHED: ${{ github.event.schedule }}
+        run: |
+          S=0
+          if [ "$EVENT" = "schedule" ]; then
+            T=$(python3 cloud/beat.py --today ai_feat || echo '?')
+            echo "ai_feat の今日の成功= $T(1= 済・0= 未・?= 読めない)"
+            if [ "$T" = "1" ]; then S=1; echo "今日は済み= 予備の schedule は何もせず終わる"; fi
+          fi
+          echo "skip=$S" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: gate
+    if: needs.gate.outputs.skip != '1'
     runs-on: ubuntu-latest
     timeout-minutes: 180    # §243 学習行が 10 年分で 3 倍(187 万行)= 90 分で打ち切られた(9/22)。§224a fit に 1 着の模型+12 か月 WF の較正が乗った(手元 8 スレッドで +15〜30 分)
     env:
@@ -180,6 +211,7 @@ jobs:
       - name: fit base-v1 (morning / without today columns)
         run: python -X utf8 pipeline/ai/base_v1.py fit --feat out/nar_ai_feat_run.csv --model out/base_v1_morning.model.json --variant morning
       - name: predict today (morning) and write marks (REST upsert only)
+        id: marks
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -188,6 +220,8 @@ jobs:
           DAY=$(TZ=Asia/Tokyo date +%F)
           if [ "$WRITE" = "yes" ]; then W=--write; else W=; fi
           python -X utf8 pipeline/ai/base_v1.py predict --feat out/nar_ai_feat_run.csv --model out/base_v1_morning.model.json --date "$DAY" --timing morning $W
+          # 監査 A8(2026-09-24) 朝の印を書き終えた所= heartbeat 'ai_feat'(書いた便だけ)。⛔表が無くても落ちない
+          if [ "$WRITE" = "yes" ]; then python3 cloud/beat.py ai_feat ok; fi
       - name: gzip features
         run: gzip -6 out/nar_ai_feat_run.csv
 
@@ -234,3 +268,11 @@ jobs:
       - name: stop local postgres
         if: always()
         run: docker rm -f feat || true
+
+      # 監査 A8(2026-09-24) 失敗の印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure() && steps.marks.outcome != 'success'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py ai_feat fail 失敗
