@@ -99,4 +99,14 @@ def main(argv):
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv[1:]))
+    for _s in (sys.stdout, sys.stderr):
+        try:
+            _s.reconfigure(errors="replace")     # 手元の cp932 でも log の記号で落ちない
+        except Exception:                        # noqa: BLE001
+            pass
+    try:
+        rc = main(sys.argv[1:])
+    except Exception as e:                       # noqa: BLE001(⛔便を落とさない)
+        print(f"heartbeat: 想定外の失敗(続行) {type(e).__name__}", file=sys.stderr)
+        rc = 0
+    sys.exit(rc)
