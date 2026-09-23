@@ -208,16 +208,28 @@ def apply_rows(base, key, rows):
     return True
 
 
+def stat_names(base, key, kind, page=1000):
+    """監査 #20 nar_person_stats の名前を全部(1 回 1000 行で黙って切れない= ページ送り。
+    order は name= kind・track・period を絞った中では 1 人 1 行)。読めなければ読めた分まで。"""
+    mine, off = set(), 0
+    while True:
+        st, txt = req(base, key,
+                      f"/rest/v1/nar_person_stats?select=name&kind=eq.{kind}"
+                      f"&track=eq.all&period=eq.all&order=name.asc&limit={page}&offset={off}")
+        if st >= 300:
+            return mine
+        got = json.loads(txt)
+        mine |= {r["name"] for r in got}
+        if len(got) < page:
+            return mine
+        off += page
+
+
 def verify(base, key, rows):
     """オラクル= nar_person_stats.name(=nar_runs 由来)と name_short がどれだけ当たるか。"""
     ok = True
     for kind in KINDS:
-        mine = set()
-        st, txt = req(base, key,
-                      f"/rest/v1/nar_person_stats?select=name&kind=eq.{kind}"
-                      f"&track=eq.all&period=eq.all&limit=2000")
-        if st < 300:
-            mine = {r["name"] for r in json.loads(txt)}
+        mine = stat_names(base, key, kind)
         made = {}
         for r in rows:
             if r["kind"] == kind:
