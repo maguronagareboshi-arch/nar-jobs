@@ -1,0 +1,50 @@
+# §256 最終オッズの見込み「これまでの答え合わせ」(/odds-record)の夜の便。
+# 目的: 日×場の答え合わせ(幅に入った割合・平均のずれ)を nar_meta 'odds_final_record' に焼く。既定は JST の今日の 2 日前〜今日を作り直す。
+# 判定は画面と同じ部品を本番から取る(https://nar.yukochi.com/viewer-data/odds-forecast/odds-final.mjs と model.json)。
+#   ここに写しを置くと画面の確定後の答え合わせと数字がずれるため。本番に部品が無ければ何も書かずに失敗する。
+# 遡り: workflow_dispatch で from=2026-09-02(to は空= 今日)。50 日より前は台本が --force なしでは止める(60 日を過ぎた刻みは間引かれる)。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: odds-record
+on:
+  schedule:
+    - cron: '50 14 * * *'
+  workflow_dispatch:
+    inputs:
+      from:
+        description: 'from (YYYY-MM-DD / empty = JST today - 2)'
+        required: false
+        default: ''
+      to:
+        description: 'to (YYYY-MM-DD / empty = JST today)'
+        required: false
+        default: ''
+      dry_run:
+        description: 'dry run (no write)'
+        required: false
+        default: false
+        type: boolean
+concurrency:
+  group: odds-record
+  cancel-in-progress: false
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: odds record
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          FROM: ${{ github.event.inputs.from }}
+          TO: ${{ github.event.inputs.to }}
+          DRY: ${{ github.event.inputs.dry_run }}
+        run: |
+          set --
+          if [ -n "$FROM" ]; then set -- "$@" --from "$FROM"; fi
+          if [ -n "$TO" ]; then set -- "$@" --to "$TO"; fi
+          if [ "$DRY" = "true" ]; then set -- "$@" --dry-run; fi
+          node cloud/odds_record.mjs "$@"
