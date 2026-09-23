@@ -4,6 +4,7 @@
 --   ⛔60 日以内は全点(2 分刻み・約 20 点/レース)。画面(odds-series.js の節目表 初回/30分前/10分前/最終)は薄めた後も同じ点を引ける。
 --   ⛔発走時刻(nar_races.post_time HHMM)が無いレースは「初回・最終」以外を決められないので、初回と最終だけ残す。
 -- 適用: psql … -f pipeline/sql/odds_ticks_retention.sql(nar-refresh.yml monthly の venue stats と同じ段)
+-- ⛔§258(2026-09-23): nar-refresh.yml からの実行は止めた。60 日超は cloud/odds_archive.py が全点を Storage へ書き出してから同じ規則(keep_ids)で 9 点に間引く。これを単独で流すと書き出す前に消える。
 \set ON_ERROR_STOP on
 with old as (
   select t.id, t.track, t.race_date, t.race_no, t.t, t.f,

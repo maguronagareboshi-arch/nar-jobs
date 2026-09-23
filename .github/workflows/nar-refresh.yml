@@ -305,8 +305,11 @@ jobs:
           psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/race_level.sql | tail -n 5
           psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/graded.sql | tail -n 5
           psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/big_payouts.sql | tail -n 3
-          # §77 W4 2分刻みオッズの保持(60 日を過ぎたレースは 1 レース 6 点に薄める・冪等)
-          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/odds_ticks_retention.sql | tail -n 3
+          # §258(2026-09-23): 単複 2分刻み nar_odds_ticks の間引き(odds_ticks_retention.sql= 60 日超を 1 レース 9 点)は外した。
+          # 60 日超は daily 朝の便の odds archive(cloud/odds_archive.py)が Storage へ全点を書き出し→照合してから、同じ規則で 9 点に間引く
+          # (先に間引くと書き出す前に 2 分刻みが消える= 後で研究できない)。
+          # 戻し方(書き出しをやめて SQL の間引きに戻すときだけ): 下の行の # を外し、odds_archive.py の TABLE_ALIAS "all" から nar_odds_ticks を抜く。
+          # psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/odds_ticks_retention.sql | tail -n 3
           # 監査 #28(2026-09-23): nar_odds_full_ticks の間引き(odds_full_ticks_retention.sql)は外した。
           # 60 日超は daily 朝の便の odds archive(cloud/odds_archive.py)が Storage へ書き出してから消す(先に間引くと書き出す前に消える)
 
@@ -396,6 +399,8 @@ jobs:
 
       # 監査 #28(2026-09-23 案C) 全券種オッズの刻み nar_odds_full_ticks の 60 日超を 1 日 1 ファイル
       # (Storage 非公開バケット odds-archive)へ書き出し→取り直して照合→一致した日だけ DB から消す。1 回 3 日まで。
+      # §258(2026-09-23) 続けて単複 2分刻み nar_odds_ticks も同じく書き出し→照合→1 レース 9 点だけ残して他を消す
+      # (odds_ticks_retention.sql と同じ規則・上の monthly 段の SQL 間引きは止めた)。上限 3 日は表ごと。
       # ⛔最後の段に置く= 失敗(rc 1)しても他の段を止めない。照合が合わなければ消さずに落ちる(失敗メールで気づく)
       - name: odds archive (morning only)
         if: env.MODE != 'monthly' && !cancelled()
