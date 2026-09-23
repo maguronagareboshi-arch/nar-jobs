@@ -1,0 +1,39 @@
+# §258 オッズの書き出し(cloud/odds_archive.py)の試し= 手で起動するときだけ。
+# 60 日以内の 1 日でも 書き出し→Storage の _test/ に上げる→落として照合 までやり、DB からは消さない・nar_meta にも書かない・
+# 上げた試しのファイルは最後に消す(--dry-run --date)。本番の書き出しは nar-refresh.yml の朝の便「odds archive (morning only)」。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY(既存)
+name: odds-archive-test
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'YYYY-MM-DD (1 day)'
+        required: true
+      table:
+        description: 'full / ticks / all'
+        default: 'all'
+
+concurrency:
+  group: odds-archive
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: odds archive dry run
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          D: ${{ inputs.date }}
+          TB: ${{ inputs.table }}
+        run: python cloud/odds_archive.py --dry-run --date "$D" --table "$TB"
