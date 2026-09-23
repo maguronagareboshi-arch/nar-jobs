@@ -2,7 +2,8 @@
 // ⛔判定は画面と同じ部品(本番の /viewer-data/odds-forecast/odds-final.mjs と model.json)を取って呼ぶだけ。
 //   ここで判定を書き直さない(画面の確定後の答え合わせと数字がずれるため)。
 // 使い方: node cloud/odds_record.mjs [--from YYYY-MM-DD] [--to YYYY-MM-DD] [--lib URL|path] [--model URL|path]
-//         [--dry-run] [--out file] [--force]
+//         [--adj path] [--dry-run] [--out file] [--force]
+// §259 券種補正の一覧は nar_meta 'odds_forecast_adj'(--adj= 同じ value の手元ファイル・試験用)。読めなければ何も書かずに 1
 // env: SUPABASE_URL / SUPABASE_SERVICE_KEY(書く)。読むだけの試験は NAR_ANON_KEY でもよい。
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -22,6 +23,7 @@ const FROM = opt('--from', addDays(today, -2));
 const TO = opt('--to', today);
 const LIB = opt('--lib', `https://nar.yukochi.com/viewer-data/odds-forecast/odds-final.mjs?v=${stamp}`);
 const MODEL = opt('--model', `https://nar.yukochi.com/viewer-data/odds-forecast/model.json?v=${stamp}`);
+const ADJ = opt('--adj', null);
 const DRY = flag('--dry-run');
 const OUT = opt('--out', null);
 const FORCE = flag('--force');
@@ -58,20 +60,27 @@ try {
   const f = join(mkdtempSync(join(tmpdir(), 'odds-record-')), 'odds-final.mjs');
   writeFileSync(f, code);
   lib = await import(pathToFileURL(f).href);
-  for (const n of ['judgeRace', 'recordRows', 'postMinOf', 'REC_COLS', 'modelLabel', 'recordPopRows', 'POP_COLS']) if (!(n in lib)) throw new Error('lib に ' + n + ' が無い');
+  for (const n of ['judgeRace', 'recordRows', 'postMinOf', 'REC_COLS', 'modelLabel', 'recordPopRows', 'POP_COLS', 'adjFor']) if (!(n in lib)) throw new Error('lib に ' + n + ' が無い');
 } catch (e) { die('lib が取れない: ' + e.message); }
 try {
   model = JSON.parse(await fetchText(MODEL));
   if (!model || typeof model !== 'object') throw new Error('空');
 } catch (e) { die('model が取れない: ' + e.message); }
 const { judgeRace, recordRows, postMinOf, REC_COLS, modelLabel, recordPopRows, POP_COLS } = lib;
+// §259 券種補正の一覧(since ≤ 日付 の最新の 1 件をその日に使う= 判定は lib の中)
+let adj;
+try {
+  const v = ADJ ? JSON.parse(readFileSync(resolve(ADJ), 'utf8')) : ((await get('nar_meta?select=value&key=eq.odds_forecast_adj'))[0] || {}).value;
+  if (!v || v.v !== 1 || !Array.isArray(v.list)) throw new Error('形が違う(行が無い?)');
+  adj = v.list;
+} catch (e) { die('券種補正の一覧(nar_meta odds_forecast_adj)が読めない: ' + e.message); }
 
 // ---- 今の記録
 const cur = await get(`nar_meta?select=value&key=eq.${META_KEY}`);
 const old = cur.length && cur[0].value && typeof cur[0].value === 'object' ? cur[0].value : null;
 const models = Array.isArray(old?.models) ? [...old.models] : [];
-// §257 mi= その日の見込みの名前(modelLabel= 日付が model.adj.since 以後なら「built_on+券種(from〜to)」)の番号
-const miOf = (d) => { const lb = modelLabel(model, d); let i = models.indexOf(lb); if (i < 0) { models.push(lb); i = models.length - 1; } return i; };
+// §257 mi= その日の見込みの名前(modelLabel= その日に使う補正があれば「built_on+券種(from〜to)」)の番号
+const miOf = (d) => { const lb = modelLabel(model, d, adj); let i = models.indexOf(lb); if (i < 0) { models.push(lb); i = models.length - 1; } return i; };
 
 // ---- 刻みの形の直し方= 画面の data.js getRaceTicks と同じ
 const toMap = (o, pick) => { const m = new Map(); for (const [k, v] of Object.entries(o && typeof o === 'object' ? o : {})) { const u = Number(k); if (Number.isFinite(u)) m.set(u, pick(v)); } return m; };
@@ -105,7 +114,7 @@ for (const d of days) {
     const pt = post.get(k);
     const hhmm = pt && /^\d{4}$/.test(String(pt)) ? String(pt).slice(0, 2) + ':' + String(pt).slice(2) : null;
     const pm = postMinOf(hhmm);
-    items.push({ d, tr: track, j: pm === null ? { st: 'no_post' } : judgeRace(model, ticks, pm, track, Number(no), d), mi });
+    items.push({ d, tr: track, j: pm === null ? { st: 'no_post' } : judgeRace(model, ticks, pm, track, Number(no), d, adj), mi });
   }
   const dr = recordRows(items);
   newRows.push(...dr);

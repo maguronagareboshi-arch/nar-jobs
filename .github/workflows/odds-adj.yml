@@ -1,0 +1,47 @@
+# §259 最終オッズの見込みの券種補正(§257)を月 1 回作り直す便。
+# 目的: 基準日の前日までの 60 日で T ごとに係数を作り直し、採点(直近 14 日)で「今の係数」と「補正なし」の両方に勝った T があれば
+#   nar_meta 'odds_forecast_adj' の一覧の末尾に 1 件足す(since= 基準日の翌日)。古い項目は消さない・書き換えない。
+# 行・係数・採点は画面と同じ部品を本番から取る(https://nar.yukochi.com/viewer-data/odds-forecast/odds-final.mjs と model.json)。
+# 既定= 毎月 1 日 JST 06:10(= UTC 前月末日 21:10)。cron は UTC 28〜31 日 21:10 に起き、JST で 1 日のときだけ走る。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: odds-adj
+on:
+  schedule:
+    - cron: '10 21 28-31 * *'
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'base date (YYYY-MM-DD / empty = JST today)'
+        required: false
+        default: ''
+      dry_run:
+        description: 'dry run (no write)'
+        required: false
+        default: false
+        type: boolean
+concurrency:
+  group: odds-adj
+  cancel-in-progress: false
+jobs:
+  adj:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: odds adj
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          DATE_IN: ${{ github.event.inputs.date }}
+          DRY: ${{ github.event.inputs.dry_run }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          # 定時は UTC の月末日 21:10(= JST の 1 日 06:10)だけ走る。28〜31 日のうち、翌日が 1 日でない日は何もしない
+          if [ "$EVENT" = "schedule" ] && [ "$(TZ=Asia/Tokyo date +%d)" != "01" ]; then echo "JST 1 日ではない"; exit 0; fi
+          set --
+          if [ -n "$DATE_IN" ]; then set -- "$@" --date "$DATE_IN"; fi
+          if [ "$DRY" = "true" ]; then set -- "$@" --dry-run; fi
+          node cloud/odds_adj.mjs "$@"
