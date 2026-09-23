@@ -3,6 +3,7 @@
 
   python3 cloud/beat.py <job> ok|fail [補足]   … nar_beat(p_job, p_ok, p_note) を REST で呼ぶ
   python3 cloud/beat.py --today <job>         … last_ok が JST の今日なら 1・違えば 0・読めなければ ?
+  python3 cloud/beat.py --due <job> <秒>      … last_ok が今日でない かつ (last_try が今日でない or <秒> 以上前) なら 1・違えば 0・読めなければ ?
   python3 cloud/beat.py --dump                … 全行を JSON 1 行で出す(読めなければ空行・exit 3)
 
 ⛔標準ライブラリだけ(setup-python の無い便でも python3 で動く)。
@@ -79,7 +80,34 @@ def ok_today(job, got=None):
     return bool(r) and jst_date(r.get("last_ok")) == dt.datetime.now(JST).date()
 
 
+def _ts(v):
+    if not v:
+        return None
+    t = dt.datetime.fromisoformat(str(v).replace("Z", "+00:00"))
+    if t.tzinfo is None:
+        t = t.replace(tzinfo=dt.timezone.utc)
+    return t.astimezone(JST)
+
+
+def due(job, retry_sec, got=None):
+    """今日まだ成功していない かつ 最後の試みが今日でない/retry_sec 以上前 → True。読めなければ None。
+    ⛔失敗しても retry_sec に 1 回までしか回り直さない(監査 A1)。"""
+    got = rows() if got is None else got
+    if got is None:
+        return None
+    r = got.get(job) or {}
+    now = dt.datetime.now(JST)
+    ok, tr = _ts(r.get("last_ok")), _ts(r.get("last_try"))
+    if ok is not None and ok.date() == now.date():
+        return False
+    return tr is None or tr.date() != now.date() or (now - tr).total_seconds() >= retry_sec
+
+
 def main(argv):
+    if len(argv) >= 3 and argv[0] == "--due":
+        v = due(argv[1], int(argv[2]))
+        print("?" if v is None else ("1" if v else "0"))
+        return 0
     if len(argv) >= 2 and argv[0] == "--today":
         v = ok_today(argv[1])
         print("?" if v is None else ("1" if v else "0"))

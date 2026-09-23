@@ -73,7 +73,8 @@ jobs:
       - uses: actions/checkout@v4
       # 監査 A1(2026-09-24): 朝の段は「JST 09:30 前の便」ではなく「今日まだ済んでいない(heartbeat 'refresh_morning')かつ JST 09:00 以降」の便で回す。
       #   時刻だけで決めると、朝の便が月次に待たされて 09:30 を越えた日に「スキップ」で黙って 1 日抜けた(9/22)。
-      #   済みの印は便の最後(全段成功)で書く= 朝の段が落ちた日は次の便でもう一度回る。表が読めないときは従来の 09:30 前に戻る。
+      #   朝の段が終わったら成否に関係なく印を書く(全段成功= ok・どれか失敗= fail で note に落ちた段名)。
+      #   失敗した日は last_try から 2 時間たった便でもう一度回る(= 2 時間に 1 回まで)。表が読めないときは従来の 09:30 前に戻る。
       #   以下の段の `[ "$MORNING" = 1 ]` がこの判定(元は JST 09:30 前か)。EVENING= JST 17:00 以降。
       - name: morning or not
         env:
@@ -81,14 +82,14 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          D=$(python3 cloud/beat.py --today refresh_morning || echo '?')
+          D=$(python3 cloud/beat.py --due refresh_morning 7200 || echo '?')
           if [ "$D" = "?" ]; then
             if [ $((10#$H)) -lt 930 ]; then M=1; else M=0; fi
-          elif [ "$D" = "0" ] && [ $((10#$H)) -ge 900 ]; then M=1; else M=0; fi
+          elif [ "$D" = "1" ] && [ $((10#$H)) -ge 900 ]; then M=1; else M=0; fi
           if [ $((10#$H)) -ge 1700 ]; then E=1; else E=0; fi
           echo "MORNING=$M" >> "$GITHUB_ENV"
           echo "EVENING=$E" >> "$GITHUB_ENV"
-          echo "朝の段= $M(refresh_morning の今日= $D・JST $H)/ 夕の段= $E"
+          echo "朝の段= $M(refresh_morning を回す番= $D・JST $H)/ 夕の段= $E"
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
@@ -139,6 +140,7 @@ jobs:
       # §117b 門別・南関4場の能検は結果が当日〜翌日に出るので**朝の便で毎日**差分を取る(南関= 直近21日の日付総当たり
       # 1場 22〜24 本・門別= 索引+最新3日・0.7秒あけ・合計 2 分弱)。月次の --venue all にも入っているが、それは月 1 回
       - name: noken public 5 venues (morning only)
+        id: am_noken5
         if: env.MODE == 'daily' && !cancelled()
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -163,6 +165,7 @@ jobs:
       # (⛔ran は「一度付いたら戻らない」向きだけの旗なので、遅れても誤りにはならない=画面が生照会で補う)
       # 2026-09-02 分予算対策: 毎回 1 分弱かかるので **朝の便(monthly 05:33 と daily 09:07)だけ**に減らす
       - name: noken index (morning only)
+        id: am_noken_index
         if: '!cancelled()'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -176,6 +179,7 @@ jobs:
       # ⛔**落ちても続行**(|| echo)= 索引は付け足しの機能なので、これで朝の便を止めない。
       # 新しい便は作らない(Actions の分予算。ここに相乗りで実測10秒ほど)。
       - name: official news (morning only)
+        id: am_official_news
         if: '!cancelled()'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -196,6 +200,7 @@ jobs:
         run: python cloud/sand_depth.py --apply || echo "⚠ 砂厚が取れない(続行)"
 
       - name: horse ledger (morning only)
+        id: am_horse_ledger
         if: '!cancelled()'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -208,6 +213,7 @@ jobs:
       # horse ledger(③ profiles.code の埋め)の直後・朝の便だけ。表がまだ無ければ警告して 0。⛔落ちても続行
       # 全期間から作り直すのは手で回す便 horse-homonyms.yml
       - name: horse homonyms (morning only)
+        id: am_horse_homonyms
         if: '!cancelled()'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -219,6 +225,7 @@ jobs:
       # §38 1-C 南関東4場の「格」「格付ポイント」(主催者 nankankeiba の馬ページ・1.5秒/本)。直近2日に走った馬だけ=
       # 日次 100〜300 本・数分。**朝の便だけ**(分予算)。他場PCの fetch_nankan_points.py(大井だけ・chihou_meta)の置き換え
       - name: nankan points (morning only)
+        id: am_nankan_points
         if: '!cancelled()'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -232,6 +239,7 @@ jobs:
       # §79 P3 場ごとの「番組賞金(当サイトの計算)」と「あと◯」を台帳の calc 列へ(通信は DB だけ・数秒)。
       # 線の表は class.js を node で読む(tests/class_const_dump.mjs)。検算= docs/s79_p3_verify_20260903.md
       - name: class calc (morning only)
+        id: am_class_calc
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -299,6 +307,7 @@ jobs:
       # 2026-09-22 S1 標準の窓は季節版(同じ暦±45日×3年)が既定= 引数は要らない(--baseline で切替)
       # 2026-09-05 ユーザーFB「最近の馬場の時計が出ていない日がある」= monthly だけだったのを 朝の便(JST 09:30 前)でも回す(手元 24 秒)
       - name: baba diff (monthly + morning)
+        id: am_baba_diff
         if: '!cancelled()'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -309,6 +318,7 @@ jobs:
 
       # §100 馬場傾向(時計=baba_diff・前後=1角順位×着順ρ・内外=枠×着順ρ)。朝の便は 90 日組み直し、日中の便は当日だけ
       - name: baba trend
+        id: am_baba_trend
         if: env.MODE != 'monthly'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -320,6 +330,7 @@ jobs:
       # §103 コース別データ(場×距離の枠番・序盤の位置・逃げ馬)。前日までの過去1年の数なので朝の便だけ
       # (手元の実測= 14場ぶんで 32 秒・要求 187 回)
       - name: course stats (morning only)
+        id: am_course_stats
         if: env.MODE != 'monthly' && !cancelled()
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -330,6 +341,7 @@ jobs:
 
       # §118 データの状態= 取り込めたかを行数で数えて nar_meta coverage に 1 枚(朝の便の最後・前段が落ちても数える)
       - name: coverage (morning only)
+        id: am_coverage
         if: env.MODE != 'monthly' && !cancelled()
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -387,6 +399,7 @@ jobs:
       # ⛔落ちても続行(|| echo)= 数えるだけの表なので、これで便を止めない。
       # 全期間の焼き直しは coverage-backfill.yml(手押し)。
       - name: coverage matrix (morning only)
+        id: am_coverage_matrix
         if: env.MODE != 'monthly' && !cancelled()
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -406,6 +419,7 @@ jobs:
       # 夕方(17:00 以降)は先に**明日**の nar_run_facts を焼く(run facts 段は今日と前日だけ= 明日の脚質が空になるため)。
       #   脚質は過去走だけで決まる= 発走前の値として正しい。着順・通過の入った行は当日と翌日の run facts 段が上書きする。
       - name: karte facts (morning + evening)
+        id: am_karte_facts
         if: '!cancelled()'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -422,6 +436,7 @@ jobs:
       #   通過順も脚質も派生表 nar_run_facts から読むだけになったので、今日ぶん(run facts 段)と
       #   明日ぶん(karte facts 段の 17:00 以降)が焼けた**後**でないと型が空になる。
       - name: tenkai (morning + 17:07)
+        id: am_tenkai
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -459,6 +474,7 @@ jobs:
       # (odds_ticks_retention.sql と同じ規則・上の monthly 段の SQL 間引きは止めた)。上限 3 日は表ごと。
       # ⛔最後の段に置く= 失敗(rc 1)しても他の段を止めない。照合が合わなければ消さずに落ちる(失敗メールで気づく)
       - name: odds archive (morning only)
+        id: am_odds_archive
         if: env.MODE != 'monthly' && !cancelled()
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -468,7 +484,7 @@ jobs:
           if [ "$MORNING" = 1 ]; then python cloud/odds_archive.py --max-days 3; else echo "odds archive は朝の便だけ(JST $H)=スキップ"; fi
 
       # 監査 A8(2026-09-24) 最終成功時刻(表 nar_job_heartbeat)。外の見張り nar-watchdog と画面が読む。⛔表が無くても落ちない
-      #   refresh= daily の成功ごと / stats= monthly の成功 / refresh_morning= 朝の段を回した便の成功 / refresh_evening= 17 時以降の便の成功
+      #   refresh= daily の成功ごと / stats= monthly の成功 / refresh_evening= 17 時以降の便の成功(refresh_morning は下の段)
       - name: heartbeat ok
         if: success()
         env:
@@ -477,7 +493,6 @@ jobs:
         run: |
           if [ "$MODE" != "monthly" ]; then python3 cloud/beat.py refresh ok "JST $(TZ=Asia/Tokyo date +%H:%M)"; fi
           if [ "$MODE" != "daily" ]; then python3 cloud/beat.py stats ok; fi
-          if [ "$MODE" != "monthly" ] && [ "$MORNING" = 1 ]; then python3 cloud/beat.py refresh_morning ok; fi
           if [ "$MODE" != "monthly" ] && [ "$EVENING" = 1 ]; then python3 cloud/beat.py refresh_evening ok; fi
       - name: heartbeat fail
         if: failure()
@@ -487,5 +502,15 @@ jobs:
         run: |
           if [ "$MODE" != "monthly" ]; then python3 cloud/beat.py refresh fail 失敗; fi
           if [ "$MODE" != "daily" ]; then python3 cloud/beat.py stats fail 失敗; fi
-          if [ "$MODE" != "monthly" ] && [ "$MORNING" = 1 ]; then python3 cloud/beat.py refresh_morning fail 失敗; fi
           if [ "$MODE" != "monthly" ] && [ "$EVENING" = 1 ]; then python3 cloud/beat.py refresh_evening fail 失敗; fi
+      # 監査 A1(2026-09-24) 朝の段を回した便は成否に関係なく refresh_morning を書く(全段成功= ok・どれか失敗= fail で note に段名)
+      #   段は id が am_ で始まるもの。⛔表が無くても落ちない
+      - name: heartbeat morning
+        if: always() && env.MORNING == '1' && env.MODE != 'monthly'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          STEPS: ${{ toJSON(steps) }}
+        run: |
+          BAD=$(python3 -c "import json,os; s=json.loads(os.environ['STEPS']); print(' '.join(k[3:] for k,v in s.items() if k.startswith('am_') and v.get('outcome')=='failure'))")
+          if [ -z "$BAD" ]; then python3 cloud/beat.py refresh_morning ok; else python3 cloud/beat.py refresh_morning fail "落ちた段 $BAD"; fi
