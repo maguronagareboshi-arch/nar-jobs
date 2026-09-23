@@ -41,6 +41,7 @@ except Exception:
 
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
+JST = dt.timezone(dt.timedelta(hours=9))
 SRC = "https://www.keiba.go.jp/KeibaWeb/MonthlyConveneInfo/MonthlyConveneInfoTop"
 META_KEY = "kaisai_schedule"
 
@@ -103,6 +104,19 @@ def fetch_month(year, month):
     return days, others
 
 
+def keep_failed_months(value, old, failed):
+    """監査 #22 読めなかった月は前回の nar_meta の中身を残す(読めた月だけ置換)。value を直して返す。"""
+    old = old or {}
+    for ym in failed:
+        kept = {d: v for d, v in (old.get("days") or {}).items() if d.startswith(ym + "-")}
+        value["days"].update(kept)
+        if ym in (old.get("months") or []) and ym not in value["months"]:
+            value["months"].append(ym)
+    value["months"].sort()
+    value["days"] = dict(sorted(value["days"].items()))
+    return value
+
+
 def month_list(today, n=3):
     y, m = today.year, today.month
     out = []
@@ -129,13 +143,15 @@ def main():
         log("SUPABASE_URL / SUPABASE_SERVICE_KEY が無い(--apply/--verify には要る)")
         return 2
 
-    today = dt.date.today()
+    today = dt.datetime.now(JST).date()                 # 監査 #22 Actions は UTC= 0〜9 時 JST に前日になっていた
     value = {"built": today.isoformat(), "months": [], "days": {}, "others": {}}
+    failed = []
     for y, m in month_list(today):
         try:
             days, others = fetch_month(y, m)
         except Exception as e:
             log(f"{y}-{m:02d}: 読めない {type(e).__name__}: {str(e)[:120]}")
+            failed.append(f"{y}-{m:02d}")
             continue
         ym = f"{y}-{m:02d}"
         if days:
@@ -196,6 +212,19 @@ def main():
         sample = dict(list(value["days"].items())[:3])
         log(f"days 例: {json.dumps(sample, ensure_ascii=False)}")
         return 0
+
+    if failed:
+        # 監査 #22 読めなかった月を空にしない= 前回の中身を残す(前回が読めなければ書かない)
+        try:
+            st, body = req(base, key, f"/rest/v1/nar_meta?select=value&key=eq.{META_KEY}")
+        except Exception as e:
+            st, body = 0, str(e)[:120]
+        if not 200 <= st < 300:
+            log(f"読めない月 {failed} があり、前回の nar_meta も読めない({st} {body[:120]})= 書かない")
+            return 2
+        got = json.loads(body or "[]")
+        keep_failed_months(value, (got[0].get("value") if got else None), failed)
+        log(f"読めない月 {failed} は前回の中身を残す(開催日 計{len(value['days'])}日)")
 
     # ⛔updated_at を必ず送る(#155 の教訓: 送らないと鮮度の物差しが腐る)
     st, _ = req(base, key, "/rest/v1/nar_meta?on_conflict=key", "POST",

@@ -164,7 +164,8 @@ def collect(kind, full, limit=None):
         dup.setdefault(s, []).append(sei + mei)
         rows.append({"kind": kind, "license_no": lic, "name_full": sei + mei,
                      "name_sei": sei, "name_mei": mei, "name_short": s,
-                     "birth": None, "area": None, "active": True})
+                     "active": True})
+        # 監査 #22 birth/area は個票が読めたときだけ付ける= 読めない人は DB の値を None で上書きしない
     amb = {k: v for k, v in dup.items() if len(set(v)) > 1}
     log(f"  ⛔略称が同じ別人: {len(amb)} 組 " + json.dumps(amb, ensure_ascii=False))
     if not full:
@@ -176,24 +177,34 @@ def collect(kind, full, limit=None):
             break
         try:
             p = fetch_profile(kind, r["license_no"])
-            r["birth"], r["area"] = p["birth"], p["area"]
+            r["birth"], r["area"] = p["birth"], p["area"]      # 読めた回だけ(失敗は鍵ごと送らない)
         except Exception as e:                       # 1人読めなくても止めない
             log(f"  ⚠{r['name_full']}({r['license_no']}) を読めません: {e}")
         n += 1
         if n % 50 == 0:
             log(f"  … {n}/{len(rows)}")
         time.sleep(WAIT)
-    got = sum(1 for r in rows if r["birth"])
-    log(f"  生年月日が取れた: {got}/{len(rows)}")
+    got = sum(1 for r in rows if r.get("birth"))
+    miss = sum(1 for r in rows if "birth" not in r)
+    log(f"  生年月日が取れた: {got}/{len(rows)}(個票を読めず birth/area を送らない {miss})")
     return rows, amb
 
 
+def column_groups(rows):
+    """監査 #22 列の組み合わせごとに分ける(一括 upsert は 1 リクエスト内で行ごとに列を変えられない)。"""
+    groups = {}
+    for r in rows:
+        groups.setdefault(tuple(sorted(r)), []).append(r)
+    return list(groups.values())
+
+
 def apply_rows(base, key, rows):
-    body = json.dumps([{k: v for k, v in r.items()} for r in rows], ensure_ascii=False).encode("utf-8")
-    st, txt = req(base, key, "/rest/v1/nar_persons?on_conflict=kind,license_no", "POST", body)
-    if st >= 300:
-        log(f"⛔投入に失敗 status={st} {txt[:300]}")
-        return False
+    for group in column_groups(rows):
+        body = json.dumps([{k: v for k, v in r.items()} for r in group], ensure_ascii=False).encode("utf-8")
+        st, txt = req(base, key, "/rest/v1/nar_persons?on_conflict=kind,license_no", "POST", body)
+        if st >= 300:
+            log(f"⛔投入に失敗 status={st} {txt[:300]}")
+            return False
     return True
 
 
