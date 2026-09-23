@@ -58,34 +58,35 @@ try {
   const f = join(mkdtempSync(join(tmpdir(), 'odds-record-')), 'odds-final.mjs');
   writeFileSync(f, code);
   lib = await import(pathToFileURL(f).href);
-  for (const n of ['judgeRace', 'recordRows', 'postMinOf', 'REC_COLS']) if (!(n in lib)) throw new Error('lib に ' + n + ' が無い');
+  for (const n of ['judgeRace', 'recordRows', 'postMinOf', 'REC_COLS', 'modelLabel', 'recordPopRows', 'POP_COLS']) if (!(n in lib)) throw new Error('lib に ' + n + ' が無い');
 } catch (e) { die('lib が取れない: ' + e.message); }
 try {
   model = JSON.parse(await fetchText(MODEL));
   if (!model || typeof model !== 'object') throw new Error('空');
 } catch (e) { die('model が取れない: ' + e.message); }
-const { judgeRace, recordRows, postMinOf, REC_COLS } = lib;
+const { judgeRace, recordRows, postMinOf, REC_COLS, modelLabel, recordPopRows, POP_COLS } = lib;
 
 // ---- 今の記録
 const cur = await get(`nar_meta?select=value&key=eq.${META_KEY}`);
 const old = cur.length && cur[0].value && typeof cur[0].value === 'object' ? cur[0].value : null;
 const models = Array.isArray(old?.models) ? [...old.models] : [];
-const builtOn = model.built_on ?? null;
-let mi = models.indexOf(builtOn);
-if (mi < 0) { models.push(builtOn); mi = models.length - 1; }
+// §257 mi= その日の見込みの名前(modelLabel= 日付が model.adj.since 以後なら「built_on+券種(from〜to)」)の番号
+const miOf = (d) => { const lb = modelLabel(model, d); let i = models.indexOf(lb); if (i < 0) { models.push(lb); i = models.length - 1; } return i; };
 
 // ---- 刻みの形の直し方= 画面の data.js getRaceTicks と同じ
 const toMap = (o, pick) => { const m = new Map(); for (const [k, v] of Object.entries(o && typeof o === 'object' ? o : {})) { const u = Number(k); if (Number.isFinite(u)) m.set(u, pick(v)); } return m; };
 const num = (x) => { const n = Number(x); return x === null || x === undefined || x === '' || !Number.isFinite(n) ? null : n; };
+// §257 合成オッズ(u1/s1)= data.js の synthNum と同じ(0 以下・数でないものは null)
+const synthNum = (x) => { const o = num(x); return o !== null && o > 0 ? o : null; };
 
 const days = []; for (let d = FROM; d <= TO; d = addDays(d, 1)) days.push(d);
-const newRows = []; const keepDays = new Set();
+const newRows = []; const newPop = []; const keepDays = new Set();
 for (const d of days) {
   const races = await get(`nar_races?select=track,race_no,post_time&race_date=eq.${d}&limit=1000`);
   const post = new Map(races.map((r) => [r.track + '|' + r.race_no, r.post_time]));
   let rows = [];
   for (let off = 0; ; off += 1000) {
-    const j = await get(`nar_odds_ticks?select=id,track,race_no,t,f,w,p&race_date=eq.${d}&order=id.asc&limit=1000&offset=${off}`);
+    const j = await get(`nar_odds_ticks?select=id,track,race_no,t,f,w,p,u1,s1&race_date=eq.${d}&order=id.asc&limit=1000&offset=${off}`);
     rows = rows.concat(j);
     if (j.length < 1000) break;
   }
@@ -95,18 +96,20 @@ for (const d of days) {
     const k = r.track + '|' + r.race_no;
     if (!by.has(k)) by.set(k, []);
     if (!r.t) continue;
-    by.get(k).push({ t: String(r.t), f: r.f === true, w: toMap(r.w, (x) => { const o = num(x); return o !== null && o > 0 ? o : null; }), p: r.p ? toMap(r.p, (x) => (Array.isArray(x) ? x.map(num) : null)) : null });
+    by.get(k).push({ t: String(r.t), f: r.f === true, w: toMap(r.w, (x) => { const o = num(x); return o !== null && o > 0 ? o : null; }), p: r.p ? toMap(r.p, (x) => (Array.isArray(x) ? x.map(num) : null)) : null, u1: r.u1 ? toMap(r.u1, synthNum) : null, s1: r.s1 ? toMap(r.s1, synthNum) : null });
   }
   const items = [];
+  const mi = miOf(d);
   for (const [k, ticks] of by) {
     const [track, no] = k.split('|');
     const pt = post.get(k);
     const hhmm = pt && /^\d{4}$/.test(String(pt)) ? String(pt).slice(0, 2) + ':' + String(pt).slice(2) : null;
     const pm = postMinOf(hhmm);
-    items.push({ d, tr: track, j: pm === null ? { st: 'no_post' } : judgeRace(model, ticks, pm, track, Number(no)), mi });
+    items.push({ d, tr: track, j: pm === null ? { st: 'no_post' } : judgeRace(model, ticks, pm, track, Number(no), d), mi });
   }
   const dr = recordRows(items);
   newRows.push(...dr);
+  newPop.push(...recordPopRows(items));
   let rc = 0, n = 0, hit = 0;
   for (const a of dr) { rc += a[2]; n += a[3]; hit += a[4]; }
   console.log(`${d} レース ${rc} 幅 ${n ? ((hit / n) * 100).toFixed(1) : '-'}% (${hit}/${n}) 場 ${dr.length}`);
@@ -115,11 +118,14 @@ for (const d of days) {
 // ---- 合わせる: from〜to の日は入れ替え(刻み 0 行の日は既存を残す)・ほかの日は残す
 const inRange = (d) => d >= FROM && d <= TO && !keepDays.has(d);
 const kept = (Array.isArray(old?.rows) ? old.rows : []).filter((a) => Array.isArray(a) && !inRange(a[0]));
+// §257 人気の順ごと(pop)も rows と同じ入れ替え方
+const keptPop = (Array.isArray(old?.pop) ? old.pop : []).filter((a) => Array.isArray(a) && !inRange(a[0]));
+const pop = keptPop.concat(newPop).sort((p, q) => (p[0] < q[0] ? -1 : p[0] > q[0] ? 1 : p[1] < q[1] ? -1 : p[1] > q[1] ? 1 : 0));
 const all = kept.concat(newRows).sort((p, q) => (p[0] < q[0] ? -1 : p[0] > q[0] ? 1 : p[1] < q[1] ? -1 : p[1] > q[1] ? 1 : 0));
 const built = new Date(Date.now() + 9 * 3600e3).toISOString().replace('Z', '+09:00');
-const value = { v: 1, built, models, k: model.k, T: 10, max: 14, cols: REC_COLS, rows: all };
+const value = { v: 1, built, models, k: model.k, T: 10, max: 14, cols: REC_COLS, rows: all, popCols: POP_COLS, pop };
 if (OUT) writeFileSync(OUT, JSON.stringify(value));
-console.log(`行 ${all.length}(新 ${newRows.length}・残し ${kept.length})models ${JSON.stringify(models)} mi ${mi}`);
+console.log(`行 ${all.length}(新 ${newRows.length}・残し ${kept.length})人気の行 ${pop.length} models ${JSON.stringify(models)}`);
 
 if (DRY) { console.log('dry-run: 書かない'); process.exit(0); }
 const r = await fetch(BASE + 'nar_meta?on_conflict=key', {
