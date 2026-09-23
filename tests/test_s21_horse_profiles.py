@@ -141,12 +141,30 @@ class Homonyms(unittest.TestCase):
         apart = [("イ", 2010, "2012-04-01"), ("イ", 2010, "2016-03-01"), ("イ", 2020, "2023-05-01"),
                  ("イ", 2019, "2023-06-01")]                         # 2019/2020 は重なる= 1 頭・2010 と合わせ 2 頭
         self.assertEqual(HH.homonyms_from_pairs(typo + apart), ["イ"])
-        self.assertEqual(HH.count_horses([("2012-04-01", "2016-03-01"), ("2023-05-01", "2023-05-01"),
-                                          ("2023-01-01", "2023-06-01")]), 2)
+        def g(f, last, banei=False, bds=()):
+            return {"first": f, "last": last, "banei": banei, "bds": set(bds)}
+        self.assertEqual(HH.count_horses([g("2012-04-01", "2016-03-01"), g("2023-05-01", "2023-05-01"),
+                                          g("2023-01-01", "2023-06-01")]), 2)
         runs = {"ア": [{"race_date": "2023-01-05", "age": 3}, {"race_date": "2023-08-10", "age": 4},
                        {"race_date": "2024-06-01", "birth_date": "2020-03-01"}],
                 "イ": [{"race_date": "2012-04-01", "age": 2}, {"race_date": "2023-05-01", "birth_date": "2020-01-01"}]}
         self.assertEqual(HH.confirm_additions(["ア", "イ"], runs.get), ["イ"])
+
+    def test_banei_and_birth_dates_not_merged(self):
+        # viewer dry-run の 3 例: ばんえいと平地で同時期に走る別馬= 期間が重なっても同名として残す
+        pairs = []
+        for n in ("オトコギ", "シンドラー", "タカラシップ"):
+            pairs += [(n, 2018, "2023-01-05", "帯広", None), (n, 2018, "2024-03-01", "帯広", None),
+                      (n, 2020, "2023-06-01", "浦和", None), (n, 2020, "2024-01-01", "浦和", None)]
+        # 両群とも生年月日があって値が違う= 期間が重なっても別馬
+        pairs += [("エ", 2020, "2023-01-05", "大井", "2020-04-01"), ("エ", 2021, "2023-06-01", "大井", "2021-05-01")]
+        # 平地どうし・一方に生年月日が無い(馬齢の書き誤り)= 1 頭
+        pairs += [("オ", 2020, "2023-01-05", "大井", "2020-04-01"), ("オ", 2020, "2023-12-01", "大井", "2020-04-01"),
+                  ("オ", 2019, "2023-06-01", "大井", None)]
+        self.assertEqual(HH.homonyms_from_pairs(pairs), ["エ", "オトコギ", "シンドラー", "タカラシップ"])
+        runs = {"シンドラー": [{"track": "帯広", "race_date": "2023-01-05", "age": 5},
+                               {"track": "浦和", "race_date": "2023-06-01", "birth_date": "2020-04-01"}]}
+        self.assertEqual(HH.confirm_additions(["シンドラー"], runs.get), ["シンドラー"])
 
     def test_daily_additions(self):
         runs = [{"horse_name": "ア", "birth_date": "2022-03-03", "age": 4, "race_date": "2026-09-23"},
