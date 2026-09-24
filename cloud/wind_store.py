@@ -115,7 +115,9 @@ def races_of(date):
                f"&race_date=eq.{date}&order=track.asc,race_no.asc&limit=1000") or []
     out = {}
     for r in got:
-        t = (r.get("post_time") or "")[:5]
+        raw = str(r.get("post_time") or "").strip()
+        # 本番の post_time は 'HHMM'(例 1040)。'HH:MM' でも受ける(9/24 dry-run で判明)
+        t = raw[:2] + ":" + raw[2:4] if re.fullmatch(r"\d{4}", raw) else raw[:5]
         if re.fullmatch(r"\d{2}:\d{2}", t):
             out.setdefault(r["track"], []).append(t)
     return out
