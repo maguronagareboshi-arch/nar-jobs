@@ -58,6 +58,7 @@ union all select extract(year from current_date)::int::text, extract(year from c
 union all select (extract(year from current_date)::int - 1)::text, extract(year from current_date)::int - 1, extract(year from current_date)::int - 1;
 
 -- 集計本体
+-- 監査 A7(2026-09-24): 同順位で並び・上位の切り取り・記録馬が実行ごとに変わらないよう、並べる順の最後に名前/日付を足した
 create or replace function pg_temp.rank_block(p_track text, p_from int, p_to int, p_key text, p_min int)
 returns jsonb language sql as $$
   with g as (
@@ -75,7 +76,7 @@ returns jsonb language sql as $$
            'name', k, 'n', n, 'w1', w1, 'w2', w2, 'w3', w3,
            'win', round(100.0 * w1 / n, 1), 'top2', round(100.0 * (w1 + w2) / n, 1), 'top3', round(100.0 * (w1 + w2 + w3) / n, 1),
            'roi', round(100.0 * pay / (n * 100.0), 0))
-         order by (case when p_key in ('gate', 'popularity') then (k)::numeric else null end), w1 desc, n desc), '[]'::jsonb)
+         order by (case when p_key in ('gate', 'popularity') then (k)::numeric else null end), w1 desc, n desc, k), '[]'::jsonb)
   from g where k is not null and k <> '' and n >= p_min
 $$;
 
@@ -97,16 +98,16 @@ select t.track, p.period,
       select coalesce(jsonb_agg(jsonb_build_object('distance', d.distance_m, 'races', d.races, 'avg_win', d.avg_win,
                  'record', d.rec, 'record_horse', d.rec_horse, 'record_date', d.rec_date, 'record_going', d.rec_going,
                  'alltime', (select jsonb_build_object('record', min(a.time_sec),
-                               'horse', (array_agg(a.horse_name order by a.time_sec))[1],
-                               'date',  (array_agg(a.race_date  order by a.time_sec))[1],
-                               'going', (array_agg(a.going      order by a.time_sec))[1])
+                               'horse', (array_agg(a.horse_name order by a.time_sec, a.race_date, a.race_no))[1],
+                               'date',  (array_agg(a.race_date  order by a.time_sec, a.race_date, a.race_no))[1],
+                               'going', (array_agg(a.going      order by a.time_sec, a.race_date, a.race_no))[1])
                              from tmp_runs a where a.track = t.track and a.distance_m = d.distance_m
                                and a.finish = 1 and a.time_sec is not null)
                ) order by d.distance_m), '[]'::jsonb)
       from (
         select distance_m, count(*) as races, round(avg(time_sec)::numeric, 1) as avg_win, min(time_sec) as rec,
-               (array_agg(horse_name order by time_sec))[1] as rec_horse, (array_agg(race_date order by time_sec))[1] as rec_date,
-               (array_agg(going order by time_sec))[1] as rec_going
+               (array_agg(horse_name order by time_sec, race_date, race_no))[1] as rec_horse, (array_agg(race_date order by time_sec, race_date, race_no))[1] as rec_date,
+               (array_agg(going order by time_sec, race_date, race_no))[1] as rec_going
         from tmp_runs x where x.track = t.track and x.yr between p.y_from and p.y_to and finish = 1 and time_sec is not null and distance_m is not null
         group by distance_m having count(*) >= 5
       ) d),
@@ -117,14 +118,14 @@ select t.track, p.period,
         select distance_m,
                jsonb_agg(jsonb_build_object('name', sire, 'n', n, 'w1', w1,
                  'win', round(100.0 * w1 / n, 1), 'top3', round(100.0 * w123 / n, 1),
-                 'roi', round(100.0 * pay / (n * 100.0), 0)) order by w1 desc, n desc) filter (where rn <= 10) as sires
+                 'roi', round(100.0 * pay / (n * 100.0), 0)) order by w1 desc, n desc, sire) filter (where rn <= 10) as sires
         from (
           select distance_m, sire, count(*) as n,
                  count(*) filter (where finish = 1) as w1,
                  count(*) filter (where finish <= 3) as w123,
                  sum(win_pay) as pay,
                  row_number() over (partition by distance_m
-                                    order by count(*) filter (where finish = 1) desc, count(*) desc) as rn
+                                    order by count(*) filter (where finish = 1) desc, count(*) desc, sire) as rn
           from tmp_runs x
           where x.track = t.track and x.yr between p.y_from and p.y_to
             and sire is not null and sire <> '' and distance_m is not null
@@ -160,7 +161,7 @@ select t.track, p.period,
         group by going, distance_m having count(*) >= 5
       ) gd),
     'going', (
-      select coalesce(jsonb_agg(jsonb_build_object('going', going, 'races', races, 'fav_win', fav_win) order by races desc), '[]'::jsonb)
+      select coalesce(jsonb_agg(jsonb_build_object('going', going, 'races', races, 'fav_win', fav_win) order by races desc, going), '[]'::jsonb)
       from (
         select going, count(distinct (race_date, race_no)) as races,
                round(100.0 * count(*) filter (where popularity = 1 and finish = 1) / nullif(count(*) filter (where popularity = 1), 0), 1) as fav_win
