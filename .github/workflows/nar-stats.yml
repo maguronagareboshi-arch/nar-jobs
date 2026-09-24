@@ -1,0 +1,28 @@
+# 監査 A7(2026-09-24) 集計(場・人・組み合わせ・騎手×コース・AI成績・レース水準・重賞・高額配当)を
+# 本番 DB ではなく Actions 内の Postgres で作り、差分だけ本番へ戻す便。
+# ⛔これは起動口だけ(中身は枝 a7-stats-local で作成中)。枝の版は gh workflow run nar-stats.yml --ref <枝> で動かす。
+name: nar-stats
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'check= 照合だけ(本番に書かない) / apply= 差分を本番へ'
+        type: choice
+        options: [check, apply]
+        default: check
+      asof:
+        description: 'check の時点合わせ(ISO 時刻・空= しない)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+jobs:
+  stats:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: stub
+        run: echo "nar-stats stub (mode=${{ inputs.mode }})"
