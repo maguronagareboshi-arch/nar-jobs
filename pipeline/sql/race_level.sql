@@ -28,7 +28,8 @@ select track, race_date, race_no, finish,
        lead(race_date) over w as next_date
 from public.nar_runs
 where horse_name is not null and horse_name <> ''
-window w as (partition by horse_name order by race_date, race_no);
+-- 監査 A7(2026-09-24): 同じ日・同じレース番号に同名の馬が別の場で走ると並びが決まらない= track を足して毎回同じ結果に
+window w as (partition by horse_name order by race_date, race_no, track);
 
 delete from public.nar_race_level;
 insert into public.nar_race_level (track, race_date, race_no, stats, updated_at)

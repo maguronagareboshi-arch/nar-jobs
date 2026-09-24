@@ -99,7 +99,7 @@ select g.kind, g.name, 'all', p.period,
   pg_temp.basic(g.kind, g.name, 'all', p.y_from, p.y_to)
   || jsonb_build_object(
     'by_track', (
-      select coalesce(jsonb_agg(jsonb_build_object('track', track, 'n', n, 'w1', w1, 'win', round(100.0 * w1 / n, 1), 'top3', round(100.0 * t3 / n, 1)) order by n desc), '[]'::jsonb)
+      select coalesce(jsonb_agg(jsonb_build_object('track', track, 'n', n, 'w1', w1, 'win', round(100.0 * w1 / n, 1), 'top3', round(100.0 * t3 / n, 1)) order by n desc, track), '[]'::jsonb)
       from (select track, count(*) n, count(*) filter (where finish = 1) w1, count(*) filter (where finish <= 3) t3
             from tmp_pp x where x.kind = g.kind and x.name = g.name and x.yr between p.y_from and p.y_to group by track) t),
     'by_distance', (
@@ -110,10 +110,10 @@ select g.kind, g.name, 'all', p.period,
       -- §62 B7-2 直近30走も didRun と同じ規則(中止・失格も出す)。⛔`note` を渡して画面が理由を書けるように
       select coalesce(jsonb_agg(jsonb_build_object('d', race_date, 'track', track, 'no', race_no,
                'horse', horse_name, 'fin', finish, 'note', finish_note, 'pop', popularity,
-               'dist', distance_m, 'race', race_name) order by race_date desc, race_no desc), '[]'::jsonb)
+               'dist', distance_m, 'race', race_name) order by race_date desc, race_no desc, track, runner_number), '[]'::jsonb)
       from (select * from tmp_pp x where x.kind = g.kind and x.name = g.name
-            order by race_date desc, race_no desc limit 30) r) else null end,
-    'main_track', (select track from tmp_pp x where x.kind = g.kind and x.name = g.name and x.yr between p.y_from and p.y_to group by track order by count(*) desc limit 1)
+            order by race_date desc, race_no desc, track, runner_number limit 30) r) else null end,
+    'main_track', (select track from tmp_pp x where x.kind = g.kind and x.name = g.name and x.yr between p.y_from and p.y_to group by track order by count(*) desc, track limit 1)
   ), now()
 from (select kind, name from tmp_pp where kind not in ('sire', 'bms') group by 1, 2) g
 cross join tmp_periods p
@@ -127,7 +127,7 @@ select g.kind, g.name, 'all', p.period,
   pg_temp.basic(g.kind, g.name, 'all', p.y_from, p.y_to)
   || jsonb_build_object(
     'by_track', (
-      select coalesce(jsonb_agg(jsonb_build_object('track', track, 'n', n, 'w1', w1, 'win', round(100.0 * w1 / n, 1), 'top3', round(100.0 * t3 / n, 1)) order by n desc), '[]'::jsonb)
+      select coalesce(jsonb_agg(jsonb_build_object('track', track, 'n', n, 'w1', w1, 'win', round(100.0 * w1 / n, 1), 'top3', round(100.0 * t3 / n, 1)) order by n desc, track), '[]'::jsonb)
       from (select track, count(*) n, count(*) filter (where finish = 1) w1, count(*) filter (where finish <= 3) t3
             from tmp_pp x where x.kind = g.kind and x.name = g.name and x.yr between p.y_from and p.y_to group by track) t),
     'by_distance', (

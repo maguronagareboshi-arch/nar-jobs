@@ -105,8 +105,16 @@ def cmd_dump(asof):
     os.makedirs(DUMP, exist_ok=True)
     lines = ["set default_transaction_read_only = on;", "set statement_timeout = '10min';", "begin read only;"]
     for t, (cols, _) in INPUTS.items():
-        # 時刻合わせ= updated_at <= asof の行だけ(5 表とも updated_at あり)
-        w = f" where updated_at <= '{asof}'::timestamptz" if asof else ""
+        # 時刻合わせ= asof の後に入った行を外す(5 表とも updated_at あり・created_at は無い)。
+        # ⚠updated_at だけで絞ると、asof の後に中身そのままで上書きされた古い行まで落ちる
+        #   (1 本目の check= 2026-09-23 23:25 UTC 以降に nar_race_payouts 48,726 行が上書きされていて回収率がほぼ全部ずれた)。
+        #   → レースの日付がある表は「asof の JST の日より前のレース」は updated_at に関わらず残す。nar_horses は絞らない
+        #   (新しい馬は未来の出走にしか付かず、集計は着順のある走だけを数える)。
+        if not asof or t == "nar_horses":
+            w = ""
+        else:
+            w = (f" where updated_at <= '{asof}'::timestamptz"
+                 f" or race_date < ('{asof}'::timestamptz at time zone 'Asia/Tokyo')::date")
         lines.append(f"\\copy (select {cols} from public.{t}{w}) to '{DUMP}/in_{t}.tsv'")
     for t, cols in OUT_COLS.items():
         lines.append(f"\\copy (select {cols} from public.{t} {OUT_WHERE.get(t, '')}) to '{DUMP}/out_{t}.tsv'")
@@ -207,15 +215,17 @@ def cmd_diff():
                 log(f"    見本 {st}: {sm}")
         # 変わった行で、stats / value の上の段の鍵ごとに何件違うか(原因の当たりを付ける)
         col = "value" if t == "nar_meta" else ("stats" if "stats" in OUTPUTS[t][1] else None)
-        if col and c.get("changed"):
+        for dst in (("changed", "order_only") if col else ()):
+            if not c.get(dst):
+                continue
             jk = " and ".join(f"l.{k} = d.{k}" for k in keys)
             pk = " and ".join(f"p.{k} = d.{k}" for k in keys)
             got = rows(
                 f"select k, count(*) from prod.diff_{t} d join public.{t} l on {jk} join prod.{t} p on {pk}, "
                 f"lateral (select k from jsonb_object_keys(l.{col} || p.{col}) k) kk "
-                f"where d.st = 'changed' and jsonb_typeof(l.{col}) = 'object' and jsonb_typeof(p.{col}) = 'object' "
+                f"where d.st = '{dst}' and jsonb_typeof(l.{col}) = 'object' and jsonb_typeof(p.{col}) = 'object' "
                 f"and (l.{col} -> k) is distinct from (p.{col} -> k) group by k order by 2 desc limit 12")
-            log(f"    違う鍵: {[(a, int(b)) for a, b in got]}")
+            log(f"    違う鍵({dst}): {[(a, int(b)) for a, b in got]}")
     with open(os.path.join(DUMP, "diff_summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False)
     return summary
