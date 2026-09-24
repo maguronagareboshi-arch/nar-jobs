@@ -76,6 +76,8 @@ SQLS = ["venue_stats", "person_stats", "ai_record", "race_level", "graded", "big
 
 INPUT_MIN_RATIO = 0.99   # 入力が本番の推定行数のこれ未満なら apply しない
 CHANGE_MAX_RATIO = 0.30  # 1 表で(変わった+消す)が本番行数のこれを超えたら apply しない(--allow-large で許す)
+CHANGE_MIN_ROWS = 1000   # ↑の柵は本番が この行数以上の表だけ(venue・ai_record・big_payouts は毎日ほぼ全行変わる)。
+                         #   それ未満の表は「手元の行数が本番の 99% 以上」だけを見る
 BATCH = 500
 
 
@@ -268,8 +270,11 @@ def cmd_apply(allow_large):
         if n < INPUT_MIN_RATIO * est.get(t, 0):
             stop.append(f"入力 {t} {n} 行 < 本番の推定 {est.get(t)} の {INPUT_MIN_RATIO:.0%}")
     for t, s in summary.items():
-        if s["ratio"] > CHANGE_MAX_RATIO and not allow_large:
-            stop.append(f"{t} の(変わった+消す)が {s['ratio']:.1%} > {CHANGE_MAX_RATIO:.0%}")
+        if s["prod"] >= CHANGE_MIN_ROWS:
+            if s["ratio"] > CHANGE_MAX_RATIO and not allow_large:
+                stop.append(f"{t} の(変わった+消す)が {s['ratio']:.1%} > {CHANGE_MAX_RATIO:.0%}")
+        elif s["local"] < INPUT_MIN_RATIO * s["prod"]:
+            stop.append(f"{t} の手元 {s['local']} 行 < 本番 {s['prod']} 行の {INPUT_MIN_RATIO:.0%}")
     if stop:
         for m in stop:
             log("安全柵: " + m)
