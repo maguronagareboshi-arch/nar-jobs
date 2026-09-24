@@ -525,7 +525,7 @@ jobs:
   #   切り替え(本番 SQL の段を消す・mode=apply・heartbeat 'stats' を nar-stats へ)は枝 a7-switch。
   stats_check:
     needs: [gate, refresh]
-    if: needs.gate.outputs.skip != '1' && (github.event.inputs.mode || (github.event.schedule == '33 20 * * *' && 'monthly' || 'daily')) != 'daily'
+    if: ${{ !cancelled() && needs.gate.outputs.skip != '1' && (github.event.inputs.mode || (github.event.schedule == '33 20 * * *' && 'monthly' || 'daily')) != 'daily' }}
     uses: ./.github/workflows/nar-stats.yml
     with:
       mode: check
