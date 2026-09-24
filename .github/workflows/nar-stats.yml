@@ -1,6 +1,8 @@
 # 監査 A7(2026-09-24) 集計(場・人・組み合わせ・騎手×コース・AI成績・レース水準・重賞・高額配当)を
-# 本番 DB ではなく Actions 内の Postgres で作り、差分だけ本番へ戻す便。
-# ⛔これは起動口だけ(中身は枝 a7-stats-local で作成中)。枝の版は gh workflow run nar-stats.yml --ref <枝> で動かす。
+# 本番 DB ではなく Actions 内の Postgres で作り、差分だけ本番へ戻す便。台本は pipeline/stats_local/stats_local.py。
+#   check= 手元で計算して本番の出力と突き合わせ、表ごとの 同じ/変わった/手元だけ/本番だけ をログに出す(⛔本番に書かない)
+#   apply= 変わった行・新しい行を REST で upsert・本番だけの鍵を消す(安全柵に掛かれば何も書かない)。最後に heartbeat 'stats'
+# ⛔成果物(artifact)を出さない(公開 repo)。⛔ログに秘密・入力の生データを出さない(台本は行数と見本の鍵だけ出す)。
 name: nar-stats
 
 on:
@@ -12,9 +14,22 @@ on:
         options: [check, apply]
         default: check
       asof:
-        description: 'check の時点合わせ(ISO 時刻・空= しない)'
+        description: 'check の時点合わせ(ISO 時刻・空= しない)。入力を updated_at <= asof に絞り、手元の時計もこの時刻にする'
         required: false
         default: ''
+      allow_large:
+        description: 'apply で 1 表の(変わった+消す)が 30% を超えても書く'
+        type: boolean
+        default: false
+  workflow_call:
+    inputs:
+      mode:
+        type: string
+        default: check
+
+concurrency:
+  group: nar-stats
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -22,7 +37,87 @@ permissions:
 jobs:
   stats:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 60
+    env:
+      MODE: ${{ inputs.mode || 'check' }}
+      ASOF: ${{ github.event_name == 'workflow_dispatch' && inputs.asof || '' }}
+      ALLOW_LARGE: ${{ github.event_name == 'workflow_dispatch' && inputs.allow_large && '1' || '' }}
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGDATABASE: postgres
+      PGPASSWORD: stats            # ⛔このジョブの中だけの Postgres。鍵ではない
     steps:
-      - name: stub
-        run: echo "nar-stats stub (mode=${{ inputs.mode }})"
+      - uses: actions/checkout@v4
+
+      # ---------------------------------------------------------------- 器を立てる(本番と同じ PG17・ICU en-US・UTC)
+      # asof があるときは libfaketime で手元の時計を asof に合わせる(集計 SQL の current_date / now() を本番が計算した日にそろえる)。
+      #   作れなければ普通の postgres:17 で続ける(時計がずれる分の差はログの「時計」で分かる)
+      - name: start local postgres
+        run: |
+          set -u
+          ARGS="-c work_mem=256MB -c maintenance_work_mem=512MB -c shared_buffers=1GB -c max_wal_size=4GB -c fsync=off -c synchronous_commit=off -c full_page_writes=off -c timezone=UTC"
+          INIT="--locale-provider=icu --icu-locale=en-US --locale=en_US.UTF-8"
+          IMG=postgres:17; FT=""
+          if [ -n "$ASOF" ] && [ "$MODE" = "check" ]; then
+            FAKE=$(python3 -c 'import sys,datetime as d; t=d.datetime.fromisoformat(sys.argv[1].replace("Z","+00:00")); t=t if t.tzinfo else t.replace(tzinfo=d.timezone.utc); print(t.astimezone(d.timezone.utc).strftime("%Y-%m-%d %H:%M:%S"))' "$ASOF")
+            if printf 'FROM postgres:17\nRUN apt-get update -qq && apt-get install -y -qq --no-install-recommends libfaketime && rm -rf /var/lib/apt/lists/*\n' | docker build -q -t pg17ft - >/dev/null; then
+              LIB=$(docker run --rm pg17ft sh -c 'ls /usr/lib/*/faketime/libfaketime.so.1 | head -n 1')
+              printf 'LD_PRELOAD=%s\nFAKETIME=@%s\nFAKETIME_DONT_FAKE_MONOTONIC=1\n' "$LIB" "$FAKE" > /tmp/ft.env
+              IMG=pg17ft; FT="--env-file /tmp/ft.env"
+            else
+              echo "libfaketime の器を作れなかった= 時計は合わせずに続ける"
+            fi
+          fi
+          start() {
+            docker run -d --name st -e POSTGRES_PASSWORD=stats -e POSTGRES_INITDB_ARGS="$INIT" $2 -p 127.0.0.1:5432:5432 $1 $ARGS >/dev/null
+            for i in $(seq 1 60); do pg_isready -h localhost -p 5432 -U postgres -q && psql -X -qAt -c 'select 1' >/dev/null 2>&1 && return 0; sleep 2; done
+            return 1
+          }
+          if ! start "$IMG" "$FT"; then
+            docker logs st 2>&1 | tail -n 20; docker rm -f st >/dev/null
+            echo "時計合わせの器が立たなかった= 普通の postgres:17 で続ける"
+            start postgres:17 "" || { docker logs st 2>&1 | tail -n 20; exit 1; }
+          fi
+          psql -X -At -c "select '時計 ' || now()::text || ' / current_date ' || current_date::text || ' / ' || version()"
+          psql -X -At -c "select 'ロケール ' || datlocprovider::text || ' ' || coalesce(datlocale, '') || ' ' || datcollate from pg_database where datname = 'postgres'"
+          df -h / | tail -n 1
+
+      # ---------------------------------------------------------------- ①④ 本番から写す(⛔読むだけ・1 表ずつ・statement_timeout 10min)
+      - name: dump from production (read only)
+        env:
+          PROD_PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+        run: python3 pipeline/stats_local/stats_local.py dump --asof "$ASOF"
+
+      # ---------------------------------------------------------------- ② 手元に入れる
+      - name: load into local postgres
+        run: python3 pipeline/stats_local/stats_local.py load
+
+      # ---------------------------------------------------------------- ③ 集計 SQL 6 本をそのまま(⛔手元だけ)
+      - name: run stats sql (local only)
+        run: python3 pipeline/stats_local/stats_local.py run
+
+      # ---------------------------------------------------------------- ⑤ 照合(check)/ 差分を本番へ(apply)
+      - name: diff against production
+        if: env.MODE == 'check'
+        run: python3 pipeline/stats_local/stats_local.py diff
+
+      - name: apply diff to production
+        if: env.MODE == 'apply'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 pipeline/stats_local/stats_local.py apply ${ALLOW_LARGE:+--allow-large}
+
+      - name: heartbeat ok
+        if: success() && env.MODE == 'apply'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py stats ok
+      - name: heartbeat fail
+        if: failure() && env.MODE == 'apply'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py stats fail 失敗

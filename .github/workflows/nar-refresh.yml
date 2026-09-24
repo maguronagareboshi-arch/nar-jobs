@@ -519,3 +519,14 @@ jobs:
         run: |
           BAD=$(python3 -c "import json,os; s=json.loads(os.environ['STEPS']); print(' '.join(k[3:] for k,v in s.items() if k.startswith('am_') and v.get('outcome')=='failure'))")
           if [ -z "$BAD" ]; then python3 cloud/beat.py refresh_morning ok; else python3 cloud/beat.py refresh_morning fail "落ちた段 $BAD"; fi
+
+  # 監査 A7(2026-09-24) 集計を Actions 内の Postgres で作る便 nar-stats を、月次の後に check(照合だけ・本番に書かない)で流す。
+  #   ⛔本番 SQL の段(venue stats)はまだ消さない= 同じ朝の入力どうしで本番の出力と手元の出力を突き合わせるため。
+  #   切り替え(本番 SQL の段を消す・mode=apply・heartbeat 'stats' を nar-stats へ)は枝 a7-switch。
+  stats_check:
+    needs: [gate, refresh]
+    if: needs.gate.outputs.skip != '1' && (github.event.inputs.mode || (github.event.schedule == '33 20 * * *' && 'monthly' || 'daily')) != 'daily'
+    uses: ./.github/workflows/nar-stats.yml
+    with:
+      mode: check
+    secrets: inherit
