@@ -30,7 +30,11 @@ from urllib.parse import urlencode
 BASE_URL = "https://www.keiba.go.jp/KeibaWeb/DataDownload"
 UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 Chrome/124 Safari/537.36"
 FORMAT = "nar-official-csv-v1"
-UNORDERED = {"quinella", "wide", "trio"}
+UNORDERED = {"quinella", "wide", "trio", "wakuren"}
+PAIRS = {"quinella", "exacta", "wide", "wakuren", "wakutan"}
+# 2026-09-24 枠連(枠複)・枠連単(枠単)は同じ枠どうしのゾロ目(5-5)が当たり目になる= 同番を許すのはこの 2 種だけ
+# (2022-11〜 の払戻に枠の 2 種が 1 件も無かった= normalize_payouts が拾っていなかった)
+SAME_NUMBER_OK = {"wakuren", "wakutan"}
 TICKET_NAMES = {
     "単勝": "win",
     "単勝式": "win",
@@ -115,8 +119,9 @@ def opt_iso_date(value: Any) -> str | None:
 
 def canonical_combination(ticket_type: str, values: Iterable[Any]) -> str:
     numbers = tuple(int(value) for value in values if str(value or "").strip())
-    expected = 1 if ticket_type in {"win", "place"} else 2 if ticket_type in {"quinella", "exacta", "wide"} else 3
-    if len(numbers) != expected or len(set(numbers)) != expected:
+    expected = 1 if ticket_type in {"win", "place"} else 2 if ticket_type in PAIRS else 3
+    distinct = len(numbers) if ticket_type in SAME_NUMBER_OK else len(set(numbers))
+    if len(numbers) != expected or distinct != expected:
         raise ValueError(f"invalid {ticket_type} combination: {numbers}")
     if ticket_type in UNORDERED:
         numbers = tuple(sorted(numbers))
@@ -332,6 +337,8 @@ def normalize_payouts(rows: Iterable[dict[str, str]], *, source_url: str,
             _add_payout(output, row, "place", [row.get(f"複勝組番{index}")], f"複勝払戻金{index}（円）", f"複勝人気{index}", source_url=source_url, source_hash=source_hash)
         _add_payout(output, row, "quinella", [row.get("馬複組番1"), row.get("馬複組番2")], "馬複払戻金（円）", "馬複人気1", source_url=source_url, source_hash=source_hash)
         _add_payout(output, row, "exacta", [row.get("馬単組番1"), row.get("馬単組番2")], "馬単払戻金（円）", "馬単人気1", source_url=source_url, source_hash=source_hash)
+        _add_payout(output, row, "wakuren", [row.get("枠複組番1"), row.get("枠複組番2")], "枠複払戻金（円）", "枠複人気", source_url=source_url, source_hash=source_hash)
+        _add_payout(output, row, "wakutan", [row.get("枠単組番1"), row.get("枠単組番2")], "枠単払戻金（円）", "枠単人気", source_url=source_url, source_hash=source_hash)
         for index in range(1, 4):
             _add_payout(output, row, "wide", [row.get(f"ワイド組番{index}馬番1"), row.get(f"ワイド組番{index}馬番2")], f"ワイド払戻金{index}（円）", f"ワイド人気{index}", source_url=source_url, source_hash=source_hash)
         _add_payout(output, row, "trio", [row.get("３連複組番馬番1"), row.get("３連複組番馬番2"), row.get("３連複組番馬番3")], "３連複払戻金（円）", "３連複人気", source_url=source_url, source_hash=source_hash)
@@ -345,6 +352,7 @@ def normalize_payouts(rows: Iterable[dict[str, str]], *, source_url: str,
 _PAYBACK_COMBO_COLS = (
     "単勝組番", "複勝組番1", "複勝組番2", "複勝組番3",
     "馬複組番1", "馬複組番2", "馬単組番1", "馬単組番2",
+    "枠複組番1", "枠複組番2", "枠単組番1", "枠単組番2",
     "ワイド組番1馬番1", "ワイド組番1馬番2", "ワイド組番2馬番1", "ワイド組番2馬番2",
     "ワイド組番3馬番1", "ワイド組番3馬番2",
     "３連複組番馬番1", "３連複組番馬番2", "３連複組番馬番3",
@@ -352,7 +360,7 @@ _PAYBACK_COMBO_COLS = (
 )
 _PAYBACK_YEN_COLS = (
     "単勝払戻金（円）", "複勝払戻金1（円）", "複勝払戻金2（円）", "複勝払戻金3（円）",
-    "馬複払戻金（円）", "馬単払戻金（円）",
+    "馬複払戻金（円）", "馬単払戻金（円）", "枠複払戻金（円）", "枠単払戻金（円）",
     "ワイド払戻金1（円）", "ワイド払戻金2（円）", "ワイド払戻金3（円）",
     "３連複払戻金（円）", "３連単払戻金（円）",
 )

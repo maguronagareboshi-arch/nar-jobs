@@ -1,0 +1,44 @@
+# 2026-09-24 枠連・枠単の払戻の埋め戻し(手押しだけ・定期実行なし)
+# 2022-11〜 の nar_race_payouts に wakuren/wakutan が無かった分を、公式の月次 ZIP を取り直して**追記だけ**する
+# (既存の要素は消さない・変えない・既に枠がある行は触らない= 何度流しても同じ)。台本= cloud/waku_backfill.py
+# ⛔便は 1 本ずつ(年ごと)・apply=no で件数を見てから yes。終わったらこのファイルごと消してよい。
+name: waku-backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      months:
+        description: "月をカンマで(例 2022-11,2022-12)"
+        required: true
+      apply:
+        description: "yes で書き込む(既定はドライラン)"
+        type: choice
+        options: ['no', 'yes']
+        default: 'no'
+
+concurrency:
+  group: waku-backfill
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r cloud/requirements.txt
+      - name: backfill bracket payouts
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          MONTHS: ${{ github.event.inputs.months }}
+          APPLY: ${{ github.event.inputs.apply }}
+        run: |
+          if [ "$APPLY" = "yes" ]; then A=--apply; else A=; fi
+          python -X utf8 cloud/waku_backfill.py --months "$MONTHS" $A
