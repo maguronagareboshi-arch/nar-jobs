@@ -130,6 +130,14 @@ jobs:
           PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
           PGSSLMODE: require
         run: |
+          set -o pipefail
+          # 監査 A10(2026-09-24) 先に「もう望む形か」を読むだけで確かめ、そうなら下の DDL(drop/add constraint= 表を排他ロック+全件検証)を飛ばす。
+          #   足りない項目が 1 つでも出たら・確認が読めなかったら、従来どおり全部流す(= 表の形は今と同じに収まる)。
+          MISS=$(psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres \
+            -v ON_ERROR_STOP=1 -X -At -c "set statement_timeout = '60s'" -f pipeline/sql/health_schema_shape_check.sql) || MISS="(確認が読めなかった)"
+          MISS=$(printf '%s\n' "$MISS" | grep -v '^SET$' || true)
+          if [ -z "$MISS" ]; then echo "健康の器はもう望む形= DDL を飛ばす"; exit 0; fi
+          echo "望む形でない= DDL を流す:"; printf '%s\n' "$MISS"
           psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 \
             -U postgres.qgsnsdjvzzeazbazjlwa -d postgres \
             -v ON_ERROR_STOP=1 -X -f pipeline/sql/horse_health_20260903.sql
