@@ -159,6 +159,15 @@ def late_count(starts):
     return sum(1 for r in use if r.get("late")), len(use)
 
 
+def late_all(starts):
+    """通算の出遅れ= その日より前の実走のうち記録のある走すべて(⛔late_count と同じ判定・5 走で切らない)
+    → (回数, 記録のある走数)。記録が 1 本も無ければ (None, None)。"""
+    use = [r for r in starts if r.get("late") is not None]
+    if not use:
+        return None, None
+    return sum(1 for r in use if r.get("late")), len(use)
+
+
 def late_runs(starts):
     """出遅れた走の位置= 直近 5 走の中で何走前か(1= 前走)の並び。⛔記録が 1 本も無ければ None・出遅れ 0 回は []。
     モックの「前走・2走前」と同じ数え方(位置は記録の無い走も含めた直近 5 走の中の順番)。"""
@@ -264,6 +273,22 @@ def since_layoff(starts, race_date):
 def gap_days(starts, race_date):
     """今回の間隔= 前走(直近の実走)からの日数(⛔馬柱の currentGap/gapText と同じ前走の選び方)。前走が無ければ None。"""
     return (to_date(race_date) - to_date(starts[0]["race_date"])).days if starts else None
+
+
+def gaps_recent(starts):
+    """近ごろの間隔= 直近 5 走それぞれの「その前の走からの日数」(新しい順・最大 5)。
+    ⛔走の並びは gap_days / since_layoff と同じ starts(能検・取消は入っていない)。前の走が無い走は数えない。"""
+    return [(to_date(starts[i]["race_date"]) - to_date(starts[i + 1]["race_date"])).days
+            for i in range(min(LAST_RUNS, len(starts) - 1))]
+
+
+def gap_usual(gaps):
+    """ふだんの間隔= gaps_recent の中央値(偶数個なら真ん中 2 つの平均を切り捨て)。⛔2 つ未満なら None。"""
+    if not gaps or len(gaps) < 2:
+        return None
+    g = sorted(gaps)
+    m = len(g) // 2
+    return g[m] if len(g) % 2 else (g[m - 1] + g[m]) // 2
 
 
 # ---------------------------------------------------------------- 条件との相性(通算・南関の走だけ)
@@ -413,6 +438,8 @@ def build_row(entry, runs, opponents, style, late_table, computed_at):
         return row
     st = past_starts(runs, d)
     ln, lden = late_count(st)
+    lan, laden = late_all(st)
+    gr = gaps_recent(st)
     lruns = late_runs(st)
     pv, pvn = pos_range(st)
     lh, lhn = lead_hold(st, d)
@@ -429,6 +456,7 @@ def build_row(entry, runs, opponents, style, late_table, computed_at):
         "pos_var": pv, "pos_var_n": pvn,
         "runs_30d": runs_30d(st, d), "run_of_year": run_of_year(st, d), "since_layoff": since_layoff(st, d),
         "gap_days": gap_days(st, d),
+        "late_all_n": lan, "late_all_den": laden, "gap_usual_days": gap_usual(gr), "gaps_recent": gr or None,
         "oi_top3_rate": ratio(ok, on), "oi_n": on, "other3_top3_rate": ratio(tk, tn), "other3_n": tn,
         "night_top3_rate": ratio(nk, nn), "night_n": nn, "day_top3_rate": ratio(dk, dn), "day_n": dn,
         "h2h": hh, "h2h_w": hw, "h2h_l": hl,
@@ -440,7 +468,7 @@ def build_row(entry, runs, opponents, style, late_table, computed_at):
     return row
 
 
-# 表の列(⛔pipeline/sql/karte_facts_20260922.sql と同じ並び)
+# 表の列(⛔pipeline/sql/karte_facts_20260922.sql + karte_facts_s274_20260924.sql と同じ並び)
 COLUMNS = (
     "race_date", "track", "race_no", "umaban", "horse_key", "horse_name",
     "late_n", "late_den", "late_next_pct", "late_runs",
@@ -450,6 +478,7 @@ COLUMNS = (
     "h2h", "h2h_w", "h2h_l",
     "best_margin", "best_margin_date", "best_finish", "recent3_margin", "pop_beat_rate", "pop_beat_n", "win_conv_rate", "win_conv_n",
     "computed_at",
+    "late_all_n", "late_all_den", "gap_usual_days", "gaps_recent",      # §274(ADD COLUMN= 末尾に付く)
 )
 
 

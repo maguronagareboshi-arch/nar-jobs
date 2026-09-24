@@ -84,6 +84,53 @@ class Start(unittest.TestCase):
         self.assertIsNone(karte.late_next_pct(None, t))
 
 
+class LateAllAndPace(unittest.TestCase):
+    """§274 通算の出遅れ・ふだんの間隔・近ごろの間隔。"""
+
+    def test_late_all_not_cut_at_5(self):
+        st = karte.past_starts([R("2026-09-%02d" % d, late=v) for d, v in
+                                ((20, True), (15, None), (10, False), (5, True), (2, True), (1, True))], D)
+        self.assertEqual(karte.late_count(st), (3, 4))
+        self.assertEqual(karte.late_all(st), (4, 5), "6 走目を数えていない・記録なしを分母に入れた")
+        self.assertEqual(karte.late_all([]), (None, None))
+        self.assertEqual(karte.late_all(karte.past_starts([R("2026-09-01", late=None)], D)), (None, None))
+
+    def test_late_all_skips_noken_and_scratch(self):
+        st = karte.past_starts([R("2026-09-10", late=True), R("2026-09-05", late=True, noken=True),
+                                R("2026-09-03", finish=None, note="出走取消", late=True), R("2026-09-01", late=False)], D)
+        self.assertEqual(karte.late_all(st), (1, 2))
+
+    def test_gaps_recent_newest_first_max5(self):
+        days = ["2026-09-15", "2026-09-01", "2026-08-25", "2026-08-04", "2026-07-21", "2026-07-07", "2026-06-01"]
+        st = karte.past_starts([R(d) for d in days], D)
+        self.assertEqual(karte.gaps_recent(st), [14, 7, 21, 14, 14])
+        self.assertEqual(karte.gap_usual(karte.gaps_recent(st)), 14, "奇数個の中央値")
+
+    def test_gap_usual_even_floor(self):
+        self.assertEqual(karte.gap_usual([7, 21, 14, 28]), 17, "偶数個= (14+21)//2")
+        self.assertEqual(karte.gap_usual([7, 8]), 7)
+
+    def test_gap_usual_needs_two(self):
+        st = karte.past_starts([R("2026-09-01"), R("2026-08-01")], D)
+        self.assertEqual(karte.gaps_recent(st), [31])
+        self.assertIsNone(karte.gap_usual(karte.gaps_recent(st)))
+        self.assertEqual(karte.gaps_recent(karte.past_starts([R("2026-09-01")], D)), [])
+        self.assertIsNone(karte.gap_usual([]))
+
+    def test_gaps_skip_noken(self):
+        st = karte.past_starts([R("2026-09-15"), R("2026-09-08", race_name="能力検査"),
+                                R("2026-09-01", finish=None, note="出走取消"), R("2026-08-18"), R("2026-08-04")], D)
+        self.assertEqual(karte.gaps_recent(st), [28, 14], "能検・取消を間隔の走に数えた")
+        self.assertEqual(karte.gap_usual([28, 14]), 21)
+
+    def test_build_row_columns(self):
+        runs = [R("2026-09-15", late=True), R("2026-09-01", late=False), R("2026-08-18", late=None), R("2026-08-04")]
+        row = karte.build_row({"race_date": D, "track": "浦和", "race_no": 1, "umaban": 1, "horse_name": "x",
+                               "horse_key": "x|2021"}, runs, [], None, None, "t")
+        self.assertEqual((row["late_all_n"], row["late_all_den"], row["gap_usual_days"], row["gaps_recent"]),
+                         (1, 2, 14, [14, 14, 14]))
+
+
 class Style(unittest.TestCase):
     def test_pos_range(self):
         st = karte.past_starts([R("2026-09-%02d" % d, c1=c) for d, c in
@@ -216,7 +263,8 @@ class Row(unittest.TestCase):
         row = karte.build_row(self.ENTRY, [], [], "差し", None, "t")
         for c in ("late_n", "late_den", "late_next_pct", "late_runs", "style_counts", "lead_hold_rate", "lead_hold_n",
                   "pos_var", "oi_n", "night_n", "h2h", "h2h_w", "best_margin", "best_finish", "recent3_margin",
-                  "pop_beat_n", "win_conv_n", "since_layoff", "gap_days"):
+                  "pop_beat_n", "win_conv_n", "since_layoff", "gap_days",
+                  "late_all_n", "late_all_den", "gap_usual_days", "gaps_recent"):
             self.assertIsNone(row[c], c)
         self.assertEqual((row["runs_30d"], row["run_of_year"], row["style"]), (0, 1, "差し"))
 
