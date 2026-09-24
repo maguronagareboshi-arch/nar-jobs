@@ -358,28 +358,15 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: python cloud/convene.py --apply
 
-      - name: venue stats (monthly only)
-        # #478 前段(class calc 等)が落ちても集計は流す(集計は前日までの確定結果で足りる)
-        if: env.MODE != 'daily' && !cancelled()
-        env:
-          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
-          PGSSLMODE: require
-        # セッションプーラー(IPv4)。psql は ubuntu-latest に同梱。AI成績(ai_record)もここで翌朝反映
-        run: |
-          set -o pipefail
-          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/venue_stats.sql | tail -n 20
-          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/person_stats.sql | tail -n 10
-          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/ai_record.sql | tail -n 10
-          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/race_level.sql | tail -n 5
-          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/graded.sql | tail -n 5
-          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/big_payouts.sql | tail -n 3
-          # §258(2026-09-23): 単複 2分刻み nar_odds_ticks の間引き(odds_ticks_retention.sql= 60 日超を 1 レース 9 点)は外した。
-          # 60 日超は daily 朝の便の odds archive(cloud/odds_archive.py)が Storage へ全点を書き出し→照合してから、同じ規則で 9 点に間引く
-          # (先に間引くと書き出す前に 2 分刻みが消える= 後で研究できない)。
-          # 戻し方(書き出しをやめて SQL の間引きに戻すときだけ): 下の行の # を外し、odds_archive.py の TABLE_ALIAS "all" から nar_odds_ticks を抜く。
-          # psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/odds_ticks_retention.sql | tail -n 3
-          # 監査 #28(2026-09-23): nar_odds_full_ticks の間引き(odds_full_ticks_retention.sql)は外した。
-          # 60 日超は daily 朝の便の odds archive(cloud/odds_archive.py)が Storage へ書き出してから消す(先に間引くと書き出す前に消える)
+      # 監査 A7(2026-09-24) 集計 SQL 6 本(venue/person/ai_record/race_level/graded/big_payouts)は本番 DB で流すのをやめ、
+      #   下の job stats_check(nar-stats.yml・mode=apply= Actions 内の Postgres で計算して差分だけ本番へ)に移した。heartbeat 'stats' もそちらで書く。
+      # §258(2026-09-23): 単複 2分刻み nar_odds_ticks の間引き(odds_ticks_retention.sql= 60 日超を 1 レース 9 点)は外した。
+      # 60 日超は daily 朝の便の odds archive(cloud/odds_archive.py)が Storage へ全点を書き出し→照合してから、同じ規則で 9 点に間引く
+      # (先に間引くと書き出す前に 2 分刻みが消える= 後で研究できない)。
+      # 戻し方(書き出しをやめて SQL の間引きに戻すときだけ): 下の行の # を外し、odds_archive.py の TABLE_ALIAS "all" から nar_odds_ticks を抜く。
+      # psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/odds_ticks_retention.sql | tail -n 3
+      # 監査 #28(2026-09-23): nar_odds_full_ticks の間引き(odds_full_ticks_retention.sql)は外した。
+      # 60 日超は daily 朝の便の odds archive(cloud/odds_archive.py)が Storage へ書き出してから消す(先に間引くと書き出す前に消える)
 
       # §238a 派生表 nar_run_facts(通過順の順位・脚質・前半3F・発走直前の単勝を 1 頭 1 行で先に焼く)。
       # ⛔**結果が確定した後**の段= 当日と前日ぶんを毎便 upsert(前日は結果が入ってから焼き直す・冪等)。
@@ -489,7 +476,7 @@ jobs:
           if [ "$MORNING" = 1 ]; then python cloud/odds_archive.py --max-days 3; else echo "odds archive は朝の便だけ(JST $H)=スキップ"; fi
 
       # 監査 A8(2026-09-24) 最終成功時刻(表 nar_job_heartbeat)。外の見張り nar-watchdog と画面が読む。⛔表が無くても落ちない
-      #   refresh= daily の成功ごと / stats= monthly の成功 / refresh_evening= 17 時以降の便の成功(refresh_morning は下の段)
+      #   refresh= daily の成功ごと / stats= nar-stats(apply)が書く / refresh_evening= 17 時以降の便の成功(refresh_morning は下の段)
       - name: heartbeat ok
         if: success()
         env:
@@ -497,7 +484,6 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           if [ "$MODE" != "monthly" ]; then python3 cloud/beat.py refresh ok "JST $(TZ=Asia/Tokyo date +%H:%M)"; fi
-          if [ "$MODE" != "daily" ]; then python3 cloud/beat.py stats ok; fi
           if [ "$MODE" != "monthly" ] && [ "$EVENING" = 1 ]; then python3 cloud/beat.py refresh_evening ok; fi
       - name: heartbeat fail
         if: failure()
@@ -506,7 +492,6 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           if [ "$MODE" != "monthly" ]; then python3 cloud/beat.py refresh fail 失敗; fi
-          if [ "$MODE" != "daily" ]; then python3 cloud/beat.py stats fail 失敗; fi
           if [ "$MODE" != "monthly" ] && [ "$EVENING" = 1 ]; then python3 cloud/beat.py refresh_evening fail 失敗; fi
       # 監査 A1(2026-09-24) 朝の段を回した便は成否に関係なく refresh_morning を書く(全段成功= ok・どれか失敗= fail で note に段名)
       #   段は id が am_ で始まるもの。⛔表が無くても落ちない
@@ -520,13 +505,12 @@ jobs:
           BAD=$(python3 -c "import json,os; s=json.loads(os.environ['STEPS']); print(' '.join(k[3:] for k,v in s.items() if k.startswith('am_') and v.get('outcome')=='failure'))")
           if [ -z "$BAD" ]; then python3 cloud/beat.py refresh_morning ok; else python3 cloud/beat.py refresh_morning fail "落ちた段 $BAD"; fi
 
-  # 監査 A7(2026-09-24) 集計を Actions 内の Postgres で作る便 nar-stats を、月次の後に check(照合だけ・本番に書かない)で流す。
-  #   ⛔本番 SQL の段(venue stats)はまだ消さない= 同じ朝の入力どうしで本番の出力と手元の出力を突き合わせるため。
-  #   切り替え(本番 SQL の段を消す・mode=apply・heartbeat 'stats' を nar-stats へ)は枝 a7-switch。
+  # 監査 A7(2026-09-24) 集計は Actions 内の Postgres で作る便 nar-stats(mode=apply= 差分だけ本番へ・heartbeat 'stats' もここ)。
   stats_check:
     needs: [gate, refresh]
-    if: ${{ !cancelled() && needs.gate.outputs.skip != '1' && (github.event.inputs.mode || (github.event.schedule == '33 20 * * *' && 'monthly' || 'daily')) != 'daily' }}
+    # #478 と同じ= 前段が落ちても集計は流す(集計は前日までの確定結果で足りる)
+    if: "!cancelled() && needs.gate.outputs.skip != '1' && (github.event.inputs.mode || (github.event.schedule == '33 20 * * *' && 'monthly' || 'daily')) != 'daily'"
     uses: ./.github/workflows/nar-stats.yml
     with:
-      mode: check
+      mode: apply
     secrets: inherit
