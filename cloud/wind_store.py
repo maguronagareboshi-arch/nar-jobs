@@ -36,6 +36,18 @@ VENUES = [
 ]
 BY_KEY = {p: (p, n, s) for p, n, s in VENUES}
 BY_KEY.update({n: (p, n, s) for p, n, s in VENUES})
+BY_KEY["帯広ば"] = BY_KEY["帯広"]   # nar_races の track は「帯広ば」(ばんえい・9/24 初回取り込みで判明)
+
+
+def venue_of(track):
+    """track → (prefix, name, station)。完全一致 → 場名で始まる(「帯広ば」等)の順"""
+    t = str(track or "").strip()
+    if t in BY_KEY:
+        return BY_KEY[t]
+    for p, n, s in VENUES:
+        if t.startswith(n):
+            return (p, n, s)
+    return None
 
 
 def log(msg):
@@ -130,14 +142,14 @@ def run_day(date, now, dry):
     if not races:
         log(f"{date} 開催なし")
         return 0, 0, []
-    bad = [t for t in races if t not in BY_KEY]
+    bad = [t for t in races if t and venue_of(t) is None]
     if bad:
         log(f"要判断: 場の表に無い track {bad}")
         raise SystemExit(2)
     day0 = dt.datetime.fromisoformat(date + "T00:00:00+09:00")
     n_v, n_rows, failed = 0, 0, []
     for track, times in races.items():
-        prefix, name, station = BY_KEY[track]
+        prefix, name, station = venue_of(track)
         lo, hi = window_of(times)
         hours = hours_of(lo, hi)[:5]
         pts, got_files = [], 0
