@@ -1,5 +1,7 @@
 # §129d 予想AI base-v1 段階1= 特徴量表 `nar_ai_feat_run` を **Actions の中の Postgres** で組む。
 # 2026-09-08 nar-viewer(private)から nar-jobs(public)へ移設(#529)。
+# 監査 A3(2026-09-24) 公開 repo なので成果物は暗号化して置く(*.tar.gz.enc・鍵= SUPABASE_SERVICE_KEY の sha256)。手元で戻す 1 行:
+#   ARTIFACT_KEY=$(printf '%s' "$SUPABASE_SERVICE_KEY" | sha256sum | cut -c1-64) openssl enc -d -aes-256-cbc -pbkdf2 -pass env:ARTIFACT_KEY -in X.tar.gz.enc | tar -xzf -
 #
 # ⛔なぜ本番 DB で作らないのか(9/8 決定・ここが一番大事)
 #   9/7 22:14 = 本番で refresh_nar_ai_feat() を流し、temp がディスクを使い切って 9 分で失敗。
@@ -239,11 +241,18 @@ jobs:
             gzip -6 -c "dump/$t.tsv" > "out_dump/dump_$t.tsv.gz"
           done
           ls -l out_dump
+      - name: seal dumps (A3)
+        continue-on-error: true
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          set -o pipefail
+          bash ops/artifact_seal.sh seal out_dump sealed_dump/nar-ai-feat-dumps.tar.gz.enc
       - uses: actions/upload-artifact@v4
         continue-on-error: true
         with:
           name: nar-ai-feat-dumps
-          path: out_dump/
+          path: sealed_dump/
           retention-days: 2
           if-no-files-found: error
 
@@ -258,10 +267,16 @@ jobs:
             -c "select jsonb_pretty(jsonb_object_agg(key, value)) from public.nar_ai_meta" > out/nar_ai_meta.json
           ls -l out
 
+      - name: seal features (A3)
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          set -o pipefail
+          bash ops/artifact_seal.sh seal out sealed/nar-ai-feat.tar.gz.enc
       - uses: actions/upload-artifact@v4
         with:
           name: nar-ai-feat-${{ github.run_number }}
-          path: out/
+          path: sealed/
           retention-days: 14
           if-no-files-found: error
 

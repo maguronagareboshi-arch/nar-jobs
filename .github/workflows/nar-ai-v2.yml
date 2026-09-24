@@ -6,6 +6,8 @@
 # ⛔学習はしない(固定模型を pipeline/ai/v2/model/ から読む)。
 # ⛔材料は成果物からだけ取る(本番からは読まない)= nar-ai-feat の dump_*.tsv.gz と nar_ai_feat_run.csv.gz、
 #   便 A(nar-ai-v2-raw)の nar_paper_runs.csv.gz。
+# 監査 A3(2026-09-24) 公開 repo なので成果物は暗号化して置く(*.tar.gz.enc・鍵= SUPABASE_SERVICE_KEY の sha256)。手元で戻す 1 行:
+#   ARTIFACT_KEY=$(printf '%s' "$SUPABASE_SERVICE_KEY" | sha256sum | cut -c1-64) openssl enc -d -aes-256-cbc -pbkdf2 -pass env:ARTIFACT_KEY -in X.tar.gz.enc | tar -xzf -
 name: nar-ai-v2
 
 on:
@@ -53,6 +55,7 @@ jobs:
       # ---------------------------------------------------------------- 材料(成果物)を取る
       - name: download nar-ai-feat artifact
         env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
           EV_ID: ${{ github.event.workflow_run.id }}
           EV_NUM: ${{ github.event.workflow_run.run_number }}
           IN_ID: ${{ github.event.inputs.feat_run_id }}
@@ -73,9 +76,12 @@ jobs:
           mkdir -p in/feat
           gh run download "$RID" -n "nar-ai-feat-$RNUM" -D in/feat
           gh run download "$RID" -n nar-ai-feat-dumps -D in/feat
+          bash ops/artifact_seal.sh unseal in/feat   # 監査 A3: *.tar.gz.enc を戻す(平文の古い成果物はそのまま)
           ls -l in/feat
 
       - name: download nar-ai-v2-raw artifact
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           set -o pipefail
           RID=$(gh run list -w nar-ai-v2-raw.yml -s success -L1 --json databaseId -q '.[0].databaseId')
@@ -83,6 +89,7 @@ jobs:
           echo "nar-ai-v2-raw run=$RID"
           mkdir -p in/raw
           gh run download "$RID" -n nar-ai-v2-raw -D in/raw
+          bash ops/artifact_seal.sh unseal in/raw
           ls -l in/raw
 
       # ---------------------------------------------------------------- 作業場所 nai/ を組む
@@ -140,12 +147,19 @@ jobs:
           python -X utf8 pipeline/ai/v2/predict_v2.py --date "$DAY" \
             --out "out/pred_base_v2_$DAY.csv" $W 2>&1 | tee out/log_predict.txt
 
+      - name: seal outputs (A3)
+        if: always()
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          set -o pipefail
+          mkdir -p stage
+          cp out/*.csv out/*.txt stage/ 2>/dev/null || true
+          bash ops/artifact_seal.sh seal stage sealed/nar-ai-v2.tar.gz.enc
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: nar-ai-v2-${{ github.run_number }}
-          path: |
-            out/*.csv
-            out/*.txt
+          path: sealed/
           retention-days: 7
           if-no-files-found: warn

@@ -6,6 +6,8 @@
 # ⛔他の 4 表(nar_runs・nar_races・nar_run_facts・nar_kb_runs)は nar-ai-feat 便が同じ朝に写した
 #   dump/ を使う(二重写しをしない)= ここでは触らない。
 # JST 05:00 に写す理由= 銀の帯「06:30〜08:30 に重ねない」。
+# 監査 A3(2026-09-24) 公開 repo なので成果物は暗号化して置く(*.tar.gz.enc・鍵= SUPABASE_SERVICE_KEY の sha256)。手元で戻す 1 行:
+#   ARTIFACT_KEY=$(printf '%s' "$SUPABASE_SERVICE_KEY" | sha256sum | cut -c1-64) openssl enc -d -aes-256-cbc -pbkdf2 -pass env:ARTIFACT_KEY -in X.tar.gz.enc | tar -xzf -
 name: nar-ai-v2-raw
 
 on:
@@ -49,9 +51,15 @@ jobs:
           gzip -6 out/nar_paper_runs.csv
           ls -l out
 
+      - name: seal csv (A3)
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          set -o pipefail
+          bash ops/artifact_seal.sh seal out sealed/nar-ai-v2-raw.tar.gz.enc
       - uses: actions/upload-artifact@v4
         with:
           name: nar-ai-v2-raw
-          path: out/
+          path: sealed/
           retention-days: 3
           if-no-files-found: error

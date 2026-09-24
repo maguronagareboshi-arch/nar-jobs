@@ -11,6 +11,8 @@
 #   以後の回は「今日の nar_runs / nar_races」だけ写し直し(小さい)、地元で今日の行を作り直して予想する。
 #   全列の模型は朝便(schedule)の最新の成果物から取る(学習はしない)。
 #   ⛔本番への書き込みは nar_ai_marks(model='base-v1', timing='last')の REST upsert だけ。SQL は流さない。
+# 監査 A3(2026-09-24) 公開 repo なので成果物は暗号化して置く(*.tar.gz.enc・鍵= SUPABASE_SERVICE_KEY の sha256)。手元で戻す 1 行:
+#   ARTIFACT_KEY=$(printf '%s' "$SUPABASE_SERVICE_KEY" | sha256sum | cut -c1-64) openssl enc -d -aes-256-cbc -pbkdf2 -pass env:ARTIFACT_KEY -in X.tar.gz.enc | tar -xzf -
 name: nar-ai-last
 
 on:
@@ -57,6 +59,7 @@ jobs:
       - name: fetch morning-run artifact (model)
         env:
           GH_TOKEN: ${{ github.token }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           R=$(gh run list -R "$GITHUB_REPOSITORY" -w nar-ai-feat.yml -s success -L 1 --json databaseId,createdAt,event --jq '.[0] | "\(.databaseId) \(.createdAt) \(.event)"')
           ID=${R%% *}
@@ -69,6 +72,7 @@ jobs:
             echo "MODEL_NOTE=前日のモデル $RUN_DAY" >> "$GITHUB_ENV"
           fi
           gh run download "$ID" -R "$GITHUB_REPOSITORY" -p 'nar-ai-feat-*' -D model
+          bash ops/artifact_seal.sh unseal model   # 監査 A3: *.tar.gz.enc を戻す(平文の古い成果物はそのまま)
           M=$(ls model/*/base_v1.model.json | head -n 1)
           [ -n "$M" ] || { echo "base_v1.model.json が無い"; exit 1; }
           cp "$M" base_v1.model.json
