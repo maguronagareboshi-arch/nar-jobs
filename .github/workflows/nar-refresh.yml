@@ -447,7 +447,10 @@ jobs:
           if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ] || { [ $((10#$H)) -ge 1700 ] && [ $((10#$H)) -lt 1730 ]; }; then python cloud/tenkai.py --apply; else echo "tenkai は朝と 17:07 の便だけ(JST $H)=スキップ"; fi
           if [ -n "$PACE_SINCE" ] || [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/nar_race_pace_20260920.sql | tail -n 2 && python cloud/tenkai.py --apply --pace-log ${PACE_SINCE:+--since "$PACE_SINCE"}; else echo "pace log は朝の便だけ(JST $H)=スキップ"; fi
 
-      # 再生不能データ(AI印の凍結履歴・当日オッズ・成績)の日次バックアップ。artifact は90日保持
+      # 再生不能データ(AI印の凍結履歴・当日オッズ・成績)の月次バックアップ。
+      # 監査 A3(2026-09-24) 公開 repo の成果物をやめ、Storage の非公開バケット odds-archive の backup/YYYY-MM-DD/<表>.csv.gz へ置く。
+      #   同じ段で backup/ の 30 日より古い日付フォルダを消す。上げ損ねたら段を赤くする(無言で抜けない)。
+      #   落とし方= Supabase の Storage 画面 → odds-archive → backup
       - name: backup irreplaceables (monthly only)
         if: env.MODE != 'daily' && !cancelled()
         env:
@@ -460,13 +463,15 @@ jobs:
             psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -X               -c "\copy (select * from public.$t) to 'backup/$t.csv' csv header"
           done
           gzip backup/*.csv && ls -la backup/
-      - name: upload backup (monthly only)
-        if: env.MODE != 'daily'
-        uses: actions/upload-artifact@v4
-        with:
-          name: nar-backup-${{ github.run_id }}
-          path: backup/*.csv.gz
-          retention-days: 90
+      - name: upload backup to storage (monthly only)
+        if: env.MODE != 'daily' && !cancelled()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          set -o pipefail
+          python cloud/storage_put.py put --prefix "backup/$(TZ=Asia/Tokyo date +%F)/" backup/*.csv.gz
+          python cloud/storage_put.py prune --root backup/ --days 30
 
       # 監査 #28(2026-09-23 案C) 全券種オッズの刻み nar_odds_full_ticks の 60 日超を 1 日 1 ファイル
       # (Storage 非公開バケット odds-archive)へ書き出し→取り直して照合→一致した日だけ DB から消す。1 回 3 日まで。

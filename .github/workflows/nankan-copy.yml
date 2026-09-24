@@ -15,8 +15,6 @@
 #      header 行に列名が入るので、受け取った側で列は復元できる。
 #      さらに最初の手順で information_schema.columns から 14 表の列一覧を out/_columns.csv に写しておく
 #      (1 行 1 列の軽い読み)ので、次に列名を書き起こすときはこれを見ればよい。
-# 監査 A3(2026-09-24) 公開 repo なので成果物は暗号化して置く(*.tar.gz.enc・鍵= SUPABASE_SERVICE_KEY の sha256)。手元で戻す 1 行:
-#   ARTIFACT_KEY=$(printf '%s' "$SUPABASE_SERVICE_KEY" | sha256sum | cut -c1-64) openssl enc -d -aes-256-cbc -pbkdf2 -pass env:ARTIFACT_KEY -in X.tar.gz.enc | tar -xzf -
 name: nankan-copy
 
 on:
@@ -172,17 +170,10 @@ jobs:
           ls -l out
           du -sh out
 
-      - name: seal csv (A3)
-        if: always()
-        env:
-          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: |
-          set -o pipefail
-          bash ops/artifact_seal.sh seal out sealed/nankan-copy.tar.gz.enc
       - uses: actions/upload-artifact@v4
         if: always()
         with:
           name: nankan-copy
-          path: sealed/
+          path: out/
           retention-days: 3
           if-no-files-found: warn
