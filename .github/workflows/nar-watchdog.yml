@@ -287,3 +287,57 @@ jobs:
           print('異常なし' if not bad else f'異常 {len(bad)} 件')
           raise SystemExit(1 if bad else 0)
           PY
+
+  # 監査 D10(2026-09-24) 本番 DB の大きさ= JST のその日の最初の便で cloud/db_sizes.py を 1 回流す(catalog を読むだけ)。
+  #   nar_meta 'db_sizes' の at が JST の今日なら流さない。warn がある/at が 36 時間より古い → 赤(= 所有者へ失敗メール)。
+  #   閾値は db_sizes.py の先頭(仮置き)。D4 の「外から見たオッズの鮮度」は上の odds-live が既に見ている。
+  db-size:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            cloud/beat.py
+            cloud/db_sizes.py
+          sparse-checkout-cone-mode: false
+      - name: record db sizes once a day and check thresholds
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+        run: |
+          python3 - <<'PY'
+          import sys, subprocess, datetime as dt
+          sys.path.insert(0, 'cloud')
+          import beat
+          def meta():
+              got = beat._req('nar_meta?select=value&key=eq.db_sizes')
+              return (got[0]['value'] if got else None) or {}
+          def at_of(v):
+              return beat._ts(v.get('at')) if v.get('at') else None
+          now = dt.datetime.now(beat.JST)
+          v = meta(); at = at_of(v)
+          rc = 0
+          if at is None or at.date() != now.date():
+              print(f'db_sizes の最終 {at} = 今日まだ無いので流す', flush=True)
+              rc = subprocess.run([sys.executable, 'cloud/db_sizes.py']).returncode
+              v = meta(); at = at_of(v)
+          else:
+              print(f'db_sizes は今日すでに記録済み({at})= 流さない')
+          bad = []
+          if rc != 0:
+              bad.append(f'db_sizes.py が失敗(exit {rc})')
+          if at is None or (now - at).total_seconds() > 36 * 3600:
+              bad.append(f'db_sizes の記録が 36 時間より古い({at})')
+          for w in v.get('warn') or []:
+              bad.append('DB の大きさ: ' + w)
+          g = v.get('growth_per_day')
+          print(f"DB {int(v.get('db_bytes') or 0) / 1024**3:.2f}GB 伸び/日 {g}")
+          for t in (v.get('tables') or [])[:5]:
+              print(f"  {t['name']:28s} {t['bytes'] / 1024**2:8.0f}MB {t['rows']:>10d} 行")
+          for b in bad:
+              print('::error::' + b)
+          print('異常なし' if not bad else f'異常 {len(bad)} 件')
+          raise SystemExit(1 if bad else 0)
+          PY
