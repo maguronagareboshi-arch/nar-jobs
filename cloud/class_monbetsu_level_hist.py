@@ -3,6 +3,7 @@
 
   各レース日 D: asof < D の最新の公式回 K を起点(馬ごとに第1〜K回で最後に載った回)にし、
   その回の締めより後〜D の前日の走を class_monbetsu_calc の加算(要領 第7)で足す。
+  2歳で第1〜K回のどの表にも無い馬= 年度の初めから 0 円を起点に今年度の走を全部足す(kai=0)。
   照合: 回 N(2〜13)の締め直後の門別開催日で、起点 N-1 回+加算を公式 N 回と全頭照合する(check.json)。
 
   python cloud/class_monbetsu.py --env <path> --backfill --out <kais>           # 第1〜最新回の JSON(書かない)
@@ -51,6 +52,14 @@ def bases_by_kai(kais):
     return out
 
 
+FY_START = "{fy}-03-31"            # kai=0(0 円起点)の締め= 年度の前日
+
+
+def zero_base(fy, d):
+    """2歳で表に無い馬の起点(0 円・年度の頭から)"""
+    return {"kai": 0, "prize": 0, "age": 2, "cls": None, "by": int(d[:4]) - 2, "zero": fy}
+
+
 def prev_day(d):
     return str(CC.D(d) - dt.timedelta(days=1))
 
@@ -71,6 +80,7 @@ def build(official, hist, mon_runs, nar, jra, races, date_from, date_to):
     fy = official["fy"]
     kais = kais_of(official, hist)
     cuts = {k: CC.ipan_cut(fy, k, v["asof"], v.get("asof_by")) for k, v in kais.items()}
+    cuts[0] = FY_START.format(fy=fy)
     bk = bases_by_kai(kais)
     nar_by_name = defaultdict(list)
     for r in nar:
@@ -85,6 +95,8 @@ def build(official, hist, mon_runs, nar, jra, races, date_from, date_to):
         if not ok:
             continue
         b = bk[max(ok)].get(r["horse_name"])
+        if not b and r.get("age") == 2:
+            b = zero_base(fy, d)
         if not b:
             continue
         if r.get("birth_date") and int(r["birth_date"][:4]) != b["by"]:
@@ -107,6 +119,8 @@ def build(official, hist, mon_runs, nar, jra, races, date_from, date_to):
         miss = []
         for nm, h in sorted(kais[n]["horses"].items()):
             b = bk[n - 1].get(nm)
+            if not b and CC.is_nisai(h):
+                b = zero_base(fy, kais[n]["asof"])
             if h.get("prize") is None or not b:
                 continue
             p, _, _ = level(nm, b, cuts, prev_day(d), nar_by_name, jra, races, runners, fy)
@@ -151,7 +165,7 @@ def main():
     if not official or not official.get("horses"):
         CM.log(f"{CM.META_KEY} が読めない")
         return 2
-    mon = CC._get(base, key, "nar_runs?select=track,race_date,race_no,runner_number,horse_name,birth_date"
+    mon = CC._get(base, key, "nar_runs?select=track,race_date,race_no,runner_number,horse_name,birth_date,age"
                   f"&track=eq.{urllib.parse.quote(TRACK)}&race_date=gte.{a.dfrom}&race_date=lte.{a.dto}"
                   "&order=race_date,race_no,runner_number,horse_name")
     kais = kais_of(official, hist)
