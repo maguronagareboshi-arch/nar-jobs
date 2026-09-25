@@ -1,0 +1,57 @@
+# 検索集客 案 2-④(2026-09-26) 地方競馬の年間の重賞日程を表 nar_graded_schedule に取り込む便(cloud/graded_schedule.py)。
+#   取り込み元= keiba.go.jp の重賞競走一覧 schedule_<年>.html(取得は許可済み)。毎朝 1 回・数秒。
+#   viewer の重賞の年ページ(/graded/<slug>/<年>)と /sitemap-graded が読み、開催の 2 週以上前から URL を出す。
+#   ① probe= 走者から取れるか dry-run で試す(取れなければ ::warning:: と heartbeat fail)
+#   ② apply= upsert → 同じ年の一覧から消えた行を消す → heartbeat 'graded_schedule'(note に 年=件数)
+# ⛔表 nar_graded_schedule は pipeline/sql/graded_schedule_20260926.sql を本番に流してから有効にする(無いと upsert 404= fail)。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: graded-schedule
+on:
+  schedule:
+    - cron: '20 21 * * *'    # JST 毎朝 06:20
+  workflow_dispatch:
+concurrency:
+  group: graded-schedule
+  cancel-in-progress: false
+jobs:
+  schedule:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # ① 走者から取れるかの試し(DB は読まない・書かない)
+      - name: probe runner fetch
+        id: probe
+        run: |
+          if python cloud/graded_schedule.py --dry-run --out "$RUNNER_TEMP/probe.csv"; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::走者から重賞一覧を取れない= 本番 DB の pg_net で取る案に切り替える"
+          fi
+
+      - name: graded schedule apply
+        if: steps.probe.outputs.ok == '1'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/graded_schedule.py --apply --out "$RUNNER_TEMP/schedule.csv"
+
+      - name: heartbeat probe fail
+        if: steps.probe.outputs.ok == '0'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py graded_schedule fail 走者から取れない
+
+      # 想定外で落ちたときの印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py graded_schedule fail 便が落ちた
