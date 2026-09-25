@@ -10,7 +10,7 @@
     {"built": "YYYY-MM-DD",
      "horses": {"ゴールドモナコ": [{"d":"kawasaki","date":"2026-07-31","time":"51.6","ok":"合",
                                     "v":"https://youtu.be/gZCBvwp1rvQ","s":0,
-                                    "r":1,"n":3,"tr":1,"a":38.2,"ar":1,"t1":13.4}], …}}
+                                    "r":1,"n":3,"tr":1,"a":38.2,"ar":1,"t1":13.4,"j":"御神本"}], …}}
     d=地区prefix / time=表示用の文字列 / ok=合・否・null / v=映像URL / s=頭出しの秒(川崎・浦和だけ)
     p=場名(1地区に2場ある岩手・兵庫だけ。「8/1 水沢」と出すため)
     同名馬・再受検は配列に複数入る(日付の新しい順)。使う側は「同名の能検記録が複数」と断ること
@@ -23,6 +23,7 @@
     ar = レース内の上がり順位(a のある馬だけで・tr と同じ付け方)
     t1 = テン1F(= 走破 − 上がり3F)。**800m(4F)の検査にだけ成り立つ**ので他の距離には出さない
          (門別1000m・川崎900m・大井1200m の検査もある)。js/data.js の nokenOf と同じ規則=画面と食い違わない
+    j  = 騎手(§279。元表の jockey 列を空白を除いただけの略称の字のまま。乗り替わりで2人入るセルは最後の1人)
     ⚠ n は「頭数」で、tr の分母(タイムのある頭数)とは別物。地区によっては大きく食い違う
       (実測 ばんえい 2,148行中タイムのあるのは 1,245行)。画面で「N頭中M位」と書くときは、この違いを承知で使うこと
 
@@ -345,7 +346,7 @@ def build(metas, offsets, cut, stats):
         st = stats.setdefault(prefix, {"days": 0, "days_all": len(days), "rows": 0,
                                        "time": 0, "ok": 0, "video": 0, "cue": 0,
                                        "a": 0, "t1": 0, "r": 0, "tr": 0, "dr": 0, "ag": 0,
-                                       "dup": 0, "alias": [], "dropped_ok": {}})
+                                       "j": 0, "j_multi": 0, "dup": 0, "alias": [], "dropped_ok": {}})
         seen = {}                                    # (馬名, 日付) → 記録(同じ日の重複を1つに)
         for day in days:
             if not isinstance(day, dict):
@@ -430,6 +431,14 @@ def build(metas, offsets, cut, stats):
                     t1 = ten1f_of(dist, times.get(i), lasts.get(i))
                     if t1 is not None:
                         rec["t1"] = t1
+                    # §279 騎手= 空白を除いた略称の字のまま(推測・変換をしない)。乗り替わりで 1 セルに
+                    # 2 人(「丹 羽\n加藤利」)なら改行・「/」で切った最後の 1 人。空ならキーごと省略
+                    jparts = [re.sub(r"\s+", "", x) for x in re.split(r"[\r\n/／]", str(row.get("jockey") or ""))]
+                    jparts = [x for x in jparts if x]
+                    if jparts:
+                        rec["j"] = jparts[-1]
+                        if len(jparts) > 1:
+                            st["j_multi"] += 1
                     k = (name, date)
                     if k in seen:
                         st["dup"] += 1
@@ -462,7 +471,7 @@ def build(metas, offsets, cut, stats):
                 st["video"] += 1
             if rec["s"] is not None:
                 st["cue"] += 1
-            for k in ("a", "t1", "r", "tr", "dr", "ag"):   # §37.7-1/§50 地区ごとの充足率(黙って空にならないように)
+            for k in ("a", "t1", "r", "tr", "dr", "ag", "j"):   # §37.7-1/§50 地区ごとの充足率(黙って空にならないように)
                 if rec.get(k) is not None:
                     st[k] += 1
             rec.pop("_no", None)
@@ -610,10 +619,17 @@ def main():
         log(f"{p:<10}{s['days']:>5}{got:>7}{s['time']:>7}{s['ok']:>7}{s['video']:>7}{s['cue']:>8}"
             f"{s['r']:>7}{s['tr']:>7}{s['a']:>7}{s['t1']:>7}  {s['dup']}"
             + (f"  別名 {s['alias']}" if s["alias"] else "")
-            + (f"  ⚠合否を落とした値 {s['dropped_ok']}" if s["dropped_ok"] else ""))
+            + (f"  ⚠合否を落とした値 {s['dropped_ok']}" if s["dropped_ok"] else "")
+            + f"  騎手j {s['j']}(乗替2人 {s['j_multi']})")
     log(f"合計: {len(horses):,} 頭 / {entries:,} 件 / 素 {len(body) / 1024:.1f}KB / gzip {gz / 1024:.1f}KB")
     if gz > 150 * 1024:
         log("⚠ gzip が 150KB を超えた。目標は数十KB=画面に載せる前に相談すること")
+    # §279 騎手 j によるサイズ増(素のバイト数= 各記録の ,"j":"…" の分の合計)
+    j_recs = [r for v in horses.values() for r in v if r.get("j")]
+    j_bytes = sum(len(("," + json.dumps({"j": r["j"]}, ensure_ascii=False, separators=(",", ":"))[1:-1]).encode("utf-8"))
+                  for r in j_recs)
+    log(f"騎手j: {entries:,} 件中 {len(j_recs):,} 件 / サイズ増 素 {j_bytes / 1024:.1f}KB"
+        f"(平均 {j_bytes / max(len(j_recs), 1):.1f}B/件)")
 
     out = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
