@@ -1627,7 +1627,10 @@ def hyogo_official_mismatch(tables, c, last_run):
     """§286 型A: 公式の直近の格組(last_run の cls)と計算の級が違うか。apply と hist の両方で使う。
     前走で線を越えて上がった馬(計算の級= 前走の級の 1 つ上・前走 1着・前走後の点がその級の範囲)は食い違いとしない。
     1着に限る(検算 9/4〜9/25・lag 0: 前走1着の救済 55/58 一致・2〜5着で線を越えた分は 6/28 しか一致しない= 公式の点が計算より低い)。
-    前走が混合戦・重賞など単独クラスでない= 公式の級が読めない= 食い違いとしない(従来どおり)。"""
+    前走が混合戦・重賞など単独クラスでない= 公式の級が読めない= 食い違いとしない(従来どおり)。
+    前走が他場(転入の直後)= その級は兵庫の格組ではない= 食い違いとしない(例 プンタカナ 大井 Ｂ２二→ 園田 Ｂ１)。"""
+    if last_run and last_run.get("tr") not in HYOGO_TRACKS:
+        return False
     lab = hyogo_label({"cls": last_run.get("cls") if last_run else None, "name": ""}, None)
     if not lab:
         return False
