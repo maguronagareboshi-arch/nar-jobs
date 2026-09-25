@@ -255,13 +255,18 @@ def runs_30d(starts, race_date):
 
 
 def run_of_year(starts, race_date):
-    """今回が今年何戦目か(今年の実走数 + 1)。"""
+    """今回が今年何戦目か(今年の実走数 + 1)。
+    ⛔§278 その日より前の地方の実走が 0 件= None(中央からの転入は中央の走を数えられない・2 歳の初出走とも
+    区別できない= 「1 戦目」と断定しない・台帳 #41)。"""
+    if not starts:
+        return None
     y = to_date(race_date).year
     return 1 + sum(1 for r in starts if to_date(r["race_date"]).year == y)
 
 
 def since_layoff(starts, race_date):
-    """180 日を超えて間が空いた後から今回が何戦目か。⛔そういう休みが無い馬は None(初出走の前は休みに数えない)。"""
+    """180 日を超えて間が空いた後から今回が何戦目か。⛔そういう休みが無い馬は None(初出走の前は休みに数えない)。
+    ⛔§278 地方の実走が 0 件の馬も None(下の days が今回 1 日だけ= last が立たない)。"""
     days = sorted({to_date(r["race_date"]) for r in starts}) + [to_date(race_date)]
     last = None
     for i in range(1, len(days)):

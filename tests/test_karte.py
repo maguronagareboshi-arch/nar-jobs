@@ -43,7 +43,7 @@ class Select(unittest.TestCase):
         runs = [R("2026-09-03", noken=True), R("2026-09-02", race_name="能力検査"), R("2026-09-01", race_name="能検")]
         self.assertEqual(karte.past_starts(runs, D), [])
         self.assertEqual(karte.runs_30d(karte.past_starts(runs, D), D), 0)
-        self.assertEqual(karte.run_of_year(karte.past_starts(runs, D), D), 1)
+        self.assertIsNone(karte.run_of_year(karte.past_starts(runs, D), D), "§278 地方の走 0 を 1 戦目と断定した")
 
     def test_scratch_and_cancelled_race_are_not_counted(self):
         runs = [R("2026-09-10", finish=None, note="出走取消"), R("2026-09-09", finish=None, note="競走除外"),
@@ -266,7 +266,7 @@ class Row(unittest.TestCase):
                   "pop_beat_n", "win_conv_n", "since_layoff", "gap_days",
                   "late_all_n", "late_all_den", "gap_usual_days", "gaps_recent"):
             self.assertIsNone(row[c], c)
-        self.assertEqual((row["runs_30d"], row["run_of_year"], row["style"]), (0, 1, "差し"))
+        self.assertEqual((row["runs_30d"], row["run_of_year"], row["style"]), (0, None, "差し"))
 
     def test_no_key_all_none(self):
         row = karte.build_row(dict(self.ENTRY, horse_key=None), [R("2026-09-01", finish=1)], [], None, None, "t")
