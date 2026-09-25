@@ -1553,6 +1553,26 @@ def hyogo_state(runs, birth, asof, lag, races, trace=False):
     return st
 
 
+def hyogo_official_mismatch(tables, c, last_run):
+    """§286 型A: 公式の直近の格組(last_run の cls)と計算の級が違うか。apply と hist の両方で使う。
+    前走で線を越えて上がった馬(計算の級= 前走の級の 1 つ上・前走 1着・前走後の点がその級の範囲)は食い違いとしない。
+    1着に限る(検算 9/4〜9/25・lag 0: 前走1着の救済 55/58 一致・2〜5着で線を越えた分は 6/28 しか一致しない= 公式の点が計算より低い)。
+    前走が混合戦・重賞など単独クラスでない= 公式の級が読めない= 食い違いとしない(従来どおり)。"""
+    lab = hyogo_label({"cls": last_run.get("cls") if last_run else None, "name": ""}, None)
+    if not lab:
+        return False
+    official = ("3歳" if lab[0] == "y3" else "") + lab[1]
+    if official == c["cls"]:
+        return False
+    table = tables[0] if lab[0] == "old" else tables[1]
+    up = _up(table, lab[1])
+    if up and c["cls"] == ("3歳" if lab[0] == "y3" else "") + up and last_run.get("fin") == 1:
+        lo, hi = _lo(table, up), _hi(table, up)
+        if c["value"] >= lo and (hi is None or c["value"] <= hi):
+            return False
+    return True
+
+
 def hyogo_calc(tables, runs, asof, lag, birth, age_at, races, prefix):
     hyogo_state.tables = {"old": tables[0], "y3": tables[1]}
     st = hyogo_state(runs, birth, asof, lag, races, trace=bool(os.environ.get("TRACE") and runs and runs[0].get("_name") == os.environ.get("TRACE")))
@@ -1631,6 +1651,18 @@ def verify_hyogo(tables, rows, births, races, since, lags):
                     kinds["表示対象"] += 1
                     if pred == actual:
                         kinds["表示対象で一致"] += 1
+                # §286 型A の後の表示条件(apply/hist と同じ= 直前の走の格組と突き合わせ・線を越えて上がった直後は出す)
+                last = next((y for y in runs if (yd := _date(y.get("d"))) and yd < d), None)
+                if not c.get("hide") and not hyogo_official_mismatch(tables, c, last):
+                    kinds["表示対象§286"] += 1
+                    if pred == actual:
+                        kinds["表示対象§286で一致"] += 1
+                    olab = hyogo_label({"cls": last.get("cls") if last else None, "name": ""}, None)
+                    if olab and ("3歳" if olab[0] == "y3" else "") + olab[1] != pred:
+                        w = "1着" if last.get("fin") == 1 else "2〜5着"
+                        kinds[f"§286 救済(前走{w}で昇級)"] += 1
+                        if pred == actual:
+                            kinds[f"§286 救済(前走{w})で一致"] += 1
                 if pred == actual:
                     ok[actual] += 1
                 else:
@@ -1744,9 +1776,9 @@ def main_hyogo(a):
             if not c:
                 continue
             # 公式の直近の格組(last_cls)と計算の級が違う馬は出さない(表示方針)
-            lab = hyogo_label({"cls": r.get("last_cls"), "name": ""}, None)
-            official = (("3歳" if lab[0] == "y3" else "") + lab[1]) if lab else None
-            if c.get("hide") or (official and official != c["cls"]):
+            # §286 型A: 前走で線を越えて上がった馬は食い違いとしない(hyogo_official_mismatch)
+            last = {"cls": r.get("last_cls"), "fin": runs[0].get("fin") if runs else None}
+            if c.get("hide") or hyogo_official_mismatch(tables, c, last):
                 c["hide"] = True
                 c["next"] = None
             out.append({"code": r["code"], "calc": c})
@@ -2037,9 +2069,7 @@ def hist_calc(kind, ctx, r, b, d, track):
         return None
     # 公式の直近の格組= d より前の最新の走の格組(apply の last_cls と同じ物= 台帳の runs の先頭)
     prev = next((x for x in runs if (xd := _date(x.get("d"))) and xd < d), None)
-    lab = hyogo_label({"cls": prev.get("cls") if prev else None, "name": ""}, None)
-    official = (("3歳" if lab[0] == "y3" else "") + lab[1]) if lab else None
-    if c.get("hide") or (official and official != c["cls"]):
+    if c.get("hide") or hyogo_official_mismatch(ctx["lines"], c, prev):
         c["hide"] = True
         c["next"] = None
     return c
