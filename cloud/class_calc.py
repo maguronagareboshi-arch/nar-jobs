@@ -2194,11 +2194,13 @@ def hist_stage(a, kind, ctx, rows, births):
     tracks = HIST_TRACKS[kind]
     url, key = os.environ.get("SUPABASE_URL"), os.environ.get("SUPABASE_SERVICE_KEY")
     entries = []
-    if url and key and not a.local:                    # 出走予定(台帳の runs にまだ無い走の日)= 場ごとに 1 本
+    # 出走予定(台帳の runs にまだ無い走の日)= 場ごとに 1 本。§286: lo から取る(きょうからだと、前の便が出馬表で書いた
+    # 過去の日の行(取消・台帳の runs 未反映)が --hist-all で作り直されず古い calc のまま残る)
+    if url and key and not a.local:
         q = urllib.parse.quote
         for tr in tracks:
             for e in sb_all(url, key, f"nar_runs?select=horse_name,birth_date,race_date&track=eq.{q(DB_TRACK.get(tr, tr))}"
-                                      f"&race_date=gte.{max(lo, today).isoformat()}&order=race_date,race_no,runner_number"):
+                                      f"&race_date=gte.{lo.isoformat()}&order=race_date,race_no,runner_number"):
                 entries.append((e["horse_name"], e.get("birth_date"), _date(e["race_date"]), tr))
     shard_i, shard_n = (int(x) for x in a.shard.split("/")) if a.shard else (0, 1)
     by_code = {r["code"]: r for r in rows}
