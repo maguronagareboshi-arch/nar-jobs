@@ -101,6 +101,27 @@ jobs:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: python cloud/refresh.py --mode "$MODE"
+      # 共有画像(2026-09-26): 払戻の取り込み(上の refresh)の後で、確定したレースの 1200x630 PNG を公開バケット share に上げる。
+      #   字(BIZ UDゴシック Bold)は cache・無ければ share_image.py が取って sha256 を照合する。同じ中身は上げ直さない。
+      #   JST 06 時前の便は前日の遅い確定も拾う。⛔落ちても便は赤くしない(continue-on-error)・件数はログ・heartbeat 'share_image'
+      - name: share image font cache
+        if: env.MODE != 'monthly' && !cancelled()
+        uses: actions/cache@v4
+        with:
+          path: fonts/BIZUDGothic-Bold.ttf
+          key: font-bizudgothic-bold-98a528b6b638463041968783cc0f63adaf4cdc26f5398afed68bab712d1113f3
+      - name: share image
+        if: env.MODE != 'monthly' && !cancelled()
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          RC=0
+          if [ "$(TZ=Asia/Tokyo date +%H)" -lt 6 ]; then python cloud/share_image.py --upload --date "$(TZ=Asia/Tokyo date -d yesterday +%F)" || RC=1; fi
+          python cloud/share_image.py --upload --date "$(TZ=Asia/Tokyo date +%F)" || RC=1
+          if [ $RC = 0 ]; then python3 cloud/beat.py share_image ok; else python3 cloud/beat.py share_image fail 失敗あり; fi
+          exit $RC
       # 当日オッズ(単複+全券種)は **公開リポ nar-odds-collector の Actions が 2 分おき**に取る(§77 W3・2026-09-04 #451:
       # 本体の単複段 cloud/odds.py は撤去。園田1R で 13:50/13:52/13:54 の 3 ティックと nar_race_odds の更新を実測してから外した)。
       # cloud/odds.py / cloud/odds_full.py は同一内容の正本として残す(tests が読む・公開リポの odds_tanfuku.py/odds_full.py の元)。

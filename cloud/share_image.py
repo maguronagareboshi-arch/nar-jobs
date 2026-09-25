@@ -340,26 +340,31 @@ def main():
     if not a.out and not a.upload:
         ap.error("--out か --upload のどちらかが要る")
     rest = Rest()
-    made = skip = up = same = 0
+    made = skip = up = same = fail = 0
     for rc in load_day(rest, a.date, a.venue, a.race):
         if not complete(rc):
             skip += 1
             continue
-        png, _ = render(rc)
-        path = rel_path(rc)
-        made += 1
-        if a.out:
-            p = os.path.join(a.out, *path.split("/"))
-            os.makedirs(os.path.dirname(p), exist_ok=True)
-            with open(p, "wb") as f:
-                f.write(png)
-        if a.upload:
-            if upload(rest, path, png):
-                up += 1
-            else:
-                same += 1
-    log("share_image %s: 作った %d・未確定で飛ばした %d・上げた %d・同じ中身 %d" % (a.date, made, skip, up, same))
-
+        try:
+            png, _ = render(rc)
+            path = rel_path(rc)
+            made += 1
+            if a.out:
+                p = os.path.join(a.out, *path.split("/"))
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                with open(p, "wb") as f:
+                    f.write(png)
+            if a.upload:
+                if upload(rest, path, png):
+                    up += 1
+                else:
+                    same += 1
+        except Exception as e:  # 1 レースの失敗で残りを止めない(件数に出す)
+            fail += 1
+            log("⚠ %s %sR: %s" % (rc.get("track", "?"), rc.get("race_no", "?"), e))
+    log("share_image %s: 作成 %d・上げた %d・同じで省略 %d・未確定で省略 %d・失敗 %d"
+        % (a.date, made, up, same, skip, fail))
+    return 1 if fail else 0
 
 if __name__ == "__main__":
     sys.exit(main())
