@@ -346,7 +346,7 @@ def build(metas, offsets, cut, stats):
         st = stats.setdefault(prefix, {"days": 0, "days_all": len(days), "rows": 0,
                                        "time": 0, "ok": 0, "video": 0, "cue": 0,
                                        "a": 0, "t1": 0, "r": 0, "tr": 0, "dr": 0, "ag": 0,
-                                       "j": 0, "j_multi": 0, "dup": 0, "alias": [], "dropped_ok": {}})
+                                       "j": 0, "j_multi": 0, "w": 0, "t1r": 0, "dup": 0, "alias": [], "dropped_ok": {}})
         seen = {}                                    # (馬名, 日付) → 記録(同じ日の重複を1つに)
         for day in days:
             if not isinstance(day, dict):
@@ -396,6 +396,10 @@ def build(metas, offsets, cut, stats):
                         lasts[i] = a
                 tr_of = rank_of(times.items())
                 ar_of = rank_of(lasts.items())
+                # §280 テン1F 順位 t1r= 同じ検査レースの中で t1 のある馬だけ・昇順・同タイム同順位
+                t1s = {i: t for i in range(len(rows))
+                       if (t := ten1f_of(dist, times.get(i), lasts.get(i))) is not None}
+                t1r_of = rank_of(t1s.items())
                 for i, row in enumerate(rows):
                     name = text(row.get("name"))
                     st["rows"] += 1
@@ -428,9 +432,13 @@ def build(metas, offsets, cut, stats):
                     if i in lasts:
                         rec["a"] = lasts[i]
                         rec["ar"] = ar_of[i]
-                    t1 = ten1f_of(dist, times.get(i), lasts.get(i))
-                    if t1 is not None:
-                        rec["t1"] = t1
+                    if i in t1s:
+                        rec["t1"] = t1s[i]
+                        rec["t1r"] = t1r_of[i]
+                    # §280 能検時の馬体重 w= 元 JSON の weight を整数 kg で。無ければキーごと省略
+                    w = int_of(row.get("weight"))
+                    if w is not None and w > 0:
+                        rec["w"] = w
                     # §279 騎手= 空白を除いた略称の字のまま(推測・変換をしない)。乗り替わりで 1 セルに
                     # 2 人(「丹 羽\n加藤利」)なら改行・「/」で切った最後の 1 人。空ならキーごと省略
                     jparts = [re.sub(r"\s+", "", x) for x in re.split(r"[\r\n/／]", str(row.get("jockey") or ""))]
@@ -471,7 +479,7 @@ def build(metas, offsets, cut, stats):
                 st["video"] += 1
             if rec["s"] is not None:
                 st["cue"] += 1
-            for k in ("a", "t1", "r", "tr", "dr", "ag", "j"):   # §37.7-1/§50 地区ごとの充足率(黙って空にならないように)
+            for k in ("a", "t1", "r", "tr", "dr", "ag", "j", "w", "t1r"):   # §37.7-1/§50 地区ごとの充足率(黙って空にならないように)
                 if rec.get(k) is not None:
                     st[k] += 1
             rec.pop("_no", None)
@@ -620,7 +628,8 @@ def main():
             f"{s['r']:>7}{s['tr']:>7}{s['a']:>7}{s['t1']:>7}  {s['dup']}"
             + (f"  別名 {s['alias']}" if s["alias"] else "")
             + (f"  ⚠合否を落とした値 {s['dropped_ok']}" if s["dropped_ok"] else "")
-            + f"  騎手j {s['j']}(乗替2人 {s['j_multi']})")
+            + f"  騎手j {s['j']}(乗替2人 {s['j_multi']})"
+            + f"  体重w {s['w']}  テン順t1r {s['t1r']}")
     log(f"合計: {len(horses):,} 頭 / {entries:,} 件 / 素 {len(body) / 1024:.1f}KB / gzip {gz / 1024:.1f}KB")
     if gz > 150 * 1024:
         log("⚠ gzip が 150KB を超えた。目標は数十KB=画面に載せる前に相談すること")
