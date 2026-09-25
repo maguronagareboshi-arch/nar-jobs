@@ -774,11 +774,11 @@ def read_pdf(data, last_modified, kind, kai, want_fy, drop):
 
 # ---------------------------------------------------------------- 1開催回
 
-def collect_kai(fy, kai, drop, cache=None, kinds=KINDS):
+def collect_kai(fy, kai, drop, cache=None):
     """1開催回(PDF 2本)→ {"kai","asof","fy","horses","blocks","files","lm"}。
-    年度違い(前年度の残骸)は None を返す(⛔1)。kinds で本を絞れる(§284 差し替えの取り直し)。"""
+    年度違い(前年度の残骸)は None を返す(⛔1)。"""
     horses, blocks, files, asofs, nisai, lms = {}, [], [], {}, set(), {}
-    for kind in kinds:
+    for kind in KINDS:
         url = pdf_url(kai, kind)
         try:
             if cache and (cache / f"mon{kai}-{kind}.pdf").exists():
@@ -1200,7 +1200,7 @@ def run(args):
 
 
 def recheck(stored, base, key, apply):
-    """§284 最新回の PDF 2 本に HEAD だけ打ち、Last-Modified が保存時より新しい本だけ取り直す。
+    """§284 最新回の PDF 2 本に HEAD だけ打ち、1 本でも Last-Modified が保存時より新しければ 2 本とも取り直す。
     保存値が無い(初回)ときは記録だけ。→ note に添える文字列。"""
     fy, kai = stored.get("fy"), int(stored.get("kai") or 0)
     kais = stored.get("kais") or []
@@ -1224,24 +1224,20 @@ def recheck(stored, base, key, apply):
     note = ""
     if again:
         drop = []
-        got = collect_kai(fy, kai, drop, kinds=tuple(again))
-        if not got or set(got.get("lm") or {}) != set(again):
-            print(f"::warning::門別の級別表 第{kai}回 {again} の取り直しに失敗(前回の表を残す)", flush=True)
+        # ⛔推測で本を仕分けない= 1 本でも新しければ 2 本とも取り直して表を丸ごと作り直す(通常の取り込みと同じ)
+        got = collect_kai(fy, kai, drop)
+        if not got or set(got.get("lm") or {}) != set(KINDS):
+            print(f"::warning::門別の級別表 第{kai}回 の取り直しに失敗(前回の表を残す)", flush=True)
             again = []
         else:
-            # 取り直さない本の馬は保存値から残す(3歳以上= age あり / 2歳= age なし)
-            keep = {n: h for n, h in (value.get("horses") or {}).items()
-                    if len(again) < len(KINDS) and ("age" in h) == ("2sai" in again)}
-            keep.update(got["horses"])
-            value["horses"] = keep
-            value["asof_by"] = dict(value.get("asof_by") or {}) | (got.get("asof_by") or {})
-            if value["asof_by"]:
-                value["asof"] = max(value["asof_by"].values())
-            ent2["asof"], ent2["n"] = value.get("asof"), len(keep)
-            lm.update(got["lm"])
+            value["horses"] = got["horses"]
+            value["asof"], value["asof_by"] = got["asof"], got.get("asof_by") or {}
+            value["kakuzuke"] = kakuzuke_meta()
+            ent2["asof"], ent2["n"] = got["asof"], len(got["horses"])
+            lm = dict(got["lm"])
             value["built"] = f"{dt.datetime.now(JST):%Y-%m-%d}"
-            note = f" 第{kai}回 {'・'.join(again)} 差し替え取込"
-            log(f"第{kai}回 {again} を取り直した({len(got['horses'])}頭・合わせて {len(keep)}頭)")
+            note = f" 第{kai}回 差し替え取込({'・'.join(again)} が新しい)"
+            log(f"第{kai}回 を 2 本とも取り直した({len(got['horses'])}頭・新しかった本 {again})")
     ent2["lm"] = lm
     if not apply:
         log("ドライラン(差し替えの確認は書かない)")

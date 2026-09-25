@@ -60,7 +60,7 @@ class T(unittest.TestCase):
     def test_no_stored(self):
         self.assertEqual(M.timing([], *IN_SEASON, at("2026-09-25T12:30")), ("unknown", None))
 
-    def test_lm_newer_refetch(self):        # 新しくなった本だけ取り直す
+    def test_lm_newer_refetch(self):        # 1 本でも新しい= 取り直す(2 本とも取り直すのは recheck)
         old = {"ipan": "Fri, 11 Sep 2026 03:13:00 GMT", "2sai": "Fri, 11 Sep 2026 03:20:00 GMT"}
         new = {"ipan": "Fri, 11 Sep 2026 03:13:00 GMT", "2sai": "Thu, 17 Sep 2026 02:00:00 GMT"}
         self.assertEqual(M.lm_changed(old, new), (["2sai"], []))
