@@ -23,7 +23,7 @@ import beat  # noqa: E402
 
 GB = 1024 ** 3
 MB = 1024 ** 2
-WARN_DB_GB = float(os.environ.get("DB_SIZE_WARN_DB_GB", "5.0"))                 # DB 全体
+WARN_DB_GB = float(os.environ.get("DB_SIZE_WARN_DB_GB", "7.0"))                 # DB 全体(ディスク 12GB の 95%=11.4GB で読み取り専用・WAL 4GB+システム 0.2GB を引く)
 WARN_GROWTH_MB = float(os.environ.get("DB_SIZE_WARN_GROWTH_MB", "150"))         # 1 日の伸び
 WARN_ODDS_FULL_TICKS_GB = float(os.environ.get("DB_SIZE_WARN_ODDS_FULL_TICKS_GB", "1.0"))  # nar_odds_full_ticks
 
