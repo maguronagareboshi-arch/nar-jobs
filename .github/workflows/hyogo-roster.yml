@@ -1,0 +1,56 @@
+# §286 兵庫(園田・姫路)の主催者の名簿「番組・馬連名簿」を週 2 回保存する便(表 nar_hyogo_roster・cloud/hyogo_roster.py)。
+#   名簿は週ごとに差し替わる(「令和8年度 9月4週」)。同じ週を取り直したら上書き。
+#   ① probe= 走者から取れるか dry-run で試す(海外を拒むサイトなら取れない)。取れなければ ::warning:: と heartbeat fail で止める
+#      → その場合は本番 DB の pg_net で取る案に切り替える(memory: 海外拒否サイトは pg_net)。
+#   ② apply= upsert → 同じ週の古い行を消す → heartbeat 'hyogo_roster'(note に 週= と頭数)。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: hyogo-roster
+on:
+  schedule:
+    - cron: '0 1 * * 1,4'    # JST 月・木 10:00
+  workflow_dispatch:
+concurrency:
+  group: hyogo-roster
+  cancel-in-progress: false
+jobs:
+  roster:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      # ① 走者から取れるかの試し(DB は読まない・書かない)
+      - name: probe runner fetch
+        id: probe
+        run: |
+          if python cloud/hyogo_roster.py --dry-run --out "$RUNNER_TEMP/probe.csv"; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::走者から兵庫の名簿を取れない(海外拒否の疑い)= 本番 DB の pg_net で取る案に切り替える"
+          fi
+
+      - name: hyogo roster apply
+        if: steps.probe.outputs.ok == '1'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/hyogo_roster.py --apply --out "$RUNNER_TEMP/roster.csv"
+
+      - name: heartbeat probe fail
+        if: steps.probe.outputs.ok == '0'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py hyogo_roster fail 走者から取れない
+
+      # 想定外で落ちたときの印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py hyogo_roster fail 便が落ちた
