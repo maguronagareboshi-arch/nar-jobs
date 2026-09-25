@@ -29,6 +29,7 @@
 import argparse
 import datetime as dt
 import json
+import math
 import os
 import re
 import unicodedata
@@ -1046,7 +1047,8 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
                 base = max(0, value - entry_value) if "p" in TOKAI_V else value
                 if "n" in TOKAI_V:
                     base = max(0, base - gained)       # 読み方 n: 前回以降の収得ぶんは 25% の基礎からも除く
-                adj = _thou(base * 0.25)
+                # §285-B #8 笠松 10(6)ケ「調整額の算出において、千円未満の端数が生じた場合は切り上げる」。名古屋の要綱に端数の定めは無い=従来の切り捨て
+                adj = -(-math.ceil(base * 0.25) // 1000) * 1000 if home == "笠松" else _thou(base * 0.25)
                 if not won and gained < adj:
                     value = max(0, value - (adj - gained))
             gained, won, ran_q = 0, False, False
