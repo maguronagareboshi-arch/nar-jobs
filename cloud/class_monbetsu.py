@@ -1295,6 +1295,13 @@ def timed_main(args):
     newer = got and (k0 is None or RESULT.get("fy") != (stored or {}).get("fy") or int(got) > int(k0))
     if rc == 0 and newer:
         _s, nxt = timing(RESULT.get("kais") or [], mon, sched_end, now)
+        if RESULT.get("applied"):
+            try:                                       # §284① 自前の加算を作り直し+新しい回と照合(⛔便を落とさない)
+                import class_monbetsu_calc as C
+                if C.run(apply=True)[0] != 0:
+                    print("::warning::門別の番組賞金(自前の加算)が作れない", flush=True)
+            except Exception as e:                     # noqa: BLE001
+                print(f"::warning::門別の番組賞金(自前の加算)で失敗 {type(e).__name__}: {str(e)[:120]}", flush=True)
         return say(True, f"第{got}回 取込(asof {RESULT.get('asof')}) 次の見込み={nxt}")
     if rc == 1:
         print("::warning::門別の級別表 投入失敗(前回の表を残す)", flush=True)

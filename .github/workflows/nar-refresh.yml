@@ -247,6 +247,17 @@ jobs:
           H=$(TZ=Asia/Tokyo date +%H%M)
           if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/class_calc.py --apply --hist-days 3 --prefix kochi && python cloud/class_calc.py --apply --hist-days 3 --prefix obihiro && python cloud/class_calc.py --apply --hist-days 3 --prefix saga && python cloud/class_calc.py --apply --hist-days 3 --prefix tokai && python cloud/class_calc.py --apply --hist-days 3 --prefix hyogo; else echo "class calc は朝の便だけ(JST $H)=スキップ"; fi
 
+      # §284① 門別の番組賞金と級= 公式の最新回を起点に前日までの走を自前で加算(nar_meta 'monbetsu_class_calc')。
+      # heartbeat 'monbetsu_calc'。⛔落ちても続行(|| echo)= 便を止めない
+      - name: monbetsu calc (morning only)
+        if: '!cancelled()'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          H=$(TZ=Asia/Tokyo date +%H%M)
+          if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/class_monbetsu_calc.py --apply || echo "::warning::門別の番組賞金(自前の加算)が作れない(続行)"; else echo "monbetsu calc は朝の便だけ(JST $H)=スキップ"; fi
+
       # §54.1 P1 券種別の総票数・返還票数(楽天 race_dividend・1日1場1リクエスト)。
       # 前日までの取りこぼしは --days 3 の窓が自己修復。未確定の日は書かず翌日また試す
       - name: rakuten sales (daily + monthly)
