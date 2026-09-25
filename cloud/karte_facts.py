@@ -3,7 +3,7 @@
 
 対象= 南関 4 場(大井・船橋・川崎・浦和)で、その日の出走表の行が nar_runs にあるレース。1 頭 1 行。
 ⛔発走前の値だけ= **その日より前の走だけ**で数える。馬の見分け= (名前, 生年)(§238e facts.birth_year_of)。
-材料= nar_runs(着順・人気・走破タイム・日付)/ nar_races(post_time・レース名)/ nar_kb_runs(start_note)/
+材料= nar_runs(着順・人気・走破タイム・日付・§281 騎手・調教師)/ nar_races(post_time・レース名・§281 距離)/ nar_kb_runs(start_note)/
       nar_run_facts(今日の行の style・過去走の c1〜c4)/ nar_meta karte:late_next:v1(出遅れの割合表)。
 
   py -3.12 -X utf8 cloud/karte_facts.py                          # ドライラン(JST の今日と明日・書かずに表で出す)
@@ -134,7 +134,7 @@ def match_key(r):
 
 # ---------------------------------------------------------------- 取得(⛔読むだけ)
 
-RUN_COLS = "track,race_date,race_no,runner_number,horse_name,birth_date,age"
+RUN_COLS = "track,race_date,race_no,runner_number,horse_name,birth_date,age,jockey,trainer"   # §281 騎手・調教師
 
 
 def fetch_entries(base, key, date, tracks):
@@ -180,7 +180,7 @@ def fetch_run_facts(base, key, hkeys):
 
 
 def fetch_races(base, key, need):
-    """{(場, 日)} → {(場, 日, R): {post_time, race_name}}。場ごと・日付 80 個ずつ(⛔run_facts.fetch_corners と同じ割り方)。"""
+    """{(場, 日)} → {(場, 日, R): {post_time, race_name, distance_m}}。場ごと・日付 80 個ずつ(⛔run_facts.fetch_corners と同じ割り方)。"""
     by_track = {}
     for t, d in need:
         by_track.setdefault(t, set()).add(d)
@@ -188,7 +188,7 @@ def fetch_races(base, key, need):
     for t, days in sorted(by_track.items()):
         for part in chunks(sorted(days)):
             for r in rows_all(base, key,
-                              "/rest/v1/nar_races?select=track,race_date,race_no,post_time,race_name"
+                              "/rest/v1/nar_races?select=track,race_date,race_no,post_time,race_name,distance_m"
                               "&track=eq.%s&race_date=in.(%s)&order=race_date.asc,race_no.asc"
                               % (urllib.parse.quote(t), q_in(part))):
                 out[(r["track"], str(r["race_date"])[:10], int(r["race_no"]))] = r
@@ -232,11 +232,13 @@ def to_run(r, kb=None, rf=None, race=None, win=None):
            "finish": karte.int_or_none(r.get("finish")), "note": r.get("finish_note"),
            "pop": karte.int_or_none(r.get("popularity")), "time": karte.num_or_none(r.get("time_sec")),
            "win_time": None, "post_time": None, "race_name": None, "late": None,
-           "c1": None, "n1": None, "c4": None, "n4": None}
+           "c1": None, "n1": None, "c4": None, "n4": None,
+           "distance": None, "jockey": r.get("jockey"), "trainer": r.get("trainer")}
     k3 = (r["track"], d, no)
     if race is not None and k3 in race:
         run["post_time"] = race[k3].get("post_time")
         run["race_name"] = race[k3].get("race_name")
+        run["distance"] = karte.int_or_none(race[k3].get("distance_m"))
     if win is not None:
         run["win_time"] = win.get(k3)
     if kb is not None:
@@ -283,6 +285,13 @@ def build_day(base, key, date, tracks, late_table, race_no=None, now=None):
     rf = fetch_run_facts(base, key, hk)
     d0 = (dt.date.fromisoformat(date) - dt.timedelta(days=karte.FORM_DAYS)).isoformat()
     need_race = {(r["track"], str(r["race_date"])[:10]) for r in hist if r["track"] in karte.SOUTH}
+    # §281 前走の距離(南関の外の前走も)と今日のレース(距離・クラス)= 馬名ごとの新しい 3 行 + 今日の場
+    last = {}
+    for r in hist:                                                # hist は日付の古い順
+        last.setdefault(r.get("horse_name"), []).append(r)
+    for rs in last.values():
+        need_race |= {(r["track"], str(r["race_date"])[:10]) for r in rs[-3:]}
+    need_race |= {(e["track"], date) for e in entries}
     need_win = {(r["track"], str(r["race_date"])[:10]) for r in hist
                 if str(r["race_date"])[:10] >= d0 and r.get("time_sec") is not None}
     race = fetch_races(base, key, need_race)
@@ -304,8 +313,11 @@ def build_day(base, key, date, tracks, late_table, race_no=None, now=None):
             opps = [(o["runner_number"], o["horse_name"], by_key.get(match_key(o), []) if match_key(o) else [])
                     for o in group if o is not e]
             style = (rf.get((date, track, no, u)) or {}).get("style")
+            today = race.get((track, date, no)) or {}
             entry = {"race_date": date, "track": track, "race_no": no, "umaban": u,
                      "horse_name": e.get("horse_name"),
+                     "distance": karte.int_or_none(today.get("distance_m")), "race_name": today.get("race_name"),
+                     "jockey": e.get("jockey"), "trainer": e.get("trainer"),
                      "horse_key": facts.horse_key(e.get("horse_name"), e.get("birth_date"), e.get("age"), date)
                      if mk else None}
             out.append(karte.build_row(entry, by_key.get(mk, []) if mk else [], opps, style, late_table, now))
@@ -357,6 +369,11 @@ def fmt_row(r):
                                                                   r["best_finish"])
     rec = "-" if r["recent3_margin"] is None else "%.1f" % r["recent3_margin"]
     lall = "-" if r["late_all_n"] is None else "%d/%d" % (r["late_all_n"], r["late_all_den"])
+    s281 = " | 同場距離帯%s 距離%s→%s クラス%s 乗替%s(再%s) 厩%s" % (
+        "-" if r["same_cd_n"] is None else "%d/%d" % (r["same_cd_top3"], r["same_cd_n"]),
+        r["dist_prev_m"] or "-", r["dist_now_m"] or "-", r["class_move"] or "-",
+        {True: "あり", False: "なし"}.get(r["jockey_switch"], "-"),
+        "-" if r["jockey_rides"] is None else r["jockey_rides"], r["trainer_move"] or "-")
     pace = "ふだん%s(近%s)" % (r["gap_usual_days"] if r["gap_usual_days"] is not None else "-",
                              "・".join(str(g) for g in r["gaps_recent"]) if r["gaps_recent"] else "-")
     return ("%s%2dR %2d %-10s 出遅%s 通算%s 次%s | %s%s 位置%s | 粘%s 失速%s | 30日%s 今年%s 休明%s 間%s日 %s日 | 大井%s 他3%s 夜%s 昼%s"
@@ -368,7 +385,8 @@ def fmt_row(r):
                pace,
                _kn(r["oi_top3_rate"], r["oi_n"]), _kn(r["other3_top3_rate"], r["other3_n"]),
                _kn(r["night_top3_rate"], r["night_n"]), _kn(r["day_top3_rate"], r["day_n"]),
-               h2h, best, rec, _kn(r["pop_beat_rate"], r["pop_beat_n"]), _kn(r["win_conv_rate"], r["win_conv_n"])))
+               h2h, best, rec, _kn(r["pop_beat_rate"], r["pop_beat_n"]), _kn(r["win_conv_rate"], r["win_conv_n"]))
+            + s281)
 
 
 def dates_of(a):

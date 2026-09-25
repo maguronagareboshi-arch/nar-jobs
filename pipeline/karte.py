@@ -16,7 +16,7 @@
   track, race_date('YYYY-MM-DD' か date), race_no, umaban, finish(int|None), note(着の注記),
   pop(人気), time(走破タイム 秒), win_time(そのレースの 1 着のタイム 秒), post_time('1330' 等),
   race_name, noken(能力検査なら True), c1/n1/c4/n4(nar_run_facts), late(True 出遅れ / False 記録あり出遅れ無し /
-  None 記録なし)。⛔runs には取消・取りやめの行も入れてよい(ここで is_start で外す。脚質の回数だけは
+  None 記録なし)、§281 distance(nar_races.distance_m)/ jockey / trainer(nar_runs)。⛔runs には取消・取りやめの行も入れてよい(ここで is_start で外す。脚質の回数だけは
   run_facts と同じく全行から 5 走を選ぶ)
 
   py -3.12 -X utf8 pipeline/karte.py --selftest     # 通信なしの自己診断
@@ -52,6 +52,11 @@ NOKEN_RE = re.compile("能力検査|能検")
 LATE_KEY = "karte:late_next:v1"              # nar_meta の鍵(出遅れの割合表)
 LATE_FROM, LATE_TO = "2025-09-01", "2026-08-31"   # 割合表の期間(決めごと 3= 南関の 1 年)
 LATE_BUCKETS = (0, 1, 2, 3)                  # 直近 5 走の出遅れ回数 0 / 1 / 2 / 3 以上
+COURSE_DAYS = 365                            # §281 今日と同じ場・同じ距離帯の窓
+DIST_BANDS = (1200, 1600)                    # §281 距離帯= 〜1200 / 1201〜1600 / 1601〜
+CLASSES = ("A1", "A2", "B1", "B2", "B3", "C1", "C2", "C3")   # §281 ⛔cloud/nankan_hist.py CLASSES と同じ並び(上→下)
+Z2H = str.maketrans("ＡＢＣ１２３", "ABC123")
+NAME_JUNK = re.compile(r"[\s\u3000▲△☆★◇◆◎○●◯]|[（(].*?[)）]")   # 騎手・調教師の名前の比べ方(空白・減量の印・所属の括弧を外す)
 
 
 # ---------------------------------------------------------------- 小道具
@@ -324,6 +329,90 @@ def time_split(starts):
     return (_top3(nt), len(nt)), (_top3(dy), len(dy))
 
 
+# ---------------------------------------------------------------- §281 今回の変化・今日と同じ場
+
+def dist_band(m):
+    """距離帯 0= 〜1200 / 1= 1201〜1600 / 2= 1601〜。距離が無ければ None。"""
+    m = int_or_none(m)
+    if m is None or m <= 0:
+        return None
+    return sum(1 for b in DIST_BANDS if m > b)
+
+
+def same_course(starts, race_date, track, distance):
+    """今日と同じ場・同じ距離帯の 3 着内 → (3 着内, 走数)(⛔窓= COURSE_DAYS・距離の読めない走は外す)。
+    ⛔今日の距離か場が無ければ (None, None)。走が 0 本なら (0, 0)(材料はある= 0 走)。"""
+    band = dist_band(distance)
+    if band is None or not track:
+        return None, None
+    rows = [r for r in in_days(starts, race_date, COURSE_DAYS)
+            if r.get("track") == track and dist_band(r.get("distance")) == band]
+    return _top3(rows), len(rows)
+
+
+def dist_change(starts, distance):
+    """距離の変化 → (前走の距離, 今回の距離)。⛔無い方は None。"""
+    prev = int_or_none(starts[0].get("distance")) if starts else None
+    return prev, int_or_none(distance)
+
+
+def race_class(name):
+    """レース名 → いちばん上のクラス('A1'〜'C3')。⛔cloud/nankan_hist.race_classes と同じ読み方。読めなければ None。"""
+    s = str(name or "").translate(Z2H)
+    cs = sorted({c for c in re.findall(r"([ABC][123])", s) if c in CLASSES}, key=CLASSES.index)
+    return cs[0] if cs else None
+
+
+def class_move(starts, track, race_name):
+    """クラスの変化= 同じ場の前の走(直近)のクラスとくらべて '上' / '同じ' / '下'。⛔どちらかのクラスが読めない・
+    同じ場の走が無ければ None(推定で埋めない)。"""
+    now = race_class(race_name)
+    if now is None:
+        return None
+    prev = next((r for r in starts if r.get("track") == track), None)
+    pc = race_class(prev.get("race_name")) if prev else None
+    if pc is None:
+        return None
+    i, j = CLASSES.index(now), CLASSES.index(pc)
+    return "上" if i < j else "下" if i > j else "同じ"
+
+
+def norm_name(v):
+    s = NAME_JUNK.sub("", str(v or ""))
+    return s or None
+
+
+def same_person(a, b):
+    """騎手・調教師の名前が同じ人か(⛔出どころで略し方が違う= 片方がもう片方の頭なら同じ)。どちらか無ければ None。"""
+    a, b = norm_name(a), norm_name(b)
+    if a is None or b is None:
+        return None
+    return a.startswith(b) or b.startswith(a)
+
+
+def jockey_change(starts, jockey):
+    """乗り替わり → (前走と騎手が違うか, 今回の騎手が以前この馬に乗った回数(全期間・実走))。
+    ⛔前走が無い・名前が無ければ (None, None)。乗り替わりでなければ回数は None。"""
+    if not starts:
+        return None, None
+    sw = same_person(starts[0].get("jockey"), jockey)
+    if sw is None:
+        return None, None
+    if sw:
+        return False, None
+    return True, sum(1 for r in starts if same_person(r.get("jockey"), jockey))
+
+
+def trainer_move(starts, trainer):
+    """転厩して初戦= 前走と調教師が違う → '転厩'(前走が南関)/ '転入'(前走が南関の外)。同じ・材料なし= None。"""
+    if not starts:
+        return None
+    same = same_person(starts[0].get("trainer"), trainer)
+    if same is None or same:
+        return None
+    return "転厩" if starts[0].get("track") in SOUTH else "転入"
+
+
 # ---------------------------------------------------------------- 相手関係(通算・南関の走だけ)
 
 def race_id(r):
@@ -429,7 +518,8 @@ def late_targets(runs, lo, hi, tracks=SOUTH):
 def build_row(entry, runs, opponents, style, late_table, computed_at):
     """1 頭ぶんの nar_karte_facts の行(dict)。⛔欠けは None のまま(0 で埋めない)。
 
-    entry= 今日の出走表の行 {race_date, track, race_no, umaban, horse_name, horse_key}
+    entry= 今日の出走表の行 {race_date, track, race_no, umaban, horse_name, horse_key,
+           §281 distance, race_name, jockey, trainer(無くてよい= 該当の列が None)}
     runs= この馬の全走(走 1 本の形・今日の行や未来の行が混じっていてよい= ここで切る)
     opponents= [(馬番, 馬名, その馬の全走)](今日の相手)/ style= 今日の nar_run_facts.style
     horse_key が None(名前か生年が無い)なら事実は全部 None(⛔名前だけで別の馬をつながない)。
@@ -453,6 +543,9 @@ def build_row(entry, runs, opponents, style, late_table, computed_at):
     (nk, nn), (dk, dn) = time_split(st)
     hh, hw, hl = h2h(st, [(no, nm, past_starts(rs, d)) for no, nm, rs in opponents])
     fm = form(st, d)
+    sk, sn = same_course(st, d, entry["track"], entry.get("distance"))
+    dp, dnow = dist_change(st, entry.get("distance"))
+    jsw, jrides = jockey_change(st, entry.get("jockey"))
     row.update({
         "late_n": ln, "late_den": lden, "late_next_pct": late_next_pct(ln, late_table), "late_runs": lruns,
         "style_counts": style_counts(runs, entry["track"], d),
@@ -469,11 +562,14 @@ def build_row(entry, runs, opponents, style, late_table, computed_at):
         "recent3_margin": fm["recent3_margin"],
         "pop_beat_rate": ratio(*fm["pop_beat"]), "pop_beat_n": fm["pop_beat"][1],
         "win_conv_rate": ratio(*fm["win_conv"]), "win_conv_n": fm["win_conv"][1],
+        "same_cd_top3": sk, "same_cd_n": sn, "dist_prev_m": dp, "dist_now_m": dnow,
+        "class_move": class_move(st, entry["track"], entry.get("race_name")),
+        "jockey_switch": jsw, "jockey_rides": jrides, "trainer_move": trainer_move(st, entry.get("trainer")),
     })
     return row
 
 
-# 表の列(⛔pipeline/sql/karte_facts_20260922.sql + karte_facts_s274_20260924.sql と同じ並び)
+# 表の列(⛔pipeline/sql/karte_facts_20260922.sql + karte_facts_s274_20260924.sql + karte_facts_s281_20260925.sql と同じ並び)
 COLUMNS = (
     "race_date", "track", "race_no", "umaban", "horse_key", "horse_name",
     "late_n", "late_den", "late_next_pct", "late_runs",
@@ -484,6 +580,8 @@ COLUMNS = (
     "best_margin", "best_margin_date", "best_finish", "recent3_margin", "pop_beat_rate", "pop_beat_n", "win_conv_rate", "win_conv_n",
     "computed_at",
     "late_all_n", "late_all_den", "gap_usual_days", "gaps_recent",      # §274(ADD COLUMN= 末尾に付く)
+    "same_cd_top3", "same_cd_n", "dist_prev_m", "dist_now_m", "class_move",   # §281
+    "jockey_switch", "jockey_rides", "trainer_move",
 )
 
 
@@ -551,6 +649,22 @@ def selftest(quiet=False):
                         _run("2025-01-01", track="園田", finish=1)])]
     check("h2h 南関だけ", h2h(st, opp), ([{"umaban": 3, "horse_name": "相手", "w": 2, "l": 0}], 2, 0))
     check("h2h 会っていない", h2h(st, [(4, "他", [])]), (None, None, None))
+    # §281(st= 9/1 浦和 2 着・8/10 大井 1 着・7/1 浦和 7 着・2025-01-01 園田 4 着)
+    s3 = [dict(r, distance=dv, jockey=jv, trainer=tv, race_name=nv) for r, dv, jv, tv, nv in zip(st, (
+        1400, 1500, 1400, 1200), ("森泰斗", "笹川翼", "森　泰", None), ("A師", "A師", "B師", "C師"), ("C1", "B3", "C2", "C3"))]
+    check("dist_band", [dist_band(x) for x in (1200, 1201, 1600, 1601, None)], [0, 1, 1, 2, None])
+    check("same_course 浦和・1201〜1600", same_course(s3, D, "浦和", 1500), (1, 2))
+    check("same_course 距離なし", same_course(s3, D, "浦和", None), (None, None))
+    check("dist_change", dist_change(s3, 1600), (1400, 1600))
+    check("race_class 全角・混合は上", (race_class("Ｃ２Ｃ３"), race_class("B3C1"), race_class("オープン")), ("C2", "B3", None))
+    check("class_move 同じ場の前の走", class_move(s3, "浦和", "B3"), "上")
+    check("class_move 同じ", class_move(s3, "浦和", "C1"), "同じ")
+    check("class_move 読めない", class_move(s3, "浦和", "オープン"), None)
+    check("jockey_change 略しても同じ人", jockey_change(s3, "森泰"), (False, None))
+    check("jockey_change 再騎乗", jockey_change(s3[1:], "森泰斗"), (True, 1))
+    check("trainer_move 転厩", trainer_move(s3[2:], "Z師"), "転厩")
+    check("trainer_move 転入", trainer_move(s3[3:], "Z師"), "転入")
+    check("trainer_move 同じ", trainer_move(s3, "A師"), None)
     check("late_table_counts", late_table_counts([(True, 0), (False, 0), (True, 4)])[0]["pct"], 50.0)
     if not quiet:
         print("karte selftest: %d/%d" % (n - bad, n))
