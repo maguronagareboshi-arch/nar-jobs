@@ -1,5 +1,5 @@
 # §271 風の保存: 開催場の気象庁アメダス 10 分値(風向・風速・気温)を nar_wind_obs へ残す(気象庁は 10 日前までしか出さない)。
-# 毎晩 JST 23:50(その日の最終 R 後)に今日 1 日分。初回は手で days=10。
+# 毎晩 JST 23:50(その日の最終 R 後)に今日 1 日分(遅れて 06 時前に走ったら前日)。初回は手で days=10。
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY(既存。**新しい secret は作らない**)
 # 失敗の通知は nar-watchdog が heartbeat(wind_store)を見る。
 name: wind-store

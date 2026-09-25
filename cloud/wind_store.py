@@ -192,7 +192,9 @@ def main(argv=None):
         dates = [a.date]
     else:
         n = max(1, min(10, a.days))
-        dates = [(now.date() - dt.timedelta(days=i)).isoformat() for i in range(n)]
+        # 9/25 実例: 23:50 の定時便が GitHub の遅れで翌 03:41 に走り「今日」= 翌日を取って空振り。06 時前は前日を起点に
+        base = now.date() - dt.timedelta(days=1 if now.hour < 6 else 0)
+        dates = [(base - dt.timedelta(days=i)).isoformat() for i in range(n)]
     tot_v, tot_rows, failed, err = 0, 0, [], None
     try:
         for d in dates:
