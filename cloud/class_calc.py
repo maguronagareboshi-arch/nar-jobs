@@ -5,7 +5,7 @@
 **帯広ばんえい**(令和8年度 番組編成要領 第2・第7。検算= docs/s79_p3_verify_obihiro_20260903.md 99.27%)・
 **佐賀**(令和8年度 番組編成要領 第4-1。状態機械。検算= docs/s79_p3_verify_saga_20260903.md 98.27%)・
 **東海(笠松・名古屋)**(番組要綱。1 地区の状態機械。検算= docs/s79_p3_verify_tokai_20260903.md 97.66%・計算した級の精度 ≥96.5%)・
-**兵庫(園田・姫路)**(ポイント制。走歴の格組を合図に同期し昇級だけ予測。検算= docs/s79_p3_verify_hyogo_20260903.md 94.4%・表示方針つき 99.0%)。
+**兵庫(園田・姫路)**(ポイント制。走歴の格組を合図に同期し昇級だけ予測。§286 格付修正(走歴の降級から検出)ごとに最下限を超えた点を半分に。検算= docs/s79_p3_verify_hyogo_20260903.md 94.4%・表示方針つき 99.0%)。
 
   py -3.12 -X utf8 cloud/class_calc.py --verify --prefix kochi [--local kochi_ledger.json]   # 検算(書かない)
   py -3.12 -X utf8 cloud/class_calc.py --apply  --prefix kochi --env <.env.nar>               # calc 列を書く
@@ -1455,6 +1455,70 @@ def hyogo_transfer_pts(rs, d, key, cls):
     return None
 
 
+HYOGO_REVS = []          # §286 格付修正の日(hyogo_revisions で走歴から検出・main_hyogo が入れる)
+HYOGO_OTHER_GRADED = set()   # §286 他場の重賞(nar_races の race_kind=重賞)の (track, 'YYYY-MM-DD', race_no)
+
+
+def hyogo_revisions(rows, races, tables, min_n=8, max_gap=45):
+    """§286 格付修正の日を走歴から検出する(公表されないため)。修正でしか起きない降級(単独クラスで上→下の級)の
+    前後の走の間 (a, b](b−a ≤ max_gap 日)を数え、重なりが最大の区間の初日(= 旧格付の最後の開催の翌日)を修正の日とする。
+    実測(2025-26): 2025-07-05・09-06・11-07・2026-01-09・03-06・05-08・07-04・09-05(概ね2か月ごと)。"""
+    pairs = []
+    for r in rows:
+        prev = None
+        for x in sorted(r.get("runs") or [], key=lambda y: str(y.get("d"))):
+            if x.get("tr") not in HYOGO_TRACKS or not _date(x.get("d")):
+                continue
+            lab = hyogo_label(x, races.get((x.get("tr"),) + _rkey(x)))
+            if not lab:
+                continue
+            if prev and prev[0][0] == lab[0]:
+                names = [c for c, _, _ in (tables[0] if lab[0] == "old" else tables[1])]
+                a, b = prev[1], _date(x.get("d"))
+                if names.index(lab[1]) > names.index(prev[0][1]) and (b - a).days <= max_gap:
+                    pairs.append((a, b))
+            prev = (lab, _date(x.get("d")))
+    cov = Counter()
+    for a, b in pairs:
+        for i in range(1, (b - a).days + 1):
+            cov[a + dt.timedelta(days=i)] += 1
+    out = []
+    for x in sorted(cov):
+        n = cov[x]
+        if n < min_n or cov.get(x - dt.timedelta(days=1), 0) >= n:
+            continue                                       # 区間の初日だけ
+        if any(cov.get(x + dt.timedelta(days=k), 0) > n for k in range(-20, 21)):
+            continue                                       # 近くにもっと重なる日がある
+        if out and (x - out[-1]).days < 30:
+            continue
+        out.append(x)
+    return out
+
+
+def _hyogo_halve(st, tables, a, b):
+    """§286 格付修正(a < R ≤ b)ごとに、いまの級の最下限を超えた点を半分にする(切り捨て)。
+    要領に書かれていない(「新格付に伴うポイント修正」は非公表)。実データの突き合わせで決めた:
+    修正の後の昇級・据え置き 3,127 例と矛盾する数= 半分 51・0 に戻す 126・そのまま 467(修正 10 回どれも半分が最少級)。"""
+    if not st["cls"]:
+        return
+    for R in HYOGO_REVS:
+        if (a is None or a < R) and R <= b:
+            lo = _lo(tables[st["table"]], st["cls"])
+            if st["pts"] > lo:
+                st["pts"] = lo + (st["pts"] - lo) // 2
+
+
+def _hyogo_graded_stakes(r, race):
+    """重賞(他場含む・要領 第5-2(2)(5))。在籍場= nar_races の race_kind、他場= HYOGO_OTHER_GRADED、ＪＲＡ= 名前の G。"""
+    kind = str((race or {}).get("race_kind") or "")
+    if kind == "重賞" or "重賞" in str(r.get("cls") or ""):
+        return True
+    if r.get("tr") not in HYOGO_TRACKS and (r.get("tr"),) + _rkey(r) in HYOGO_OTHER_GRADED:
+        return True
+    name = str(r.get("name") or "")
+    return bool(r.get("jra") and (_JRA_G12.search(name) or _JRA_G3.search(name)))
+
+
 def hyogo_state(runs, birth, asof, lag, races, trace=False):
     """→ dict(cls, table, pts, resident, synced, note)"""
     cutoff = asof - dt.timedelta(days=lag)
@@ -1475,8 +1539,11 @@ def hyogo_state(runs, birth, asof, lag, races, trace=False):
         return None
 
     last_home = None
+    prev_d = None
     for r in rs:
         d = _date(r.get("d"))
+        _hyogo_halve(st, tables, prev_d, d)                  # §286 この走までに格付修正があれば点を半分に
+        prev_d = d
         tr = r.get("tr")
         race = races.get((tr,) + _rkey(r)) if tr in HYOGO_TRACKS else None
         a = age(d)
@@ -1509,6 +1576,8 @@ def hyogo_state(runs, birth, asof, lag, races, trace=False):
                         if nl and nl[0] == key and nl[1] == st["cls"] and r.get("fin") != 1:
                             pass                                  # 格上挑戦
                         else:
+                            # 格上で1着(第5-2(4))= 勝ったクラスの最下限に昇級し、その走の点も足す(下の加算)。
+                            # 実データ(§286・4/1〜): 足さない読みは 5 走悪い(3歳Ｃ２→Ｃ１勝ち→次は3歳Ｂ など)
                             st.update(cls=cls, pts=max(st["pts"], _lo(table, cls)))
                     else:
                         # 降級(格付修正)= 1段ごとに 前クラスの最下限−60(Ｃ３へは60・3歳Ｃ２へは90)。2段落ちたら2回
@@ -1536,8 +1605,7 @@ def hyogo_state(runs, birth, asof, lag, races, trace=False):
             pts = (HYOGO_PTS_G if _graded(name) else HYOGO_PTS)[fin]
             st["pts"] += pts
             table = tables[st["table"]]
-            kind = str((race or {}).get("race_kind") or "")
-            if fin == 1 and (kind == "重賞" or "重賞" in str(r.get("cls") or "")):
+            if fin == 1 and _hyogo_graded_stakes(r, race):
                 up = _up(table, st["cls"])
                 if up:
                     st["cls"] = up                            # 重賞1着= 点に関係なく1つ上(点は戻さない)
@@ -1547,9 +1615,11 @@ def hyogo_state(runs, birth, asof, lag, races, trace=False):
                 if hi is not None and st["pts"] > hi:
                     up = _up(table, st["cls"])
                     if up:
-                        st["cls"], st["pts"] = up, _lo(table, up)   # 昇級= 最下限に戻す
+                        # 昇級= 最下限に戻す。重賞(他場含む)で越えたときは戻さない(第5-2(2) ただし書き)
+                        st["cls"], st["pts"] = up, (st["pts"] if _hyogo_graded_stakes(r, race) else _lo(table, up))
         if trace:
             print(f"  {d} {str(tr):4} fin={fin} → {st['table']} {st['cls']} pts={st['pts']}")
+    _hyogo_halve(st, tables, prev_d, asof)                   # §286 最後の走のあと asof までの格付修正
     return st
 
 
@@ -1653,6 +1723,18 @@ def verify_hyogo(tables, rows, births, races, since, lags):
                         kinds["表示対象で一致"] += 1
                 # §286 型A の後の表示条件(apply/hist と同じ= 直前の走の格組と突き合わせ・線を越えて上がった直後は出す)
                 last = next((y for y in runs if (yd := _date(y.get("d"))) and yd < d), None)
+                if c.get("hide"):
+                    kinds["hide(線を越えた計算)"] += 1
+                # 前走で線を越えて1つ上がった計算(前走の格組の1つ上・点がその級の範囲)の当たり= 1着と2〜5着に分けて数える
+                olab = hyogo_label({"cls": last.get("cls") if last else None, "name": ""}, None)
+                if olab and isinstance(last.get("fin"), int) and 1 <= last["fin"] <= 5:
+                    ot = tables[0] if olab[0] == "old" else tables[1]
+                    up = _up(ot, olab[1])
+                    if up and pred == ("3歳" if olab[0] == "y3" else "") + up and                             _lo(ot, up) <= c["value"] and (_hi(ot, up) is None or c["value"] <= _hi(ot, up)):
+                        w = "1着" if last["fin"] == 1 else "2〜5着"
+                        kinds[f"線越え(前走{w})"] += 1
+                        if pred == actual:
+                            kinds[f"線越え(前走{w})で一致"] += 1
                 if not c.get("hide") and not hyogo_official_mismatch(tables, c, last):
                     kinds["表示対象§286"] += 1
                     if pred == actual:
@@ -1749,7 +1831,15 @@ def main_hyogo(a):
             load_env(a.env)   # ⛔#465 クラウドは環境変数だけ(--env 無しで 他場.env を探して SystemExit していた)
         url, key = os.environ["SUPABASE_URL"], os.environ["SUPABASE_SERVICE_KEY"]
         rows, births, entered, races = fetch_hyogo(url, key, since)
-    log(f"台帳 {len(rows)} 頭(兵庫の走が {since} 以降にある馬)・レース {len(races)}")
+        # §286 他場の重賞(第5-2(2)「重賞競走(他場含む)で昇級した場合は戻さない」)= nar_races の race_kind=重賞(全場で約1,300行)
+        HYOGO_OTHER_GRADED.clear()
+        HYOGO_OTHER_GRADED.update((r["track"], str(r["race_date"])[:10], int(r["race_no"])) for r in sb_all(
+            url, key, f"nar_races?select=track,race_date,race_no&race_kind=eq.{urllib.parse.quote('重賞')}&race_date=gte.2022-11-01")
+            if r.get("race_no") is not None and r.get("track") not in HYOGO_TRACKS)
+    log(f"台帳 {len(rows)} 頭(兵庫の走が {since} 以降にある馬)・レース {len(races)}・他場の重賞 {len(HYOGO_OTHER_GRADED)}")
+    # §286 格付修正の日(非公表)を走歴の降級から検出。修正ごとに点を半分にする(_hyogo_halve)
+    HYOGO_REVS[:] = hyogo_revisions(rows, races, tables)
+    log("格付修正の日(検出):", [x.isoformat() for x in HYOGO_REVS])
     if a.verify:
         lags = [a.lag] if a.lag is not None else [0, 3, 7]
         rep = verify_hyogo(tables, rows, births, races, since, lags)
