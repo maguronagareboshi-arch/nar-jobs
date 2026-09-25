@@ -230,7 +230,7 @@ jobs:
           PY
 
   # 監査 A8(2026-09-24) 定期便の最終成功時刻(表 nar_job_heartbeat)を外から見る。どれかに当たれば赤(= 所有者へ失敗メール)
-  #   ① dispatch か odds_watch か ai_last の last_status が 'fail'(本番 DB の起動係・オッズ見張り・AI 直前便が自分で失敗を書いた)
+  #   ① dispatch か odds_watch か ai_last か monbetsu_calc の last_status が 'fail'(本番 DB の起動係・オッズ見張り・AI 直前便・門別の番組賞金の照合外れ §284①が自分で失敗を書いた)
   #   ⑤ monbetsu_class の note の「見込み=YYYY-MM-DD」の翌日 JST 09:00 を過ぎても新しい回が無い(§284)
   #   ② JST 09:30〜22:00 に refresh の last_ok が 70 分より古い(daily 便は 30 分おき)
   #   ③ JST 09:30 以降に ai_feat・stats の last_ok が今日でない
@@ -267,7 +267,7 @@ jobs:
               r = got[job]
               print(f"{job:24s} ok={r.get('last_ok')} try={r.get('last_try')} status={r.get('last_status')} note={r.get('note')}")
           bad = []
-          for job in ('dispatch', 'odds_watch', 'ai_last'):
+          for job in ('dispatch', 'odds_watch', 'ai_last', 'monbetsu_calc'):
               if (got.get(job) or {}).get('last_status') == 'fail':
                   bad.append(f"{job} の last_status= fail(note={(got.get(job) or {}).get('note')})")
           if 930 <= hm < 2200:

@@ -101,6 +101,30 @@ class Build(unittest.TestCase):
         self.assertEqual(v["horses"]["甲"]["prize"], 1_200_000)                 # 9/15 は第13回に入っている
         self.assertEqual(C.note_of(v)[0], False)
 
+    def test_check_from_saved_calc(self):
+        # hist は無い(本番どおり)。保存済みの calc(第12回起点)を持った状態で第13回の公式を当てる
+        off12 = {"fy": 2026, "kai": 12, "asof": "2026-09-11", "asof_by": {"ipan": "2026-09-11"},
+                 "horses": {"甲": {"prize": 700_000, "age": 4, "cls": "Ｃ４－１"},
+                            "乙": {"prize": 700_000, "age": 4, "cls": "Ｃ４－１"}}}
+        rs = {(r["track"], r["race_date"], r["race_no"]): r
+              for r in [race(1, "Ｂ４", date="2026-09-15"), race(2, "Ｃ２", date="2026-09-16")]}
+        runs = [run(1, 1, date="2026-09-15"), run(2, 1, name="乙", date="2026-09-16")]
+        prev = C.build(off12, None, None, runs, {}, rs, "2026-09-20")
+        self.assertIsNone(prev["check"])                                        # 初回は照合なし
+        self.assertEqual(prev["horses"]["甲"]["prize"], 1_200_000)
+        off13 = {"fy": 2026, "kai": 13, "asof": "2026-09-25", "asof_by": {"ipan": "2026-09-25"},
+                 "horses": {"甲": {"prize": 1_200_000, "age": 4, "cls": "Ｃ３－１"},
+                            "乙": {"prize": 1_000_000, "age": 4, "cls": "Ｃ３－２"}}}
+        prev = json.loads(json.dumps(prev))                                     # nar_meta を通った形
+        v = C.build(off13, None, prev, runs, {}, rs, "2026-09-25")
+        c = v["check"]
+        self.assertEqual((c["kai"], c["n"], c["match"], c["new"]), (13, 2, 1, True))
+        self.assertEqual(c["miss"], [["乙", 1_100_000, 1_000_000, 12]])
+        self.assertEqual((v["base_kai"], v["horses"]["乙"]["base_kai"], v["horses"]["乙"]["prize"]), (13, 13, 1_000_000))
+        self.assertEqual(sorted(v["cuts"]), ["12", "13"])
+        v2 = C.build(off13, None, json.loads(json.dumps(v)), runs, {}, rs, "2026-09-26")
+        self.assertEqual((v2["check"]["new"], C.note_of(v2)[0]), (False, True))  # 翌朝の便は照合を持ち越し ok
+
 
 @unittest.skipUnless((SCR / "cls26" / "kai13.json").exists() and (SCR / "cache_runs.json").exists(),
                      "手元の写し(scratchpad)が無い")
