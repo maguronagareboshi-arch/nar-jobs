@@ -3,6 +3,7 @@
 -- 入力= nar_runs(age, birth_date 込み)・nar_races・nar_race_payouts・nar_horses(dam, breeder 込み)・auction_sales・
 --        noken_meta / noken_recs(能検索引を python で行に開いた表)。
 -- 出力= nar_shinba_stats(kind, a, b, stats, as_of)。stats は件数だけ {n, w1, w2, w3, pay}(dm だけ sib を足す)。率は画面で割る。
+-- 母集団= sd/bd/st は 2 歳の走ぜんぶ(tmp_d2・9/25 ユーザー決定)・td/br/jk は新馬戦(tmp_s)・他は 2 歳の初戦(tmp_d)。
 -- b の鍵は viewer の data.js SHINBA_BANDS と同じ字(検査で一致を見る)。
 -- 窓= 前日までの 3 年。n<5 の行は作らない(dm だけ n≥1= 設計書 §2-2)。a・b の「無し」は ''・全体は a='*'。
 set statement_timeout = '30min';
@@ -74,6 +75,13 @@ select f.* from (
 where f.age = 2 and f.race_date >= (select w_from from tmp_sw);
 create index on tmp_d (horse_name);
 
+-- D2= 2 歳の走ぜんぶ(窓の中の age=2 の「走った」行・9/25 ユーザー決定)。sd/bd/st の母集団
+drop table if exists tmp_d2;
+create temp table tmp_d2 as
+select horse_name, distance_m, track, finish, win_pay from tmp_sr
+where age = 2 and race_date >= (select w_from from tmp_sw);
+create index on tmp_d2 (horse_name);
+
 -- S= 新馬戦の出走(判定語は viewer の SHINBA_WORDS と同じ「新馬」「初出走」)
 drop table if exists tmp_s;
 create temp table tmp_s as
@@ -96,16 +104,16 @@ where c.cnt > 0 and d.race_date >= (select nk_from from tmp_sw);
 drop table if exists tmp_kv;
 create temp table tmp_kv (kind text, a text, b text, finish int, win_pay int);
 
--- sd 父×距離帯 / bd 母父×距離帯 / st 父×場(D)
+-- sd 父×距離帯 / bd 母父×距離帯 / st 父×場(D2= 2 歳の走ぜんぶ)
 insert into tmp_kv
 select 'sd', h.sire, pg_temp.band_dist(d.distance_m), d.finish, d.win_pay
-from tmp_d d join public.nar_horses h on h.horse_name = d.horse_name;
+from tmp_d2 d join public.nar_horses h on h.horse_name = d.horse_name;
 insert into tmp_kv
 select 'bd', h.broodmare_sire, pg_temp.band_dist(d.distance_m), d.finish, d.win_pay
-from tmp_d d join public.nar_horses h on h.horse_name = d.horse_name;
+from tmp_d2 d join public.nar_horses h on h.horse_name = d.horse_name;
 insert into tmp_kv
 select 'st', h.sire, d.track, d.finish, d.win_pay
-from tmp_d d join public.nar_horses h on h.horse_name = d.horse_name;
+from tmp_d2 d join public.nar_horses h on h.horse_name = d.horse_name;
 
 -- td 厩舎の新馬戦 / br 生産牧場 / jk 騎手×場の新馬戦(S)
 insert into tmp_kv select 'td', s.trainer, '', s.finish, s.win_pay from tmp_s s;
