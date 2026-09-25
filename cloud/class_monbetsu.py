@@ -222,6 +222,40 @@ def get_bin(url, tries=2):
             _last[0] = time.monotonic()
 
 
+def head_lm(url):
+    """HEAD だけ打って Last-Modified を返す(§284 差し替えの検知)。無ければ None。"""
+    _wait()
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA}, method="HEAD")
+        with urllib.request.urlopen(req, timeout=25) as res:
+            return res.headers.get("Last-Modified")
+    finally:
+        _last[0] = time.monotonic()
+
+
+def _lm_time(v):
+    from email.utils import parsedate_to_datetime
+    try:
+        return parsedate_to_datetime(v) if v else None
+    except (TypeError, ValueError):
+        return None
+
+
+def lm_changed(old_lm, new_lm):
+    """回ごとの Last-Modified {ipan,2sai} の保存値と HEAD の値 → (取り直す本, 記録だけする本)。
+    ⛔保存値が無い本(初回)は記録だけで取り直さない。新しくなった本だけ取り直す。"""
+    old_lm, again, record = old_lm or {}, [], []
+    for kind, v in (new_lm or {}).items():
+        t_new, t_old = _lm_time(v), _lm_time(old_lm.get(kind))
+        if t_new is None:
+            continue
+        if t_old is None:
+            record.append(kind)
+        elif t_new > t_old:
+            again.append(kind)
+    return sorted(again), sorted(record)
+
+
 _PDFLIB = []
 
 
@@ -740,11 +774,11 @@ def read_pdf(data, last_modified, kind, kai, want_fy, drop):
 
 # ---------------------------------------------------------------- 1開催回
 
-def collect_kai(fy, kai, drop, cache=None):
-    """1開催回(PDF 2本)→ {"kai","asof","fy","horses","blocks","files"}。
-    年度違い(前年度の残骸)は None を返す(⛔1)。"""
-    horses, blocks, files, asofs, nisai = {}, [], [], {}, set()
-    for kind in KINDS:
+def collect_kai(fy, kai, drop, cache=None, kinds=KINDS):
+    """1開催回(PDF 2本)→ {"kai","asof","fy","horses","blocks","files","lm"}。
+    年度違い(前年度の残骸)は None を返す(⛔1)。kinds で本を絞れる(§284 差し替えの取り直し)。"""
+    horses, blocks, files, asofs, nisai, lms = {}, [], [], {}, set(), {}
+    for kind in kinds:
         url = pdf_url(kai, kind)
         try:
             if cache and (cache / f"mon{kai}-{kind}.pdf").exists():
@@ -774,6 +808,8 @@ def collect_kai(fy, kai, drop, cache=None):
         if got["kai_in"] and got["kai_in"] != kai:
             drop.append(f"第{kai}回 {kind}: PDF の見出しは第{got['kai_in']}回(URLと違う)")
         files.append(url)
+        if lm:
+            lms[kind] = lm
         if got["asof"]:
             asofs[kind] = got["asof"]
         blocks += got["blocks"]
@@ -788,7 +824,8 @@ def collect_kai(fy, kai, drop, cache=None):
     # ⚠同じ回でも2本の PDF の作成日が違うことがある(実測 第8回= 一般 7/17・2歳 7/23)。
     # asof は**遅いほう**(表がそろった日)。内訳も残す。
     return {"kai": kai, "fy": fy, "asof": max(asofs.values()) if asofs else None,
-            "asof_by": asofs, "horses": horses, "blocks": blocks, "files": files, "kaku_n": kaku_n}
+            "asof_by": asofs, "horses": horses, "blocks": blocks, "files": files, "kaku_n": kaku_n,
+            "lm": lms}
 
 
 def put_horse(horses, row, block, drop):
@@ -1098,7 +1135,8 @@ def run(args):
 
     newest = max(kais)
     head = kais[newest]
-    index = [{"kai": k, "asof": v["asof"], "n": len(v["horses"])} for k, v in sorted(kais.items())]
+    index = [{"kai": k, "asof": v["asof"], "n": len(v["horses"])} | ({"lm": v["lm"]} if v.get("lm") else {})
+             for k, v in sorted(kais.items())]
     for k in (stored or {}).get("kais", []):        # 今回取りに行かなかった回も索引に残す
         if (stored or {}).get("fy") == fy and not any(i["kai"] == k["kai"] for i in index):
             index.append(k)
@@ -1161,6 +1199,61 @@ def run(args):
     return 0
 
 
+def recheck(stored, base, key, apply):
+    """§284 最新回の PDF 2 本に HEAD だけ打ち、Last-Modified が保存時より新しい本だけ取り直す。
+    保存値が無い(初回)ときは記録だけ。→ note に添える文字列。"""
+    fy, kai = stored.get("fy"), int(stored.get("kai") or 0)
+    kais = stored.get("kais") or []
+    ent = next((k for k in kais if int(k.get("kai") or 0) == kai), None)
+    if not fy or not kai or ent is None:
+        return ""
+    now_lm = {}
+    for kind in KINDS:
+        v = head_lm(pdf_url(kai, kind))
+        if v:
+            now_lm[kind] = v
+    again, record = lm_changed(ent.get("lm"), now_lm)
+    log(f"差し替えの確認 第{kai}回: HEAD {now_lm} / 保存 {ent.get('lm')} → 取り直し {again} / 記録だけ {record}")
+    if not again and not record:
+        return ""
+    value = json.loads(json.dumps(stored))              # 写しを直す
+    ent2 = next(k for k in value["kais"] if int(k.get("kai") or 0) == kai)
+    lm = dict(ent2.get("lm") or {})
+    for kind in record:
+        lm[kind] = now_lm[kind]
+    note = ""
+    if again:
+        drop = []
+        got = collect_kai(fy, kai, drop, kinds=tuple(again))
+        if not got or set(got.get("lm") or {}) != set(again):
+            print(f"::warning::門別の級別表 第{kai}回 {again} の取り直しに失敗(前回の表を残す)", flush=True)
+            again = []
+        else:
+            # 取り直さない本の馬は保存値から残す(3歳以上= age あり / 2歳= age なし)
+            keep = {n: h for n, h in (value.get("horses") or {}).items()
+                    if len(again) < len(KINDS) and ("age" in h) == ("2sai" in again)}
+            keep.update(got["horses"])
+            value["horses"] = keep
+            value["asof_by"] = dict(value.get("asof_by") or {}) | (got.get("asof_by") or {})
+            if value["asof_by"]:
+                value["asof"] = max(value["asof_by"].values())
+            ent2["asof"], ent2["n"] = value.get("asof"), len(keep)
+            lm.update(got["lm"])
+            value["built"] = f"{dt.datetime.now(JST):%Y-%m-%d}"
+            note = f" 第{kai}回 {'・'.join(again)} 差し替え取込"
+            log(f"第{kai}回 {again} を取り直した({len(got['horses'])}頭・合わせて {len(keep)}頭)")
+    ent2["lm"] = lm
+    if not apply:
+        log("ドライラン(差し替えの確認は書かない)")
+        return note
+    status, msg = upsert(base, key, "nar_meta", "key", [
+        {"key": META_KEY, "value": value, "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()}])
+    if status not in (200, 201):
+        print(f"::warning::門別の級別表 差し替えの投入失敗 {status} {str(msg)[:120]}", flush=True)
+        return ""
+    return note
+
+
 def timed_main(args):
     """§284 見込み日だけ取りに行く。⛔常に exit 0(取れなくても便を落とさない・前回の表を残す)。"""
     import beat as B                                   # cloud/beat.py(標準ライブラリだけ)
@@ -1183,10 +1276,16 @@ def timed_main(args):
     k0 = (stored or {}).get("kai")
     log(f"判定 {state} / 最新 第{k0}回 asof {(stored or {}).get('asof')} / 見込み {exp}"
         f" / 門別の開催日 {len(mon) if mon is not None else '読めない'}")
+    extra = ""
+    if state in ("season_end", "before") and stored and now.hour < OVERDUE_HOUR:
+        try:
+            extra = recheck(stored, base, key, args.apply)
+        except Exception as e:                         # noqa: BLE001(⛔便を落とさない)
+            print(f"::warning::門別の級別表 差し替えの確認に失敗 {type(e).__name__}: {str(e)[:120]}", flush=True)
     if state == "season_end":
-        return say(True, f"今季終わり(最終 第{k0}回・{exp} から 10 日以内に門別の開催なし)")
+        return say(True, f"今季終わり(最終 第{k0}回・{exp} から 10 日以内に門別の開催なし){extra}")
     if state == "before":
-        return say(True, f"見込み={exp} 前(第{k0}回まで取込済み)")
+        return say(True, f"見込み={exp} 前(第{k0}回まで取込済み){extra}")
 
     try:
         rc = run(args)
