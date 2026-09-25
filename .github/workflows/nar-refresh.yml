@@ -107,7 +107,7 @@ jobs:
       # ⛔戻すとき: ここに `- name: odds` / `run: python cloud/odds.py`(if: env.MODE != 'monthly')を足すだけ。
 
       # 2026-09-09 base-v0 の印(cloud/marks.py)は書くのをやめた= 画面は base-v1 の 1 本(別便 nar-ai-feat.yml が書く)。
-      # cloud/marks.py は残す(戻すときは `- name: ai marks` / `run: python cloud/marks.py` を足すだけ)。
+      # 2026-09-25 cloud/marks.py は git rm で撤去(失敗作の整理)。DB の base-v0 の行は残す。戻すときは git 履歴から。
 
       # データ鮮度の見張り(daily): 直近3時間以内に nar_races が更新されていなければ失敗させる
       # (失敗すると GitHub が所有者へ通知メールを送る=これが唯一の監視。DESIGN §21)
