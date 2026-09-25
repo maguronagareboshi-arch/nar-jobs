@@ -1,0 +1,38 @@
+# 2026-09-26 枝 horse-sales: セール(市場取引)の上場記録を表 sale_listings へ(cloud/sale_listings.py weekly)。
+#   毎週月曜 JST 04:10。今年の JBIS 一覧から「終わって 60 日以内」の市場だけ取り直す(4 秒間隔・多くて 10 ページ前後)
+#   → 母名+性+生年(月日)で当サイトの馬に結ぶ → upsert → 直近 5 世代の未結びを再ひも付け → heartbeat 'sale_listings'。
+#   市場の季節= 1 月(ジェイエス冬)・4〜7 月(ブリーズアップ・トレーニング・千葉・九州・八戸・セレクト・セレクション)・8〜10 月(サマー・セプテンバー・オータム・ミックス・ジェイエス)。
+# ⛔表 sale_listings は pipeline/sql/sale_listings_20260926.sql を本番に流してから有効にする(無いと upsert 404= fail)。
+# ⛔便を足したら viewer の /update-times にも行を足す。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: sale-listings
+on:
+  schedule:
+    - cron: '10 19 * * 0'    # JST 毎週月曜 04:10
+  workflow_dispatch:
+concurrency:
+  group: sale-listings
+  cancel-in-progress: false
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: sale listings weekly
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/sale_listings.py weekly --apply --raw "$RUNNER_TEMP/jbis"
+
+      # 想定外で落ちたときの印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py sale_listings fail 便が落ちた
