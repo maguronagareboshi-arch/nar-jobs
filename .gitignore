@@ -10,3 +10,4 @@ data/
 .env*
 pipeline/.env*
 *.env.*
+fonts/*.ttf
