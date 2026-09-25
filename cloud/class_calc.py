@@ -755,6 +755,13 @@ TOKAI_A_STEP = ((30_000_000, 15_000_000), (18_000_000, 10_000_000), (9_000_000, 
 TOKAI_CUT = {"native": 2_000_000, "local": 1_000_000, "jra": 700_000}
 TOKAI_CUT_RATE = {"native": 0.50, "local": 0.30, "jra": 0.20}
 TOKAI_Y2, TOKAI_Y3 = 4_500_000, 4_400_000
+TOKAI_Y3_2027 = 4_500_000   # §285-B 要領(名古屋 R8「2歳(2027年1月以降3歳)450万円未満」・笠松 5(1)オ「令和9年1月から450万円未満」)
+TOKAI_Y3_FROM = dt.date(2027, 1, 1)
+
+
+def tokai_y3(d):
+    """3 歳格の線。2027-01-01 以降は 450 万(それより前は 440 万)。"""
+    return TOKAI_Y3_2027 if d >= TOKAI_Y3_FROM else TOKAI_Y3
 # 検算(2026-09-03・docs/s79_p3_verify_tokai_20260903.md)= 採用 "jqeti"・転出 365 日・lag 3 → 97.66%
 #   (実際の級ごと: ３歳 99.9 / Ｃ級 98.6 / Ｂ級 93.0。計算した級ごとの精度: Ｃ級 96.9 / Ｂ級 96.5 = 画面に出す判断の物差し)。
 #   j=+70万(中央歴) q=四半期調整 e=編入控除 t=岐阜↔愛知の移籍は換算し直し i=孤立した1走は転入でない
@@ -814,19 +821,42 @@ def _dg(name):
     return bool(re.search(r"Ｊｐｎ|Jpn|ＪＢＣ|JBC|ネクストスター", name))
 
 
-def tokai_rate_resident(run, race):
+def _sp_grade(text):
+    """レース名・区分から SP の格(1/2/3)を読む。取れなければ None。"""
+    m = re.search(r"(?:ＳＰ|SP)\s*(Ⅲ|Ⅱ|Ⅰ|III|II|I|３|２|１|3|2|1)", text)
+    if not m:
+        return None
+    return {"Ⅰ": 1, "Ⅱ": 2, "Ⅲ": 3, "I": 1, "II": 2, "III": 3, "１": 1, "２": 2, "３": 3, "1": 1, "2": 2, "3": 3}[m.group(1)]
+
+
+def tokai_rate_resident(run, race, venue=None):
+    """在籍馬の換算率。venue= レースの場(名古屋/笠松)。§285-B 要領 R8(名古屋 (2)・笠松 10(2))で場ごとに分ける。
+    SP の格が名前・区分から取れないときは従来の近似(古馬重賞 60%・2歳3歳準重賞 50%)のまま。
+    ⚠笠松の「Ａ級1組の加算額以下の古馬重賞は Ａ級1組と同額」は未対応。"""
     name = str((race or {}).get("race_name") or run.get("name") or "")
     kind = str((race or {}).get("race_kind") or "")
+    grade = _sp_grade(name + " " + kind + " " + str((race or {}).get("grade") or ""))
+    venue = venue or str(run.get("tr") or "")
     young = bool(re.search(r"[２３]歳", name))
     if _dg(name):
         return 0.30, "ダートグレード"
+    if "重賞級" in name:
+        return 0.30, "重賞級認定"
     if "認定" in name or "Ｊ認" in name:
         return 0.40, "認定"
     if "新馬" in name:
         return 0.50, "新馬"
     if kind == "重賞":
-        return (0.40, "2歳3歳重賞") if young else (0.60, "古馬重賞")
+        if young:
+            return 0.40, "2歳3歳重賞"
+        if grade == 1:
+            return 0.60, "古馬SPⅠ"
+        if grade == 2 or (grade == 3 and venue == "笠松"):
+            return 0.70, "古馬SPⅡⅢ"
+        return 0.60, "古馬重賞"
     if kind == "準重賞" and young:
+        if venue == "名古屋":
+            return 0.60, "2歳3歳P"
         return 0.50, "2歳3歳準重賞"
     return 1.00, "東海"
 
@@ -950,9 +980,9 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
             return v < TOKAI_Y2
         if a == 3 and "u" in TOKAI_V:
             hen = TOKAI_HEN.get(d.year)
-            return v < TOKAI_Y3 and (d < hen if hen else d.month <= 9)
+            return v < tokai_y3(d) and (d < hen if hen else d.month <= 9)
         if a == 3 and d.month <= 9:
-            return v < TOKAI_Y3
+            return v < tokai_y3(d)
         return False
 
     for kind, d, r in events:
@@ -1028,7 +1058,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
                 gained, won = 0, False
                 tk_ever = True
             recent = (recent + [r.get("tr")])[-5:]
-            rate, label = tokai_rate_resident(r, races.get((r.get("tr"),) + _rkey(r)) if races else None)
+            rate, label = tokai_rate_resident(r, races.get((r.get("tr"),) + _rkey(r)) if races else None, r.get("tr"))
             got = _thou(prize * rate)
             value += got
             if young and not cur_young(d, value):                        # 線に達した→ 編入(控除)
@@ -1087,7 +1117,8 @@ def tokai_calc(lines, runs, asof, lag, birth, age_at, races, prefix):
         out["next"] = {"cls": GENERAL, "need": TOKAI_Y2, "gap": TOKAI_Y2 - value}
     elif age == 3 and young:
         out["cls"] = "３歳"
-        out["next"] = {"cls": GENERAL, "need": TOKAI_Y3, "gap": TOKAI_Y3 - value}
+        y3 = tokai_y3(asof)
+        out["next"] = {"cls": GENERAL, "need": y3, "gap": y3 - value}
     else:
         cls = classify(lines, value)
         out["cls"] = cls
