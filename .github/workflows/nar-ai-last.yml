@@ -61,7 +61,13 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
-          R=$(gh run list -R "$GITHUB_REPOSITORY" -w nar-ai-feat.yml -s success -L 1 --json databaseId,createdAt,event --jq '.[0] | "\(.databaseId) \(.createdAt) \(.event)"')
+          # 9/25 実例: 遅れた予備 schedule は build を飛ばした success(成果物 0)になる= 成果物のある最新の便まで戻る
+          R=""
+          for L in $(gh run list -R "$GITHUB_REPOSITORY" -w nar-ai-feat.yml -s success -L 10 --json databaseId,createdAt,event --jq '.[] | "\(.databaseId)|\(.createdAt)|\(.event)"'); do
+            N=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/${L%%|*}/artifacts" --jq .total_count)
+            if [ "$N" -gt 0 ]; then R=$(echo "$L" | tr '|' ' '); break; fi
+            echo "run ${L%%|*} は成果物 0 本= 飛ばす"
+          done
           ID=${R%% *}
           { [ -n "$ID" ] && [ "$ID" != "null" ]; } || { echo "朝便の成功が見つからない"; exit 1; }
           CREATED=$(echo "$R" | cut -d' ' -f2)

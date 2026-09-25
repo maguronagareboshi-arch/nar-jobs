@@ -38,8 +38,33 @@ permissions:
   actions: read
 
 jobs:
-  predict:
+  # 9/25 実例: nar-ai-feat の予備 schedule が遅れて走ると gate が「今日は済み」で build を飛ばし成果物 0 本の success になる
+  #   → それを拾って落ちていた。成果物が無い便なら predict を飛ばす(本物の便で先に済んでいる)
+  check:
     if: github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.c.outputs.go }}
+    steps:
+      - name: skip when the feat run has no artifacts
+        id: c
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EV_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          if [ -z "$EV_ID" ]; then echo "go=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+          N=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$EV_ID/artifacts" --jq .total_count)
+          echo "nar-ai-feat run=$EV_ID 成果物 $N 本"
+          if [ "$N" -gt 0 ]; then
+            echo "go=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::nar-ai-feat run $EV_ID は build を飛ばした便(成果物 0)= 予想は作らない"
+            echo "go=0" >> "$GITHUB_OUTPUT"
+          fi
+
+  predict:
+    needs: check
+    if: needs.check.outputs.go == '1'
     runs-on: ubuntu-latest
     timeout-minutes: 60
     env:
