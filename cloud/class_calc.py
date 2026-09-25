@@ -1344,6 +1344,40 @@ def _graded(name):
     return bool(re.search(r"Ｊｐｎ|Jpn|ＪＢＣ|JBC|ＧＩ|GI|ＧＩＩ|ＧＩＩＩ|G1|G2|G3", name))
 
 
+HYOGO_RETURN_DAYS = 548   # 別表1(3)ウ: 1年半以内の再転入は元のクラス・点に復帰。それを超えたら新たな転入として扱う
+_JRA_JUMP = re.compile(r"障害|ジャンプ|ＪＳ|ＳＳ")
+_JRA_G12 = re.compile(r"(Ｇ|G)(Ｉ|I|ＩＩ|II)(?!I|Ｉ)")
+_JRA_G3 = re.compile(r"(Ｇ|G)(ＩＩＩ|III)")
+_JRA_OP = re.compile(r"オープン|上オー?$|歳オー?$|ＯＰ|(Ｇ|G)(Ｉ|I)|Ｌ$|（Ｌ）")
+
+
+def hyogo_transfer_pts(rs, d, key, cls):
+    """別表1(3)(4歳以上転入)の転入点。d= 兵庫での最初の走の日、rs= それより前の走。当てはまらなければ None。
+    イ: ＪＲＡ未勝利から1年以内= Ｃ２ 130。表: ＪＲＡ(1年以内) GⅠ・Ⅱ勝ち Ａ１ 1,160/GⅢ勝ち Ａ１ 960/OP Ａ１ 860。
+    DB で取れない分(3歳単独の実績馬の別途決定・南関の賞金 200万以上の最低Ｃ１ など)は今のまま(最下限)。"""
+    if key != "old":
+        return None
+    jra = [r for r in rs if r.get("jra") and (x := _date(r.get("d"))) and x < d
+           and (d - x).days <= 365 and not _JRA_JUMP.search(str(r.get("name") or ""))]
+    if not jra:
+        return None
+    names = [(str(r.get("name") or ""), r.get("fin")) for r in jra]
+    if cls == "Ａ１":
+        if any(f == 1 and _JRA_G12.search(n) for n, f in names):
+            return 1160
+        if any(f == 1 and _JRA_G3.search(n) for n, f in names):
+            return 960
+        if any(_JRA_OP.search(n) for n, _ in names):
+            return 860
+        return None
+    if cls == "Ｃ２":
+        won = any(r.get("jra") and r.get("fin") == 1 for r in rs)
+        last = max(jra, key=lambda r: str(r.get("d")))
+        if not won and re.search(r"未勝利|新馬", str(last.get("name") or "")):
+            return 130
+    return None
+
+
 def hyogo_state(runs, birth, asof, lag, races, trace=False):
     """→ dict(cls, table, pts, resident, synced, note)"""
     cutoff = asof - dt.timedelta(days=lag)
@@ -1363,12 +1397,17 @@ def hyogo_state(runs, birth, asof, lag, races, trace=False):
                 return lab
         return None
 
+    last_home = None
     for r in rs:
         d = _date(r.get("d"))
         tr = r.get("tr")
         race = races.get((tr,) + _rkey(r)) if tr in HYOGO_TRACKS else None
         a = age(d)
         if tr in HYOGO_TRACKS:
+            if last_home and (d - last_home).days > HYOGO_RETURN_DAYS:
+                # 1年半を超える再転入= 新たな転入(別表1(3)ウの裏)
+                st.update(cls=None, table=None, pts=0, resident=False, via_graded=False)
+            last_home = d
             lab = hyogo_label(r, race)
             if lab:
                 key, cls = lab
@@ -1376,9 +1415,12 @@ def hyogo_state(runs, birth, asof, lag, races, trace=False):
                 if st["cls"] is None or st["table"] != key:
                     # 初回(転入・2歳→3歳・3歳→古馬)= その走の格組に合わせる。点は、在籍中に積んだ点がその級の幅に
                     # 収まっていればそのまま(2歳の走の点も数える)・外れていれば最下限(別表1。3歳Ｃ２の転入は 49)
+                    # 転入(未在籍)で別表1(3)の JRA 実績に当たれば その点(1,160/960/860/130)
                     lo, hi = _lo(table, cls), _hi(table, cls)
                     inside = st["resident"] and st["pts"] >= lo and (hi is None or st["pts"] <= hi)
-                    pts = st["pts"] if inside else (49 if (key == "y3" and cls == "Ｃ２" and not st["resident"]) else lo)
+                    tp = None if st["resident"] else hyogo_transfer_pts(rs, d, key, cls)
+                    pts = st["pts"] if inside else (tp if tp is not None else
+                                                    (49 if (key == "y3" and cls == "Ｃ２" and not st["resident"]) else lo))
                     st.update(cls=cls, table=key, pts=pts)
                     st["synced"] = True
                     st["resident"] = True
