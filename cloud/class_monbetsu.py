@@ -1302,6 +1302,11 @@ def timed_main(args):
                     print("::warning::門別の番組賞金(自前の加算)が作れない", flush=True)
             except Exception as e:                     # noqa: BLE001
                 print(f"::warning::門別の番組賞金(自前の加算)で失敗 {type(e).__name__}: {str(e)[:120]}", flush=True)
+            # §285-F 便の次の手順(過去レースの昇級ライン)に「新しい回を取った」を渡す
+            gho = os.environ.get("GITHUB_OUTPUT")
+            if gho:
+                with open(gho, "a", encoding="utf-8") as f:
+                    f.write(f"new_kai={got}\n")
         return say(True, f"第{got}回 取込(asof {RESULT.get('asof')}) 次の見込み={nxt}")
     if rc == 1:
         print("::warning::門別の級別表 投入失敗(前回の表を残す)", flush=True)

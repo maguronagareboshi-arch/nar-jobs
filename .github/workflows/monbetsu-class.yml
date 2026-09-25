@@ -24,10 +24,23 @@ jobs:
           python-version: '3.12'
       - run: pip install -r cloud/requirements.txt
       - name: monbetsu class timed
+        id: timed
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: python cloud/class_monbetsu.py --timed --apply
+
+      # §285-F 新しい回を取った時だけ= 過去レースの昇級ライン(表 nar_monbetsu_level_hist)を今年度ぶん upsert で作り直す。
+      #   kais= 公式 PDF の第1回〜最新回を取り直す(nar_meta は書かない)。⛔失敗しても便は落とさない(::warning:: だけ)
+      - name: monbetsu level hist
+        if: steps.timed.outputs.new_kai != ''
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          python cloud/class_monbetsu.py --backfill --out "$RUNNER_TEMP/kais" \
+            && python cloud/class_monbetsu_level_hist.py --kais "$RUNNER_TEMP/kais" --out "$RUNNER_TEMP/lvh" --apply \
+            || echo "::warning::門別の過去レースの昇級ラインを作り直せなかった(前の行を残す)"
 
       # 想定外で落ちたときの印(表 nar_job_heartbeat)。⛔表が無くても落ちない
       - name: heartbeat fail

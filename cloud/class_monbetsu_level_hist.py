@@ -8,7 +8,8 @@
 
   python cloud/class_monbetsu.py --env <path> --backfill --out <kais>           # 第1〜最新回の JSON(書かない)
   python cloud/class_monbetsu_level_hist.py --env <path> --kais <kais> --out <dir>           # 読むだけ・CSV
-  python cloud/class_monbetsu_level_hist.py --env <path> --kais <kais> --out <dir> --apply   # 表へ upsert
+  python cloud/class_monbetsu_level_hist.py --env <path> --kais <kais> --out <dir> --apply   # 表へ upsert(冪等)
+  便= .github/workflows/monbetsu-class.yml が新しい回を取った時だけ、公式 PDF から kais を作り直して --apply
 ⛔本番 DB は PostgREST の軽い SELECT だけ(--apply 以外は書かない)。DDL= pipeline/sql/monbetsu_level_hist_20260925.sql
 """
 import argparse
@@ -147,8 +148,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--env")
     ap.add_argument("--out", required=True, help="CSV と check.json の書き出し先")
-    ap.add_argument("--from", dest="dfrom", default="2026-04-01")
-    ap.add_argument("--to", dest="dto", default="2026-09-24")
+    ap.add_argument("--from", dest="dfrom", help="既定= 年度の初め(4/1)")
+    ap.add_argument("--to", dest="dto", help="既定= 公式最新回の asof(viewer が過去表を引く範囲)")
     ap.add_argument("--kais", help="過去回の JSON(class_monbetsu.py --backfill --out の kaiNN.json)の置き場。"
                     f"無ければ nar_meta/{CM.HIST_KEY}")
     ap.add_argument("--apply", action="store_true", help=f"{TABLE} へ upsert(既定はドライラン)")
@@ -165,6 +166,8 @@ def main():
     if not official or not official.get("horses"):
         CM.log(f"{CM.META_KEY} が読めない")
         return 2
+    a.dfrom = a.dfrom or f"{official['fy']}-04-01"
+    a.dto = a.dto or str(official["asof"])
     mon = CC._get(base, key, "nar_runs?select=track,race_date,race_no,runner_number,horse_name,birth_date,age"
                   f"&track=eq.{urllib.parse.quote(TRACK)}&race_date=gte.{a.dfrom}&race_date=lte.{a.dto}"
                   "&order=race_date,race_no,runner_number,horse_name")
