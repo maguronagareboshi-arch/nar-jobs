@@ -5,6 +5,7 @@ Actions 内の Postgres で計算し、本番との差分だけを戻す台本�
   python3 pipeline/stats_local/stats_local.py dump [--asof ISO]   ①④ 本番から入力表・出力表・推定行数を写す(⛔読むだけ)
   python3 pipeline/stats_local/stats_local.py load                ② 手元に入れて analyze
   python3 pipeline/stats_local/stats_local.py run                 ③ 集計 SQL 6 本を**そのまま**手元で流す
+  python3 pipeline/stats_local/stats_local.py shinba              ③' §280 能検索引を noken_recs に開き shinba_stats.sql を流す
   python3 pipeline/stats_local/stats_local.py diff                ⑤ 表ごとに 同じ/変わった/手元だけ/本番だけ をログへ
   python3 pipeline/stats_local/stats_local.py apply [--allow-large]  差分を REST で本番へ(安全柵に掛かれば何も書かない)
 
@@ -15,6 +16,7 @@ Actions 内の Postgres で計算し、本番との差分だけを戻す台本�
   本番 psql= PROD_PGPASSWORD(他は下の定数)/ 本番 REST= SUPABASE_URL・SUPABASE_SERVICE_KEY
   手元 psql= PGHOST・PGPORT・PGUSER・PGDATABASE・PGPASSWORD(便の env)
 """
+import csv
 import json
 import os
 import re
@@ -32,18 +34,27 @@ PROD = dict(host="aws-0-ap-northeast-1.pooler.supabase.com", port="5432",
 # 入力表= 本番から写す列(⛔schema.sql の並びと同じ)と、手元で付ける主キー/索引
 INPUTS = {
     "nar_runs": ("track, race_date, race_no, runner_number, gate, horse_name, jockey, trainer, finish, finish_note, "
-                 "time_sec, popularity, last3f, updated_at",
+                 "time_sec, popularity, last3f, age, birth_date, updated_at",
                  "alter table public.nar_runs add primary key (track, race_date, race_no, runner_number)"),
     "nar_races": ("track, race_date, race_no, post_time, race_name, surface, distance_m, going, field_size, "
                   "prize_yen, race_kind, updated_at",
                   "alter table public.nar_races add primary key (track, race_date, race_no)"),
     "nar_race_payouts": ("track, race_date, race_no, payouts, updated_at",
                          "alter table public.nar_race_payouts add primary key (track, race_date, race_no)"),
-    "nar_horses": ("horse_name, sire, broodmare_sire, owner, updated_at",
+    "nar_horses": ("horse_name, sire, broodmare_sire, owner, dam, breeder, updated_at",
                    "alter table public.nar_horses add primary key (horse_name)"),
     "nar_ai_marks": ("model, track, race_date, race_no, timing, marks, computed_at, updated_at",
                      "create index on public.nar_ai_marks (track, race_date, race_no)"),
+    # §280 落札価格帯(kind=au)。レースの日付が無いので asof で絞らない(nar_horses と同じ)
+    "auction_sales": ("source, horse_name, birth_date, auction_date, price, sold",
+                      "create index on public.auction_sales (horse_name)"),
 }
+NO_ASOF = ("nar_horses", "auction_sales")
+# §280 能検索引= nar_meta key='noken_index' の 1 行(nar-ai-feat.yml と同じ \copy)。
+# ⛔INPUTS に入れない= 手元の public.nar_meta は出力(big_payouts)の器で、入れると diff が「手元だけ」として本番へ書き戻す。
+#   手元では別の表 public.noken_meta に置き、cmd_shinba が noken_recs に開く。
+NOKEN_COPY = "select key, value, updated_at from public.nar_meta where key = 'noken_index'"
+NOKEN_KEYS = ("d", "r", "n", "dr", "dn", "ar", "t1", "t1r", "j", "w")   # ⛔schema.sql の noken_recs の並び(horse_name, date の後)
 
 # 出力表= (主キー, 比べる列の式)。updated_at は now() なので比べない。
 # ⛔nar_jockey_track_stats.as_of(集計した日)も比べない= 毎日全行が「変わった」になるため(要判断: 画面は as_of を表示に使う)
@@ -59,6 +70,8 @@ OUTPUTS = {
                     "winner_horse", "winner_jockey", "winner_pop"]),
     # big_payouts の 'built'(作った時刻)は比べない
     "nar_meta": (["key"], ["value - 'built'"]),
+    # §280 新馬戦の傾向。as_of は比べない(nar_jockey_track_stats と同じ扱い)
+    "nar_shinba_stats": (["kind", "a", "b"], ["stats"]),
 }
 OUT_COLS = {
     "nar_venue_stats": "track, period, stats, updated_at",
@@ -70,6 +83,7 @@ OUT_COLS = {
     "nar_graded": ("track, race_date, race_no, race_name, race_kind, distance_m, post_time, field_size, prize1_yen, "
                    "winner_horse, winner_jockey, winner_pop, updated_at"),
     "nar_meta": "key, value, updated_at",
+    "nar_shinba_stats": "kind, a, b, stats, as_of, updated_at",
 }
 OUT_WHERE = {"nar_meta": "where key = 'big_payouts'"}
 SQLS = ["venue_stats", "person_stats", "ai_record", "race_level", "graded", "big_payouts"]
@@ -112,12 +126,13 @@ def cmd_dump(asof):
         #   (1 本目の check= 2026-09-23 23:25 UTC 以降に nar_race_payouts 48,726 行が上書きされていて回収率がほぼ全部ずれた)。
         #   → レースの日付がある表は「asof の JST の日より前のレース」は updated_at に関わらず残す。nar_horses は絞らない
         #   (新しい馬は未来の出走にしか付かず、集計は着順のある走だけを数える)。
-        if not asof or t == "nar_horses":
+        if not asof or t in NO_ASOF:
             w = ""
         else:
             w = (f" where updated_at <= '{asof}'::timestamptz"
                  f" or race_date < ('{asof}'::timestamptz at time zone 'Asia/Tokyo')::date")
         lines.append(f"\\copy (select {cols} from public.{t}{w}) to '{DUMP}/in_{t}.tsv'")
+    lines.append(f"\\copy ({NOKEN_COPY}) to '{DUMP}/in_noken_meta.tsv'")
     for t, cols in OUT_COLS.items():
         lines.append(f"\\copy (select {cols} from public.{t} {OUT_WHERE.get(t, '')}) to '{DUMP}/out_{t}.tsv'")
     names = ",".join(f"'{t}'" for t in list(INPUTS) + list(OUTPUTS))
@@ -146,6 +161,7 @@ def cmd_load():
     psql_local_file(os.path.join(ROOT, "pipeline/stats_local/schema.sql"))
     for t in INPUTS:
         psql_local(f"\\copy public.{t} from '{DUMP}/in_{t}.tsv'")
+    psql_local(f"\\copy public.noken_meta from '{DUMP}/in_noken_meta.tsv'")
     for t, (_, ddl) in INPUTS.items():
         psql_local(ddl)
     psql_local("analyze")
@@ -165,6 +181,68 @@ def cmd_run():
         log(f"{s}.sql {time.time() - t0:.1f} 秒")
         if r.returncode != 0:
             raise SystemExit(f"{s}.sql が失敗")
+
+
+# ------------------------------------------------------------------ ③' §280 新馬戦の傾向
+def _int(v):
+    try:
+        return int(v) if v is not None and v != "" else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _num(v):
+    try:
+        return float(v) if v is not None and v != "" else None
+    except (TypeError, ValueError):
+        return None
+
+
+def noken_rows(value):
+    """能検索引の JSON({"built", "horses": {馬名: [記録…]}})→ noken_recs の行
+    (horse_name, date, d, r, n, dr, dn, ar, t1, t1r, j, w)。日付の読めない記録は捨てる・無いキーは None"""
+    out = []
+    horses = value.get("horses") if isinstance(value, dict) else None
+    for name, recs in (horses or {}).items():
+        if not name or not isinstance(recs, list):
+            continue
+        for r in recs:
+            if not isinstance(r, dict):
+                continue
+            date = str(r.get("date") or "")
+            if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", date):
+                continue
+            j = r.get("j")
+            out.append((name, date, r.get("d") or None, _int(r.get("r")), _int(r.get("n")), _int(r.get("dr")),
+                        _int(r.get("dn")), _int(r.get("ar")), _num(r.get("t1")), _int(r.get("t1r")),
+                        str(j) if j else None, _int(r.get("w"))))
+    return out
+
+
+def cmd_shinba():
+    t0 = time.time()
+    got = psql_local("select value::text from public.noken_meta where key = 'noken_index'", fetch=True).strip()
+    recs = noken_rows(json.loads(got)) if got else []
+    path = os.path.join(DUMP, "noken_recs.csv")
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        csv.writer(f).writerows(recs)
+    psql_local("truncate public.noken_recs")
+    psql_local(f"\\copy public.noken_recs from '{path}' with (format csv)")
+    psql_local("analyze public.noken_recs")
+    idx = {k: i + 2 for i, k in enumerate(NOKEN_KEYS)}
+    log(f"noken_recs {len(recs)} 行(j {sum(1 for r in recs if r[idx['j']])}・w {sum(1 for r in recs if r[idx['w']] is not None)}"
+        f"・t1r {sum(1 for r in recs if r[idx['t1r']] is not None)}・dr {sum(1 for r in recs if r[idx['dr']] is not None)})"
+        + ("" if got else "  ⚠索引が無い= 能検の kind は 0 行"))
+    r = subprocess.run(["psql", "-v", "ON_ERROR_STOP=1", "-X", "-f",
+                        os.path.join(ROOT, "pipeline/stats_local/shinba_stats.sql")],
+                       capture_output=True, text=True, encoding="utf-8")
+    tail = "\n".join(r.stdout.splitlines()[-12:])
+    log(f"::group::shinba_stats.sql rc={r.returncode}\n{tail}\n{r.stderr[-2000:]}\n::endgroup::")
+    if r.returncode != 0:
+        raise SystemExit("shinba_stats.sql が失敗")
+    for k, n in rows("select kind, count(*) from public.nar_shinba_stats group by kind order by kind"):
+        log(f"  nar_shinba_stats {k}: {n} 行")
+    log(f"shinba 済み {time.time() - t0:.1f} 秒")
 
 
 # ------------------------------------------------------------------ ⑤ 差分
@@ -311,6 +389,8 @@ def main(argv):
         cmd_load()
     elif c == "run":
         cmd_run()
+    elif c == "shinba":
+        cmd_shinba()
     elif c == "diff":
         cmd_diff()
     elif c == "apply":

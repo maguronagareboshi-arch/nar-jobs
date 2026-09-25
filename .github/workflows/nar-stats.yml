@@ -86,6 +86,10 @@ jobs:
       - name: run stats sql (local only)
         run: python3 pipeline/stats_local/stats_local.py run
 
+      # ---------------------------------------------------------------- ③' §280 新馬戦の傾向(能検索引を行に開く → shinba_stats.sql・⛔手元だけ)
+      - name: run shinba stats sql (local only)
+        run: python3 pipeline/stats_local/stats_local.py shinba
+
       # ---------------------------------------------------------------- ⑤ 照合(check)/ 差分を本番へ(apply)
       - name: diff against production
         if: env.MODE == 'check'
@@ -110,3 +114,16 @@ jobs:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: python3 cloud/beat.py stats fail 失敗
+      # §280 新馬戦の傾向(nar_shinba_stats)も同じ流れで書くので成否は同じ
+      - name: heartbeat shinba ok
+        if: success() && env.MODE == 'apply'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py shinba_stats ok
+      - name: heartbeat shinba fail
+        if: failure() && env.MODE == 'apply'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py shinba_stats fail 失敗

@@ -13,7 +13,7 @@ end $$;
 create table public.nar_runs (
   track text not null, race_date date not null, race_no integer not null, runner_number integer not null,
   gate integer, horse_name text, jockey text, trainer text, finish integer, finish_note text,
-  time_sec numeric, popularity integer, last3f numeric, updated_at timestamptz not null
+  time_sec numeric, popularity integer, last3f numeric, age integer, birth_date date, updated_at timestamptz not null
 );
 create table public.nar_races (
   track text not null, race_date date not null, race_no integer not null,
@@ -25,12 +25,26 @@ create table public.nar_race_payouts (
   payouts jsonb not null, updated_at timestamptz not null
 );
 create table public.nar_horses (
-  horse_name text not null, sire text, broodmare_sire text, owner text, updated_at timestamptz not null
+  horse_name text not null, sire text, broodmare_sire text, owner text, dam text, breeder text,
+  updated_at timestamptz not null
 );
 create table public.nar_ai_marks (
   model text not null, track text not null, race_date date not null, race_no integer not null, timing text not null,
   marks jsonb not null, computed_at timestamptz not null, updated_at timestamptz not null
 );
+-- §280 落札価格帯(kind=au)
+create table public.auction_sales (
+  source text not null, horse_name text, birth_date date, auction_date date not null, price integer, sold boolean not null
+);
+-- §280 能検索引(本番 nar_meta key='noken_index' の 1 行)と、それを python で行に開いた表(⛔本番には作らない)
+create table public.noken_meta (
+  key text primary key, value jsonb not null, updated_at timestamptz not null
+);
+create table public.noken_recs (
+  horse_name text not null, date date not null, d text, r integer, n integer, dr integer, dn integer,
+  ar integer, t1 numeric, t1r integer, j text, w integer
+);
+create index on public.noken_recs (horse_name, date);
 
 -- ---------------------------------------------------------------- 出力のうち、集計 SQL が create しない表
 create table public.nar_ai_record (
