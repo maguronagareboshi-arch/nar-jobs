@@ -28,6 +28,10 @@
   py -3.12 -X utf8 cloud/class_monbetsu.py --backfill         # 今年度の第1回から全部
   py -3.12 -X utf8 cloud/class_monbetsu.py --kai 10 --verify  # 1回だけ+検品(頭数・級の分布・捨てた行)
   py -3.12 -X utf8 cloud/class_monbetsu.py --env pipeline/.env.nar --apply   # 実弾(nar_meta へ upsert)
+  python cloud/class_monbetsu.py --timed --apply             # §284 便(monbetsu-class.yml)。見込み日だけ取りに行く
+    ・見込み日= 最新回の asof + 14 日(隔週金曜)。見込み日から 10 日以内に門別の開催が無ければ今季終わり。
+    ・見込み日の前日より前/今季終わり= 通信しない。取れなければ警告だけで exit 0(前回の表を残す)。
+    ・heartbeat 'monbetsu_class' の note に「見込み=YYYY-MM-DD」。外の見張り(nar-watchdog)が翌日 09:00 で判定。
 環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY(--apply の書き込みだけ。読みは要らない)
 終了コード: 0 正常 / 1 投入失敗 / 2 前提の読み取りに失敗
 ⚠ローカル実行は **py -3.12 -X utf8**(py 単体は py.ini で 3.13-32 に解決され pdfplumber が無い)。
@@ -101,6 +105,69 @@ KINDS = ("ipan", "2sai")
 KAI_MAX = 20            # 門別は年度16回前後。3回続けて空振りしたら打ち切る
 KAI_BLANK_STOP = 3
 MAN = 10000             # 番組賞金は万円(⛔8)
+
+# §284 発表の見込み(今年度 第1〜13回= 隔週金曜 11:13〜13:21 JST。例外= 連休明けの木曜)
+EVERY_DAYS = 14         # 最新回の asof + 14 日= 次の見込み日
+EARLY_DAYS = 1          # 見込み日の前日(木曜の例外)から見に行く
+SEASON_WIN = 10         # 見込み日から 10 日以内に門別の開催が無ければ今季の発表は無い
+OVERDUE_HOUR = 15       # 見込み日の 15 時以降(15:30 の便)でも取れていなければ「未取得」
+START_WITHIN = 7        # 今季終わりの後、7 日以内に門別の開催が来たら新しい季の第1回を待つ
+BEAT_JOB = "monbetsu_class"
+
+
+def _day(v):
+    try:
+        return dt.date.fromisoformat(str(v)[:10])
+    except (TypeError, ValueError):
+        return None
+
+
+def monbetsu_days(sched):
+    """nar_meta 'kaisai_schedule' の value → (門別の開催日の昇順, 日程の最後の日)。読めなければ (None, None)。"""
+    if isinstance(sched, str):
+        try:
+            sched = json.loads(sched)
+        except ValueError:
+            return None, None
+    days = sched.get("days") if isinstance(sched, dict) else None
+    if not isinstance(days, dict) or not days:
+        return None, None
+    mon, every = [], []
+    for d, items in days.items():
+        dd = _day(d)
+        if dd is None:
+            continue
+        every.append(dd)
+        if any(isinstance(it, list) and it and it[0] == "monbetsu" for it in items or []):
+            mon.append(dd)
+    return sorted(mon), (max(every) if every else None)
+
+
+def timing(kais, mon_days, sched_end, now):
+    """→ (state, 見込み日)。now は JST の datetime。
+    state = 'before'(見込み日の前日より前= 通信しない) / 'due'(見に行く) / 'overdue'(見込み日 15 時を過ぎた)
+          / 'season_end'(見込み日から 10 日以内に門別の開催なし= 通信しない) / 'unknown'(前回の表が読めない= 見に行く)
+    mon_days=None(日程が読めない)や、日程が見込み日+10日まで無いときは今季終わりと決めない。"""
+    today = now.date()
+    asofs = [d for d in (_day((k or {}).get("asof")) for k in (kais or [])) if d]
+    if not asofs:
+        return "unknown", None
+    last = max(asofs)
+    exp = last + dt.timedelta(days=EVERY_DAYS)
+    win_end = exp + dt.timedelta(days=SEASON_WIN)
+    if mon_days is not None and sched_end is not None and sched_end >= win_end:
+        if not any(exp <= d <= win_end for d in mon_days):
+            # 新しい季: 前回の発表から 30 日を超えて空き、7 日以内に門別の開催がある= 第1回を待つ
+            nxt = [d for d in mon_days if today <= d <= today + dt.timedelta(days=START_WITHIN)]
+            if nxt and (nxt[0] - last).days > 30:
+                exp = nxt[0] - dt.timedelta(days=6)
+            else:
+                return "season_end", exp
+    if today < exp - dt.timedelta(days=EARLY_DAYS):
+        return "before", exp
+    if today < exp or (today == exp and now.hour < OVERDUE_HOUR):
+        return "due", exp
+    return "overdue", exp
 
 
 def log(msg):
@@ -946,6 +1013,9 @@ def sb_get_meta(base, key, meta_key):
         return None
 
 
+RESULT = {}            # run() が取り込めた回(timed_main が読む)
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--kai", type=int, help="この開催回だけ(既定=一覧に出ている最新回)")
@@ -958,9 +1028,18 @@ def main():
     ap.add_argument("--out", help="書き出し先(既定=scratchpad/class_monbetsu/)")
     ap.add_argument("--cache", help="PDF をここに貯めて2度目は取りに行かない(検品の反復用)")
     ap.add_argument("--env")
+    ap.add_argument("--timed", action="store_true",
+                    help="§284 見込み日だけ取りに行く・取れなくても exit 0・heartbeat を書く(--apply 時)")
+    ap.add_argument("--now", help="--timed の判定に使う JST 日時(試験用 YYYY-MM-DDTHH:MM)")
     args = ap.parse_args()
     if args.env:
         load_env(args.env)
+    if args.timed:
+        return timed_main(args)
+    return run(args)
+
+
+def run(args):
     if not pdf_lib():
         log("pdfplumber が入っていない(cloud/requirements.txt)。py -3.12 -X utf8 で動かすこと")
         return 2
@@ -983,13 +1062,19 @@ def main():
     stored = sb_get_meta(base, key, META_KEY) if (base and key) else None
     done = {int(k["kai"]) for k in (stored or {}).get("kais", [])
             if (stored or {}).get("fy") == fy}
+    if getattr(args, "timed", False) and (stored or {}).get("fy") == fy \
+            and latest <= int((stored or {}).get("kai") or 0):
+        log(f"新しい回はまだ出ていない(入っているのは第{stored.get('kai')}回・一覧は第{latest}回)")
+        return 3
     if args.kai:
         todo = [args.kai]
     elif args.backfill:
         todo = list(range(1, max(latest, KAI_MAX) + 1))
     else:
         # 差分= まだ持っていない回 + 最新回(更正番組は出走前に作り直されるので毎回取り直す)
-        todo = sorted(set(range(1, latest + 1)) - done | {latest})
+        # ⛔--timed は同じ回を二度取らない(§284)= まだ持っていない回だけ
+        again = set() if getattr(args, "timed", False) else {latest}
+        todo = sorted(set(range(1, latest + 1)) - done | again)
     log(f"取りに行く回: {todo}" + (f" / 既にある回: {sorted(done)}" if done else ""))
 
     cache = Path(args.cache) if args.cache else None
@@ -1050,6 +1135,7 @@ def main():
 
     if not args.apply:
         log("ドライラン(--apply で nar_meta へ入る)")
+        RESULT.update(kai=newest, fy=fy, asof=head["asof"], kais=index, applied=False)
         return 0
     # ⚠古い回で今の行を上書きしない。最新回のPDFがまだ出ていない日に流すと、差分の todo が
     # 古い回だけになり得る(同じ年度のときだけ見る。年度が変われば当然入れ替える)
@@ -1071,7 +1157,57 @@ def main():
         log(f"投入失敗 {status} {msg}")
         return 1
     log(f"nar_meta/{META_KEY}{' と ' + HIST_KEY if args.archive else ''} 更新")
+    RESULT.update(kai=newest, fy=fy, asof=head["asof"], kais=index, applied=True)
     return 0
+
+
+def timed_main(args):
+    """§284 見込み日だけ取りに行く。⛔常に exit 0(取れなくても便を落とさない・前回の表を残す)。"""
+    import beat as B                                   # cloud/beat.py(標準ライブラリだけ)
+    base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+    now = (dt.datetime.fromisoformat(args.now).replace(tzinfo=JST) if args.now
+           else dt.datetime.now(JST))
+
+    def say(ok, note):
+        if args.apply:
+            B.beat(BEAT_JOB, ok, note)
+        else:
+            log(f"(ドライラン= heartbeat は書かない) {BEAT_JOB} {'ok' if ok else 'fail'} {note}")
+        return 0
+
+    stored = sb_get_meta(base, key, META_KEY) if (base and key) else None
+    sched = sb_get_meta(base, key, "kaisai_schedule") if (base and key) else None
+    mon, sched_end = monbetsu_days(sched)
+    state, exp = timing((stored or {}).get("kais") or [], mon, sched_end, now)
+    k0 = (stored or {}).get("kai")
+    log(f"判定 {state} / 最新 第{k0}回 asof {(stored or {}).get('asof')} / 見込み {exp}"
+        f" / 門別の開催日 {len(mon) if mon is not None else '読めない'}")
+    if state == "season_end":
+        return say(True, f"今季終わり(最終 第{k0}回・{exp} から 10 日以内に門別の開催なし)")
+    if state == "before":
+        return say(True, f"見込み={exp} 前(第{k0}回まで取込済み)")
+
+    try:
+        rc = run(args)
+    except SystemExit as e:
+        rc = 2
+        log(f"止まった {str(e)[:150]}")
+    except Exception as e:                             # noqa: BLE001(⛔便を落とさない)
+        rc = 2
+        log(f"想定外の失敗 {type(e).__name__}: {str(e)[:150]}")
+    got = RESULT.get("kai")
+    newer = got and (k0 is None or RESULT.get("fy") != (stored or {}).get("fy") or int(got) > int(k0))
+    if rc == 0 and newer:
+        _s, nxt = timing(RESULT.get("kais") or [], mon, sched_end, now)
+        return say(True, f"第{got}回 取込(asof {RESULT.get('asof')}) 次の見込み={nxt}")
+    if rc == 1:
+        print("::warning::門別の級別表 投入失敗(前回の表を残す)", flush=True)
+    else:
+        print(f"::warning::門別の級別表 新しい回はまだ取れていない(見込み {exp}・前回の表を残す)", flush=True)
+    if state == "overdue":
+        return say(False, f"見込み={exp} 未取得")
+    return say(True, f"見込み={exp} 未掲載(第{k0}回まで取込済み)")
 
 
 if __name__ == "__main__":

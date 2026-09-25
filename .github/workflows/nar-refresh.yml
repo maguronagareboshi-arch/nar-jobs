@@ -286,14 +286,7 @@ jobs:
           SUPABASE_DB_PASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
         run: python cloud/jockey_change.py --apply
 
-      # §38 1-E 門別の級別表(公式PDF・最新回だけ・冪等・古い回では上書きしない)。級別表は毎年上書きされる
-      # ローリング公開なので、この毎朝実行そのものがアーカイブの保険になる(笠松能検と同じ性質)
-      - name: monbetsu class (monthly only)
-        if: env.MODE != 'daily' && !cancelled()
-        env:
-          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: python cloud/class_monbetsu.py --apply
+      # §38 1-E 門別の級別表は §284 で専用の便 monbetsu-class.yml へ移した(見込み日だけ取りに行く・二重に動かさない)
 
       # §54.6 せり市場(JRHA セレクトセール・HBA 北海道市場)の取引結果を auction_sales へ(月次便・JRHA 2 年ぶん 2 本+HBA 新しい順 3 ページ・1 秒間隔)
       - name: sale results (monthly only)

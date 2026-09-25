@@ -1,0 +1,38 @@
+# §284 門別の級別表(公式PDF・DESIGN §38 1-E)を「出る見込みの日だけ」取りに行く便。nar-refresh の monthly 段から移した。
+# 級別表は隔週金曜 JST 11:13〜13:21 に公開(例外= 連休明けの木曜)。見込み日= 最新回の asof + 14 日。
+#   見込み日の前日より前/今季終わり(見込み日から 10 日以内に門別の開催なし)= 通信せず緑。
+#   取れなければ ::warning:: だけで緑(前回の表を残す)。見込み日を過ぎても取れないときは外の見張り nar-watchdog が赤にする。
+#   heartbeat 'monbetsu_class' を毎回書く(note に「見込み=YYYY-MM-DD」)。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: monbetsu-class
+on:
+  schedule:
+    - cron: '30 3 * * *'    # JST 12:30
+    - cron: '30 6 * * *'    # JST 15:30
+  workflow_dispatch:
+concurrency:
+  group: monbetsu-class
+  cancel-in-progress: false
+jobs:
+  class:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r cloud/requirements.txt
+      - name: monbetsu class timed
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/class_monbetsu.py --timed --apply
+
+      # 想定外で落ちたときの印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py monbetsu_class fail 便が落ちた
