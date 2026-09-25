@@ -31,6 +31,7 @@ import datetime as dt
 import json
 import os
 import re
+import unicodedata
 import subprocess
 import sys
 import urllib.parse
@@ -821,23 +822,66 @@ def _dg(name):
     return bool(re.search(r"Ｊｐｎ|Jpn|ＪＢＣ|JBC|ネクストスター", name))
 
 
-def _sp_grade(text):
-    """レース名・区分から SP の格(1/2/3)を読む。取れなければ None。"""
-    m = re.search(r"(?:ＳＰ|SP)\s*(Ⅲ|Ⅱ|Ⅰ|III|II|I|３|２|１|3|2|1)", text)
-    if not m:
+# §285-B 令和8年度の重賞・準重賞の格(公式の年間日程から)。値= (格 1/2/3/"P", 2歳3歳限定か)。
+#   名古屋: https://www.nagoyakeiba.com/info/program/file/cb9f549e8a8adb8b2a9f4fd2c033a617431aebc8.pdf(番組要綱 重賞日程・Ｐ=東海地区準重賞)
+#   笠松: https://www.kasamatsu-keiba.com/resources/pdfs/news/2026/1774670513_37e97f66111794f4064f.pdf(別紙1 重賞・準重賞競走年間実施予定)
+#   「３歳以上」「４歳以上」は古馬扱い。表に無い重賞(西日本３歳優駿など)は従来の率。
+TOKAI_GRADE = {
+    "名古屋": {
+        "東海桜花賞": (1, False), "東海クイーンカップ": (1, True), "駿蹄賞": (1, True), "東海優駿": (1, True),
+        "トリトン争覇": (2, False), "名港盃": (1, False), "ベイスプリント": (2, False), "秋桜賞": (1, False),
+        "秋の鞍": (1, True), "ゴールド争覇": (1, False), "東海菊花賞": (1, False), "ゴールドウィング賞": (1, True),
+        "名古屋記念": (1, False), "新春ペガサスカップ": (2, True), "梅見月杯": (1, False), "スプリングカップ": (1, True),
+        "若草賞土古記念": (1, False),
+        "湾岸スターカップ": ("P", False), "あすなろ杯": ("P", False), "けやき杯": ("P", True), "弥富記念": ("P", False),
+        "若駒盃": ("P", True), "新春盃": ("P", False), "尾張名古屋杯": ("P", False), "梅桜賞": ("P", True),
+        "中京ペガスターカップ": ("P", True),
+    },
+    "笠松": {
+        "飛山濃水杯": (1, False), "クイーンカップ": (3, True), "オグリキャップ記念": (1, False), "新緑賞": (3, True),
+        "撫子争覇": (3, False), "ぎふ清流カップ": (1, True), "サマーカップ": (2, False), "くろゆり賞": (1, False),
+        "ブルームカップ": (3, True), "オータムカップ": (2, False), "岐阜金賞": (1, True), "東海クラウン": (3, False),
+        "ラブミーチャン記念": (1, True), "笠松グランプリ": (1, False), "レジェンドハンター記念": (3, False),
+        "ライデンリーダー記念": (1, True), "東海ゴールドカップ": (1, False), "白銀争覇": (2, False),
+        "ゴールドジュニア": (3, True), "ブルーリボンマイル": (1, False), "ジュニアグローリー": (2, True),
+        "マーチカップ": (2, False),
+        "笠松プリンシパルカップ": ("P", True), "秋風ジュニア": ("P", True), "ジュニアクラウン": ("P", True),
+        "ジュニアキング": ("P", True), "岐阜新聞・岐阜放送杯": ("P", True), "笠松若駒杯": ("P", True),
+    },
+}
+
+
+def _norm_race(name):
+    """第◯回・空白・全角/半角の違いを消す(NFKC)。"""
+    t = unicodedata.normalize("NFKC", str(name or ""))
+    t = re.sub(r"第\s*\d+\s*回", "", t)
+    return re.sub(r"\s+", "", t)
+
+
+def tokai_grade(venue, name):
+    """(格, 2歳3歳限定か) を名前表から引く。名前の後ろの「・オープン」などは部分一致で吸収(長い名前を先に)。"""
+    tbl = TOKAI_GRADE.get(venue)
+    if not tbl:
         return None
-    return {"Ⅰ": 1, "Ⅱ": 2, "Ⅲ": 3, "I": 1, "II": 2, "III": 3, "１": 1, "２": 2, "３": 3, "1": 1, "2": 2, "3": 3}[m.group(1)]
+    n = _norm_race(name)
+    for k in sorted(tbl, key=len, reverse=True):
+        if _norm_race(k) in n:
+            return tbl[k]
+    return None
 
 
 def tokai_rate_resident(run, race, venue=None):
     """在籍馬の換算率。venue= レースの場(名古屋/笠松)。§285-B 要領 R8(名古屋 (2)・笠松 10(2))で場ごとに分ける。
-    SP の格が名前・区分から取れないときは従来の近似(古馬重賞 60%・2歳3歳準重賞 50%)のまま。
+    格は TOKAI_GRADE(名前表)で引く。Ｐ競走= race_kind「準重賞」(要領の「Ｐ=東海地区準重賞」)。
+    表に無い重賞は従来の近似(古馬重賞 60%・2歳3歳準重賞 50%)のまま。
     ⚠笠松の「Ａ級1組の加算額以下の古馬重賞は Ａ級1組と同額」は未対応。"""
     name = str((race or {}).get("race_name") or run.get("name") or "")
     kind = str((race or {}).get("race_kind") or "")
-    grade = _sp_grade(name + " " + kind + " " + str((race or {}).get("grade") or ""))
     venue = venue or str(run.get("tr") or "")
-    young = bool(re.search(r"[２３]歳", name))
+    hit = tokai_grade(venue, name)
+    grade, young = (hit if hit else (None, bool(re.search(r"[２３]歳", name))))
+    if hit and kind not in ("重賞", "準重賞"):
+        kind = "準重賞" if grade == "P" else "重賞"
     if _dg(name):
         return 0.30, "ダートグレード"
     if "重賞級" in name:
