@@ -3,6 +3,7 @@
 -- 入力= nar_runs(age, birth_date 込み)・nar_races・nar_race_payouts・nar_horses(dam, breeder 込み)・auction_sales・
 --        noken_meta / noken_recs(能検索引を python で行に開いた表)。
 -- 出力= nar_shinba_stats(kind, a, b, stats, as_of)。stats は件数だけ {n, w1, w2, w3, pay}(dm だけ sib を足す)。率は画面で割る。
+-- b の鍵は viewer の data.js SHINBA_BANDS と同じ字(検査で一致を見る)。
 -- 窓= 前日までの 3 年。n<5 の行は作らない(dm だけ n≥1= 設計書 §2-2)。a・b の「無し」は ''・全体は a='*'。
 set statement_timeout = '30min';
 
@@ -18,27 +19,27 @@ create table if not exists public.nar_shinba_stats (
 
 -- ---------------------------------------------------------------- 帯(⛔境目はここ 1 か所・画面の SHINBA_BANDS と同じ値)
 create or replace function pg_temp.band_dist(m int) returns text language sql immutable as $$
-  select case when m is null or m <= 0 then null when m <= 1000 then '〜1000' when m <= 1200 then '1100〜1200'
-              when m <= 1400 then '1300〜1400' else '1500〜' end $$;
+  select case when m is null or m <= 0 then null when m <= 1000 then 'd1000' when m <= 1200 then 'd1200'
+              when m <= 1400 then 'd1400' else 'd1500' end $$;
 -- 能検 日全体順位(dr/dn)。dn<4 の池は帯にしない
 create or replace function pg_temp.band_day(r int, n int) returns text language sql immutable as $$
-  select case when r is null or n is null or n < 4 then null when r = 1 then '1位'
-              when r::numeric / n <= 0.3 then '上位3割' when r::numeric / n <= 0.7 then '中位' else '下位' end $$;
+  select case when r is null or n is null or n < 4 then null when r = 1 then 'r1'
+              when r::numeric / n <= 0.3 then 'top30' when r::numeric / n <= 0.7 then 'mid' else 'low' end $$;
 -- 上がり・テン1F の検査レース内順位(ar/n・t1r/n)
 create or replace function pg_temp.band_race(r int, n int) returns text language sql immutable as $$
-  select case when r is null or n is null or n < 1 then null when r = 1 then '1位'
-              when r::numeric / n <= 0.3 then '上位3割' else 'その他' end $$;
+  select case when r is null or n is null or n < 1 then null when r = 1 then 'r1'
+              when r::numeric / n <= 0.3 then 'top30' else 'other' end $$;
 -- 最後の能検→初戦の日数
 create or replace function pg_temp.band_week(days int) returns text language sql immutable as $$
-  select case when days is null or days < 0 then null when days <= 14 then '〜2週' when days <= 28 then '3〜4週'
-              when days <= 56 then '5〜8週' else '9週〜' end $$;
+  select case when days is null or days < 0 then null when days <= 14 then 'w2' when days <= 28 then 'w4'
+              when days <= 56 then 'w8' else 'w9' end $$;
 -- 能検の回数(初戦より前の索引の記録の数・再検査・不合格も数える= R12)
 create or replace function pg_temp.band_cnt(c bigint) returns text language sql immutable as $$
   select case when c is null or c < 1 then null when c = 1 then '1' when c = 2 then '2' else '3+' end $$;
 -- 落札価格(表の値そのまま・円)
 create or replace function pg_temp.band_price(p int) returns text language sql immutable as $$
-  select case when p is null or p <= 0 then null when p < 1000000 then '〜100万' when p < 3000000 then '100〜300万'
-              when p < 6000000 then '300〜600万' else '600万〜' end $$;
+  select case when p is null or p <= 0 then null when p < 1000000 then 'p100' when p < 3000000 then 'p300'
+              when p < 6000000 then 'p600' else 'p600u' end $$;
 create or replace function pg_temp.auc_group(src text) returns text language sql immutable as $$
   select case when src in ('rakuten', 'sat') then 'オークション' when src in ('jrha', 'hba') then 'セリ' end $$;
 
