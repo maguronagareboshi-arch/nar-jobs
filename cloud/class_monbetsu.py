@@ -262,6 +262,8 @@ def fy_of(era, num):
 # <li><a href='…/mon10-ipan.pdf' …>３歳以上</a></li> と 「第１０回　門別競馬（８月１８日〜…）」
 KYU_BLOCK_RE = re.compile(r"級別表.*?</dl>", re.S)
 PDF_HREF_RE = re.compile(r"href=['\"]([^'\"]*?/hkj/bangumi/mon(\d+)-(ipan|2sai)\.pdf)['\"]", re.I)
+# 回の切れ目(9/25 実例)= 次回の概定番組 mon13-gai.pdf だけが先に出て級別表のブロックが消える
+GAI_HREF_RE = re.compile(r"href=['\"][^'\"]*?/hkj/bangumi/mon(\d+)(?:-\d+)?-gai\.pdf['\"]", re.I)
 FY_HEAD_RE = re.compile(r"<h2>\s*(令和|平成)\s*([元０-９\d]+)\s*年度")
 KAI_LABEL_RE = re.compile(r"第([０-９\d]+)回\s*門別競馬\s*[（(]([^）)]*)[）)]")
 
@@ -282,9 +284,14 @@ def index_head():
             kai = max(int(h[1]) for h in hits)
     if kai is None:                       # 級別表のブロックが見つからないときは全リンクから
         hits = PDF_HREF_RE.findall(page)
-        if not hits:
+        if hits:
+            kai = max(int(h[1]) for h in hits)
+    if kai is None:                       # 回の切れ目= 概定番組の回の 1 つ前を最新とみなす(年度は PDF の見出しで確かめる)
+        gai = [int(n) for n in GAI_HREF_RE.findall(page)]
+        if not gai:
             raise SystemExit("一覧ページに級別表PDFのリンクが1本も無い")
-        kai = max(int(h[1]) for h in hits)
+        kai = max(max(gai) - 1, 1)
+        log(f"級別表はまだ無い(概定番組は第{max(gai)}回まで)→ 第{kai}回を最新とみなす")
     for num, span in KAI_LABEL_RE.findall(page):
         if int(norm(num)) == kai:
             period = norm(span).replace(" ", "")
