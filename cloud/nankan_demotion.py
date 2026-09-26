@@ -28,6 +28,7 @@ import urllib.parse
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "pipeline"))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 JST = dt.timezone(dt.timedelta(hours=9))
