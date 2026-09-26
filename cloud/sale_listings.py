@@ -429,7 +429,7 @@ def upsert_rows(base, key, rows, batch=500):
     bad = 0
     for i in range(0, len(rows), batch):
         part = [{k: (x.get(k) if x.get(k) != "" else None) for k in COLS} for x in rows[i:i + batch]]
-        st, msg = upsert(base, key, TABLE, "sale_year,market_code,hip_no", part)
+        st, msg = upsert(base, key, TABLE, "sale_year,market_code,hip_no,jbis_horse_id", part)
         if st >= 300:
             bad += 1
             log(f"  upsert 失敗 {i}: {st} {msg[:200]}")
@@ -530,10 +530,26 @@ def main(argv=None):
         log(f"今年の対象市場 {len(keep)}・行 {len(rows)}・ひも付け {dict(c)}")
         # 未結びの再ひも付け(競走馬登録は上場の後= 後から結べる)。直近 5 世代だけ
         old = rest_get(base, rkey, f"{TABLE}?select={','.join(COLS)}&or=(link_method.is.null,link_method.eq.multi)&birth_year=gte.{today.year - 5}"
-                                   "&order=sale_year.asc,market_code.asc,hip_no.asc")
+                                   "&order=sale_year.asc,market_code.asc,hip_no.asc,jbis_horse_id.asc")
         old = [x for x in old if (x["sale_year"], x["market_code"]) not in {(today.year, k) for k in keep}]
         c2 = link(old, prof, auc)
         newly = [x for x in old if x["link_method"] not in (None, "multi")]
+        # 名前だけで結んだ行(code null の馬)に後から code が付いたら入れる(馬名+生年で 1 頭だけ)
+        named = rest_get(base, rkey, f"{TABLE}?select={','.join(COLS)}&horse_code=is.null&horse_name=not.is.null"
+                                     f"&link_method=not.is.null&link_method=neq.multi&birth_year=gte.{today.year - 5}"
+                                     "&order=sale_year.asc,market_code.asc,hip_no.asc,jbis_horse_id.asc")
+        coded = defaultdict(list)
+        for q in prof:
+            if q.get("code") and q.get("horse_name") and q.get("birth_date"):
+                coded[(q["horse_name"], int(q["birth_date"][:4]))].append(q["code"])
+        got_code = []
+        for x in named:
+            cc = coded.get((x["horse_name"], x["birth_year"]), [])
+            if len(cc) == 1:
+                x["horse_code"] = cc[0]
+                got_code.append(x)
+        newly += got_code
+        log(f"名前だけの結び {len(named)}・後から code が付いた {len(got_code)}")
         log(f"再ひも付け 対象 {len(old)}・新たに結べた {len(newly)}")
         if not a.apply:
             log("ドライラン= 書かない"); return 0
