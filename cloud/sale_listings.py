@@ -17,7 +17,7 @@
 
   py -3.12 -X utf8 cloud/sale_listings.py fetch --raw <dir> --years 2003-2026      # 取得して保存だけ(1 回・4 秒間隔)
   py -3.12 -X utf8 cloud/sale_listings.py parse --raw <dir> --catalog-dir <dir> --out rows.csv
-  py -3.12 -X utf8 cloud/sale_listings.py link  --rows rows.csv --profiles prof.csv --out linked.csv
+  py -3.12 -X utf8 cloud/sale_listings.py link  --rows rows.csv --profiles prof.csv [--auction auc.csv] --out linked.csv
   py -3.12 -X utf8 cloud/sale_listings.py load  --rows linked.csv [--apply]        # --apply で upsert(既定はドライラン)
   python cloud/sale_listings.py weekly [--apply]    # 便: 今年の一覧から終わって 60 日以内の市場を取り直す→ひも付け→upsert→未結びの再ひも付け→heartbeat
 環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY(--apply)/ SUPABASE_ANON_KEY(読むだけ)
@@ -329,27 +329,66 @@ def _sexkey(s):
     return "M" if s in ("牡", "セ") else ("F" if s == "牝" else None)
 
 
-def link(rows, profiles):
-    """profiles= [{code, horse_name, birth_date, sex, dam}]。rows を上書きで結ぶ。"""
+def link(rows, profiles, auction=None):
+    """rows を上書きで結ぶ。2026-09-26 直し:
+      profiles= 当サイトの全馬 [{code, horse_name, birth_date, sex, sire, dam}](年齢・現役で絞らない)。
+        ⛔nar_horse_profiles の code は 6 割が null= 結べた馬の horse_name を必ず入れ、code は有れば入れる
+        (前は code が null の馬に結ぶと link_method だけ付いて code も名前も空だった= 4,291 行)。
+      auction= 既存 auction_sales(hba/jrha)の競走馬名つき行 [{item_id, horse_name, birth_date, sex, dam}]。
+        2 本目の鍵= (上場年, 上場番号, 母名) が同じ上場。既存の結びを失わないよう、こちらを先に当てる。
+      母+性+生年(+生年月日)で 2 頭以上なら父名で絞る。それでも 2 頭以上なら結ばない(multi)。"""
     idx = defaultdict(list)
+    by_name = defaultdict(list)
     for p in profiles:
+        if p.get("horse_name"):
+            by_name[p["horse_name"]].append(p)
         if not p.get("birth_date") or not p.get("dam"):
             continue
         idx[(norm_dam(p["dam"]), int(p["birth_date"][:4]), _sexkey(p.get("sex")))].append(p)
+    aidx = defaultdict(list)
+    for r in auction or []:
+        iid = str(r.get("item_id") or "")
+        if len(iid) != 9 or not r.get("horse_name") or not r.get("dam"):
+            continue
+        aidx[(int(iid[:4]), int(iid[5:]), norm_dam(r["dam"]))].append(r)
+
+    def prof_by_name(name, by):
+        c = [p for p in by_name.get(name, []) if not by or not p.get("birth_date") or int(p["birth_date"][:4]) == by]
+        return c[0] if len(c) == 1 else None
+
     c = Counter()
     for x in rows:
-        x["horse_code"], x["link_method"] = None, None
-        if not x["birth_year"] or not x["dam_norm"]:
+        jbis_name = x.get("jbis_name", x.get("horse_name"))
+        x["jbis_name"] = jbis_name
+        x["horse_code"], x["link_method"], x["horse_name"] = None, None, jbis_name
+        if not x["dam_norm"]:
             c["no_key"] += 1
             continue
+        # 1) 既存 auction_sales の同じ上場
+        a = aidx.get((x["sale_year"], x["hip_no"], x["dam_norm"]), [])
+        a = [r for r in a if _sexkey(r.get("sex")) in (None, _sexkey(x["sex"]))]
+        if len(a) == 1:
+            p = prof_by_name(a[0]["horse_name"], x["birth_year"])
+            x["horse_name"] = x["horse_name"] or a[0]["horse_name"]
+            x["horse_code"] = p["code"] if p else None
+            x["link_method"] = "auction_sales"
+            c["auction_sales"] += 1
+            continue
+        if not x["birth_year"]:
+            c["no_key"] += 1
+            continue
+        # 2) 母+性+生年(+生年月日)→ 父で絞る
         cand = idx.get((x["dam_norm"], x["birth_year"], _sexkey(x["sex"])), [])
+        how = "dam+sex+birth_year"
         if x["birth_date"]:
             cand = [p for p in cand if p["birth_date"][:10] == x["birth_date"]]
             how = "dam+sex+birth_date"
-        else:
-            how = "dam+sex+birth_year"
+        if len(cand) > 1 and x.get("sire"):
+            cand = [p for p in cand if norm_dam(p.get("sire")) == norm_dam(x["sire"])]
+            how += "+sire"
         if len(cand) == 1:
-            x["horse_code"], x["link_method"] = cand[0]["code"], how
+            x["horse_code"], x["link_method"] = cand[0].get("code") or None, how
+            x["horse_name"] = x["horse_name"] or cand[0]["horse_name"]
             c[how] += 1
         elif len(cand) > 1:
             x["link_method"] = "multi"
@@ -374,10 +413,15 @@ def rest_get(base, key, path):
         off += 1000
 
 
-def read_profiles(base, key, y_from, y_to):
-    q = ("nar_horse_profiles?select=code,horse_name,birth_date,sex,dam,last_seen"
-         f"&birth_date=gte.{y_from}-01-01&birth_date=lte.{y_to}-12-31&order=code.asc")
-    return rest_get(base, key, q)
+def read_profiles(base, key, y_from=None, y_to=None):
+    """当サイトの全馬(2026-09-26: 年で絞らない。引数は互換のため残す)。"""
+    return rest_get(base, key, "nar_horse_profiles?select=code,horse_name,birth_date,sex,sire,dam&order=horse_name.asc,birth_date.asc.nullsfirst,code.asc.nullsfirst")
+
+
+def read_auction(base, key):
+    """既存 auction_sales(hba/jrha)の競走馬名つき行= 2 本目の鍵。"""
+    return rest_get(base, key, "auction_sales?select=source,item_id,horse_name,birth_date,sex,dam&source=in.(hba,jrha)"
+                               "&horse_name=not.is.null&order=source.asc,item_id.asc")
 
 
 def upsert_rows(base, key, rows, batch=500):
@@ -425,7 +469,8 @@ def main(argv=None):
     ap.add_argument("--years", default=None)
     ap.add_argument("--catalog-dir")
     ap.add_argument("--rows")
-    ap.add_argument("--profiles", help="CSV(code,horse_name,birth_date,sex,dam,last_seen)")
+    ap.add_argument("--profiles", help="CSV(code,horse_name,birth_date,sex,sire,dam)= 当サイトの全馬")
+    ap.add_argument("--auction", help="CSV(item_id,horse_name,birth_date,sex,dam)= 既存 auction_sales の hba/jrha")
     ap.add_argument("--out")
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--days", type=int, default=60, help="weekly: 終わってから何日以内の市場を取り直すか")
@@ -448,7 +493,11 @@ def main(argv=None):
         rows = read_csv(a.rows)
         with open(a.profiles, encoding="utf-8") as f:
             prof = list(csv.DictReader(f))
-        c = link(rows, prof)
+        auc = []
+        if a.auction:
+            with open(a.auction, encoding="utf-8") as f:
+                auc = list(csv.DictReader(f))
+        c = link(rows, prof, auc)
         write_csv(rows, a.out)
         log(f"ひも付け {dict(c)} → {a.out}")
         return 0
@@ -475,16 +524,16 @@ def main(argv=None):
         keep = {r["code"] for r in got}
         rows = [x for x in rows if x["market_code"] in keep]
         ys = [x["birth_year"] for x in rows if x["birth_year"]]
-        prof = read_profiles(base, rkey, min(ys), max(ys)) if ys else []
-        c = link(rows, prof)
+        prof = read_profiles(base, rkey)
+        auc = read_auction(base, rkey)
+        c = link(rows, prof, auc)
         log(f"今年の対象市場 {len(keep)}・行 {len(rows)}・ひも付け {dict(c)}")
         # 未結びの再ひも付け(競走馬登録は上場の後= 後から結べる)。直近 5 世代だけ
-        old = rest_get(base, rkey, f"{TABLE}?select={','.join(COLS)}&horse_code=is.null&birth_year=gte.{today.year - 5}"
+        old = rest_get(base, rkey, f"{TABLE}?select={','.join(COLS)}&or=(link_method.is.null,link_method.eq.multi)&birth_year=gte.{today.year - 5}"
                                    "&order=sale_year.asc,market_code.asc,hip_no.asc")
         old = [x for x in old if (x["sale_year"], x["market_code"]) not in {(today.year, k) for k in keep}]
-        prof2 = read_profiles(base, rkey, today.year - 5, today.year)
-        c2 = link(old, prof2)
-        newly = [x for x in old if x["horse_code"]]
+        c2 = link(old, prof, auc)
+        newly = [x for x in old if x["link_method"] not in (None, "multi")]
         log(f"再ひも付け 対象 {len(old)}・新たに結べた {len(newly)}")
         if not a.apply:
             log("ドライラン= 書かない"); return 0
