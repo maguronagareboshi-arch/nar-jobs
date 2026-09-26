@@ -1,0 +1,34 @@
+# §287 南関4場の「降級の目安」を表 nar_nankan_demotion に書く便(cloud/nankan_demotion.py)。
+#   毎晩 22:15(JST)= その日の開催の後。本番 DB の nar_nankan_points を読むだけ(外のサイトは取らない)→upsert→heartbeat 'nankan_demotion'
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: nankan-demotion
+on:
+  schedule:
+    - cron: '15 13 * * *'    # JST 毎晩 22:15
+  workflow_dispatch:
+concurrency:
+  group: nankan-demotion
+  cancel-in-progress: false
+jobs:
+  demotion:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: nankan demotion apply
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/nankan_demotion.py --apply --out "$RUNNER_TEMP/nankan_demotion.csv"
+
+      # 想定外で落ちたときの印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py nankan_demotion fail 便が落ちた
