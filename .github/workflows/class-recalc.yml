@@ -34,3 +34,11 @@ jobs:
           PREFIX: ${{ inputs.prefix }}
           SINCE: ${{ inputs.since }}
         run: python cloud/class_calc.py --apply --hist-all --since "$SINCE" --prefix "$PREFIX"
+
+      # §288 佐賀を作り直したら、降級の目安(表 nar_saga_demotion)もその場で作り直す
+      - name: saga demotion
+        if: ${{ inputs.prefix == 'saga' }}
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/saga_demotion.py --apply --out "$RUNNER_TEMP/saga_demotion.csv"
