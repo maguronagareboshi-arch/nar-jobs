@@ -129,7 +129,8 @@ def sb_upsert(base, key, path, rows):
 
 CONTENT_RE = re.compile(r'<div[^>]+id="the-content"[^>]*>(.*?)</div>', re.S)
 # 「1番　ナインスマイル　新庄騎手」。数字は半角/全角の両方・区切りは全角空白のことが多い
-HEAD_RE = re.compile(r"^([0-9０-９]{1,2})\s*番\s+(\S.*?)\s+(\S+?)\s*騎手$")
+# ⚠他場の騎手は「小笠原騎手（愛知）」と所属が付く(9/27 監査: これを見出しと取れず前の馬の本文に 55 行混ざっていた)
+HEAD_RE = re.compile(r"^([0-9０-９]{1,2})\s*番\s+(\S.*?)\s+(\S+?)\s*騎手\s*(?:[（(][^）)]*[）)])?$")
 ZEN = str.maketrans("０１２３４５６７８９", "0123456789")
 
 
@@ -183,7 +184,8 @@ def race_targets(base, key, since, until):
 
 
 def already(base, key, since, until):
-    """もう行のある (日, R)。表がまだ無ければ None(ドライランは続ける・--apply は止める)。"""
+    """(日, R) → もう行のある頭数。表がまだ無ければ None(ドライランは続ける・--apply は止める)。
+    ⛔「1 行でもあれば済み」にしない= 読み違いで欠けた馬が埋まらなくなる(9/27 監査)。頭数を結果と比べる。"""
     try:
         rows = sb_rows_all(base, key,
                            f"nar_race_comments?select=race_date,race_no,umaban&track=eq.{urllib.parse.quote(TRACK)}"
@@ -192,22 +194,28 @@ def already(base, key, since, until):
     except Exception as e:
         log(f"⚠ nar_race_comments が読めない({type(e).__name__}: {str(e)[:80]})")
         return None
-    return {(str(r["race_date"]), int(r["race_no"])) for r in rows}
+    have = {}
+    for r in rows:
+        k = (str(r["race_date"]), int(r["race_no"]))
+        have[k] = have.get(k, 0) + 1
+    return have
 
 
 def day_runs(base, key, date):
-    """その日の結果(1 日 1 本)。返り値= ({R: {馬番: 馬名}}, 結果の出ている R の集合)。"""
+    """その日の結果(1 日 1 本)。返り値= ({R: {馬番: 馬名}}, {結果の出ている R: 着のある頭数})。"""
     rows = sb_rows(base, key,
                    "nar_runs?select=race_no,runner_number,horse_name,finish,finish_note"
                    f"&track=eq.{urllib.parse.quote(TRACK)}&race_date=eq.{date}&limit=3000")
-    by, done = {}, set()
+    by, done = {}, {}
     for r in rows:
         if r.get("race_no") is None or r.get("runner_number") is None:
             continue
         no, uma = int(r["race_no"]), int(r["runner_number"])
         by.setdefault(no, {})[uma] = str(r.get("horse_name") or "").strip()
         if r.get("finish") is not None or str(r.get("finish_note") or "").strip():
-            done.add(no)
+            done.setdefault(no, 0)
+        if r.get("finish") is not None:
+            done[no] = done.get(no, 0) + 1
     return by, done
 
 
@@ -243,6 +251,7 @@ def main(argv=None):
     ap.add_argument("--show", type=int, default=0, help="読めた行を N 件だけ出す(目で見る用)")
     ap.add_argument("--out", default=None, help="読めた行を JSON に書き出す(投入とは別)")
     ap.add_argument("--env", default=None)
+    ap.add_argument("--redo", action="store_true", help="既にあるレースも取り直す(読み違いの修復用)")
     a = ap.parse_args(argv)
     if a.env:
         load_env(a.env)
@@ -266,21 +275,23 @@ def main(argv=None):
         if a.apply:
             log("表がまだ無い(pipeline/sql/nar_race_comments_20260907.sql を先に流す)")
             return 2
-        have = set()
+        have = {}
     log(f"高知 {since}〜{until}: 開催 {len(days)}日 / 既にコメントのある (日,R) {len(have)}")
 
     stats = {"races": 0, "empty": 0, "gave_up": 0, "no_run": 0, "name_ng": 0, "rows": 0,
              "errors": 0, "shown": 0}
     all_rows, fails = [], 0
     for date in sorted(days):
-        todo = sorted(no for no in days[date] if (date, no) not in have)
-        if not todo:
-            continue
         try:
             by_race, done = day_runs(base, read_key, date)
         except Exception as e:
             log(f"⚠ {date} 結果が読めない {type(e).__name__}: {str(e)[:80]}")
             stats["errors"] += 1
+            continue
+        # 行の無いレースに加え、行が着のある頭数より少ないレースも取り直す(--redo は全部)
+        todo = sorted(no for no in days[date]
+                      if a.redo or have.get((date, no), 0) < max(done.get(no, 0), 1))
+        if not todo:
             continue
         old = (today - dt.date.fromisoformat(date)).days > GIVE_UP_DAYS
         for no in todo:
