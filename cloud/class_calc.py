@@ -1494,6 +1494,7 @@ def hyogo_transfer_pts(rs, d, key, cls):
 
 
 HYOGO_REVS = []          # §286 格付修正の日(hyogo_revisions で走歴から検出・main_hyogo が入れる)
+HYOGO_TIES = {}          # §288 同着(第5-3(1)※)= (場, 'YYYY-MM-DD', R, 着) → 頭数(台帳の走から数える・hyogo_ties)
 HYOGO_OTHER_GRADED = set()   # §286 他場の重賞(nar_races の race_kind=重賞)の (track, 'YYYY-MM-DD', race_no)
 
 
@@ -1531,6 +1532,26 @@ def hyogo_revisions(rows, races, tables, min_n=8, max_gap=45):
             continue
         out.append(x)
     return out
+
+
+def hyogo_ties(rows):
+    """§288 同着(要領 第5-3(1)※)= 台帳の全馬の走で (場, 日, R, 着) が 2 頭以上ある着(1〜5着)。→ {key: 頭数}"""
+    c = Counter()
+    for r in rows:
+        for x in r.get("runs") or []:
+            fin = x.get("fin")
+            if isinstance(fin, int) and 1 <= fin <= 5 and x.get("no") is not None and x.get("tr"):
+                c[(x.get("tr"), str(x.get("d"))[:10], int(x.get("no")), fin)] += 1
+    return {k: n for k, n in c.items() if n > 1}
+
+
+def _hyogo_pts(r, fin, graded):
+    """着順の点(第5-3(1))。同着= その着から頭数ぶんの着の点の合計を頭数で割る(5着の同着は全頭 5着の点)"""
+    tab = HYOGO_PTS_G if graded else HYOGO_PTS
+    n = HYOGO_TIES.get((r.get("tr"), str(r.get("d"))[:10], int(r["no"]) if r.get("no") is not None else None, fin), 1)
+    if n <= 1 or fin == 5:
+        return tab[fin]
+    return sum(tab.get(f, 0) for f in range(fin, fin + n)) // n
 
 
 def _hyogo_halve(st, tables, a, b):
@@ -1576,9 +1597,18 @@ def hyogo_state(runs, birth, asof, lag, races, trace=False):
                 return lab
         return None
 
+    # §288 ＪＲＡ所属のまま兵庫の交流(Ｊ交)に来ただけの走(前後の走がＪＲＡ)= 在籍にしない。のちの転入は別表1(3)で格付
+    # (例 ＪＲＡ未勝利→園田のＪ交で2着→ＪＲＡ→転入= Ｃ２ 130。在籍扱いだと Ｃ２ 100 になっていた)
+    visitor = set()
+    for i, r in enumerate(rs):
+        if (r.get("tr") in HYOGO_TRACKS and "Ｊ交" in str(r.get("name") or "") and 0 < i < len(rs) - 1
+                and rs[i - 1].get("jra") and rs[i + 1].get("jra")):
+            visitor.add(id(r))
     last_home = None
     prev_d = None
     for r in rs:
+        if id(r) in visitor:
+            continue
         d = _date(r.get("d"))
         _hyogo_halve(st, tables, prev_d, d)                  # §286 この走までに格付修正があれば点を半分に
         prev_d = d
@@ -1637,11 +1667,10 @@ def hyogo_state(runs, birth, asof, lag, races, trace=False):
         fin = r.get("fin")
         if isinstance(fin, int) and 1 <= fin <= 5 and not st["cls"] and st["resident"]:
             name = str((race or {}).get("race_name") or r.get("name") or "")
-            st["pts"] += (HYOGO_PTS_G if _graded(name) else HYOGO_PTS)[fin]     # 2歳(格付なし)の点も積む
+            st["pts"] += _hyogo_pts(r, fin, _graded(name))     # 2歳(格付なし)の点も積む
         if isinstance(fin, int) and 1 <= fin <= 5 and st["cls"]:
             name = str((race or {}).get("race_name") or r.get("name") or "")
-            pts = (HYOGO_PTS_G if _graded(name) else HYOGO_PTS)[fin]
-            st["pts"] += pts
+            st["pts"] += _hyogo_pts(r, fin, _graded(name))
             table = tables[st["table"]]
             if fin == 1 and _hyogo_graded_stakes(r, race):
                 up = _up(table, st["cls"])
@@ -1909,6 +1938,9 @@ def main_hyogo(a):
     log(f"台帳 {len(rows)} 頭(兵庫の走が {since} 以降にある馬)・レース {len(races)}・他場の重賞 {len(HYOGO_OTHER_GRADED)}")
     # §286 格付修正の日(非公表)を走歴の降級から検出。修正ごとに点を半分にする(_hyogo_halve)
     HYOGO_REVS[:] = hyogo_revisions(rows, races, tables)
+    HYOGO_TIES.clear()
+    HYOGO_TIES.update(hyogo_ties(rows))
+    log(f"同着(1〜5着) {len(HYOGO_TIES)} 件")
     log("格付修正の日(検出):", [x.isoformat() for x in HYOGO_REVS])
     if a.verify:
         lags = [a.lag] if a.lag is not None else [0, 3, 7]
