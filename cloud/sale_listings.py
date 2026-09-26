@@ -41,6 +41,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
+sys.path.insert(0, str(HERE.parent / "pipeline"))
 sys.path.insert(0, str(HERE))
 JST = dt.timezone(dt.timedelta(hours=9))
 UA = "Mozilla/5.0 (compatible; nar-jobs/1.0)"
