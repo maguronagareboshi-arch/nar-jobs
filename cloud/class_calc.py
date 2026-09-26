@@ -21,6 +21,7 @@
             南関4場 50% / 兵庫 70% / 岩手・金沢・笠松・愛知・北海道・佐賀 90% / 高知 100%。換算後 千円未満切捨。
   5.(1)     2歳・3歳は番組賞金 1,000,000 円に達したら一般格へ編入。5.(4) 3歳格は 9/27 まで(9/28 一斉編入)。
   6.(4)     Ａ 1,100万円超 / Ｂ 1,100万以下 / Ｃ１ 700万以下 / Ｃ２ 460万以下 / Ｃ３上 300万以下 / Ｃ３下 200万以下。
+            §289 8/29 改定版: Ｃ３下 は第10サイクル(9 月の開催)以降 180万円以下(class.js linesUntil・lines_on で日付ごとに選ぶ)。
             昇(降)級は 1 サイクル終了毎。
 ⚠近似(検算の分類で見張る): ①中央の「収得賞金」は付加賞込みの値しか無い→ 1万円未満を切り捨てて本賞金とみなす
   ②編成日は公表されない→ 「レース日の lag 日前まで」で数える(--lag・既定は検算で決めた値)
@@ -67,11 +68,22 @@ def _yen(s):
     return int(s.replace(",", "")) * 10000
 
 
-def prize_lines(system):
-    """[['Ａ','1,100万円 超'], ['Ｂ','700万円 超 〜 1,100万円 以下'], ..., ['Ｃ３下','200万円 以下']]
-    → 上から順の [(cls, min_exclusive, max_inclusive)]。'超' の額= 下限(その額は含まない)。"""
+class DatedLines(list):
+    """§289 今の線(list のまま使える)+ before= [(この日より前, その線)]。lines_on(lines, d) で日付の線を引く。"""
+    before = ()
+
+
+def lines_on(lines, d):
+    """d(date)の線。DatedLines でなければそのまま(tests の LINES など)。"""
+    for until, ls in getattr(lines, "before", ()) or ():
+        if d is not None and d < until:
+            return ls
+    return lines
+
+
+def _parse_lines(src):
     rows = []
-    for cls, text in system["lines"]:
+    for cls, text in src:
         nums = re.findall(r"([\d,]+)万円", text)
         if not nums:
             continue
@@ -82,6 +94,15 @@ def prize_lines(system):
         elif "以下" in text:
             rows.append((cls, 0, _yen(nums[0])))
     return rows
+
+
+def prize_lines(system):
+    """[['Ａ','1,100万円 超'], ['Ｂ','700万円 超 〜 1,100万円 以下'], ..., ['Ｃ３下','180万円 以下']]
+    → 上から順の [(cls, min_exclusive, max_inclusive)]。'超' の額= 下限(その額は含まない)。
+    §289 system['linesUntil'] = [['YYYY-MM-DD', 線]] があれば DatedLines.before に入れる(その日より前はその線)。"""
+    out = DatedLines(_parse_lines(system["lines"]))
+    out.before = tuple((dt.date.fromisoformat(u), _parse_lines(ls)) for u, ls in (system.get("linesUntil") or []))
+    return out
 
 
 def classify(lines, value):
@@ -188,6 +209,7 @@ def _date(s):
 def kochi_calc(lines, runs, asof, lag, age_at):
     """1頭ぶんの calc。age_at(asof) が 2/3 歳で 100万円未満なら 2歳格/3歳格(5.(1))。"""
     value, by = kochi_value(runs, asof, lag)
+    lines = lines_on(lines, asof)   # §289 Ｃ３下 200万→180万(第10サイクル= 9 月の開催から)
     age = age_at(asof)
     out = {"prefix": "kochi", "src": "calc", "asof": asof.isoformat(), "basis": "prize", "value": value,
            "window": kochi_window(asof).isoformat() + "〜", "lag": lag}
