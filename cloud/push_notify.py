@@ -286,7 +286,7 @@ def main():
     import beat
     try:
         sent, skipped, failed, gone = send_all(rest, subs, targets, vapid,
-                                               os.environ.get("NAR_VAPID_SUBJECT", "").strip() or "https://nar.yukochi.com/")
+                                               os.environ.get("NAR_VAPID_SUBJECT", "").strip() or "https://nar.yukochi.com")   # ⛔末尾の / があると py_vapid が弾く(§291 通し試験)
         cut = (now - dt.timedelta(days=SENT_KEEP_DAYS)).isoformat()
         rest.req("nar_push_sent?sent_at=lt." + urllib.parse.quote(cut), "DELETE", prefer="return=minimal")
     except Exception as e:                                       # noqa: BLE001
