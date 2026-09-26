@@ -12,8 +12,8 @@
   見直しの日:
     笠松= 6・9・12・3 月の月末開催の後(その月の最後の開催日= nar_races。月の途中は設定値 ADJ_SET)
     名古屋= 第 7・13・19・26 回の後(その回の最後の一覧の日。次の回の一覧が出ていなければ設定値)
-    直近の見直しが一覧に反映済みか= 見直しをまたぐ同じ馬の一覧の組で P が減った割合(>= 0.5)で見分ける。
-    またぐ組が無い(見直しの後の一覧がまだ出ていない)= pending(発表待ち)として、見直し前の P から P1 を先に当てる。
+    直近の見直しが一覧に反映済みか= 最新の一覧の開催が見直しの日より後に始まっていれば反映済み(日付で決める)。
+    そうでなければ pending(発表待ち)として、見直し前の P から P1 を先に当てる。P が減った割合はログの参考値だけ。
   出すのは「今の一般格で P>=2500 かつ P1 か P2 で級が下がる見込み」の馬だけ(モックと同じ)。
 
   python cloud/tokai_demotion.py --dry-run [--out x.csv]   # 取得→解析→DB を読む→CSV だけ(書かない)
@@ -355,11 +355,17 @@ def ks_candidates(today, race_days):
     return sorted(set(out))
 
 
-def ng_candidates(today, lists):
+def ng_race_days(url, key, since):
+    got = sb_all(url, key, f"nar_races?select=race_date&track=eq.{q('名古屋')}&race_no=eq.1&race_date=gte.{since}&order=race_date")
+    return {g["race_date"][:10] for g in got}
+
+
+def ng_candidates(today, lists, race_days=None):
     """lists= 解析した名古屋の行。回の最後の一覧の日(次の回の一覧が出ていれば確定)/設定値。"""
     last = collections.defaultdict(str)
     for r in lists:
-        last[r["meet"]] = max(last[r["meet"]], r["date"])
+        if race_days is None or r["date"] in race_days:
+            last[r["meet"]] = max(last[r["meet"]], r["date"])
     out = []
     fy = fiscal(today)
     for y in (fy - 1, fy, fy + 1):
@@ -403,14 +409,19 @@ def forecast(trk, lists, cands, today, url, key):
     passed = [c for c, p in cands if p]
     future = [c for c, p in cands if not p]
     Cl = passed[-1]
-    ratio, npair = published(tl, Cl)
-    pending = not (ratio is not None and ratio >= 0.5)
+    ratio, npair = published(tl, Cl)   # 参考値(ログだけ)
+    # 反映済みか= 最新の一覧の開催(同じ meet の最初の日)が見直しの日より後に始まっているか
+    start = {}
+    for r in lists:
+        start[r["meet"]] = min(start.get(r["meet"], r["date"]), r["date"])
+    last_meet = max(lists, key=lambda r: r["date"])["meet"]
+    pending = not (start[last_meet] > Cl)
     if pending:
         st, D, D2 = passed[-2], Cl, future[0]
     else:
         st, D, D2 = Cl, future[0], (future[1] if len(future) > 1 else None)
     log(f"{TRACK[trk]}: 直近の見直し {Cl}(またぐ組 {npair}・減った割合 {ratio if ratio is None else round(ratio, 2)})"
-        f"→ {'発表待ち' if pending else '反映済み'}・期間 {st}〜{D}・その次 {D2}")
+        f"・最新の一覧の開催 {last_meet} は {start[last_meet]} 始まり→ {'発表待ち' if pending else '反映済み'}・期間 {st}〜{D}・その次 {D2}")
     until = min(D, today.isoformat())
     cand = {}
     for n, d in tl.items():
@@ -517,7 +528,7 @@ def main():
     try:
         race_days = ks_race_days(url, key, (today - dt.timedelta(days=400)).isoformat()) if (url and key) else []
         allrows, meta = [], {}
-        for trk, lists, cands in (("KS", ks_rows, ks_candidates(today, race_days)), ("NG", ng_rows, ng_candidates(today, ng_rows))):
+        for trk, lists, cands in (("KS", ks_rows, ks_candidates(today, race_days)), ("NG", ng_rows, ng_candidates(today, ng_rows, ng_race_days(url, key, (today - dt.timedelta(days=400)).isoformat()) if (url and key) else None))):
             lists = [r for r in lists if home(r["name"], trk)]
             rows, m = forecast(trk, lists, cands, today, url, key)
             for r in rows:
