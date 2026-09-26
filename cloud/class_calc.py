@@ -422,7 +422,7 @@ def fetch_obihiro(url, key, since):
     led = []
     for i in range(0, len(cs), 100):
         led += sb_all(url, key, f"{T_PRIZE}?select=code,horse_name,age,last_cls,local_prize,runs,calc&code=in.({','.join(cs[i:i + 100])})")
-    births = {c["code"]: c.get("birth_date") for c in codes}
+    births = fill_births({c["code"]: c.get("birth_date") for c in codes}, codes, runs)
     races = sb_all(url, key, f"nar_races?select=race_date,race_no,race_name,race_kind&track=eq.{q('帯広ば')}"
                              f"&race_date=gte.{OBI_START.isoformat()}")
     return led, births, entered, race_map(races)
@@ -711,7 +711,7 @@ def fetch_saga(url, key, since):
     led = []
     for i in range(0, len(cs), 100):
         led += sb_all(url, key, f"{T_PRIZE}?select=code,horse_name,age,last_cls,local_prize,runs,calc&code=in.({','.join(cs[i:i + 100])})")
-    births = {c["code"]: c.get("birth_date") for c in codes}
+    births = fill_births({c["code"]: c.get("birth_date") for c in codes}, codes, runs)
     races = sb_all(url, key, f"nar_races?select=race_date,race_no,race_name,race_kind&track=eq.{q('佐賀')}"
                              f"&race_date=gte.2022-11-01")
     return led, births, entered, race_map(races)
@@ -1306,7 +1306,7 @@ def fetch_tokai(url, key, since):
         seen |= set(cs)
         for i in range(0, len(cs), 100):
             led += sb_all(url, key, f"{T_PRIZE}?select=code,horse_name,age,last_cls,local_prize,runs,calc&code=in.({','.join(cs[i:i + 100])})")
-        births.update({c["code"]: c.get("birth_date") for c in codes})
+        births.update(fill_births({c["code"]: c.get("birth_date") for c in codes if not births.get(c["code"])}, codes, runs, tr))
         rr = sb_all(url, key, f"nar_races?select=race_date,race_no,race_name,race_kind&track=eq.{q(tr)}&race_date=gte.2022-11-01")
         for r in rr:
             if r.get("race_no") is not None:
@@ -1839,7 +1839,7 @@ def fetch_hyogo(url, key, since):
         seen |= set(cs)
         for i in range(0, len(cs), 100):
             led += sb_all(url, key, f"{T_PRIZE}?select=code,horse_name,age,last_cls,local_prize,runs,calc&code=in.({','.join(cs[i:i + 100])})")
-        births.update({c["code"]: c.get("birth_date") for c in codes})
+        births.update(fill_births({c["code"]: c.get("birth_date") for c in codes if not births.get(c["code"])}, codes, runs, tr))
         rr = sb_all(url, key, f"nar_races?select=race_date,race_no,race_name,race_kind&track=eq.{q(tr)}&race_date=gte.2022-11-01")
         for r in rr:
             if r.get("race_no") is not None:
@@ -1989,6 +1989,32 @@ def print_report(rep, title):
         for k, s in r["samples"].items():
             print(f"  {k}:", s)
 
+def fill_births(births, codes, runs, tag=""):
+    """§288 nar_horse_codes の生年が空の馬を nar_runs.birth_date で補う(同名の別馬の生年は除く・複数なら多い方)。
+    → births を書き換えて返す。食い違い(同じ馬に 2 つ以上の生年)は数だけ log"""
+    by_name = defaultdict(Counter)
+    for x in runs:
+        if x.get("birth_date"):
+            by_name[x["horse_name"]][str(x["birth_date"])[:10]] += 1
+    known = defaultdict(set)
+    for c in codes:
+        if c.get("birth_date"):
+            known[c["horse_name"]].add(str(c["birth_date"])[:10])
+    filled = conflict = 0
+    for c in codes:
+        if births.get(c["code"]):
+            continue
+        cand = Counter({b: n for b, n in by_name.get(c["horse_name"], {}).items() if b not in known[c["horse_name"]]})
+        if not cand:
+            continue
+        if len(cand) > 1:
+            conflict += 1
+        births[c["code"]] = cand.most_common(1)[0][0]
+        filled += 1
+    if filled or conflict:
+        log(f"§288 生年を nar_runs で補った {filled} 頭(食い違い {conflict}){'・' + tag if tag else ''}")
+    return births
+
 
 # ---------------------------------------------------------------- DB
 def sb_all(url, key, path, page=1000):
@@ -2019,7 +2045,7 @@ def fetch_kochi(url, key, since):
     led = []
     for i in range(0, len(cs), 100):
         led += sb_all(url, key, f"{T_PRIZE}?select=code,horse_name,age,last_cls,local_prize,runs,calc&code=in.({','.join(cs[i:i + 100])})")
-    births = {c["code"]: c.get("birth_date") for c in codes}
+    births = fill_births({c["code"]: c.get("birth_date") for c in codes}, codes, runs)
     return led, births, entered
 
 
