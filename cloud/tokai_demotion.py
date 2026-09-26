@@ -10,7 +10,11 @@
     収得= nar_runs の 1〜5 着 × nar_races.prize_yen × 率(重賞は nar_graded_schedule の格で SPI 0.6・SPII/III 0.7・JpN 0.3・
     格が分からない重賞 0.6)を千円で切り捨て。2・3 歳限定戦(競走条件)は E と勝ちに数えない。
   見直しの日:
-    笠松= 6・9・12・3 月の月末開催の後(その月の最後の開催日= nar_races。月の途中は設定値 ADJ_SET)
+    笠松= 6・9・12・3 月の月末開催の後。公式(要綱 10(6)イ・お知らせ・番組)に日付の記載は無い(9/26 確認)。
+      決め方の順= ① nar_meta 'tokai_adj_days'(一度決まった日は据え置き)② 一覧から特定(ks_detect_adj:
+      同じ馬の続けて 2 つの一覧の日 a<b で P が減った組を数え、a<=c<b となる組が最多の一覧の日 c= 見直しの日。
+      3・6・9・12 月の日だけ・組 20 以上かつ減った割合 20% 以上)→ --apply で nar_meta に保存
+      ③ 設定値 ADJ_SET ④ 月が終わっていればその月の最後の開催日(nar_races)⑤ 月末。
     名古屋= 第 7・13・19・26 回の後(その回の最後の一覧の日。次の回の一覧が出ていなければ設定値)
     直近の見直しが一覧に反映済みか= 最新の一覧の開催が見直しの日より後に始まっていれば反映済み(日付で決める)。
     そうでなければ pending(発表待ち)として、見直し前の P から P1 を先に当てる。P が減った割合はログの参考値だけ。
@@ -65,6 +69,9 @@ NG_MEETS_BACK = 8           # 名古屋の一覧を取る範囲(今の回から�
 LINE = {"A": 4500, "B": 2500, "C": 0}
 RK = {"A": 3, "B": 2, "C": 1}
 RATE = {"SPI": 0.6, "SPII": 0.7, "SPIII": 0.7, "JPNI": 0.3, "JPNII": 0.3, "JPNIII": 0.3}
+META_KEY = "tokai_adj_days"   # nar_meta: {"KS": {"YYYY-MM": "YYYY-MM-DD"}, "src": {"YYYY-MM": "一覧" | "設定値"}}
+DETECT_MIN_PAIRS = 20
+DETECT_MIN_RATIO = 0.2
 COLS = ["venue", "horse_name", "cls_now", "p_now", "earn", "won", "p1", "cls1", "p2", "cls2", "need_man", "pending", "asof"]
 
 
@@ -339,19 +346,89 @@ def load_earn(url, key, names, since, until):
 
 
 # ---------- 見直しの日 ----------
-def ks_candidates(today, race_days):
-    """[(date, passed)] 古い順。月が終わっていれば最後の開催日、月の途中/先は設定値(無ければ月末)。"""
+def ks_detect_adj(rows):
+    """一覧の行から笠松の見直しの日を特定する → {'YYYY-MM': 'YYYY-MM-DD'}。
+    同じ馬の続けて 2 つの一覧の日 (a, b) で一般格だった馬の P が減った組を数え、a <= c < b となる組が
+    最多の一覧の日 c(3・6・9・12 月の日だけ・同数なら遅い日)をその月の見直しの日とする。
+    減った組が DETECT_MIN_PAIRS 以上かつ c をまたぐ組のうち減った割合が DETECT_MIN_RATIO 以上のときだけ。"""
+    tl = collections.defaultdict(dict)
+    for r in rows:
+        if r["P"] >= 0:
+            tl[r["name"]][r["date"]] = r
+    dec, allp = [], []
+    for d in tl.values():
+        ts = sorted(d)
+        for a, b in zip(ts, ts[1:]):
+            if d[a]["rc"] != "G" or d[a]["P"] <= 0:
+                continue
+            allp.append((a, b))
+            if d[b]["P"] < d[a]["P"]:
+                dec.append((a, b))
+    days = sorted({r["date"] for r in rows})
+    best = {}
+    for c in days:
+        if int(c[5:7]) not in KS_MONTHS:
+            continue
+        k = sum(1 for a, b in dec if a <= c < b)
+        n = sum(1 for a, b in allp if a <= c < b)
+        ym = c[:7]
+        if k and (ym not in best or (k, c) >= best[ym][:2]):
+            best[ym] = (k, c, n)
+    out = {}
+    for ym, (k, c, n) in sorted(best.items()):
+        if k >= DETECT_MIN_PAIRS and n and k / n >= DETECT_MIN_RATIO:
+            out[ym] = c
+            log(f"笠松: 一覧から見直しの日 {c}(減った組 {k}/{n})")
+    return out
+
+
+def load_adj_meta(url, key):
+    if not (url and key):
+        return {}
+    got = sb_all(url, key, f"nar_meta?select=value&key=eq.{META_KEY}")
+    v = got[0]["value"] if got and isinstance(got[0].get("value"), dict) else {}
+    return v
+
+
+def save_adj_meta(url, key, value):
+    from load_nar_official import upsert
+    st, msg = upsert(url, key, "nar_meta", "key", [{
+        "key": META_KEY, "value": value, "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()}])
+    if st >= 300:
+        raise RuntimeError(f"nar_meta upsert {st} {msg}")
+
+
+def ks_known_adj(meta, detected):
+    """nar_meta の日(据え置き)+ 一覧から新しく特定した月。→ (known, 新しい meta か None)"""
+    known = dict((meta or {}).get("KS") or {})
+    src = dict((meta or {}).get("src") or {})
+    new = False
+    for ym, d in detected.items():
+        if ym not in known:
+            known[ym], src[ym], new = d, "一覧", True
+        elif known[ym] != d:
+            log(f"::warning::笠松 {ym}: nar_meta の見直しの日 {known[ym]} と一覧から特定した日 {d} が違う(nar_meta を使う)")
+    return known, ({"KS": known, "src": src} if new else None)
+
+
+def ks_candidates(today, race_days, known=None):
+    """[(date, passed)] 古い順。① 特定済み(nar_meta/一覧)② 設定値 ③ 月が終わっていれば最後の開催日 ④ 月末。"""
+    known = known or {}
     out = []
     for y in (today.year - 1, today.year, today.year + 1):
         for m in KS_MONTHS:
             ym = "%d-%02d" % (y, m)
             end = (dt.date(y, m, 28) + dt.timedelta(days=4)).replace(day=1) - dt.timedelta(days=1)
             days = [d for d in race_days if d.startswith(ym)]
-            if end < today and days:
-                out.append((days[-1], True))
+            if ym in known:
+                s = known[ym]
+            elif ym in ADJ_SET["KS"]:
+                s = ADJ_SET["KS"][ym]
+            elif end < today and days:
+                s = days[-1]
             else:
-                s = ADJ_SET["KS"].get(ym, end.isoformat())
-                out.append((s, s < today.isoformat()))
+                s = end.isoformat()
+            out.append((s, s < today.isoformat()))
     return sorted(set(out))
 
 
@@ -527,8 +604,9 @@ def main():
     asof = dt.datetime.now(JST).isoformat(timespec="seconds")
     try:
         race_days = ks_race_days(url, key, (today - dt.timedelta(days=400)).isoformat()) if (url and key) else []
+        known, new_meta = ks_known_adj(load_adj_meta(url, key), ks_detect_adj(ks_rows))
         allrows, meta = [], {}
-        for trk, lists, cands in (("KS", ks_rows, ks_candidates(today, race_days)), ("NG", ng_rows, ng_candidates(today, ng_rows, ng_race_days(url, key, (today - dt.timedelta(days=400)).isoformat()) if (url and key) else None))):
+        for trk, lists, cands in (("KS", ks_rows, ks_candidates(today, race_days, known)), ("NG", ng_rows, ng_candidates(today, ng_rows, ng_race_days(url, key, (today - dt.timedelta(days=400)).isoformat()) if (url and key) else None))):
             lists = [r for r in lists if home(r["name"], trk)]
             rows, m = forecast(trk, lists, cands, today, url, key)
             for r in rows:
@@ -546,6 +624,9 @@ def main():
     if not apply_:
         return 0
     try:
+        if new_meta:
+            save_adj_meta(url, key, new_meta)
+            log(f"nar_meta/{META_KEY} 更新 {new_meta['KS']}")
         for trk in ("KS", "NG"):
             apply_rows(url, key, VENUE[trk], [r for r in allrows if r["venue"] == VENUE[trk]], asof)
     except Exception as e:
