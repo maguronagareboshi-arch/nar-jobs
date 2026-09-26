@@ -302,6 +302,21 @@ def ks_race_days(url, key, since):
     return sorted({g["race_date"][:10] for g in got})
 
 
+def load_aff(url, key, names, since):
+    """§290 馬名 → 所属("KS"/"NG")。nar_runs.trainer_area の一番新しい走(愛知= 名古屋・笠松= 笠松)。
+    東海の外の所属・記録なしは入れない(呼び手が一覧の回数で決める)。"""
+    got = []
+    nm = sorted(names)
+    for i in range(0, len(nm), 80):
+        inq = q(",".join('"' + n + '"' for n in nm[i:i + 80]))
+        got += sb_all(url, key, f"nar_runs?select=horse_name,race_date,race_no,trainer_area&horse_name=in.({inq})"
+                                f"&race_date=gte.{since}&trainer_area=not.is.null&order=race_date,race_no,horse_name")
+    last = {}
+    for x in got:                                  # 日付順= 最後に残るのが一番新しい
+        last[NF(x["horse_name"])] = x["trainer_area"]
+    return {n: {"愛知": "NG", "笠松": "KS", "岐阜": "KS"}[t] for n, t in last.items() if t in ("愛知", "笠松", "岐阜")}
+
+
 def load_earn(url, key, names, since, until):
     """馬名 → [(date, e 千円, win, age_limited)]。東海 2 場の nar_runs(since < date <= until)。"""
     runs = []
@@ -598,9 +613,16 @@ def main():
         say(False, f"取得失敗 {str(e)[:80]}")
         return 2
     log(f"一覧の行= 笠松 {len(ks_rows)}・名古屋 {len(ng_rows)}")
-    # 所属= 両場の一覧に出た回数の多い方(dm/a2.py)
+    # §290 所属= nar_runs.trainer_area の一番新しい走。記録が無い馬だけ両場の一覧に出た回数の多い方(dm/a2.py)
     cnt = collections.Counter((r["name"], r["trk"]) for r in ks_rows + ng_rows)
-    home = lambda n, t: cnt[(n, t)] > cnt[(n, "NG" if t == "KS" else "KS")]
+    try:
+        aff = load_aff(url, key, {r["name"] for r in ks_rows + ng_rows}, (today - dt.timedelta(days=400)).isoformat()) \
+            if (url and key) else {}
+    except Exception as e:
+        log(f"所属(trainer_area)を読めない→ 一覧の回数で決める: {type(e).__name__}: {e}")
+        aff = {}
+    log(f"所属を trainer_area で決めた馬 {len(aff)}")
+    home = lambda n, t: aff[NF(n)] == t if NF(n) in aff else cnt[(n, t)] > cnt[(n, "NG" if t == "KS" else "KS")]
     asof = dt.datetime.now(JST).isoformat(timespec="seconds")
     try:
         race_days = ks_race_days(url, key, (today - dt.timedelta(days=400)).isoformat()) if (url and key) else []
