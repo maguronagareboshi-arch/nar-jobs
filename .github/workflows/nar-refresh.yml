@@ -101,6 +101,20 @@ jobs:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: python cloud/refresh.py --mode "$MODE"
+      # §291 チェック馬のお知らせ(web push): 取り込み(上の refresh)の直後に A= 出走が決まった / C= 結果が出た を送る。
+      #   nar_push_sent に先に入れた分だけ送る(二重送信なし)。⛔secret NAR_VAPID_PRIVATE が無ければ送らず緑で抜ける。
+      #   落ちても便は赤くしない(continue-on-error)・heartbeat 'push_notify'(台本の中で書く)
+      - name: push notify
+        if: env.MODE != 'monthly' && !cancelled()
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          NAR_VAPID_PRIVATE: ${{ secrets.NAR_VAPID_PRIVATE }}
+          NAR_VAPID_SUBJECT: ${{ secrets.NAR_VAPID_SUBJECT }}
+        run: |
+          if [ -z "$NAR_VAPID_PRIVATE" ]; then echo "NAR_VAPID_PRIVATE が無い= 送らない"; exit 0; fi
+          python cloud/push_notify.py --apply
       # 共有画像(2026-09-26): 払戻の取り込み(上の refresh)の後で、確定したレースの 1200x630 PNG を公開バケット share に上げる。
       #   字(BIZ UDゴシック Bold)は cache・無ければ share_image.py が取って sha256 を照合する。同じ中身は上げ直さない。
       #   JST 06 時前の便は前日の遅い確定も拾う。⛔落ちても便は赤くしない(continue-on-error)・件数はログ・heartbeat 'share_image'
