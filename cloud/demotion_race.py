@@ -10,7 +10,7 @@
       python cloud/demotion_race.py --from 2025-09-26 --to 2026-09-25 [--kinds tokai,nankan,saga] [--apply]
       各レースの日 d について「d の前日まで」の材料で計算する(このレースの着は入らない):
         南関= nar_nankan_point_hist の meet_end < d の最後の行(点・kaku_ran)を nankan_demotion.forecast(today=d) に渡す。
-              ⚠級は kaku_ran(出走した級)= Ａ１ は記録が無い→ 埋め戻しに出ない。馬コード→馬名は nar_nankan_points(引退馬は出ない)。
+              級は kaku_ran(§294b= その開催の馬の級。単一級の条件→ 算定日の点で計算→ 同じ半期の carry)。馬コード→馬名は nar_nankan_points(引退馬は出ない)。
         佐賀= nar_horse_prize.runs を d より前の走だけにして saga_demotion.forecast(today=d)(saga_state は元々 d より前だけ)。
         東海= 主催者の一覧 PDF のうち日付が d 以前の行 + d の前日までの nar_runs の収得で tokai_demotion.forecast(today=d)。
               所属= d より前の最後の nar_runs.trainer_area。
@@ -164,7 +164,8 @@ def by_date(ents):
     return g
 
 
-def bf_nankan(url, key, ents, dfrom):
+def bf_nankan(url, key, ents, dfrom, hist=None):
+    """hist= 表 nar_nankan_point_hist の代わりに使う行(§294b 入れ直しの dry-run= nankan_hist.py --out の CSV)。"""
     import nankan_demotion as NK
     pts = sb_all(url, key, "nar_nankan_points?select=code,horse_name,birth_date&order=code")
     code_of, birth = {}, {}
@@ -175,7 +176,13 @@ def bf_nankan(url, key, ents, dfrom):
     codes = sorted({code_of[e[3]] for e in ents if e[3] in code_of})
     since = (dt.date.fromisoformat(dfrom) - dt.timedelta(days=400)).isoformat()
     H = collections.defaultdict(list)
-    for i in range(0, len(codes), 100):
+    if hist is not None:
+        want = set(codes)
+        for h in sorted(hist, key=lambda h: (str(h["code"]), h["meet_end"])):
+            if str(h["code"]) in want and h["meet_end"] >= since:
+                p = h.get("points")
+                H[str(h["code"])].append((h["meet_end"][:10], None if p in (None, "") else int(p), h.get("kaku_ran") or None))
+    for i in range(0, len(codes), 100) if hist is None else ():
         for h in sb_all(url, key, f"nar_nankan_point_hist?select=code,meet_end,points,kaku_ran"
                                   f"&code=in.({','.join(codes[i:i + 100])})&meet_end=gte.{since}&order=code,meet_end"):
             H[str(h["code"])].append((h["meet_end"][:10], h.get("points"), h.get("kaku_ran")))
@@ -194,6 +201,13 @@ def bf_nankan(url, key, ents, dfrom):
                 why["レースの前の点なし"] += 1
                 continue
             me, p, k = L[i]
+            # §294b 級= このレースの開催の行の級(算定日で決まる= 発走前に分かる値)。無ければ前の行の級を同じ半期のときだけ
+            nx = L[i + 1] if i + 1 < len(L) else None
+            if nx and nx[2] and (dt.date.fromisoformat(nx[0]) - dt.date.fromisoformat(d)).days <= 7:
+                k = nx[2]
+            elif k and (me[:4], int(me[5:7]) <= 6) != (d[:4], int(d[5:7]) <= 6):
+                k = None
+                why["半期をまたいだ級(null)"] += 1
             lastme = max(lastme or me, me)
             src.append(dict(code=c, horse_name=n, kaku=k, points=p, asof=me, birth_date=birth.get(c), seen_track=None))
         today = dt.date.fromisoformat(d)
@@ -326,7 +340,13 @@ def main():
     ap.add_argument("--node", help="node の場所(佐賀の線の表 class.js を読む)")
     ap.add_argument("--sample", type=int, default=1, help="種類ごとに見せる目安ありの馬の数")
     ap.add_argument("--out", help="行を JSON で書き出す先(ドライランの確かめ用)")
+    ap.add_argument("--hist-csv", help="§294b 南関の点の履歴を表でなくこの CSV(nankan_hist.py --out)から読む(入れ直しの dry-run)")
     a = ap.parse_args()
+    hist = None
+    if a.hist_csv:
+        import csv
+        with open(a.hist_csv, encoding="utf-8", newline="") as f:
+            hist = list(csv.DictReader(f))
     url = os.environ.get("SUPABASE_URL", "").rstrip("/")
     key = os.environ.get("SUPABASE_SERVICE_KEY", "")
     today = dt.datetime.now(JST).date().isoformat()
@@ -341,7 +361,7 @@ def main():
             ents = load_entries(url, key, KIND_TRACKS[kind], a.dfrom, a.dto)
             log(f"{kind}: 出走表 {len(ents)} 行({a.dfrom}〜{a.dto})")
             rows = (bf_tokai(url, key, ents, a.dfrom, a.dto) if kind == "tokai"
-                    else bf_nankan(url, key, ents, a.dfrom) if kind == "nankan"
+                    else bf_nankan(url, key, ents, a.dfrom, hist) if kind == "nankan"
                     else bf_saga(url, key, ents, a.dfrom, a.node))
             c = collections.Counter(r["venue"] for r in rows)
             cv = collections.Counter(r["venue"] for r in rows if r["v"])

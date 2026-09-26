@@ -36,10 +36,11 @@ class T(unittest.TestCase):
         self.assertEqual((rows[0]["points"], rows[0]["src"]), (470, "recon"))  # 469.6 を四捨五入
 
     def test_anchor_rows_are_kept(self):
-        # 既にある official の行(8/20= 420)は書き直さず、それより古い開催はその行から引く
+        # 既にある official の行(8/20= 420)は点を変えず(同じ値で書く= 級だけ入れ直す)、それより古い開催はその行から引く
         items = [it("2026-07-01", "2026-07-03", 20), it("2026-08-18", "2026-08-20", 50), it("2026-09-10", "2026-09-12", 100)]
         rows = H.hist_rows("1", 500, "2026-09-15", items, anchors={"2026-08-20": 420})
-        self.assertEqual([(r["meet_end"], r["points"]) for r in rows], [("2026-07-03", 370), ("2026-09-12", 500)])
+        self.assertEqual([(r["meet_end"], r["points"], r["src"]) for r in rows],
+                         [("2026-07-03", 370, "recon"), ("2026-08-20", 420, "official"), ("2026-09-12", 500, "official")])
 
     def test_null_propagates_to_older(self):
         # 決められない走(8/20)より古い開催は null・新しい側は値あり
@@ -54,10 +55,43 @@ class T(unittest.TestCase):
         self.assertEqual([(r["kaku_ran"], r["kaku_src"]) for r in rows], [(None, None), ("C2", "race"), ("C2", "carry")])
         self.assertEqual(rows[2]["last_run"], "2026-09-11")
 
+    def test_carry_not_across_half(self):
+        # §294b 5/28 の C1 は 7/1 の見直しをまたいで引き継がない(点が無ければ null)
+        items = [it("2026-05-28", "2026-05-29", 0, kaku="C1"), it("2026-07-16", "2026-07-17", 0),
+                 it("2026-06-10", "2026-06-12", 0)]
+        rows = H.hist_rows("1", None, "2026-09-15", items)
+        self.assertEqual([(r["meet_end"], r["kaku_ran"], r["kaku_src"]) for r in rows],
+                         [("2026-05-29", "C1", "race"), ("2026-06-12", "C1", "carry"), ("2026-07-17", None, None)])
+
+    def test_calc_from_santei(self):
+        # §294b 混合戦= 算定日の点 × 算定日の半期の基準表 × 馬齢。2021 年生= 2026 年 5 歳
+        items = [it("2026-05-01", "2026-05-02", 0), dict(it("2026-08-10", "2026-08-12", 0), santei="2026-07-20"),
+                 dict(it("2026-03-10", "2026-03-12", 0), santei="2026-02-20")]
+        rows = H.hist_rows("2021100001", 750, "2026-09-15", items, birth_year=2021)
+        got = {r["meet_end"]: (r["kaku_ran"], r["kaku_src"]) for r in rows}
+        self.assertEqual(got["2026-03-12"], ("C1", "calc"))    # 上半期 5 歳 C1 の線 700 <= 750
+        self.assertEqual(got["2026-08-12"], ("C2", "calc"))    # 下半期 5 歳 C1 の線 800 > 750= C2
+        self.assertEqual(got["2026-05-02"], ("C1", "carry"))   # 同じ半期の前の値
+        self.assertEqual(H.kaku_by_points(900, "2026-08-01", 2023), "B3")  # 3 歳 下半期 B3 の線 800
+        self.assertIsNone(H.kaku_by_points(300, "2026-08-01", 2023))        # 3 歳の C2 は 10 月から(12(2))= 未格付
+        self.assertEqual(H.kaku_by_points(300, "2026-10-05", 2023), "C2")
+        self.assertEqual(H.kaku_by_points(750, "2025-12-25", 2021, "2026-01-01"), "C1")  # 1/1 の開催= 上半期の表・5 歳
+        self.assertEqual(H.kaku_by_points(0, "2026-08-01", 2020), "C3")
+
+    def test_santei_index(self):
+        idx = H.meetings({"川崎": {"2026-09-07", "2026-09-08"}, "大井": {"2026-08-31", "2026-09-04"},
+                          "船橋": {"2026-08-24", "2026-08-28"}, "浦和": {"2026-08-17"}})
+        s = H.santei_index(idx)
+        self.assertEqual(s[("川崎", "2026-09-08")], "2026-08-28")   # 前々開催の最終日(川崎 第 7 回の番組と同じ)
+        self.assertIsNone(s[("浦和", "2026-08-17")])
+
     def test_kaku_of_race(self):
         self.assertEqual(H.kaku_of_race("Ｃ３(二)", "普通"), "C3")
         self.assertIsNone(H.kaku_of_race("オーガスト賞Ａ２二Ｂ１二選抜特別", "特別"))   # 混合
-        self.assertIsNone(H.kaku_of_race("こと座特別Ｃ１二三四選抜特別", "特別"))       # 選抜
+        self.assertEqual(H.kaku_of_race("こと座特別Ｃ１二三四選抜特別", "特別"), "C1")  # §294b 単一級の選抜= その級
+        self.assertEqual(H.kaku_of_race("特選Ｃ２選抜牝馬", "普通"), "C2")             # §294b 浦和 9/25 7R
+        self.assertIsNone(H.kaku_of_race("エトワール賞Ａ２下選定馬", "特別"))            # 選定= 格上編成あり
+        self.assertIsNone(H.kaku_of_race("Ｃ１イＣ２ア選抜馬", "特別"))                  # 混合の選抜
         self.assertIsNone(H.kaku_of_race("日吉オープンＡ１下", "特別"))                  # オープン
         self.assertIsNone(H.kaku_of_race("３歳八 九", "普通"))
 

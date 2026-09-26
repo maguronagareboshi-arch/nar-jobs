@@ -14,7 +14,14 @@
   ・着内ポイント= nar_races.nankan.pts(主催者の結果ページ)があればそれ・無ければ レース名 × 公式の表(同着は等分)
     遠征= 賞金 ÷ 1 万(原文に丸めの規則が無い= 足し引きは端数のまま・表の列が整数なので書くときだけ四捨五入)
   ・⛔決められない走(S 格で pts なし・着順の欠け・遠征先の地方交流重賞)より古い開催は points=null(推定で埋めない)
-  ・kaku_ran= その開催で走ったレースの条件の格。単一クラス→ race / 混合・選抜・選定・オープン・重賞・格なし→ 前の開催から carry
+  ・kaku_ran= その開催の馬の級(§294b・条文= nar-site/RULES-nankan-class-20260926.md)。次の順で決める:
+      ① race = その開催で走ったレースの条件が単一の級(選抜・特選を含む。選定・オープン・重賞・準重賞・未格付は除く)
+               根拠: 大井番組 16(4)イ(出走条件を満たした馬)・16(7)ア.オ(クラスは算定日のもの)・浦和 第 6 回の出走資格「Ｃ２級選抜馬」
+      ② calc = 算定日(前々開催の最終日・南関 4 場の日割= 5(4)エ)の点 × 格付基準表(12(1))。表の半期と馬齢は開催の初日で取る
+               (BASIS。川崎の決定番組の級別一覧と合う方)。基準表= cloud/nankan_demotion.py KAMI/SHIMO(線= その級に居られる下限)。
+               3 歳は格付時期(12(2)= 2 月 A1 … 7 月 C1・10 月 C2)より前の級には入れない・届かなければ未格付(null)
+      ③ carry= ①② で決まらないとき前の開催の値。⛔半期(1/1・7/1 の見直し)をまたがない= またぐなら null
+      ⛔混合の別定を負担重量から戻す案(RULES §4 の 2)は入れていない(レースごとの級別重量が DB に無い= 要判断)
 """
 import argparse
 import collections
@@ -133,11 +140,51 @@ def meetings(dates_by_track):
 
 
 def kaku_of_race(name, kind):
-    """条件の格(単一クラスで、選抜・選定・オープン・重賞でない)→ 'C3' など / それ以外は None(= carry)"""
+    """条件の級(単一クラス。選抜・特選は含む= RULES §4 の 1)→ 'C3' など / それ以外は None。
+    除く= 選定(川崎 §23 の格上編成)・オープン(上限なし)・重賞・準重賞・混合"""
     cls = race_classes(name)
-    if len(cls) != 1 or kind in ("重賞", "準重賞") or re.search(r"選抜|選定|オープン", str(name or "")):
+    if len(cls) != 1 or kind in ("重賞", "準重賞") or re.search(r"選定|オープン", str(name or "")):
         return None
     return cls[0]
+
+
+def santei_index(idx):
+    """meetings() の索引 → {(track, date): 算定日}。算定日= 南関 4 場の開催を初日順に並べた 2 つ前の開催の最終日(5(4)エ)"""
+    blocks = sorted({(v[1], v[0], tr) for (tr, _), v in idx.items()})
+    pos = {b: i for i, b in enumerate(blocks)}
+    out = {}
+    for (tr, d), v in idx.items():
+        i = pos[(v[1], v[0], tr)]
+        out[(tr, d)] = blocks[i - 2][1] if i >= 2 else None
+    return out
+
+
+BASIS = "meet"            # 基準表の半期と馬齢をどの日で取るか: meet= 開催の初日(1/1・7/1 の見直し)/santei= 算定日
+Y3_FROM = {"A1": 2, "A2": 3, "B1": 4, "B2": 5, "B3": 6, "C1": 7, "C2": 10}   # 3 歳の格付時期(12(2))= この月から。C3 は 4 歳 1 月
+
+
+def kaku_by_points(pts, santei, birth_year, meet=None):
+    """算定日の点 → 級(RULES §4 の 3)。基準表の半期と馬齢= BASIS の日。決められなければ None。
+    ⚠川崎の決定番組の級別一覧との答え合わせで、1/1 をまたぐ開催は開催の日で取る方が合った(§294b)"""
+    import nankan_demotion as ND
+    if pts is None or not santei or birth_year is None or santei < START:
+        return None
+    d = dt.date.fromisoformat(meet if (BASIS == "meet" and meet) else santei)
+    age = d.year - birth_year
+    if age < 3:
+        return None
+    tbl = ND.KAMI if d.month <= 6 else ND.SHIMO
+    for c in CLASSES[:-1]:
+        line = tbl[c][min(age, 8) - 3]
+        if age == 3 and d.month < Y3_FROM[c]:
+            continue                                   # 3 歳はまだその級に格付されない月
+        if line is not None and pts >= line:
+            return c
+    return None if age == 3 else "C3"                  # 3 歳で届かない= 未格付
+
+
+def half_key(d):
+    return d[:4] + half(d) if d else None
 
 
 def run_points(r, race, tie, mixed="upper"):
@@ -164,9 +211,9 @@ def run_points(r, race, tie, mixed="upper"):
     return sum(tab[fin - 1:min(5, fin - 1 + tie)]) / tie, src + ("+同着" if tie > 1 else "")
 
 
-def hist_rows(code, now_pts, asof, items, anchors=None, since=START):
-    """1 頭ぶんの開催ごとの行。items= [{d, mend, remote, pts, kaku, no}](pts None= 決められない)。
-    anchors= {meet_end: points} 既にある official の行(書き直さない・起点に使う)"""
+def hist_rows(code, now_pts, asof, items, anchors=None, since=START, birth_year=None):
+    """1 頭ぶんの開催ごとの行。items= [{d, mend, remote, pts, kaku, no, santei}](pts None= 決められない)。
+    anchors= {meet_end: points} 既にある official の行(点は書き直さない= 同じ値で書く・起点に使う。級だけ入れ直す)"""
     anchors = dict(anchors or {})
     items = [x for x in items if x["d"] >= since]
     nk = sorted([x for x in items if not x["remote"]], key=lambda x: (x["d"], x["no"] or 0))
@@ -178,16 +225,18 @@ def hist_rows(code, now_pts, asof, items, anchors=None, since=START):
     def total(xs):
         return None if any(x["pts"] is None for x in xs) else sum(x["pts"] for x in xs)
 
-    rows, carry = [], None
+    rows = []
     for m in meets:
         in_m = [x for x in nk if x["mend"] == m]
-        k = next((x["kaku"] for x in reversed(in_m) if x["kaku"]), None)
-        kaku, ksrc = (k, "race") if k else ((carry, "carry") if carry else (None, None))
-        carry = kaku or carry
-        row = {"code": code, "meet_end": m, "kaku_ran": kaku, "kaku_src": ksrc, "last_run": in_m[-1]["d"]}
+        row = {"code": code, "meet_end": m, "last_run": in_m[-1]["d"], "_santei": in_m[0].get("santei"),
+               "_mstart": in_m[0].get("mstart"),
+               "_race": next((x["kaku"] for x in reversed(in_m) if x["kaku"]), None)}
         later = sorted(a for a in anchors if a >= m)
-        if m in anchors:
-            continue                                   # 主催者の値の行は書き直さない
+        if m in anchors:                               # 主催者の値の行= 点はそのまま(同じ値を書く)
+            a = anchors[m]
+            row.update(points=None if a is None else int(round(a)), src="official", _raw=a)
+            rows.append(row)
+            continue
         if now_pts is None:
             pts, src = None, "recon"
         elif m >= asof:                                # まだ反映されていない開催= いまの値に足す
@@ -202,8 +251,42 @@ def hist_rows(code, now_pts, asof, items, anchors=None, since=START):
             s = total(after)
             pts = None if s is None else now_pts - s
             src = "official" if (m == last_refl and not after) else "recon"
-        row.update(points=None if pts is None else int(round(pts)), src=src)
+        row.update(points=None if pts is None else int(round(pts)), src=src, _raw=pts)
         rows.append(row)
+
+    # 級(§294b)= ① race → ② calc(算定日の点)→ ③ carry(同じ半期だけ)
+    P = {r["meet_end"]: r["_raw"] for r in rows}
+
+    def pts_at(x):
+        """算定日 x の直後の点(反映= 開催の最終日の後)。決められなければ None"""
+        if not P or not x:
+            return None
+        later = sorted(k for k in P if k > x)
+        if later:
+            a = later[0]
+            s = total([y for y in items if x < y["mend"] <= a])
+            return None if (s is None or P[a] is None) else P[a] - s
+        last = max(P)
+        s = total([y for y in items if last < y["mend"] <= x])
+        return None if (s is None or P[last] is None) else P[last] + s
+
+    carry, carry_h = None, None
+    for r in rows:
+        st, rk, ms = r.pop("_santei"), r.pop("_race"), r.pop("_mstart")
+        r.pop("_raw", None)
+        hk = half_key((ms or r["meet_end"]) if BASIS == "meet" else (st or r["meet_end"]))
+        ck = kaku_by_points(pts_at(st), st, birth_year, ms) if st else None
+        if rk:
+            kaku, ksrc = rk, "race"
+        elif ck:
+            kaku, ksrc = ck, "calc"
+        elif carry and carry_h == hk:
+            kaku, ksrc = carry, "carry"
+        else:
+            kaku, ksrc = None, None
+        r.update(kaku_ran=kaku, kaku_src=ksrc, _calc=ck)
+        if kaku:
+            carry, carry_h = kaku, hk
     return rows
 
 
@@ -300,6 +383,7 @@ def build(pts, runs, races, prize, anchors, tie, args, today):
     for (tr, d, _) in rmap:
         dates[tr].add(d)
     idx = meetings(dates)
+    sidx = santei_index(idx)
     runs_by = collections.defaultdict(list)
     for r in runs:
         runs_by[r["horse_name"]].append(r)
@@ -331,7 +415,8 @@ def build(pts, runs, races, prize, anchors, tie, args, today):
                 why[src] += 1
             v = idx.get((r["track"], r["race_date"]))
             items.append({"d": r["race_date"], "mend": v[0] if v else r["race_date"], "remote": False, "pts": pt,
-                          "no": int(r["race_no"]), "kaku": kaku_of_race((race or {}).get("race_name"), (race or {}).get("race_kind"))})
+                          "no": int(r["race_no"]), "kaku": kaku_of_race((race or {}).get("race_name"), (race or {}).get("race_kind")),
+                          "santei": sidx.get((r["track"], r["race_date"])), "mstart": v[1] if v else None})
         if not items:
             continue
         first = min(x["d"] for x in items)
@@ -352,7 +437,15 @@ def build(pts, runs, races, prize, anchors, tie, args, today):
                 else:
                     pt = 0
                 items.append({"d": d, "mend": d, "remote": True, "pts": pt, "no": r.get("no"), "kaku": None})
-        out += hist_rows(p["code"], p["points"], p["asof"], items, anc.get(p["code"]))
+        by = str(p["code"])[:4]
+        out += hist_rows(p["code"], p["points"], p["asof"], items, anc.get(p["code"]),
+                         birth_year=int(by) if by.isdigit() else None)
+    # 検算(RULES §4 の 3): 条件の級(race)がある開催で、点からの計算と合う数
+    both = [r for r in out if r["kaku_src"] == "race" and r["_calc"]]
+    why["検算 race と calc の一致"] = sum(r["kaku_ran"] == r["_calc"] for r in both)
+    why["検算 race と calc の両方あり"] = len(both)
+    for r in out:
+        r.pop("_calc", None)
     return out, why
 
 
@@ -398,6 +491,7 @@ def main():
     log(f"馬 {len(pts)} / 走 {len(runs)} / レース {len(races)} / official の行 {len(anchors)}")
     rows, why = build(*data, args, today)
     nn = sum(1 for r in rows if r["points"] is None)
+    log("級の決め方: " + " ".join(f"{k}={v}" for k, v in collections.Counter(str(r["kaku_src"]) for r in rows).most_common()))
     log(f"行 {len(rows)}(馬 {len({r['code'] for r in rows})}・points null {nn}・official {sum(r['src'] == 'official' for r in rows)}"
         f"・負 {sum(1 for r in rows if (r['points'] or 0) < 0)})・決められない走 {dict(why)}")
     if args.out:
