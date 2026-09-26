@@ -1,0 +1,76 @@
+# 締め切り直前の票(最後の票)の月次集計。cloud/late_money.py が前月ぶんを docs/late-money/YYYY-MM.json/.md に書き、README.md(累計)を作り直す。
+# ⛔本番 DB では REST の単純 select だけ。集計は全部 Python。
+# 既定= 毎月 1 日 JST 06:40(= UTC 前月末日 21:40)。cron は UTC 28〜31 日 21:40 に起き、JST で 1 日のときだけ走る。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: late-money
+on:
+  schedule:
+    - cron: '40 21 28-31 * *'
+  workflow_dispatch:
+    inputs:
+      month:
+        description: 'month (YYYY-MM / empty = JST previous month)'
+        required: false
+        default: ''
+      from:
+        description: 'check from (YYYY-MM-DD / no write)'
+        required: false
+        default: ''
+      to:
+        description: 'check to (YYYY-MM-DD / no write)'
+        required: false
+        default: ''
+      dry_run:
+        description: 'dry run (no write)'
+        required: false
+        default: false
+        type: boolean
+permissions:
+  contents: write
+concurrency:
+  group: late-money
+  cancel-in-progress: false
+jobs:
+  late:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: late money
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          MONTH_IN: ${{ github.event.inputs.month }}
+          FROM_IN: ${{ github.event.inputs.from }}
+          TO_IN: ${{ github.event.inputs.to }}
+          DRY: ${{ github.event.inputs.dry_run }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          # 定時は UTC の月末日 21:40(= JST の 1 日 06:40)だけ走る。28〜31 日のうち、翌日が 1 日でない日は何もしない
+          if [ "$EVENT" = "schedule" ] && [ "$(TZ=Asia/Tokyo date +%d)" != "01" ]; then echo "JST 1 日ではない"; exit 0; fi
+          set --
+          if [ -n "$MONTH_IN" ]; then set -- "$@" --month "$MONTH_IN"; fi
+          if [ -n "$FROM_IN" ]; then set -- "$@" --from "$FROM_IN"; fi
+          if [ -n "$TO_IN" ]; then set -- "$@" --to "$TO_IN"; fi
+          if [ "$DRY" = "true" ]; then set -- "$@" --dry-run; fi
+          python3 cloud/late_money.py "$@"
+          if [ -n "$(git status --porcelain docs/late-money)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/late-money
+            git commit -m "締め切り直前の票 月次集計 $(TZ=Asia/Tokyo date +%F)"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          else
+            echo "差分なし"
+          fi
+          # 最終成功時刻(表 nar_job_heartbeat)。⛔表が無くても落ちない
+          if [ "$DRY" != "true" ]; then python3 cloud/beat.py late_money ok; fi
+
+      # 失敗の印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py late_money fail 失敗
