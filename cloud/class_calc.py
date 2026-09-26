@@ -1684,12 +1684,38 @@ def hyogo_official_mismatch(tables, c, last_run):
     return True
 
 
-def hyogo_calc(tables, runs, asof, lag, birth, age_at, races, prefix):
+def _hyogo_entry_sync(st, runs, asof, lag, entry_lab):
+    """§288 この走(asof の出走)の格組 entry_lab で、兵庫の級がまだ無い馬(転入・初出走・級の読めない走だけ)と
+    3歳→古馬の編入の初戦を合わせる。hyogo_state のループの「初回」と同じ規則(別表1: 在籍中の点が級の幅に収まれば
+    そのまま・外れていれば最下限/転入は別表1(3)の JRA 実績の点/3歳Ｃ２の転入は 49)。格組は出馬表で発走前に決まっている値。
+    → 合わせたら True"""
+    key, cls = entry_lab
+    if st["cls"] and st["table"] == key:
+        return False
+    tables = hyogo_state.tables
+    cutoff = asof - dt.timedelta(days=lag)
+    rs = sorted([r for r in runs if (d := _date(r.get("d"))) and d < cutoff], key=lambda r: str(r.get("d")))
+    homes = [_date(r.get("d")) for r in rs if r.get("tr") in HYOGO_TRACKS]
+    if homes and (asof - max(homes)).days > HYOGO_RETURN_DAYS:
+        st.update(cls=None, table=None, pts=0, resident=False, via_graded=False)   # 1年半を超える再転入= 新たな転入
+    table = tables[key]
+    lo, hi = _lo(table, cls), _hi(table, cls)
+    inside = st["resident"] and st["pts"] >= lo and (hi is None or st["pts"] <= hi)
+    tp = None if st["resident"] else hyogo_transfer_pts(rs, asof, key, cls)
+    pts = st["pts"] if inside else (tp if tp is not None else (49 if (key == "y3" and cls == "Ｃ２" and not st["resident"]) else lo))
+    st.update(cls=cls, table=key, pts=pts, synced=True, resident=True)
+    return True
+
+
+def hyogo_calc(tables, runs, asof, lag, birth, age_at, races, prefix, entry_lab=None):
     hyogo_state.tables = {"old": tables[0], "y3": tables[1]}
     st = hyogo_state(runs, birth, asof, lag, races, trace=bool(os.environ.get("TRACE") and runs and runs[0].get("_name") == os.environ.get("TRACE")))
     age = age_at(asof)
     if age is not None and age <= 2:
         return None
+    # §288 この走の格組で合わせる= 級が無い馬と、3歳の表のまま古馬の格組の走に出る馬(編入の初戦)だけ
+    from_entry = bool(entry_lab and (not st["cls"] or (st["table"] == "y3" and entry_lab[0] == "old"))
+                      and _hyogo_entry_sync(st, runs, asof, lag, entry_lab))
     if not st["cls"]:
         return None
     key = st["table"]
@@ -1710,6 +1736,9 @@ def hyogo_calc(tables, runs, asof, lag, birth, age_at, races, prefix):
     notes = ["降級は格付修正(概ね2か月ごと)で近3走の着順順で決まるので予測していません"]
     if key == "y3":
         notes.append("3歳単独の表(古馬クラス編入まで)")
+    if from_entry:
+        notes.append("級はこの走の格組(転入・編入の初戦)")
+        out["entry"] = True
     out["note"] = "・".join(notes)
     return out
 
@@ -2221,15 +2250,39 @@ def hist_calc(kind, ctx, r, b, d, track):
         return c if c and c["cls"] != "２歳" else None
     if kind == "tokai":
         return tokai_calc(ctx["lines"], runs, d, lag, b, age_at, ctx["races"], TOKAI_PREFIX[track])
-    c = hyogo_calc(ctx["lines"], runs, d, lag, b, age_at, ctx["races"], HYOGO_PREFIX[track])
+    c = hyogo_calc(ctx["lines"], runs, d, lag, b, age_at, ctx["races"], HYOGO_PREFIX[track], hyogo_entry_label(ctx, r, d, track))
     if not c:
         return None
     # 公式の直近の格組= d より前の最新の走の格組(apply の last_cls と同じ物= 台帳の runs の先頭)
     prev = next((x for x in runs if (xd := _date(x.get("d"))) and xd < d), None)
-    if c.get("hide") or hyogo_official_mismatch(ctx["lines"], c, prev):
+    if c.get("hide") or (not c.get("entry") and hyogo_official_mismatch(ctx["lines"], c, prev)):
         c["hide"] = True
         c["next"] = None
     return c
+
+
+_HY_ENTRY_TOK = re.compile(r"(Ａ１|Ａ２|Ｂ１|Ｂ２|Ｃ１|Ｃ２|Ｃ３)")
+
+
+def hyogo_race_label(race):
+    """§288 出馬表の段(台帳の runs にまだ無い走)= nar_races の race_name から古馬の単独クラスの格組を読む。
+    読むのは「３歳以上」の普通・特別で、級の字がちょうど 1 つの競走だけ(混合戦・重賞・2歳・3歳限定は None)。"""
+    if not race or race.get("race_kind") not in ("普通", "特別"):
+        return None
+    name = str(race.get("race_name") or "")
+    if "以上" not in name:
+        return None
+    toks = _HY_ENTRY_TOK.findall(name)
+    return ("old", toks[0]) if len(toks) == 1 else None
+
+
+def hyogo_entry_label(ctx, r, d, track):
+    """§288 asof の日 d の兵庫の出走の格組= 台帳の runs のその日の走(あれば)/無ければ出馬表(ctx["entry_no"])の nar_races。"""
+    for x in r.get("runs") or []:
+        if _date(x.get("d")) == d and x.get("tr") == track:
+            return hyogo_label(x, ctx["races"].get((track,) + _rkey(x)))
+    no = (ctx.get("entry_no") or {}).get((r.get("horse_name"), d, track))
+    return hyogo_race_label(ctx["races"].get((track, d.isoformat(), no))) if no is not None else None
 
 
 def hist_targets(rows, births, tracks, lo, entries=()):
@@ -2266,9 +2319,11 @@ def hist_stage(a, kind, ctx, rows, births):
     if url and key and not a.local:
         q = urllib.parse.quote
         for tr in tracks:
-            for e in sb_all(url, key, f"nar_runs?select=horse_name,birth_date,race_date&track=eq.{q(DB_TRACK.get(tr, tr))}"
+            for e in sb_all(url, key, f"nar_runs?select=horse_name,birth_date,race_date,race_no&track=eq.{q(DB_TRACK.get(tr, tr))}"
                                       f"&race_date=gte.{lo.isoformat()}&order=race_date,race_no,runner_number"):
                 entries.append((e["horse_name"], e.get("birth_date"), _date(e["race_date"]), tr))
+                if e.get("race_no") is not None:
+                    ctx.setdefault("entry_no", {})[(e["horse_name"], _date(e["race_date"]), tr)] = int(e["race_no"])
     shard_i, shard_n = (int(x) for x in a.shard.split("/")) if a.shard else (0, 1)
     by_code = {r["code"]: r for r in rows}
     out = []
