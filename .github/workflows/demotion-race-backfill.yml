@@ -1,0 +1,56 @@
+# §294 降級の目安をレースごとに残す表 nar_demotion_race の埋め戻し(cloud/demotion_race.py)。手で回すだけ。
+#   各レースの日の前日までの材料で計算する(このレースの着は入らない)。既にある行は上書きしない。10 万行を超えたら書かずに止める。
+#   dry= 行数と例だけ(書かない)/ apply= 書く。⛔計算は走者の中(本番 DB は REST で読むだけ)
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: demotion-race-backfill
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: 'はじめの日 YYYY-MM-DD'
+        required: true
+        default: '2025-09-26'
+      to:
+        description: 'おわりの日 YYYY-MM-DD(今日より前)'
+        required: true
+        default: '2026-09-25'
+      kinds:
+        description: 'tokai,nankan,saga のどれか(カンマ区切り)'
+        required: true
+        default: 'tokai,nankan,saga'
+      mode:
+        description: 'dry か apply'
+        required: true
+        default: 'dry'
+        type: choice
+        options: ['dry', 'apply']
+concurrency:
+  group: demotion-race-backfill
+  cancel-in-progress: false
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: install pdfplumber
+        run: pip install pdfplumber==0.11.10
+
+      - name: demotion race backfill
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          D_FROM: ${{ inputs.from }}
+          D_TO: ${{ inputs.to }}
+          KINDS: ${{ inputs.kinds }}
+          MODE: ${{ inputs.mode }}
+        run: |
+          if [ "$MODE" = "apply" ]; then A=--apply; else A=; fi
+          python cloud/demotion_race.py --from "$D_FROM" --to "$D_TO" --kinds "$KINDS" --sample 3 $A

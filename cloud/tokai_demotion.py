@@ -332,6 +332,23 @@ def load_earn(url, key, names, since, until):
                               f"&race_date=gt.{since}&race_date=lte.{until}&order=race_date,track,race_no")
     sched = sb_all(url, key, f"nar_graded_schedule?select=race_date,track,race_name,grade&track=in.({trk_in()})"
                              f"&race_date=gt.{since}&race_date=lte.{until}&order=race_date,track,race_name")
+    return earn_rows(runs, races, graded, sched)
+
+
+def load_earn_all(url, key, since, until):
+    """§294 埋め戻し用= 東海 2 場の走を馬名で絞らずに一度に読む(since < date <= until)→ load_earn と同じ形。"""
+    runs = sb_all(url, key, f"nar_runs?select=track,race_date,race_no,horse_name,finish&track=in.({trk_in()})"
+                            f"&race_date=gt.{since}&race_date=lte.{until}&order=race_date,track,race_no,runner_number")
+    races = sb_all(url, key, f"nar_races?select=track,race_date,race_no,prize_yen,condition&track=in.({trk_in()})"
+                             f"&race_date=gt.{since}&race_date=lte.{until}&order=race_date,track,race_no")
+    graded = sb_all(url, key, f"nar_graded?select=track,race_date,race_no,race_name,race_kind&track=in.({trk_in()})"
+                              f"&race_date=gt.{since}&race_date=lte.{until}&order=race_date,track,race_no")
+    sched = sb_all(url, key, f"nar_graded_schedule?select=race_date,track,race_name,grade&track=in.({trk_in()})"
+                             f"&race_date=gt.{since}&race_date=lte.{until}&order=race_date,track,race_name")
+    return earn_rows([x for x in runs if x.get("horse_name")], races, graded, sched)
+
+
+def earn_rows(runs, races, graded, sched):
     R = {(r["track"], r["race_date"][:10], r["race_no"]): r for r in races}
     G = {(g["track"], g["race_date"][:10], g["race_no"]): g for g in graded}
 
@@ -493,7 +510,8 @@ def published(tl, D):
 
 
 # ---------- 式 ----------
-def forecast(trk, lists, cands, today, url, key):
+def forecast(trk, lists, cands, today, url, key, ern_all=None, cutoff=None):
+    """ern_all/cutoff= §294 埋め戻し用(ern_all= load_earn_all の結果・cutoff= 収得を数える最後の日 'YYYY-MM-DD'= レースの前日)。"""
     tl = collections.defaultdict(dict)
     for r in lists:
         if r["P"] >= 0:
@@ -514,7 +532,7 @@ def forecast(trk, lists, cands, today, url, key):
         st, D, D2 = Cl, future[0], (future[1] if len(future) > 1 else None)
     log(f"{TRACK[trk]}: 直近の見直し {Cl}(またぐ組 {npair}・減った割合 {ratio if ratio is None else round(ratio, 2)})"
         f"・最新の一覧の開催 {last_meet} は {start[last_meet]} 始まり→ {'発表待ち' if pending else '反映済み'}・期間 {st}〜{D}・その次 {D2}")
-    until = min(D, today.isoformat())
+    until = min(D, today.isoformat(), cutoff or "9999-12-31")
     cand = {}
     for n, d in tl.items():
         pre = [t for t in sorted(d) if st < t <= D]
@@ -524,7 +542,10 @@ def forecast(trk, lists, cands, today, url, key):
         if lp["rc"] != "G" or lp["P"] < 2500:
             continue
         cand[n] = lp
-    ern = load_earn(url, key, set(cand), st, until) if (url and key and cand) else {}
+    if ern_all is not None:
+        ern = {NF(n): [x for x in ern_all.get(NF(n), []) if st < x[0] <= until] for n in cand}
+    else:
+        ern = load_earn(url, key, set(cand), st, until) if (url and key and cand) else {}
     out = []
     for n, lp in cand.items():
         P = lp["P"]
@@ -643,7 +664,18 @@ def main():
     out = a.out or f"tokai_demotion_{today.isoformat()}.csv"
     write_csv(out, allrows)
     log(f"CSV= {out}")
+
+    def store_race(write):
+        # §294 出走表がある今日以降のレースの馬ごとに残す(表 nar_demotion_race)。⛔落ちても便は止めない
+        if not (url and key):
+            return
+        import demotion_race as DR
+        by = {TRACK[t]: {NF(r["horse_name"]): r for r in allrows if r["venue"] == VENUE[t]} for t in ("KS", "NG")}
+        mt = {TRACK[t]: DR.tokai_meta(meta[t][1]) for t in ("KS", "NG")}
+        DR.store_live(url, key, "tokai", lambda trk, n: by.get(trk, {}).get(NF(n)), lambda trk: mt.get(trk), write=write)
+
     if not apply_:
+        store_race(False)
         return 0
     try:
         if new_meta:
@@ -655,6 +687,7 @@ def main():
         log(f"::error::投入失敗: {e}")
         say(False, "投入失敗")
         return 1
+    store_race(True)
     say(True, " ".join(f"{TRACK[t]}={meta[t][0]}{'(発表待ち)' if meta[t][1]['pending'] else ''}" for t in ("KS", "NG")))
     return 0
 

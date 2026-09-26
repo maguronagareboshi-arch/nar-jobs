@@ -135,7 +135,16 @@ def main():
     path = a.out or f"saga_demotion_{today.isoformat()}.csv"
     write_csv(path, out)
     log(f"CSV= {path}")
+
+    def store_race(write):
+        # §294 出走表がある今日以降のレースの馬ごとに残す(表 nar_demotion_race)。⛔落ちても便は止めない
+        import demotion_race as DR
+        by = {r["horse_name"]: r for r in out}
+        mt = DR.saga_meta(today)
+        DR.store_live(url, key, "saga", lambda trk, n: by.get(n), lambda trk: mt, write=write)
+
     if not apply_:
+        store_race(False)
         return 0
     if not out:
         log("::error::減額がある馬が 0= 書かずに止める")
@@ -150,6 +159,7 @@ def main():
         log(f"::error::投入失敗: {e}")
         say(False, "投入失敗")
         return 1
+    store_race(True)
     say(True, f"減額あり {len(out)}・下がる見込み {len(down)}")
     return 0
 

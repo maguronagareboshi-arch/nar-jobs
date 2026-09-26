@@ -193,7 +193,16 @@ def main():
     out = a.out or f"nankan_demotion_{today.isoformat()}.csv"
     write_csv(out, rows)
     log(f"CSV= {out}")
+
+    def store_race(write):
+        # §294 出走表がある今日以降のレースの馬ごとに残す(表 nar_demotion_race)。⛔落ちても便は止めない
+        import demotion_race as DR
+        by = {r["horse_name"]: r for r in rows}
+        mt = DR.nankan_meta(rows, s1, today)
+        DR.store_live(url, key, "nankan", lambda trk, n: by.get(n), lambda trk: mt, write=write)
+
     if not apply_:
+        store_race(False)
         return 0
     if not rows:
         log("::error::見込みの行が 0= 表を消さずに止める")
@@ -205,6 +214,7 @@ def main():
         log(f"::error::投入失敗: {e}")
         say(False, "投入失敗")
         return 1
+    store_race(True)
     pend = sum(1 for r in rows if r["pending"])
     say(True, f"見込み {len(rows)}" + (f"(反映待ち {pend})" if pend else ""))
     return 0
