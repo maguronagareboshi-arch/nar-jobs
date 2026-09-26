@@ -1,0 +1,60 @@
+# §287 笠松・名古屋の「降級の目安」を表 nar_tokai_demotion に書く便(cloud/tokai_demotion.py)。
+#   月・木 10:00 は必ず作り直す。毎朝 7:00 は前日に笠松・名古屋の開催があった日だけ作り直す(--if-raced-yesterday)。
+#   ① probe= 走者から主催者の 2 サイトに届くか。届かなければ ::warning:: と heartbeat fail で止める
+#   ② apply= 一覧 PDF を取る→解析→本番 DB を読む(nar_runs/nar_races/nar_graded/nar_graded_schedule)→upsert→heartbeat 'tokai_demotion'
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: tokai-demotion
+on:
+  schedule:
+    - cron: '0 1 * * 1,4'    # JST 月・木 10:00
+    - cron: '0 22 * * *'     # JST 毎朝 7:00(前日に開催があった日だけ)
+  workflow_dispatch:
+concurrency:
+  group: tokai-demotion
+  cancel-in-progress: false
+jobs:
+  demotion:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: install pdfplumber
+        run: pip install pdfplumber==0.11.10
+
+      # ① 走者から取れるかの試し(DB は読まない・書かない)
+      - name: probe runner fetch
+        id: probe
+        run: |
+          if python cloud/tokai_demotion.py --probe; then
+            echo "ok=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "ok=0" >> "$GITHUB_OUTPUT"
+            echo "::warning::走者から笠松・名古屋の一覧を取れない(海外拒否の疑い)= 本番 DB の pg_net で取る案に切り替える"
+          fi
+
+      - name: tokai demotion apply
+        if: steps.probe.outputs.ok == '1'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          ONLY_RACED: ${{ github.event.schedule == '0 22 * * *' && '--if-raced-yesterday' || '' }}
+        run: python cloud/tokai_demotion.py --apply $ONLY_RACED --out "$RUNNER_TEMP/tokai_demotion.csv"
+
+      - name: heartbeat probe fail
+        if: steps.probe.outputs.ok == '0'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py tokai_demotion fail 走者から取れない
+
+      # 想定外で落ちたときの印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py tokai_demotion fail 便が落ちた
