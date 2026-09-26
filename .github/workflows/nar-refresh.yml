@@ -334,13 +334,8 @@ jobs:
 
       # §38 1-E 門別の級別表は §284 で専用の便 monbetsu-class.yml へ移した(見込み日だけ取りに行く・二重に動かさない)
 
-      # §54.6 せり市場(JRHA セレクトセール・HBA 北海道市場)の取引結果を auction_sales へ(月次便・JRHA 2 年ぶん 2 本+HBA 新しい順 3 ページ・1 秒間隔)
-      - name: sale results (monthly only)
-        if: env.MODE != 'daily' && !cancelled()
-        env:
-          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: python cloud/sale_results.py --apply --hba-pages 3
+      # §54.6 せり市場の結果(sale_results.py → auction_sales)の定期実行は 2026-09-26 に止めた(案 A)。
+      #   市場の取引は表 sale_listings 1 本(便 sale-listings.yml)。auction_sales は楽天・SAT 専用に戻す。台本と既存行は残す(画面側で source を絞る)
 
       # §48 K-1b 馬場差の全15場一括計算(日×場の中央値・帯広ば除外)
       # 2026-09-22 S1 標準の窓は季節版(同じ暦±45日×3年)が既定= 引数は要らない(--baseline で切替)
