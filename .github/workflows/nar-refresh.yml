@@ -282,6 +282,17 @@ jobs:
           H=$(TZ=Asia/Tokyo date +%H%M)
           if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/class_calc.py --apply --hist-days 3 --prefix kochi && python cloud/class_calc.py --apply --hist-days 3 --prefix obihiro && python cloud/class_calc.py --apply --hist-days 3 --prefix saga && python cloud/class_calc.py --apply --hist-days 3 --prefix tokai && python cloud/class_calc.py --apply --hist-days 3 --prefix hyogo; else echo "class calc は朝の便だけ(JST $H)=スキップ"; fi
 
+      # §288 佐賀の降級の目安(翌1月の減額の見込み)を表 nar_saga_demotion へ(cloud/saga_demotion.py)。class calc の後・朝の便だけ。
+      # heartbeat 'saga_demotion'。⛔落ちても続行(|| echo)= 便を止めない
+      - name: saga demotion (morning only)
+        if: '!cancelled()'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          H=$(TZ=Asia/Tokyo date +%H%M)
+          if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/saga_demotion.py --apply --out "$RUNNER_TEMP/saga_demotion.csv" || echo "::warning::佐賀の降級の目安が作れない(続行)"; else echo "saga demotion は朝の便だけ(JST $H)=スキップ"; fi
+
       # §284① 門別の番組賞金と級= 公式の最新回を起点に前日までの走を自前で加算(nar_meta 'monbetsu_class_calc')。
       # heartbeat 'monbetsu_calc'。⛔落ちても続行(|| echo)= 便を止めない
       - name: monbetsu calc (morning only)
