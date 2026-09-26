@@ -1,0 +1,36 @@
+# §289 番組賞金(当サイトの計算)の作り直し= 手押しだけ。線や率を直した後に、指定の日以降の履歴(nar_class_calc_hist)と calc 列を書き直す。
+#   毎朝の nar-refresh は直近 3 日しか作り直さないので、過去の日に効く直しはこれで流す。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: class-recalc
+on:
+  workflow_dispatch:
+    inputs:
+      prefix:
+        description: 場(kochi / obihiro / saga / tokai / hyogo)
+        required: true
+        default: kochi
+      since:
+        description: この日以降を作り直す(YYYY-MM-DD)
+        required: true
+        default: '2026-09-01'
+concurrency:
+  group: class-recalc
+  cancel-in-progress: false
+jobs:
+  recalc:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r cloud/requirements.txt
+
+      - name: class calc recalc
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          PREFIX: ${{ inputs.prefix }}
+          SINCE: ${{ inputs.since }}
+        run: python cloud/class_calc.py --apply --hist-all --since "$SINCE" --prefix "$PREFIX"
