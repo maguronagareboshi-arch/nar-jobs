@@ -19,11 +19,11 @@ on:
         required: true
         default: 'tokai,nankan,saga'
       mode:
-        description: 'dry か apply'
+        description: 'dry か apply(hist-dry と hist-apply= 南関の点の履歴を全頭で入れ直すだけ §294b)'
         required: true
         default: 'dry'
         type: choice
-        options: ['dry', 'apply']
+        options: ['dry', 'apply', 'hist-dry', 'hist-apply']
 concurrency:
   group: demotion-race-backfill
   cancel-in-progress: false
@@ -52,5 +52,7 @@ jobs:
           KINDS: ${{ inputs.kinds }}
           MODE: ${{ inputs.mode }}
         run: |
+          if [ "$MODE" = "hist-dry" ]; then python cloud/nankan_hist.py --all; exit $?; fi
+          if [ "$MODE" = "hist-apply" ]; then python cloud/nankan_hist.py --all --apply; exit $?; fi
           if [ "$MODE" = "apply" ]; then A=--apply; else A=; fi
           python cloud/demotion_race.py --from "$D_FROM" --to "$D_TO" --kinds "$KINDS" --sample 3 $A
