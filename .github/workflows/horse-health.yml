@@ -160,20 +160,26 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: python cloud/health_org.py --adapter kochi --apply
+          DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+        run: |
+          if [ "$DRY" = "true" ]; then python cloud/health_org.py --adapter kochi; else python cloud/health_org.py --adapter kochi --apply; fi
       # §110 大井・佐賀(RSS 本文)。⛔上の段とは独立=落ちても走る。NAR 成績 PDF と同じ出来事は画面側で NAR を残す(#483 ③)
       - name: organizer ooi (daily)
         if: always()
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: python cloud/health_org.py --adapter ooi --apply
+          DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+        run: |
+          if [ "$DRY" = "true" ]; then python cloud/health_org.py --adapter ooi; else python cloud/health_org.py --adapter ooi --apply; fi
       - name: organizer saga (daily)
         if: always()
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: python cloud/health_org.py --adapter saga --apply
+          DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+        run: |
+          if [ "$DRY" = "true" ]; then python cloud/health_org.py --adapter saga; else python cloud/health_org.py --adapter saga --apply; fi
 
       # §111 制裁(戒告・過怠金・騎乗停止)。⛔上の段とは独立=落ちても走る。
       #   既定の窓は直近14日・冪等(penalty_id が同じなら上書き)。読めない行は数えるだけで止めない。
@@ -182,7 +188,9 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: python cloud/penalties.py --apply
+          DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+        run: |
+          if [ "$DRY" = "true" ]; then python cloud/penalties.py; else python cloud/penalties.py --apply; fi
 
       # 監査 A8(2026-09-24) 最終成功時刻(表 nar_job_heartbeat 'horse_health')。dry_run の便は書かない。⛔表が無くても落ちない
       - name: heartbeat
