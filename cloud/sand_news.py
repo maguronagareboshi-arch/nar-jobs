@@ -26,7 +26,7 @@
  5. 名古屋は整備状況表の補充・路盤・埒下砂掻き出しだけ。「砂厚測定」(babasunaatu.pdf 等)は拾わない=
     /sand の測定表(nar_sand_depth)に出ている・PDF 名が使い回しで画面の src 重複捨てに消される。
     PDF の本文は pypdf があるときだけ読む(無ければ題名)。便には入れていない。
- 6. 同じ場・同じ種別・同じ text の行は 7 日以内なら 1 本(先の日付を残す)= merge_near。
+ 6. 名古屋だけ、同じ種別・同じ text の行は 7 日以内なら 1 本(先の日付を残す)= merge_near。
  7. 岩手の場(v)は題+本文の「水沢」「盛岡」で振る(v_iwate)。
 """
 
@@ -431,6 +431,9 @@ def merge_near(items):
     for x in sorted(items, key=lambda r: (r.get("k") or "")):
         nx, bare = _norm_text(x), (x.get("text") or "") == (x.get("title") or "")
         hit = None
+        if x.get("v") != "nagoya":          # ⛔名古屋だけ(金沢・水沢の毎週の砂厚調整は同じ値でも全部載せる= ユーザー決定)
+            kept.append(x)
+            continue
         for y in kept:
             if y.get("v") != x.get("v") or sorted(y.get("types") or []) != sorted(x.get("types") or []):
                 continue
