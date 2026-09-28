@@ -1,0 +1,46 @@
+# /sand の毎朝の告知拾い便(cloud/sand_news.py)。2026-09-28
+#   各場の公式の「砂の補充・入れ替え・砂厚・路盤」の告知(直近 30 日)を拾い、nar_meta key='sand_news' に重ねて入れる。
+#   入口は nar-site/research/track-sand/gap-A.md・gap-B.md。大井(403)・笠松(X のみ)は対象外。
+#   成功で heartbeat 'sand_news' ok・失敗で fail(表 nar_job_heartbeat)。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: sand-news
+on:
+  schedule:
+    - cron: '10 22 * * *'    # JST 毎朝 07:10
+  workflow_dispatch:
+concurrency:
+  group: sand-news
+  cancel-in-progress: false
+jobs:
+  sand:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: install pypdf
+        run: pip install pypdf
+
+      # 前回の items を読んで重ねる。1 源も取れない(exit 2)・前回を読めない・投入失敗(exit 1)は落ちる
+      - name: sand news apply
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/sand_news.py --apply
+
+      - name: heartbeat ok
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py sand_news ok
+
+      # 想定外で落ちたときの印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py sand_news fail 便が落ちた
