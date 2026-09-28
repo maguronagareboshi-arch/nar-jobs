@@ -1,10 +1,10 @@
 # -*- coding: utf-8 -*-
 """本体 cloud: 馬場差の全15場一括計算(DESIGN §48 K-1b)。
 
-公式の勝ち時計(nar_runs.time_sec, finish=1)を「場×距離×クラス帯の**過去3年**中央値」と比べ、
+公式の勝ち時計(nar_runs.time_sec, finish=1)を「場×距離×クラス帯の**直近1年(going 既定・[d-365,d))**中央値」と比べ、
 **日×場の中央値**を馬場差(秒)として nar_meta `baba_diff` に入れる。マイナス=速い馬場。
 
-  出力 = {"built":"YYYY-MM-DD", "base":"season"|"365"|"1095",
+  出力 = {"built":"YYYY-MM-DD", "base":"going"|"season"|"365"|"1095",
           "days": {"2026-08-28": {"ooi": {"d": -0.8, "n": 9}, …}, …}}   # 直近90日+当日
           # まだ終わっていない日(=当日)は {"d":…,"n":…,"p":true}= 暫定。翌朝の便で確定して p が消える
 
@@ -19,7 +19,7 @@
     "p":true が付き、画面は「途中まで」と断って出す(js/ui.js babaWord/babaLabel)。
 
   標準の窓は --baseline で切替。**既定は going(2026-09-28 ユーザー決定= 物差し 2 本)**。
-    going  : 2 本の物差しを1セルに入れる。窓は [d-1095, d)(過去3年・d 未満)
+    going  : 2 本の物差しを1セルに入れる。窓は [d-365, d)(前日までの直近1年・d 未満。2026-09-28 ユーザー決定で 1095→365)
              d = 良馬場比: 同じ場×距離×クラス帯の going=良 の勝ち時計の中央値との差
              g = 同じ馬場状態比: 同じ場×距離×クラス帯×その走の going の中央値との差
              セル = {"d","g","n"(d に使ったレース数),"ng"(g に使ったレース数),"k"(その日の主な going),"p"?}
@@ -152,7 +152,7 @@ def fetch_days(baseline):
     """標準を作るのに何日ぶんの勝ち時計を読めばよいか(表示する90日ぶんの一番古い日から見た遡り)"""
     if baseline == "season":
         return 365 * SEASON_YEARS + SEASON_PAD + 30
-    return (STD_DAYS_LEGACY if baseline in ("1095", "going") else STD_DAYS) + 30
+    return (STD_DAYS_LEGACY if baseline == "1095" else STD_DAYS) + 30
 
 
 def baseline_ranges(d, baseline):
@@ -171,7 +171,7 @@ def baseline_ranges(d, baseline):
             if lo < hi:
                 out.append((lo.isoformat(), hi.isoformat()))
         return out
-    span = STD_DAYS_LEGACY if baseline in ("1095", "going") else STD_DAYS
+    span = STD_DAYS_LEGACY if baseline == "1095" else STD_DAYS   # going も 365(9/28 決定)
     return [((d - dt.timedelta(days=span)).isoformat(), d.isoformat())]
 
 
@@ -359,7 +359,7 @@ def main():
     ap.add_argument("--verify", action="store_true", help="公式の馬場状態(going)との相関を出す")
     ap.add_argument("--apply", action="store_true", help="nar_meta へ upsert(既定はドライラン)")
     ap.add_argument("--baseline", choices=BASELINES, default="going",
-                    help="標準の窓。going=良馬場比 d+同じ馬場状態比 g(過去3年・既定) / season=同じ暦±45日×3年 / 365=前日までの直近1年 / 1095=旧§104")
+                    help="標準の窓。going=良馬場比 d+同じ馬場状態比 g(直近1年・既定) / season=同じ暦±45日×3年 / 365=前日までの直近1年 / 1095=旧§104")
     ap.add_argument("--rebuild-all", action="store_true",
                     help="⛔確定済みの日も作り直す(定義を変えたときだけ。ふだんは付けない)")
     ap.add_argument("--env")
