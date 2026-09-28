@@ -18,7 +18,13 @@
   ⛔当日の値は「その日の**終わったレース**(勝ち時計のある走)だけ」から出した暫定値。
     "p":true が付き、画面は「途中まで」と断って出す(js/ui.js babaWord/babaLabel)。
 
-  標準の窓は --baseline で切替。**既定は season(2026-09-22 ユーザー決定)**。
+  標準の窓は --baseline で切替。**既定は going(2026-09-28 ユーザー決定= 物差し 2 本)**。
+    going  : 2 本の物差しを1セルに入れる。窓は [d-1095, d)(過去3年・d 未満)
+             d = 良馬場比: 同じ場×距離×クラス帯の going=良 の勝ち時計の中央値との差
+             g = 同じ馬場状態比: 同じ場×距離×クラス帯×その走の going の中央値との差
+             セル = {"d","g","n"(d に使ったレース数),"ng"(g に使ったレース数),"k"(その日の主な going),"p"?}
+             ⛔標本 8 本未満のセルはそのレースを除外(退避しない)。d/g はそれぞれ MIN_RACES 本以上のときだけ載せる
+             ⛔2026-09-28 までの "d" は「馬場状態を混ぜた標準」との差。going 版の "d" は良馬場比に意味が変わる
     season : 同じ場の「同じ暦の前後45日」×過去3年(すべて d 未満)。季節の波を標準に入れるので
              「例年のこの時期と比べて」の値になる(既定)
     365    : [d-365, d)  前日までの直近1年。場の常時オフセットの大半が消えるが季節の波は残る
@@ -79,7 +85,8 @@ STD_DAYS = 365
 STD_DAYS_LEGACY = 1095   # 旧版(§104)。--baseline 1095 で使える
 SEASON_YEARS = 3         # season 版: 何年ぶん遡るか
 SEASON_PAD = 45          # season 版: 同じ暦日の前後 何日
-BASELINES = ("365", "1095", "season")
+BASELINES = ("365", "1095", "season", "going")
+GOING_BASE = "良"          # going 版の d の物差し
 
 Z = str.maketrans("ＡＢＣ０１２３４５６７８９", "ABC0123456789")
 
@@ -145,7 +152,7 @@ def fetch_days(baseline):
     """標準を作るのに何日ぶんの勝ち時計を読めばよいか(表示する90日ぶんの一番古い日から見た遡り)"""
     if baseline == "season":
         return 365 * SEASON_YEARS + SEASON_PAD + 30
-    return (STD_DAYS_LEGACY if baseline == "1095" else STD_DAYS) + 30
+    return (STD_DAYS_LEGACY if baseline in ("1095", "going") else STD_DAYS) + 30
 
 
 def baseline_ranges(d, baseline):
@@ -164,7 +171,7 @@ def baseline_ranges(d, baseline):
             if lo < hi:
                 out.append((lo.isoformat(), hi.isoformat()))
         return out
-    span = STD_DAYS_LEGACY if baseline == "1095" else STD_DAYS
+    span = STD_DAYS_LEGACY if baseline in ("1095", "going") else STD_DAYS
     return [((d - dt.timedelta(days=span)).isoformat(), d.isoformat())]
 
 
@@ -216,6 +223,50 @@ def day_cell(day_rows, by_band, by_dist, d, baseline):
     return round(statistics.median(devs), 1), len(devs), devs
 
 
+def day_cell_going(day_rows, by_band_g, by_dist_g, d):
+    """going 版の1つの日×場。day_rows= [(dist, band, time, going)]。
+    by_band_g[(dist, band, going)] / by_dist_g[(dist, going)] = 日付昇順の (date, time)。
+    既存 day_cell と同じ「帯→場×距離」の落とし方で、going を良に固定(d)/その走の going(g)にして引く。
+    戻り= {"d","n","g","ng","devs"} のうち出せたものだけ(MIN_RACES 本未満は載せない)"""
+    ranges = baseline_ranges(d, "going")
+    cache = {}
+
+    def med_of(dist, band, going):
+        for k, src, kk in ((("b", dist, band, going), by_band_g, (dist, band, going)),
+                           (("d", dist, going), by_dist_g, (dist, going))):
+            if k[0] == "b" and not band:
+                continue
+            m = cache.get(k, "?")
+            if m == "?":
+                v = _vals_in(src.get(kk, []), ranges)
+                m = statistics.median(v) if len(v) >= MIN_BAND else None
+                cache[k] = m
+            if m is not None:
+                return m
+        return None
+
+    dv, gv = [], []
+    for dist, band, t, going in day_rows:
+        m = med_of(dist, band, GOING_BASE)
+        if m is not None:
+            dv.append(t - m)
+        if going:
+            m = med_of(dist, band, going)
+            if m is not None:
+                gv.append(t - m)
+    out = {}
+    if len(dv) >= MIN_RACES:
+        out["d"], out["n"], out["devs"] = round(statistics.median(dv), 1), len(dv), dv
+    if len(gv) >= MIN_RACES:
+        out["g"], out["ng"] = round(statistics.median(gv), 1), len(gv)
+    return out
+
+
+def _main_going(rows):
+    gs = [r[3] for r in rows if r[3]]
+    return statistics.mode(gs) if gs else None
+
+
 def _today_jst():
     """⛔GitHub の runner は UTC。日の境目は日本時間で決める(JST 00:00〜08:59 に UTC 日付を使うと前日が「途中まで」のまま残る)"""
     return dt.datetime.now(ZoneInfo("Asia/Tokyo")).date()
@@ -239,7 +290,15 @@ def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=
     per_day = {}
     for track, date, dist, band, t, _g in samples:
         if date in targets:
-            per_day.setdefault((date, track), []).append((dist, band, t))
+            per_day.setdefault((date, track), []).append((dist, band, t, _g))
+    if baseline == "going":
+        by_band_gg, by_dist_gg = {}, {}
+        for track, date, dist, band, t, _g in sorted(samples, key=lambda s: s[1]):
+            if not _g:
+                continue
+            by_dist_gg.setdefault(track, {}).setdefault((dist, _g), []).append((date, t))
+            if band:
+                by_band_gg.setdefault(track, {}).setdefault((dist, band, _g), []).append((date, t))
 
     out, rebuilt, devs_of = {}, 0, {}
     tstr = today.isoformat()
@@ -257,6 +316,22 @@ def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=
                     out.setdefault(date, {})[prefix] = old
                 continue
             dd = dt.date.fromisoformat(date)
+            if baseline == "going":
+                c = day_cell_going(rows, by_band_gg.get(track, {}), by_dist_gg.get(track, {}), dd)
+                if "d" not in c and "g" not in c:
+                    continue
+                cell = {k: c[k] for k in ("d", "g", "n", "ng") if k in c}
+                k = _main_going(rows)
+                if k:
+                    cell["k"] = k
+                if date >= tstr:
+                    cell["p"] = True
+                out.setdefault(date, {})[prefix] = cell
+                if "devs" in c:
+                    devs_of[(date, track)] = c["devs"]
+                rebuilt += 1
+                continue
+            rows = [r_[:3] for r_ in rows]
             r = day_cell(rows, by_band_all.get(track, {}), by_dist_all.get(track, {}),
                          dd, baseline)
             fallback = False
@@ -283,8 +358,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--verify", action="store_true", help="公式の馬場状態(going)との相関を出す")
     ap.add_argument("--apply", action="store_true", help="nar_meta へ upsert(既定はドライラン)")
-    ap.add_argument("--baseline", choices=BASELINES, default="season",
-                    help="標準の窓。season=同じ暦±45日×3年(既定) / 365=前日までの直近1年 / 1095=旧§104")
+    ap.add_argument("--baseline", choices=BASELINES, default="going",
+                    help="標準の窓。going=良馬場比 d+同じ馬場状態比 g(過去3年・既定) / season=同じ暦±45日×3年 / 365=前日までの直近1年 / 1095=旧§104")
     ap.add_argument("--rebuild-all", action="store_true",
                     help="⛔確定済みの日も作り直す(定義を変えたときだけ。ふだんは付けない)")
     ap.add_argument("--env")
