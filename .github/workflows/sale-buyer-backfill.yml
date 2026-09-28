@@ -1,0 +1,40 @@
+# 2026-09-28 §302: sale_listings の購買者(buyer)の埋め直し。手動実行だけ・1 回に 1 本(年の範囲を入力)。
+#   cloud/sale_listings.py buyer= その年の JBIS 全市場を取り直し(4 秒間隔・1 年 15 ページ前後≒ 1〜2 分)
+#   → 表にある落札行(主キー一致)の buyer だけ upsert。ほかの列・ひも付けは触らない。本番 DB で重い SQL は流さない。
+#   順= 2026-2022 → 2021-2017 → 2016-2012 → 2011-2007 → 2006-2003(1 本終わって緑を見てから次)。apply=false でドライラン。
+# ⛔先に pipeline/sql/sale_listings_buyer_20260928.sql を本番に流す(列が無いと upsert 400)。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: sale-buyer-backfill
+on:
+  workflow_dispatch:
+    inputs:
+      years:
+        description: '年の範囲 例 2022-2026'
+        required: true
+      apply:
+        description: 'true で書く(false はドライラン)'
+        required: true
+        default: 'false'
+concurrency:
+  group: sale-listings
+  cancel-in-progress: false
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: sale buyer backfill
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          YEARS: ${{ inputs.years }}
+          APPLY: ${{ inputs.apply }}
+        run: |
+          flag=""
+          if [ "$APPLY" = "true" ]; then flag="--apply"; fi
+          python cloud/sale_listings.py buyer --years "$YEARS" $flag --raw "$RUNNER_TEMP/jbis"

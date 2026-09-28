@@ -4,7 +4,7 @@
   出典= JBIS-Search の市場取引(ユーザーが JBIS・HBA の掲載許可を取得済み 2026-09-26)。
     年の一覧  https://www.jbis.or.jp/seri/result/?year=<年>        → 市場コード・市場名・品種・年齢・開催日
     市場ごと  https://www.jbis.or.jp/seri/<年>/<コード>/sale/       → 上場番号・父・母・性・毛色・価格・購買者欄・販売申込者・JBIS の馬 id
-    ⛔購買者名は持たない(購買者欄は「主取り」「欠場」の判定だけに使う)。
+    購買者名= 落札の行だけ buyer に出典の字のまま持つ(2026-09-28 §302・ユーザー決定「埋め直す」)。主取り・欠場は null。
     総括表(コード末尾 !!)は除く。ばんえいは JBIS に無い(価格非公表)。JRA-VAN は使わない。
     HBA 5 市場・八戸・セレクト(JRHA・ユーザー許可済み)・千葉・九州・ブリーズアップ・ミックス・ジェイエス 等は全部この 1 つの形で取れる
     (市場ごとの差は一覧の名前だけ= 市場ごとの台本は要らない)。
@@ -19,6 +19,7 @@
   py -3.12 -X utf8 cloud/sale_listings.py parse --raw <dir> --catalog-dir <dir> --out rows.csv
   py -3.12 -X utf8 cloud/sale_listings.py link  --rows rows.csv --profiles prof.csv [--auction auc.csv] --out linked.csv
   py -3.12 -X utf8 cloud/sale_listings.py load  --rows linked.csv [--apply]        # --apply で upsert(既定はドライラン)
+  python cloud/sale_listings.py buyer --years 2024 [--apply]   # 埋め直し(§302): その年の全市場を取り直し、既存の落札行の buyer だけ書く
   python cloud/sale_listings.py weekly [--apply]    # 便: 今年の一覧から終わって 60 日以内の市場を取り直す→ひも付け→upsert→未結びの再ひも付け→heartbeat
 環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY(--apply)/ SUPABASE_ANON_KEY(読むだけ)
 終了コード: 0 正常 / 1 一部失敗 / 2 前提失敗
@@ -53,7 +54,8 @@ EXCLUDE_NAMES = ("総括表",)
 AGE = {"当歳": 0, "１歳": 1, "1歳": 1, "２歳": 2, "2歳": 2}
 COLS = ["sale_year", "market_code", "hip_no", "market_name", "breed", "age_class", "sale_start", "sale_end", "sale_date",
         "horse_name", "dam", "dam_norm", "sire", "sex", "color", "birth_year", "birth_date", "breeder", "seller", "result",
-        "price_yen_tax_incl", "jbis_horse_id", "horse_code", "link_method", "source_url"]
+        "price_yen_tax_incl", "jbis_horse_id", "horse_code", "link_method", "source_url", "buyer"]
+KEY = ("sale_year", "market_code", "hip_no", "jbis_horse_id")
 
 
 def log(*a):
@@ -286,7 +288,8 @@ def parse_all(raw: Path, years, cdir=None):
                              "dam": x["dam"], "dam_norm": norm_dam(x["dam"]), "sire": x["sire"], "sex": x["sex"], "color": x["color"],
                              "birth_year": x["birth_year"] or ((y - ag) if ag is not None else None), "horse_name": x["name"], "birth_date": None, "breeder": None,
                              "seller": x["seller"], "result": res, "price_yen_tax_incl": price, "jbis_horse_id": x["jbis_id"],
-                             "horse_code": None, "link_method": None, "source_url": f"{BASE}/seri/{y}/{r['code']}/sale/"})
+                             "horse_code": None, "link_method": None, "source_url": f"{BASE}/seri/{y}/{r['code']}/sale/",
+                             "buyer": ((x["buyer_txt"] or "").strip() or None) if res == "落札" else None})
     # HBA 名簿で生年月日を補う: 名簿ごとに (上場番号, 母) の一致が最も多い市場に当てる
     cats = load_catalogs(cdir)
     by_sale = defaultdict(dict)
@@ -464,7 +467,7 @@ def _years(s):
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["fetch", "parse", "link", "load", "weekly"])
+    ap.add_argument("cmd", choices=["fetch", "parse", "link", "load", "weekly", "buyer"])
     ap.add_argument("--raw", default=str(HERE / "data" / "sales" / "jbis"))
     ap.add_argument("--years", default=None)
     ap.add_argument("--catalog-dir")
@@ -513,6 +516,27 @@ def main(argv=None):
         if not (base and wkey):
             log("SUPABASE_URL / SUPABASE_SERVICE_KEY が無い"); return 2
         return 1 if upsert_rows(base, wkey, rows) else 0
+
+    if a.cmd == "buyer":
+        # §302 埋め直し: 年ごとに全市場を取り直し→既存の落札行(主キー一致)の buyer だけ upsert。ほかの列・ひも付けは触らない
+        if not base or not rkey:
+            log("SUPABASE_URL / KEY が無い"); return 2
+        bad = 0
+        for y in years:
+            idx, got = fetch_year(y, raw, force=True)
+            rows, st = parse_all(raw, [y], a.catalog_dir)
+            have = {tuple(x[k] for k in KEY) for x in rest_get(base, rkey, f"{TABLE}?select={','.join(KEY)}&sale_year=eq.{y}&result=eq.落札"
+                                                                          "&order=market_code.asc,hip_no.asc,jbis_horse_id.asc")}
+            put = [{k: x[k] for k in KEY + ("buyer",)} for x in rows if x["buyer"] and tuple(x[k] for k in KEY) in have]
+            log(f"{y}: 市場 {len(got)}・落札(表) {len(have)}・buyer を書く {len(put)}・表に無い/空 {len(have) - len(put)}" + ("" if a.apply else "(ドライラン)"))
+            if a.apply and put:
+                from load_nar_official import upsert  # noqa: E402
+                for i in range(0, len(put), 500):
+                    s2, msg = upsert(base, wkey, TABLE, ",".join(KEY), put[i:i + 500])
+                    if s2 >= 300:
+                        bad += 1
+                        log(f"  upsert 失敗 {y} {i}: {s2} {msg[:200]}")
+        return 1 if bad else 0
 
     # weekly(便): 取り直し→ひも付け→upsert→heartbeat
     import beat as B
