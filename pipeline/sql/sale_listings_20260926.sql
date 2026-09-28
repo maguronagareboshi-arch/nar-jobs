@@ -1,6 +1,6 @@
 -- 2026-09-26 枝 horse-sales: セール(市場取引)の上場記録。1 行= 上場 1 回(落札/主取り/欠場)。
 -- 出典= JBIS-Search の市場取引(HBA 5 市場・八戸・セレクト・千葉・九州・ブリーズアップ・ミックス・ジェイエス 等・2003〜)。
---   ユーザーが JBIS・HBA・JRHA の掲載許可を取得済み。購買者名は持たない。
+--   ユーザーが JBIS・HBA・JRHA の掲載許可を取得済み。購買者名は buyer 列に落札行だけ持つ(9/28 §302 で撤回・sale_listings_buyer_20260928.sql)。
 -- 書き手= cloud/sale_listings.py(初回は手元で load --apply・以後は便 sale-listings.yml が毎週)。
 -- 読み手= viewer(anon の select だけ)。馬のページの札= 落札/主取り/欠場/市場の上場記録なし(「庭先」と断定しない)。
 -- 既存の auction_sales(楽天・SAT・hba・jrha の落札だけ)とは別の器。hba/jrha の落札は両方に載る(どちらを出すかは未決)。
@@ -32,7 +32,7 @@ create table if not exists public.sale_listings (
   link_method        text,                       -- 'dam+sex+birth_date' / 'dam+sex+birth_year' / 'multi'(候補 2 頭以上= 結ばない)/ null
   source_url         text,
   fetched_at         timestamptz not null default now(),
-  primary key (sale_year, market_code, hip_no)
+  primary key (sale_year, market_code, hip_no, jbis_horse_id)   -- 本番の実際(9/28 に記載を訂正)
 );
 create index if not exists sale_listings_horse on public.sale_listings (horse_code) where horse_code is not null;
 create index if not exists sale_listings_dam on public.sale_listings (dam_norm, birth_year);
