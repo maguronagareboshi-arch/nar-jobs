@@ -52,14 +52,21 @@ def load_samples():
     out = []
     for row, i in rd("nar_runs.csv.gz"):
         tr = row[i["track"]]
-        if tr not in NANKAN or row[i["finish"]] != "1" or not row[i["time_sec"]]:
+        fin = row[i["finish"]]
+        if tr not in NANKAN or not fin.isdigit() or not (1 <= int(fin) <= baba.TOP_N) or not row[i["time_sec"]]:
             continue
         m = races.get((tr, row[i["race_date"]], row[i["race_no"]]))
         if not m or not m[0]:
             continue
         out.append((tr, row[i["race_date"]], int(m[0]), baba.band_of(m[1], tr),
-                    float(row[i["time_sec"]]), m[2] or ""))
-    out.sort(key=lambda s: s[1])
+                    float(row[i["time_sec"]]), m[2] or "", row[i["race_no"]], int(fin)))
+    # 同着= (レース, 着順) ごとに速い方 1 本(baba.main と同じ)
+    best = {}
+    for s_ in out:
+        k = (s_[0], s_[1], s_[6], s_[7])
+        if k not in best or s_[4] < best[k][4]:
+            best[k] = s_
+    out = sorted(best.values(), key=lambda s: s[1])
     return out
 
 
@@ -80,7 +87,7 @@ def main():
     a = ap.parse_args()
     BL = a.baseline
     samples = load_samples()
-    print("勝ち時計 %d本(南関4場)" % len(samples))
+    print("1〜%d着の時計 %d本(南関4場・旧版の窓は 1 着だけ使う)" % (baba.TOP_N, len(samples)))
     targets = days_in(samples, FROM, TO)
     ok = True
 
@@ -100,13 +107,13 @@ def main():
     for ds in ref_days:
         d = dt.date.fromisoformat(ds)
         for tr in NANKAN:
-            rows = [(s[2], s[3], s[4]) for s in samples if s[0] == tr and s[1] == ds]
+            rows = [(s[2], s[3], s[4]) for s in samples if s[0] == tr and s[1] == ds and s[7] == 1]
             if not rows:
                 continue
             lo = (d - dt.timedelta(days=baba.STD_DAYS)).isoformat()
             bb, bd = {}, {}
             for s in samples:
-                if s[0] != tr or not (lo <= s[1] < ds):
+                if s[0] != tr or s[7] != 1 or not (lo <= s[1] < ds):
                     continue
                 bd.setdefault((s[2],), []).append(s[4])
                 if s[3]:

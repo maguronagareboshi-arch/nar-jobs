@@ -1,8 +1,18 @@
 # -*- coding: utf-8 -*-
 """本体 cloud: 馬場差の全15場一括計算(DESIGN §48 K-1b)。
 
-公式の勝ち時計(nar_runs.time_sec, finish=1)を「場×距離×クラス帯の**直近1年(going 既定・[d-365,d))**中央値」と比べ、
+公式の走破時計(nar_runs.time_sec)を「場×距離×クラス帯の**直近1年(going 既定・[d-365,d))**中央値」と比べ、
 **日×場の中央値**を馬場差(秒)として nar_meta `baba_diff` に入れる。マイナス=速い馬場。
+
+  ⛔2026-09-28 T5(1〜5着)方式(going 版の d/g。RESULT_baba_top5_20260928.md「4 方式の比較」で
+    奇数R/偶数R の日の値の相関 r が 勝ち時計だけ 0.884 → 0.908)
+    各走 = 1〜5着それぞれの時計 − 同じ場×距離×帯×**着順**の基準の中央値(窓・3 段退避・8 本条件は今までと同じ)
+    レース差 = その差の中央値(最低 MIN_HORSES=3 頭)/ 日×場 = レース差の中央値(MIN_RACES=4 R 未満は出さない)
+    "n"/"ng" は**レース数**(頭数ではない)。同着は (レース, 着順) ごとに速い方の時計 1 本だけ使う。
+    ⛔定義が変わったので切替の初回だけ --apply --rebuild-all(base は "going" のままなので自動では組み直さない)
+    取得量: nar_runs を finish<=5 で読むので勝ち時計だけの約 5 倍= 窓 485 日ぶんで約 10 万行・
+    REST 1000 行ページで約 100 ページ(1 ページ 0.5〜1 秒として 1〜2 分)。
+    season/365/1095(旧版)は従来どおり勝ち時計(finish=1)だけで組む。
 
   出力 = {"built":"YYYY-MM-DD", "base":"going"|"season"|"365"|"1095",
           "days": {"2026-08-28": {"ooi": {"d": -0.8, "n": 9}, …}, …}}   # 直近90日+当日
@@ -15,13 +25,13 @@
     だけ。--rebuild-all のときだけ全部作り直す(定義を変えたときの作り直し用)。
     昔は標準の窓に上限が無く毎朝 90 日をまるごと組み直していたので、過去の日の値があとから動いていた。
 
-  ⛔当日の値は「その日の**終わったレース**(勝ち時計のある走)だけ」から出した暫定値。
+  ⛔当日の値は「その日の**終わったレース**(時計のある走)だけ」から出した暫定値。
     "p":true が付き、画面は「途中まで」と断って出す(js/ui.js babaWord/babaLabel)。
 
   標準の窓は --baseline で切替。**既定は going(2026-09-28 ユーザー決定= 物差し 2 本)**。
     going  : 2 本の物差しを1セルに入れる。窓は [d-365, d)(前日までの直近1年・d 未満。2026-09-28 ユーザー決定で 1095→365)
-             d = 良馬場比: 同じ場×距離×クラス帯の going=良 の勝ち時計の中央値との差
-             g = 同じ馬場状態比: 同じ場×距離×クラス帯×その走の going の中央値との差
+             d = 良馬場比: 同じ場×距離×クラス帯×着順の going=良 の時計(1〜5着)の中央値との差
+             g = 同じ馬場状態比: 同じ場×距離×クラス帯×着順×その走の going の中央値との差
              セル = {"d","g","n"(d に使ったレース数),"ng"(g に使ったレース数),"k"(その日の主な going),"p"?}
              ⛔標本 8 本未満のセルはそのレースを除外(退避しない)。d/g はそれぞれ MIN_RACES 本以上のときだけ載せる
              ⛔2026-09-28 までの "d" は「馬場状態を混ぜた標準」との差。going 版の "d" は良馬場比に意味が変わる
@@ -87,6 +97,8 @@ SEASON_YEARS = 3         # season 版: 何年ぶん遡るか
 SEASON_PAD = 45          # season 版: 同じ暦日の前後 何日
 BASELINES = ("365", "1095", "season", "going")
 GOING_BASE = "良"          # going 版の d の物差し
+TOP_N = 5                # going 版(T5)で使う着順の上限(1〜5着)
+MIN_HORSES = 3           # going 版(T5): レース差を出す最少頭数
 
 Z = str.maketrans("ＡＢＣ０１２３４５６７８９", "ABC0123456789")
 
@@ -174,7 +186,7 @@ def coarse_key(band):
 
 
 def fetch_days(baseline):
-    """標準を作るのに何日ぶんの勝ち時計を読めばよいか(表示する90日ぶんの一番古い日から見た遡り)"""
+    """標準を作るのに何日ぶんの時計を読めばよいか(表示する90日ぶんの一番古い日から見た遡り)"""
     if baseline == "season":
         return 365 * SEASON_YEARS + SEASON_PAD + 30
     return (STD_DAYS_LEGACY if baseline == "1095" else STD_DAYS) + 30
@@ -249,19 +261,20 @@ def day_cell(day_rows, by_band, by_dist, d, baseline):
 
 
 def day_cell_going(day_rows, by_band_g, by_dist_g, d):
-    """going 版の1つの日×場。day_rows= [(dist, band, time, going)]。
-    by_band_g[(dist, band, going)] / by_dist_g[(dist, going)] = 日付昇順の (date, time)。
-    退避は 3 段(9/28)= 細かい帯(C1)→ 粗い帯(字だけ・by_band_g[(dist, "*C", going)])→ 場×距離。
-    going を良に固定(d)/その走の going(g)にして、各段とも同じ going で引く。
-    戻り= {"d","n","g","ng","devs"} のうち出せたものだけ(MIN_RACES 本未満は載せない)"""
+    """going 版(T5)の1つの日×場。day_rows= [(dist, band, time, going, race_no, finish)]。
+    by_band_g[(dist, band, going, finish)] / by_dist_g[(dist, going, finish)] = 日付昇順の (date, time)。
+    退避は 3 段(9/28)= 細かい帯(C1)→ 粗い帯(字だけ・by_band_g[(dist, "*C", going, finish)])→ 場×距離。
+    going を良に固定(d)/その走の going(g)にして、各段とも同じ going・同じ着順で引く。
+    レース差= そのレースの 1〜5着の差の中央値(MIN_HORSES 頭以上)。日×場= レース差の中央値。
+    戻り= {"d","n","g","ng","devs"} のうち出せたものだけ(MIN_RACES R 未満は載せない。n/ng はレース数)"""
     ranges = baseline_ranges(d, "going")
     cache = {}
 
-    def med_of(dist, band, going):
+    def med_of(dist, band, going, fin):
         cb = coarse_key(band)
-        for k, src, kk in ((("b", dist, band, going), by_band_g, (dist, band, going)),
-                           (("c", dist, cb, going), by_band_g, (dist, cb, going)),
-                           (("d", dist, going), by_dist_g, (dist, going))):
+        for k, src, kk in ((("b", dist, band, going, fin), by_band_g, (dist, band, going, fin)),
+                           (("c", dist, cb, going, fin), by_band_g, (dist, cb, going, fin)),
+                           (("d", dist, going, fin), by_dist_g, (dist, going, fin))):
             if k[0] != "d" and not k[2]:
                 continue
             m = cache.get(k, "?")
@@ -273,15 +286,21 @@ def day_cell_going(day_rows, by_band_g, by_dist_g, d):
                 return m
         return None
 
-    dv, gv = [], []
-    for dist, band, t, going in day_rows:
-        m = med_of(dist, band, GOING_BASE)
+    per_d, per_g = {}, {}
+    for dist, band, t, going, rno, fin in day_rows:
+        if not fin or fin > TOP_N:
+            continue
+        m = med_of(dist, band, GOING_BASE, fin)
         if m is not None:
-            dv.append(t - m)
+            per_d.setdefault(rno, []).append(t - m)
         if going:
-            m = med_of(dist, band, going)
+            m = med_of(dist, band, going, fin)
             if m is not None:
-                gv.append(t - m)
+                per_g.setdefault(rno, []).append(t - m)
+    dv = [statistics.median(v) for _, v in sorted(per_d.items(), key=lambda kv: str(kv[0]))
+          if len(v) >= MIN_HORSES]
+    gv = [statistics.median(v) for _, v in sorted(per_g.items(), key=lambda kv: str(kv[0]))
+          if len(v) >= MIN_HORSES]
     out = {}
     if len(dv) >= MIN_RACES:
         out["d"], out["n"], out["devs"] = round(statistics.median(dv), 1), len(dv), dv
@@ -300,9 +319,16 @@ def _today_jst():
     return dt.datetime.now(ZoneInfo("Asia/Tokyo")).date()
 
 
+def _norm(samples):
+    """samples を (track, date, dist, band, time, going, race_no, finish) に揃える。
+    6 要素(旧形= 勝ち時計だけ)は race_no=None・finish=1 とみなす"""
+    return [tuple(s_[:8]) if len(s_) >= 8 else tuple(s_[:6]) + (None, 1) for s_ in samples]
+
+
 def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=False):
     """as-of の馬場差を組む。
-      samples  : [(track, date, dist, band, time, going)]  勝ち時計(標準の窓ぶん全部)
+      samples  : [(track, date, dist, band, time, going, race_no, finish)]  1〜5着の時計(標準の窓ぶん全部)
+                 going 版は 1〜5着(T5)で組む。旧版(season/365/1095)は finish=1 だけ。6 要素なら勝ち時計とみなす
       targets  : 出したい日(date 文字列)の集合
       frozen   : 前回の blob の days(確定済みは据え置く)
       戻り     : ({日: {場prefix: {d,n[,p]}}}, 組み直した場日の数, {(日,場): 偏差列})
@@ -310,25 +336,28 @@ def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=
     """
     today = today or _today_jst()
     frozen = frozen or {}
+    samples = _norm(samples)
+    if baseline != "going":
+        samples = [s_ for s_ in samples if s_[7] == 1]
     by_band_all, by_dist_all = {}, {}
-    for track, date, dist, band, t, _g in sorted(samples, key=lambda s: s[1]):
+    for track, date, dist, band, t, _g, _rno, _fin in sorted(samples, key=lambda s: s[1]):
         by_dist_all.setdefault(track, {}).setdefault((dist,), []).append((date, t))
         if band:
             by_band_all.setdefault(track, {}).setdefault((dist, band), []).append((date, t))
     per_day = {}
-    for track, date, dist, band, t, _g in samples:
+    for track, date, dist, band, t, _g, rno, fin in samples:
         if date in targets:
-            per_day.setdefault((date, track), []).append((dist, band, t, _g))
+            per_day.setdefault((date, track), []).append((dist, band, t, _g, rno, fin))
     if baseline == "going":
         by_band_gg, by_dist_gg = {}, {}
-        for track, date, dist, band, t, _g in sorted(samples, key=lambda s: s[1]):
-            if not _g:
+        for track, date, dist, band, t, _g, _rno, fin in sorted(samples, key=lambda s: s[1]):
+            if not _g or not fin or fin > TOP_N:
                 continue
-            by_dist_gg.setdefault(track, {}).setdefault((dist, _g), []).append((date, t))
+            by_dist_gg.setdefault(track, {}).setdefault((dist, _g, fin), []).append((date, t))
             if band:
-                by_band_gg.setdefault(track, {}).setdefault((dist, band, _g), []).append((date, t))
+                by_band_gg.setdefault(track, {}).setdefault((dist, band, _g, fin), []).append((date, t))
                 if coarse_key(band):        # 退避 2 段目(字だけの粗い帯)
-                    by_band_gg[track].setdefault((dist, coarse_key(band), _g), []).append((date, t))
+                    by_band_gg[track].setdefault((dist, coarse_key(band), _g, fin), []).append((date, t))
 
     out, rebuilt, devs_of = {}, 0, {}
     tstr = today.isoformat()
@@ -405,15 +434,24 @@ def main():
     today = _today_jst()
     # ⛔表示する一番古い日(today-90)から見て、その日の標準ぶんまで遡って読む(as-of なので日ごとに窓が動く)
     since = (today - dt.timedelta(days=WINDOW_DAYS + fetch_days(a.baseline))).isoformat()
-    wins = rows_all(base, key, "/rest/v1/nar_runs?select=track,race_date,race_no,time_sec"
-                               f"&finish=eq.1&time_sec=not.is.null&race_date=gte.{since}&order=race_date.asc,track.asc,race_no.asc")
+    # ⛔T5= 1〜5着を読む(約 10 万行・100 ページ前後・1〜2 分)。旧版の窓でも読み方は同じで build_days が finish=1 に絞る。
+    #   order は一意になるよう uma_ban まで(PostgREST offset は order= 一意)
+    wins = rows_all(base, key, "/rest/v1/nar_runs?select=track,race_date,race_no,finish,uma_ban,time_sec"
+                               f"&finish=gte.1&finish=lte.{TOP_N}&time_sec=not.is.null&race_date=gte.{since}"
+                               "&order=race_date.asc,track.asc,race_no.asc,finish.asc,uma_ban.asc")
     races = rows_all(base, key, "/rest/v1/nar_races?select=track,race_date,race_no,distance_m,race_name,going,race_kind"
                                 f"&race_date=gte.{since}&order=race_date.asc,track.asc,race_no.asc")
     meta = {(r["track"], r["race_date"], r["race_no"]): r for r in races}
-    log(f"勝ち時計 {len(wins)}行 / レース {len(races)}行({since}〜・標準={a.baseline})")
+    log(f"1〜{TOP_N}着の時計 {len(wins)}行 / レース {len(races)}行({since}〜・標準={a.baseline})")
 
-    samples = []           # (track, date, dist, band, time, going)
+    # 同着= (レース, 着順) ごとに速い方の時計 1 本だけ
+    best = {}
     for w in wins:
+        kk = (w["track"], w["race_date"], w["race_no"], int(w["finish"]))
+        if kk not in best or float(w["time_sec"]) < float(best[kk]["time_sec"]):
+            best[kk] = w
+    samples = []           # (track, date, dist, band, time, going, race_no, finish)
+    for w in best.values():
         if w["track"] == BANEI or w["track"] not in TRACK2PREFIX:
             continue
         m = meta.get((w["track"], w["race_date"], w["race_no"]))
@@ -421,7 +459,7 @@ def main():
             continue
         b = band_of(m.get("race_name"), w["track"], m.get("race_kind"))
         samples.append((w["track"], w["race_date"], int(m["distance_m"]), b,
-                        float(w["time_sec"]), str(m.get("going") or "")))
+                        float(w["time_sec"]), str(m.get("going") or ""), w["race_no"], int(w["finish"])))
 
     # 前回の blob(確定済みの日を据え置くため)。読めなければ空から組む
     frozen, prev_base = {}, None
@@ -455,7 +493,7 @@ def main():
     if a.verify:
         # 自然妥当性: 公式の馬場状態別に馬場差の平均を見る(ダートは湿ると速い=重・不良が負側なら健全)
         going_of = {}
-        for track, date, _d, _b, _t, going in samples:
+        for track, date, _d, _b, _t, going, *_rest in samples:
             if date in targets and going:
                 going_of.setdefault((date, track), []).append(going)
         buckets = {}
