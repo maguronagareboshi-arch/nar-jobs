@@ -141,6 +141,9 @@ def band_of(race_name, track=None, race_kind=None):
       ④ 「ＡＢ混合」「Ｂ・Ｃ級」のような複数級は専用帯("AB"・"BC")"""
     t = str(race_name or "").translate(Z)
     if str(race_kind or "") in OP_KINDS or "オープン" in t:
+        # ⑤(9/28)若馬の OP は "OPy"(2歳・3歳。ただし 3歳以上・3上 は古馬)= 古馬 OP と標準を混ぜない
+        if re.search(r"[23]歳", t) and not re.search(r"[34]歳以上|[34]歳上|[34]上", t):
+            return "OPy"
         return "OP"
     mm = re.search(r"(?<![A-Za-zＡ-Ｚａ-ｚ])([ABC])・?([ABC])(?=混合|級)", t)
     if mm and mm.group(1) != mm.group(2):
@@ -164,6 +167,11 @@ def band_of(race_name, track=None, race_kind=None):
 # ─── as-of の標準づくり ────────────────────────────────────────────────
 # ⛔ここから下は「日 d の標準は d より前のレースだけ」を守るための道具。手元の写しでも同じ関数を呼べるよう
 #   DB に触らない純関数にしてある(検証= tools/verify_baba_asof.py)。
+
+def coarse_key(band):
+    """going 版の退避 2 段目= 字だけの粗い帯(A1/A/…→ "*A")。OP・OPy・2y・3y・AB/BC は None(粗い段なし)"""
+    return "*" + band[0] if band and re.fullmatch(r"[ABC][0-9]?", band) else None
+
 
 def fetch_days(baseline):
     """標準を作るのに何日ぶんの勝ち時計を読めばよいか(表示する90日ぶんの一番古い日から見た遡り)"""
@@ -243,15 +251,18 @@ def day_cell(day_rows, by_band, by_dist, d, baseline):
 def day_cell_going(day_rows, by_band_g, by_dist_g, d):
     """going 版の1つの日×場。day_rows= [(dist, band, time, going)]。
     by_band_g[(dist, band, going)] / by_dist_g[(dist, going)] = 日付昇順の (date, time)。
-    既存 day_cell と同じ「帯→場×距離」の落とし方で、going を良に固定(d)/その走の going(g)にして引く。
+    退避は 3 段(9/28)= 細かい帯(C1)→ 粗い帯(字だけ・by_band_g[(dist, "*C", going)])→ 場×距離。
+    going を良に固定(d)/その走の going(g)にして、各段とも同じ going で引く。
     戻り= {"d","n","g","ng","devs"} のうち出せたものだけ(MIN_RACES 本未満は載せない)"""
     ranges = baseline_ranges(d, "going")
     cache = {}
 
     def med_of(dist, band, going):
+        cb = coarse_key(band)
         for k, src, kk in ((("b", dist, band, going), by_band_g, (dist, band, going)),
+                           (("c", dist, cb, going), by_band_g, (dist, cb, going)),
                            (("d", dist, going), by_dist_g, (dist, going))):
-            if k[0] == "b" and not band:
+            if k[0] != "d" and not k[2]:
                 continue
             m = cache.get(k, "?")
             if m == "?":
@@ -316,6 +327,8 @@ def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=
             by_dist_gg.setdefault(track, {}).setdefault((dist, _g), []).append((date, t))
             if band:
                 by_band_gg.setdefault(track, {}).setdefault((dist, band, _g), []).append((date, t))
+                if coarse_key(band):        # 退避 2 段目(字だけの粗い帯)
+                    by_band_gg[track].setdefault((dist, coarse_key(band), _g), []).append((date, t))
 
     out, rebuilt, devs_of = {}, 0, {}
     tstr = today.isoformat()
