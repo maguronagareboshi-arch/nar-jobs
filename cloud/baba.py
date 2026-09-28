@@ -35,7 +35,7 @@
     退避したセルには **"b":"365"** を付ける(blob の印。トップの "base" は "season" のまま)。
   - ⚠その日の対象レースが4本未満の場は出さない(小サンプルから言わない)
   - ⚠帯広ばは対象外(#111: ばんえいは馬場の型が違う。水分率が公式にある)
-  - クラス帯は race_name の粗い抽出(Ａ/Ｂ/Ｃ+数字・2歳/3歳)。抽出できない走は場×距離の全体中央値に落とす
+  - クラス帯は race_name の粗い抽出(Ａ/Ｂ/Ｃ+数字・2歳/3歳・重賞/準重賞/オープン=OP・複数級=AB 等)。抽出できない走は場×距離の全体中央値に落とす
     (帯を捏造しない)。帯の基準は標本8本以上のときだけ使う
 
   py -3 -X utf8 cloud/baba.py --env pipeline/.env.nar            # ドライラン(集計と検証だけ)
@@ -128,17 +128,34 @@ def rows_all(base, key, path):
 LETTER_ONLY_TRACKS = {"名古屋", "笠松"}
 
 
-def band_of(race_name, track=None):
-    """クラス帯の粗い抽出。取れなければ None(=場×距離の全体基準に落ちる)。track が東海2場なら字だけ"""
+OP_KINDS = {"重賞", "準重賞"}
+KANJI_NUM = {"一": "1", "二": "2", "三": "3"}
+
+
+def band_of(race_name, track=None, race_kind=None):
+    """クラス帯の粗い抽出。取れなければ None(=場×距離の全体基準に落ちる)。track が東海2場なら字だけ。
+    2026-09-28 帯の直し(ユーザー了承):
+      ① race_kind が 重賞/準重賞、または名前に「オープン」→ "OP"(2歳・3歳・A 級の標準に混ぜない)
+      ② 「3歳以上・3上・4歳以上」は 3y にしない(中の A/B/C 級で分け、級が無ければ None)
+      ③ 級の漢数字 一二三 は 1〜3 に揃える(A一=A1)
+      ④ 「ＡＢ混合」「Ｂ・Ｃ級」のような複数級は専用帯("AB"・"BC")"""
     t = str(race_name or "").translate(Z)
+    if str(race_kind or "") in OP_KINDS or "オープン" in t:
+        return "OP"
+    mm = re.search(r"(?<![A-Za-zＡ-Ｚａ-ｚ])([ABC])・?([ABC])(?=混合|級)", t)
+    if mm and mm.group(1) != mm.group(2):
+        return "".join(sorted(mm.group(1) + mm.group(2)))
     # ⛔前後に英字(全角含む=Z はＡＢＣしか半角化しない)が続く A/B/C は級ではない
     #   (「ＪＲＡ認定」「ＪＢＣ」「ＢＡＯＯ」等の英字を拾って2歳戦がA級に混ざる)。
     #   数字が続けば級(「Ａ１Ａ２」は従来どおり A1)・続かなければ直後も英字でないこと
     m = re.search(r"(?<![A-Za-zＡ-Ｚａ-ｚ])([ABC])(?:\s?([0-9一二三])|(?![A-Za-zＡ-Ｚａ-ｚ]))", t)
     if m:
-        return m.group(1) if track in LETTER_ONLY_TRACKS else m.group(1) + (m.group(2) or "")
+        num = m.group(2) or ""
+        return m.group(1) if track in LETTER_ONLY_TRACKS else m.group(1) + KANJI_NUM.get(num, num)
     if re.search(r"2歳|２歳", t):
         return "2y"
+    if re.search(r"[34]歳以上|[34]歳上|[34]上", t):
+        return None
     if re.search(r"3歳|３歳", t):
         return "3y"
     return None
@@ -377,7 +394,7 @@ def main():
     since = (today - dt.timedelta(days=WINDOW_DAYS + fetch_days(a.baseline))).isoformat()
     wins = rows_all(base, key, "/rest/v1/nar_runs?select=track,race_date,race_no,time_sec"
                                f"&finish=eq.1&time_sec=not.is.null&race_date=gte.{since}&order=race_date.asc,track.asc,race_no.asc")
-    races = rows_all(base, key, "/rest/v1/nar_races?select=track,race_date,race_no,distance_m,race_name,going"
+    races = rows_all(base, key, "/rest/v1/nar_races?select=track,race_date,race_no,distance_m,race_name,going,race_kind"
                                 f"&race_date=gte.{since}&order=race_date.asc,track.asc,race_no.asc")
     meta = {(r["track"], r["race_date"], r["race_no"]): r for r in races}
     log(f"勝ち時計 {len(wins)}行 / レース {len(races)}行({since}〜・標準={a.baseline})")
@@ -389,7 +406,7 @@ def main():
         m = meta.get((w["track"], w["race_date"], w["race_no"]))
         if not m or not m.get("distance_m"):
             continue
-        b = band_of(m.get("race_name"), w["track"])
+        b = band_of(m.get("race_name"), w["track"], m.get("race_kind"))
         samples.append((w["track"], w["race_date"], int(m["distance_m"]), b,
                         float(w["time_sec"]), str(m.get("going") or "")))
 
