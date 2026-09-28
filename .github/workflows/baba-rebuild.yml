@@ -1,0 +1,51 @@
+# 馬場差の方式を変えたとき(例 2026-09-28 勝ち時計→1〜5着 T5)に 1 回だけ流す手動便。
+#   1) baba.py --apply --rebuild-all(90 日の確定済みも組み直す)
+#   2) baba_trend.py --calibrate(閾値表 pipeline/baba_trend_q.json を新しい d で作り直す)
+#   3) q.json に差分があれば commit・push(rebase してから。失敗したら赤で止める)
+#   4) baba_trend.py --apply(--today なし= 90 日ぜんぶ組み直し・新しい閾値表で言葉を付け直す)
+# ⛔nar-refresh と同じ concurrency group= 定時便と重ならない。nar-refresh.yml の権限は広げない(書き込みはこの便だけ)。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: baba-rebuild
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: nar-refresh
+  cancel-in-progress: false
+jobs:
+  rebuild:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+      SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: pip install -r cloud/requirements.txt
+
+      - name: baba diff rebuild all
+        run: python cloud/baba.py --apply --rebuild-all
+
+      - name: baba trend calibrate
+        run: python cloud/baba_trend.py --calibrate
+
+      - name: commit q json
+        run: |
+          set -e
+          if [ -n "$(git status --porcelain pipeline/baba_trend_q.json)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add pipeline/baba_trend_q.json
+            git commit -m "baba_trend 閾値表を作り直し(馬場差の方式変更・$(TZ=Asia/Tokyo date +%F))"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          else
+            echo "閾値表に差分なし"
+          fi
+
+      - name: baba trend apply all days
+        run: python cloud/baba_trend.py --apply
