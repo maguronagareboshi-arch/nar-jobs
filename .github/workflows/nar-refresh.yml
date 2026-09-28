@@ -352,7 +352,7 @@ jobs:
       #   市場の取引は表 sale_listings 1 本(便 sale-listings.yml)。auction_sales は楽天・SAT 専用に戻す。台本と既存行は残す(画面側で source を絞る)
 
       # §48 K-1b 馬場差の全15場一括計算(日×場の中央値・帯広ば除外)
-      # 2026-09-28 標準の窓は going 版(良馬場比 d+同じ馬場状態比 g・過去3年)が既定= 引数は要らない(--baseline で切替。旧既定は season)
+      # 2026-09-28 標準の窓は going 版(良馬場比 d+同じ馬場状態比 g・前日までの1年間)が既定= 引数は要らない(--baseline で切替。旧既定は season)
       # 2026-09-05 ユーザーFB「最近の馬場の時計が出ていない日がある」= monthly だけだったのを 朝の便(JST 09:30 前)でも回す(手元 24 秒)
       - name: baba diff (monthly + morning)
         id: am_baba_diff
