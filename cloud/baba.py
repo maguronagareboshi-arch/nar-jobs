@@ -68,6 +68,7 @@ import os
 import re
 import statistics
 import sys
+import time
 import urllib.request
 
 try:
@@ -124,10 +125,19 @@ def req(base, key, path, method="GET", body=None):
         return x.status, x.read().decode("utf-8")
 
 
-def rows_all(base, key, path):
+def rows_all(base, key, path, tries=3, wait=5):
+    """全ページを引く。⛔ページごとに最大 tries 回(間 wait 秒・2 回目以降は倍々)引き直す(監査 2d・9/5 に baba_trend で 500 実測)"""
     out, off = [], 0
     while True:
-        _, body = req(base, key, f"{path}&limit=1000&offset={off}")
+        for k in range(tries):
+            try:
+                _, body = req(base, key, f"{path}&limit=1000&offset={off}")
+                break
+            except Exception as e:  # noqa: BLE001  5xx・時間切れ・接続切れ
+                if k == tries - 1:
+                    raise
+                log(f"  取得の再試行 {k + 1}/{tries - 1}(offset={off}): {e}")
+                time.sleep(wait * (2 ** k))
         c = json.loads(body)
         out.extend(c)
         if len(c) < 1000:
@@ -436,8 +446,9 @@ def main():
     since = (today - dt.timedelta(days=WINDOW_DAYS + fetch_days(a.baseline))).isoformat()
     # ⛔T5= 1〜5着を読む(約 10 万行・100 ページ前後・1〜2 分)。旧版の窓でも読み方は同じで build_days が finish=1 に絞る。
     #   order は一意になるよう runner_number まで(PostgREST offset は order= 一意)
+    #   ⛔finish_note=is.null= 降着・失格等の注記がある馬を除く(検証 baba_4way の ijo==0 と同じ・監査 1f)
     wins = rows_all(base, key, "/rest/v1/nar_runs?select=track,race_date,race_no,finish,runner_number,time_sec"
-                               f"&finish=gte.1&finish=lte.{TOP_N}&time_sec=not.is.null&race_date=gte.{since}"
+                               f"&finish=gte.1&finish=lte.{TOP_N}&time_sec=not.is.null&finish_note=is.null&race_date=gte.{since}"
                                "&order=race_date.asc,track.asc,race_no.asc,finish.asc,runner_number.asc")
     races = rows_all(base, key, "/rest/v1/nar_races?select=track,race_date,race_no,distance_m,race_name,going,race_kind"
                                 f"&race_date=gte.{since}&order=race_date.asc,track.asc,race_no.asc")

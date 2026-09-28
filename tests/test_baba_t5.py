@@ -67,7 +67,11 @@ class T5Test(unittest.TestCase):
         self.assertEqual(c["d"], 3.0)
 
     def test_sixth_ignored(self):
-        self.assertEqual(cell(hist() + day_rows(sixth=-50.0))["d"], 0.5)
+        # 1〜5着の差を 0,1,2,3,4 秒にばらす → レース差= median(0..4)= 2.0。
+        # 6 着(−50)が混ざると median(−50,0,1,2,3,4)= 1.5 になる= TOP_N=6 に変えたら落ちる(監査 6b)
+        rows = [(TR, DAY, 1200, None, 70 + 0.2 * f + (f - 1 if f <= 5 else -50.0), "良", r, f)
+                for r in range(1, 5) for f in range(1, 7)]
+        self.assertEqual(cell(hist() + rows)["d"], 2.0)
 
     def test_min_horses_and_races(self):
         # 4R のうち 1R が 2 頭だけ → 3R しか残らず d/g は出ない

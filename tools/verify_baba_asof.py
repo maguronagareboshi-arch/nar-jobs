@@ -7,6 +7,7 @@
 
 検証:
   1. as-of= 日 d の標準に d 以降の時計が1本も混ざらない(窓の上限が d であること・値が B 版と一致)
+     + 参照実装(総当たり)との一致= 365 の 1 着・going(T5)の 1〜5着
   2. 凍結= 同じ過去日を2回組んでも値が動かない(2回目は frozen を渡して据え置き)
   3. 当日暫定= 終わったレース(勝ち時計のある走)だけから出て "p":true が付く
   ⛔2・3 は既定の窓(season)で回す。--baseline で切替。標本が薄いセルの 365 退避("b":"365")の数も出す。
@@ -53,6 +54,8 @@ def load_samples():
     for row, i in rd("nar_runs.csv.gz"):
         tr = row[i["track"]]
         fin = row[i["finish"]]
+        if "finish_note" in i and row[i["finish_note"]]:
+            continue        # 降着・失格等の注記つき= baba.main の finish_note=is.null と同じく除く
         if tr not in NANKAN or not fin.isdigit() or not (1 <= int(fin) <= baba.TOP_N) or not row[i["time_sec"]]:
             continue
         m = races.get((tr, row[i["race_date"]], row[i["race_no"]]))
@@ -135,6 +138,46 @@ def main():
                 print("   ずれ %s %s: 総当たり %s / build_days %s" % (ds, tr, want, got))
     print("   参照実装との一致(直近12日×4場): %s" % ("OK" if not ref_bad else "NG %d" % ref_bad))
     ok &= not ref_bad
+
+    # 1〜5着(going= T5)の参照実装(素直な総当たり)と build_days の d が一致するか
+    t5_bad = t5_n = 0
+    for ds in ref_days:
+        d = dt.date.fromisoformat(ds)
+        lo = (d - dt.timedelta(days=baba.STD_DAYS)).isoformat()
+        for tr in NANKAN:
+            rows = [s for s in samples if s[0] == tr and s[1] == ds and 1 <= s[7] <= baba.TOP_N]
+            if not rows:
+                continue
+            hist_ = [s for s in samples if s[0] == tr and lo <= s[1] < ds
+                     and s[5] == baba.GOING_BASE and 1 <= s[7] <= baba.TOP_N]
+            per = {}
+            for _tr, _d, dist, band, t, _g, rno, fin in rows:
+                cb = baba.coarse_key(band) if band else None
+                med = None
+                for want_band in ([band] if band else []) + ([cb] if cb else []) + [None]:
+                    if want_band is None:
+                        v = [h[4] for h in hist_ if h[2] == dist and h[7] == fin]
+                    elif want_band == band:
+                        v = [h[4] for h in hist_ if h[2] == dist and h[3] == band and h[7] == fin]
+                    else:
+                        v = [h[4] for h in hist_ if h[2] == dist and h[3]
+                             and baba.coarse_key(h[3]) == cb and h[7] == fin]
+                    if len(v) >= baba.MIN_BAND:
+                        med = statistics.median(v)
+                        break
+                if med is not None:
+                    per.setdefault(rno, []).append(t - med)
+            rv = [statistics.median(v) for v in per.values() if len(v) >= baba.MIN_HORSES]
+            want = round(statistics.median(rv), 1) if len(rv) >= baba.MIN_RACES else None
+            got = run(samples, {ds}, "going", d + dt.timedelta(days=1))[0].get(ds, {}).get(NANKAN[tr])
+            got = got.get("d") if got else None
+            t5_n += 1
+            if want != got:
+                t5_bad += 1
+                print("   ずれ(T5) %s %s: 総当たり %s / build_days %s" % (ds, tr, want, got))
+    print("   1〜5着(going)の参照実装との一致(直近12日×4場・%d 場日): %s"
+          % (t5_n, "OK" if not t5_bad else "NG %d" % t5_bad))
+    ok &= not t5_bad
 
     # ── 2. 凍結: 同じ過去日を2回組んでも動かない
     today = TO + dt.timedelta(days=1)
