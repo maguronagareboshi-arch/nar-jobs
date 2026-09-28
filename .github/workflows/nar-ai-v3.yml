@@ -1,0 +1,120 @@
+# 南関 AI v3 第 8 版の毎日の前日版(下書き・段 1)。手元の `py -3.12 -X utf8 src/t8_forecast.py table DATE pre` を PC 無しで回す。
+#
+# ⛔学習はしない(固定の模型 t7e_Y1/Y3・t8_s2.json を固定ファイルから読む)。
+# ⛔本番に書くのは最後の 1 手順だけ(nar_ai_marks の REST upsert・model='v3-8'・timing='morning')。write=yes の dispatch のときだけ。
+# 固定ファイル(毎日変わらないもの・約 293MB の tar.gz)は公開 repo なので暗号化したリリース資産に置く:
+#   tag = inputs.asset_tag(既定 v3-assets-20260928)・資産 v3_fixed.tar.gz.enc・鍵 = secrets.V3_ASSET_KEY。作り方(手元・1 回):
+#   tar -czf - -C <組んだフォルダ> v3_data raw models cyokyo_csv kd | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:V3_ASSET_KEY -out v3_fixed.tar.gz.enc
+#   中の形: v3_data/*.parquet・*.json / raw/archive/*.csv.gz / models/t7e_*・t8_s2.json / cyokyo_csv/cyokyo_{場}_{年}.csv / kd/NR/NR.DAT・kd/NS/NS.DAT
+# 毎日変わる材料は便の中で取る: 前向きの写し(db_*_forward_t3 = t7e_forecast.py fetch・公開の読み鍵)・能力試験(t7e_forecast.py nk・公式サイト)・
+#   追い切りの毎日の分(v3_daily.py が nar_kb_works から読む・読むだけ)。
+name: nar-ai-v3
+
+on:
+  # schedule:
+  #   - cron: '30 4 * * *'   # 案: 04:30 UTC = 13:30 JST に翌日の前日版(段 2 で決める。今は付けない)
+  workflow_dispatch:
+    inputs:
+      date:
+        description: '予想する日(空= JST 明日)。例 2026-09-29'
+        required: false
+        default: ''
+      write:
+        description: '本番 nar_ai_marks(v3-8・morning)に書く(yes/no)'
+        required: false
+        default: 'no'
+      asset_tag:
+        description: '固定ファイルのリリース tag'
+        required: false
+        default: 'v3-assets-20260928'
+
+concurrency:
+  group: nar-ai-v3
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      V3_DATA: ${{ github.workspace }}/v3/v3_data
+      V3_RAW: ${{ github.workspace }}/v3/raw
+      V3_MODELS: ${{ github.workspace }}/v3/models
+      V3_CYOKYO_CSV: ${{ github.workspace }}/v3/cyokyo_csv
+      V3_KD: ${{ github.workspace }}/v3/kd
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install python packages (手元と同じ版)
+        run: pip install -q "pandas==2.2.3" "numpy==1.26.4" "pyarrow==25.0.1" "lightgbm==4.7.0" "scipy==1.14.1" "scikit-learn==1.9.0" requests
+
+      - name: day
+        id: d
+        env:
+          IN_DATE: ${{ github.event.inputs.date }}
+        run: |
+          if [ -n "$IN_DATE" ]; then
+            echo "$IN_DATE" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || { echo "date は YYYY-MM-DD で"; exit 1; }
+            DAY="$IN_DATE"
+          else
+            DAY=$(TZ=Asia/Tokyo date -d tomorrow +%F)
+          fi
+          echo "day=$DAY" >> "$GITHUB_OUTPUT"; echo "day=$DAY"
+
+      # ---------------------------------------------------------------- 固定ファイル(暗号化したリリース資産)
+      - name: download and decrypt fixed files
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+          TAG: ${{ github.event.inputs.asset_tag }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY  # Get-Content 経由の末尾改行を除く
+          : "${V3_ASSET_KEY:?secrets.V3_ASSET_KEY が無い}"
+          mkdir -p in v3
+          gh release download "${TAG:-v3-assets-20260928}" -p 'v3_fixed.tar.gz.enc' -D in
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_fixed.tar.gz.enc | tar -C v3 -xzf -
+          rm -f in/v3_fixed.tar.gz.enc
+          du -sh v3/*; df -h / | tail -n 1
+
+      # ---------------------------------------------------------------- 毎日変わる材料(読むだけ)
+      - name: fetch forward copy (db_*_forward_t3)
+        run: python -X utf8 pipeline/ai/v3/t7e_forecast.py fetch "${{ steps.d.outputs.day }}" 2>&1 | tee -a out_log.txt
+
+      - name: fetch ability trials (nk_shiken)
+        run: python -X utf8 pipeline/ai/v3/t7e_forecast.py nk "${{ steps.d.outputs.day }}" 2>&1 | tee -a out_log.txt
+
+      # ---------------------------------------------------------------- 前日版の表と書き込み(ここだけ本番の鍵を渡す)
+      - name: table (pre) and write marks (REST upsert only)
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          WRITE: ${{ github.event.inputs.write }}
+        run: |
+          set -o pipefail
+          mkdir -p out
+          if [ "$WRITE" = "yes" ]; then W=--write; else W=; fi
+          echo "day=${{ steps.d.outputs.day }} write=$WRITE"
+          python -X utf8 pipeline/ai/v3/v3_daily.py "${{ steps.d.outputs.day }}" out $W 2>&1 | tee -a out_log.txt
+
+      - name: seal outputs (A3)
+        if: always()
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          set -o pipefail
+          mkdir -p stage
+          cp out/* out_log.txt stage/ 2>/dev/null || true
+          bash ops/artifact_seal.sh seal stage sealed/nar-ai-v3.tar.gz.enc
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nar-ai-v3-${{ github.run_number }}
+          path: sealed/
+          retention-days: 7
+          if-no-files-found: warn
