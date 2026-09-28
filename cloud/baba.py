@@ -435,10 +435,10 @@ def main():
     # ⛔表示する一番古い日(today-90)から見て、その日の標準ぶんまで遡って読む(as-of なので日ごとに窓が動く)
     since = (today - dt.timedelta(days=WINDOW_DAYS + fetch_days(a.baseline))).isoformat()
     # ⛔T5= 1〜5着を読む(約 10 万行・100 ページ前後・1〜2 分)。旧版の窓でも読み方は同じで build_days が finish=1 に絞る。
-    #   order は一意になるよう uma_ban まで(PostgREST offset は order= 一意)
-    wins = rows_all(base, key, "/rest/v1/nar_runs?select=track,race_date,race_no,finish,uma_ban,time_sec"
+    #   order は一意になるよう runner_number まで(PostgREST offset は order= 一意)
+    wins = rows_all(base, key, "/rest/v1/nar_runs?select=track,race_date,race_no,finish,runner_number,time_sec"
                                f"&finish=gte.1&finish=lte.{TOP_N}&time_sec=not.is.null&race_date=gte.{since}"
-                               "&order=race_date.asc,track.asc,race_no.asc,finish.asc,uma_ban.asc")
+                               "&order=race_date.asc,track.asc,race_no.asc,finish.asc,runner_number.asc")
     races = rows_all(base, key, "/rest/v1/nar_races?select=track,race_date,race_no,distance_m,race_name,going,race_kind"
                                 f"&race_date=gte.{since}&order=race_date.asc,track.asc,race_no.asc")
     meta = {(r["track"], r["race_date"], r["race_no"]): r for r in races}
