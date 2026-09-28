@@ -14,6 +14,7 @@
   py -3 -X utf8 cloud/sand_news.py                     # ドライラン(既定)
   py -3 -X utf8 cloud/sand_news.py --site kanazawa     # 1 源だけ試す
   py -3 -X utf8 cloud/sand_news.py --apply             # 実弾(前回を読んで重ね、nar_meta へ upsert)
+  py -3 -X utf8 cloud/sand_news.py --apply --rebuild   # 前回を読まずに作り直す(⚠30 日より前の行は消える)
 環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY(--apply と前回の読み込みでだけ使う)
 終了コード: 0 正常 / 1 投入失敗 / 2 1 源も取れなかった
 
@@ -25,7 +26,8 @@
  5. 名古屋は整備状況表の補充・路盤・埒下砂掻き出しだけ。「砂厚測定」(babasunaatu.pdf 等)は拾わない=
     /sand の測定表(nar_sand_depth)に出ている・PDF 名が使い回しで画面の src 重複捨てに消される。
     PDF の本文は pypdf があるときだけ読む(無ければ題名)。便には入れていない。
- 6. 岩手の場(v)は題+本文の「水沢」「盛岡」で振る(v_iwate)。
+ 6. 同じ場・同じ種別・同じ text の行は 7 日以内なら 1 本(先の日付を残す)= merge_near。
+ 7. 岩手の場(v)は題+本文の「水沢」「盛岡」で振る(v_iwate)。
 """
 
 import argparse
@@ -413,6 +415,41 @@ def collect(site, today, prev_items=None):
     return out, None
 
 
+SAME_DAYS = 7
+
+
+def _norm_text(x):
+    t = unicodedata.normalize("NFKC", x.get("text") or "")
+    return re.sub(r"区間|まで|[\s、,。・()（）]", "", t)
+
+
+def merge_near(items):
+    """同じ場・同じ種別・同じ text の行が 7 日以内に並んだら 1 本に(先の日付を残す・src は足す)。
+    ⚠名古屋の整備状況表は日付列が「掲載日」だけで、スキャンの再掲(9/28 掲載・作業は 9/24〜25)が
+      同じ区間で別の日に出る。区間の無い再掲(text が題名だけ)も同じ場・同じ種別なら同じ作業とみる。"""
+    kept = []
+    for x in sorted(items, key=lambda r: (r.get("k") or "")):
+        nx, bare = _norm_text(x), (x.get("text") or "") == (x.get("title") or "")
+        hit = None
+        for y in kept:
+            if y.get("v") != x.get("v") or sorted(y.get("types") or []) != sorted(x.get("types") or []):
+                continue
+            gap = (dt.date.fromisoformat(x["k"]) - dt.date.fromisoformat(y["k"])).days
+            if gap > SAME_DAYS:
+                continue
+            ybare = (y.get("text") or "") == (y.get("title") or "")
+            if nx == _norm_text(y) or bare or ybare:
+                hit = y
+                break
+        if hit is None:
+            kept.append(x)
+        else:
+            for u in x.get("src") or []:
+                if u not in hit["src"]:
+                    hit["src"].append(u)
+    return kept
+
+
 def build(sites, prev, today):
     prev_items = list((prev or {}).get("items") or [])
     sources, new = {}, []
@@ -431,7 +468,7 @@ def build(sites, prev, today):
         if key not in seen:
             seen.add(key)
             uniq.append(x)
-    items = sorted(prev_items + uniq, key=lambda x: (x.get("k") or ""), reverse=True)[:MAX_ITEMS]
+    items = sorted(merge_near(prev_items + uniq), key=lambda x: (x.get("k") or ""), reverse=True)[:MAX_ITEMS]
     now = dt.datetime.now(JST).replace(microsecond=0).isoformat()
     return {"built": now, "sources": sources, "skipped": SKIPPED, "items": items}, uniq, new
 
@@ -475,6 +512,7 @@ def main():
     ap.add_argument("--apply", action="store_true", help="nar_meta へ書く(既定はドライラン)")
     ap.add_argument("--env", help="SUPABASE_URL / SUPABASE_SERVICE_KEY のある .env")
     ap.add_argument("--site", help="この id の源だけ試す")
+    ap.add_argument("--rebuild", action="store_true", help="前回の items を読まずに作り直す(1 回だけ使う)")
     ap.add_argument("--today", help="YYYY-MM-DD(試験用)")
     a = ap.parse_args()
 
@@ -485,7 +523,7 @@ def main():
     env = load_env(a.env) if a.env else os.environ
     base, key = env.get("SUPABASE_URL"), env.get("SUPABASE_SERVICE_KEY")
     prev = None
-    if base and key:
+    if base and key and not a.rebuild:
         try:
             prev = read_prev(base, key)
         except Exception as e:                   # noqa: BLE001

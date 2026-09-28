@@ -8,6 +8,11 @@ on:
   schedule:
     - cron: '10 22 * * *'    # JST 毎朝 07:10
   workflow_dispatch:
+    inputs:
+      rebuild:
+        description: '前回の items を読まずに作り直す(1 回だけ)'
+        type: boolean
+        default: false
 concurrency:
   group: sand-news
   cancel-in-progress: false
@@ -26,7 +31,13 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: python cloud/sand_news.py --apply
+          REBUILD: ${{ github.event.inputs.rebuild }}
+        run: |
+          if [ "$REBUILD" = "true" ]; then
+            python cloud/sand_news.py --apply --rebuild
+          else
+            python cloud/sand_news.py --apply
+          fi
 
       - name: heartbeat ok
         env:
