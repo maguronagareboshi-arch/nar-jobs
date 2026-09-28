@@ -31,6 +31,7 @@ TITLE = "地方競馬ウォッチ"                 # 見出しは sw.js が固�
 C_WINDOW = dt.timedelta(hours=3)
 PER_DEVICE_MAX = 10                        # 1 回の実行で 1 端末に送る上限(残りは次の回)
 FAIL_MAX = 5
+PUSH_TIMEOUT = 10   # 秒。送信先 1 件の待ち上限(pywebpush 2.x の webpush(timeout=))
 SENT_KEEP_DAYS = 60
 UA = "nar-jobs push_notify (+https://nar.yukochi.com/)"
 
@@ -224,11 +225,8 @@ def send_all(rest, subs, targets, vapid_private, vapid_sub):
             ep = urllib.parse.quote(s["endpoint"], safe="")
             try:
                 webpush(subscription_info={"endpoint": s["endpoint"], "keys": {"p256dh": s["p256dh"], "auth": s["auth"]}},
-                        data=payload, vapid_private_key=vapid_private, vapid_claims={"sub": vapid_sub}, ttl=6 * 3600)
-                sent += 1
-                if s.get("fail_count"):
-                    rest.req("nar_push_subs?endpoint=eq." + ep, "PATCH", {"fail_count": 0}, prefer="return=minimal")
-                    s["fail_count"] = 0
+                        data=payload, vapid_private_key=vapid_private, vapid_claims={"sub": vapid_sub}, ttl=6 * 3600,
+                        timeout=PUSH_TIMEOUT)
             except WebPushException as e:
                 code = getattr(getattr(e, "response", None), "status_code", None)
                 failed += 1
@@ -240,6 +238,14 @@ def send_all(rest, subs, targets, vapid_private, vapid_sub):
                     rest.req("nar_push_subs?endpoint=eq." + ep, "PATCH", {"fail_count": fc}, prefer="return=minimal")
                     s["fail_count"] = fc
                 log("  失敗 %s %s: %s" % (code, x["kind"], str(e)[:120]))
+            except Exception as e:                               # noqa: BLE001  壊れた鍵(ValueError 等)・通信の時間切れ
+                failed += 1                                      # 1 件の異常で残りの送信先を止めない。⛔鍵の中身は出さない
+                log("  失敗 %s %s(送信前の異常・購読は触らない)" % (type(e).__name__, x["kind"]))
+            else:
+                sent += 1
+                if s.get("fail_count"):
+                    rest.req("nar_push_subs?endpoint=eq." + ep, "PATCH", {"fail_count": 0}, prefer="return=minimal")
+                    s["fail_count"] = 0
     return sent, skipped, failed, gone
 
 
