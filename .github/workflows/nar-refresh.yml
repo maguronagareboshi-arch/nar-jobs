@@ -273,8 +273,11 @@ jobs:
 
       # §79 P3 場ごとの「番組賞金(当サイトの計算)」と「あと◯」を台帳の calc 列へ(通信は DB だけ・数秒)。
       # 線の表は class.js を node で読む(tests/class_const_dump.mjs)。検算= docs/s79_p3_verify_20260903.md
+      # §302 落ちても後ろの段は続ける(continue-on-error)。outcome= failure は残る→ heartbeat morning が fail を書き 2 時間後の便で朝の段をやり直す
       - name: class calc (morning only)
         id: am_class_calc
+        if: '!cancelled()'
+        continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -450,9 +453,11 @@ jobs:
       # 出遅れの割合表(nar_meta karte:late_next:v1)は手動便 karte-facts(late_table)で作る= 無い間は late_next_pct が空。
       # 夕方(17:00 以降)は先に**明日**の nar_run_facts を焼く(run facts 段は今日と前日だけ= 明日の脚質が空になるため)。
       #   脚質は過去走だけで決まる= 発走前の値として正しい。着順・通過の入った行は当日と翌日の run facts 段が上書きする。
+      # §302 karte_facts の失敗は握りつぶさない(段は failure・continue-on-error で後ろは続く)→ 朝なら refresh_morning= fail でやり直し
       - name: karte facts (morning + evening)
         id: am_karte_facts
         if: '!cancelled()'
+        continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -460,7 +465,7 @@ jobs:
           H=$(TZ=Asia/Tokyo date +%H%M)
           if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ] || [ $((10#$H)) -ge 1700 ]; then
             if [ $((10#$H)) -ge 1700 ]; then T=$(TZ=Asia/Tokyo date -d tomorrow +%F); python cloud/run_facts.py --apply --from "$T" --to "$T" || echo "⚠ 明日($T)の nar_run_facts が焼けない(続行)"; fi
-            python cloud/karte_facts.py --apply || echo "⚠ 分析タブの事実 nar_karte_facts が焼けない(続行)"
+            python cloud/karte_facts.py --apply || { echo "⚠ 分析タブの事実 nar_karte_facts が焼けない(段は失敗・後ろは続行)"; exit 1; }
           else echo "karte facts は朝と 17:00 以降の便だけ(JST $H)=スキップ"; fi
 
       # §99 展開の見立て(今日+明日の出馬表)。朝の便(09:30 前)と 17:07 の便(明日の出馬表が前日夕に出る)だけ
