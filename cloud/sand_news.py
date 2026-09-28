@@ -369,7 +369,7 @@ def pdf_text(url):
         return ""
 
 
-def collect(site, today, prev_items):
+def collect(site, today, prev_items=None):
     """1 源 → (items, err)。⛔落ちても例外を投げない"""
     try:
         rows = site["list"](today)
@@ -388,14 +388,8 @@ def collect(site, today, prev_items):
             continue
         body = r.get("body")
         if r.get("nagoya") and "測定" in t:
-            # 開催前日の砂厚測定= PDF の字。前回の測定と同じ値なら足さない
-            raw = unicodedata.normalize("NFKC", pdf_text(r["u"]))
-            nums = " ".join(re.findall(r"\d+(?:\.\d+)?", raw))[:400]
-            last = [x for x in prev_items if x.get("v") == "nagoya" and x.get("m")]
-            if not nums or (last and last[0].get("m") == nums):
-                continue
-            body = "\n".join(s for s in raw.split("\n") if UNIT.search(s) or "平均" in s)[:180]
-        elif body is None:
+            continue                              # 砂厚測定は /sand の測定表(nar_sand_depth)に出ている= 拾わない
+        if body is None:
             time.sleep(GAP_PAGE)
             try:
                 u = r["u"]
@@ -413,8 +407,6 @@ def collect(site, today, prev_items):
         it = {"v": v, "k": k, "d": "%d/%d/%d" % tuple(int(x) for x in k.split("-")),
               "types": types, "text": (text or t).strip() or t, "src": [r["u"]],
               "swap": any("入れ替え" in x for x in types), "title": t}
-        if r.get("nagoya") and "測定" in t:
-            it["m"] = nums
         out.append(it)
     return out, None
 

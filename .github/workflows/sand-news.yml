@@ -21,9 +21,6 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: install pypdf
-        run: pip install pypdf
-
       # 前回の items を読んで重ねる。1 源も取れない(exit 2)・前回を読めない・投入失敗(exit 1)は落ちる
       - name: sand news apply
         env:
