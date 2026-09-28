@@ -94,7 +94,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-                  WRITE: ${{ github.event_name == 'schedule' && 'yes' || github.event.inputs.write }}
+          WRITE: ${{ github.event_name == 'schedule' && 'yes' || github.event.inputs.write }}
           V3_DUMP_FEATS: '1'  # 照合用の材料 csv(暗号化した成果物にだけ入る)
         run: |
           set -o pipefail
