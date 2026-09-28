@@ -60,6 +60,27 @@ def table_digest(csv_path):
     return hon, hashlib.sha256(body.encode('utf-8')).hexdigest()
 
 
+def _dump_feats(day, out):
+    """t8.table の中の e7.features と t8.cy_feats の戻り値をその日の分だけ out/feat_*.csv に書く(写した台本は変えない)。"""
+    out.mkdir(parents=True, exist_ok=True)
+
+    def cut(df):
+        return df[df.race_date.astype(str).str[:10] == str(day)] if 'race_date' in df.columns else df
+
+    f0, c0 = t8.e7.features, t8.cy_feats
+
+    def f1(*a, **k):
+        r = f0(*a, **k)
+        cut(r[0]).to_csv(out / 'feat_T.csv', index=False, encoding='utf-8-sig')
+        return r
+
+    def c1(*a, **k):
+        r = c0(*a, **k)
+        cut(r).to_csv(out / 'feat_F.csv', index=False, encoding='utf-8-sig')
+        return r
+    t8.e7.features, t8.cy_feats = f1, c1
+
+
 def main():
     a = sys.argv[1:]
     if a and a[0] == 'digest':  # 手元で同じ関数を使う: python v3_daily.py digest <csv>
@@ -74,6 +95,8 @@ def main():
     else:
         src = 'json'
     log('day', day, 'works', src, 'write', write)
+    if __import__('os').environ.get('V3_DUMP_FEATS') == '1':  # 照合用: 材料(T・調教 F)をその日の分だけ csv に出す
+        _dump_feats(day, out)
     t8.table(day, 'pre', str(out))
     csv_path = out / f'{day}_第8版_前日版.csv'
     rows = build_rows(csv_path, day, src)
