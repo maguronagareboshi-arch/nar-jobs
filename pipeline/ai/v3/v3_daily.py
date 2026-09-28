@@ -50,8 +50,22 @@ def build_rows(csv_path, day, src):
     return rows
 
 
+def table_digest(csv_path):
+    """照合用(公開ログに表は出さない): ◎ の馬番と、全馬の (race_no, 馬番, p1, p3 を小数 4 桁) を並べた sha256。"""
+    import hashlib
+    x = pd.read_csv(csv_path, encoding='utf-8-sig')
+    x = x.sort_values(['race_no', 'umaban'], kind='mergesort')
+    hon = ' '.join(f"{int(r.race_no)}:{int(r.umaban)}" for r in x.itertuples() if r.mark == '◎')
+    body = '\n'.join(f"{int(r.race_no)},{int(r.umaban)},{float(r.p1):.4f},{float(r.p3):.4f}" for r in x.itertuples())
+    return hon, hashlib.sha256(body.encode('utf-8')).hexdigest()
+
+
 def main():
     a = sys.argv[1:]
+    if a and a[0] == 'digest':  # 手元で同じ関数を使う: python v3_daily.py digest <csv>
+        hon, h = table_digest(a[1])
+        log('digest ◎', hon, 'sha256', h)
+        return
     day, out = a[0], Path(a[1])
     write = '--write' in a
     if kb_works.enabled():
@@ -64,6 +78,8 @@ def main():
     csv_path = out / f'{day}_第8版_前日版.csv'
     rows = build_rows(csv_path, day, src)
     log('races', len(rows), '◎', ' '.join(f"{r['track']}{r['race_no']}R:{r['marks'][0]['num']}" for r in rows[:12] if r['marks']))
+    hon, h = table_digest(csv_path)
+    log('digest ◎', hon, 'sha256', h)
     (out / f'{day}_v3-8_marks.json').write_text(json.dumps(rows, ensure_ascii=False), encoding='utf-8')
     if write and rows:
         sys.path.insert(0, str(HERE.parent))
