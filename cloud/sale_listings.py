@@ -525,7 +525,7 @@ def main(argv=None):
         for y in years:
             idx, got = fetch_year(y, raw, force=True)
             rows, st = parse_all(raw, [y], a.catalog_dir)
-            have = {tuple(x[k] for k in KEY) for x in rest_get(base, rkey, f"{TABLE}?select={','.join(KEY)}&sale_year=eq.{y}&result=eq.落札"
+            have = {tuple(x[k] for k in KEY) for x in rest_get(base, rkey, f"{TABLE}?select={','.join(KEY)}&sale_year=eq.{y}&result=eq.{urllib.parse.quote('落札')}"
                                                                           "&order=market_code.asc,hip_no.asc,jbis_horse_id.asc")}
             put = [{k: x[k] for k in KEY + ("market_name", "buyer")} for x in rows if x["buyer"] and tuple(x[k] for k in KEY) in have]
             log(f"{y}: 市場 {len(got)}・落札(表) {len(have)}・buyer を書く {len(put)}・表に無い/空 {len(have) - len(put)}" + ("" if a.apply else "(ドライラン)"))
