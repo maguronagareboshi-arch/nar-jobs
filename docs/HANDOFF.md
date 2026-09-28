@@ -17,3 +17,8 @@ commit: 7dd7e0e(枝 s224s2・1 コミット・push なし)
 変えた点: `cloud/pace_lift.py`= 過去 12 か月を月ごとに REST で読み**手元で**数えて nar_meta `pace_lift:v1` に upsert(場 × 距離帯 200m 刻み × 脚質 4 × ペース 3・分母は「走った」= 着順あり/競走中止/失格・1200m 未満と表に無い場とペース行の無いレースは入れない・20 走未満は rate と lift を null・base_rate= その場×距離帯の全体・200KB 超なら場ごとの鍵+索引 1 行・`--out` で JSON にも書ける)。`.github/workflows/pace-lift.yml`= 手で回す(dry/apply・from/to)+ 毎月 2 日 04:40 JST。`tests/test_pace_lift.py`。
 ⚠: 列名は `pace`(`pace_word` は cloud/tenkai.py の**関数名**で列ではない)。距離帯の丸めは**半分は上**(1300→1400)= Python の round() は偶数丸めで画面の Math.round とずれるため使っていない。
 要判断: 本番へ書くのはユーザー(pace-lift.yml を mode=apply で 1 回・以後は月 1 の cron)。書くまで画面(統合ビューア 枝 s224s2)は「この表はまだ作られていません」と出る。
+
+## nankan-copy の成果物は暗号化済み(監査 G2・2026-09-28)
+1. `gh run download <run-id> -R maguronagareboshi-arch/nar-jobs -n nankan-copy -D nankan-copy` で nankan-copy.tar.gz.enc を取る。
+2. `ARTIFACT_KEY=$(printf '%s' "$SUPABASE_SERVICE_KEY" | sha256sum | cut -c1-64) openssl enc -d -aes-256-cbc -pbkdf2 -pass env:ARTIFACT_KEY -in nankan-copy/nankan-copy.tar.gz.enc | tar -xzf - -C nankan-copy`(または `bash ops/artifact_seal.sh unseal nankan-copy`)。
+3. 出てきた *.csv.gz が従来の out/ の中身。南関AI 側に取り出し台本は無い(2026-09-28 grep)ので、手で取るときはこの手順で。
