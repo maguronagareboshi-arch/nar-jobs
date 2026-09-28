@@ -11,8 +11,8 @@
 name: nar-ai-v3
 
 on:
-  # schedule:
-  #   - cron: '30 4 * * *'   # 案: 04:30 UTC = 13:30 JST に翌日の前日版(段 2 で決める。今は付けない)
+  schedule:
+    - cron: '30 5 * * *'
   workflow_dispatch:
     inputs:
       date:
@@ -94,7 +94,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-          WRITE: ${{ github.event.inputs.write }}
+                  WRITE: ${{ github.event_name == 'schedule' && 'yes' || github.event.inputs.write }}
           V3_DUMP_FEATS: '1'  # 照合用の材料 csv(暗号化した成果物にだけ入る)
         run: |
           set -o pipefail
