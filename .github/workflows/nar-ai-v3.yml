@@ -118,3 +118,23 @@ jobs:
           path: sealed/
           retention-days: 7
           if-no-files-found: warn
+
+      # ---------------------------------------------------------------- 照合用(手元の .v3_asset_key で解ける)
+      - name: seal table csv with V3_ASSET_KEY
+        if: always()
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          mkdir -p sealed_csv
+          ls out/*.csv >/dev/null 2>&1 || { echo "out/*.csv が無い"; exit 0; }
+          tar -C out -czf - $(cd out && ls *.csv) | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:V3_ASSET_KEY -out sealed_csv/nar-ai-v3-csv.tar.gz.enc
+          ls -l sealed_csv
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: nar-ai-v3-csv-${{ github.run_number }}
+          path: sealed_csv/
+          retention-days: 7
+          if-no-files-found: warn
