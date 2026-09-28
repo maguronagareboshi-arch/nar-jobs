@@ -164,7 +164,43 @@ class AuctionGroups(unittest.TestCase):
         self.assertEqual(groups("跛行が見られ、その後出ることはなく"), ["symptom"])   # 「、」の先の打ち消しは拾わない
 
     def test_s205_parser_version(self):
-        self.assertEqual(hh.PARSER_VERSION, "health-v1.2.1")
+        self.assertEqual(hh.PARSER_VERSION, "health-v1.2.2")
+
+
+class RakutenPedigreeTest(unittest.TestCase):
+    """H2 楽天「本馬について」の父・母系の紹介段落を本馬の疾病にしない(例 item/16297)。"""
+
+    def _rec(self, about):
+        return {"id": 16297, "item": {"end_datetime": "2026-06-11 22:18:00", "name": "テスト 牝4歳",
+                "description": "<b>本馬について</b><hr><pre style=\"white-space: pre-wrap;\">" + about + "</pre>"}}
+
+    SIRE = ("父Xは2019年の日本ダービー馬です。その後は凱旋門賞を見据えていたものの、"
+            "8月に右前浅屈腱炎発症が判明して引退、種牡馬入りしています。")
+    DAM = "母系に関しては、近親に重賞馬がいます。母は未勝利でしたが、きょうだいは半姉が1勝しています。"
+
+    def test_sire_block_dropped(self):
+        about = self.SIRE + "\n\n" + self.DAM + "\n\n本馬は2025年3月にデビューし、7着が最高です。"
+        c = hh.auction_candidate(self._rec(about), "rakuten")
+        self.assertEqual(c["details"], [])
+        self.assertEqual(c["review_reasons"], [])
+
+    def test_own_disclosure_kept(self):
+        about = (self.SIRE + "\n\n" + self.DAM +
+                 "\n\n本馬は2025年5月に左前の繋靭帯炎を発症し、長期休養しました。")
+        ds = hh.auction_candidate(self._rec(about), "rakuten")["details"]
+        self.assertEqual([d[1] for d in ds], ["tendon_ligament"])
+        self.assertNotIn("種牡馬", ds[0][0])
+        self.assertIn("本馬は", ds[0][0])
+
+    def test_sibling_name_not_disease(self):
+        about = self.SIRE + "\n\nきょうだいは半姉エントラップメントがJRA1勝です。\n\n本馬は3戦して4着が最高です。"
+        self.assertEqual(hh.auction_candidate(self._rec(about), "rakuten")["details"], [])
+
+    def test_single_block_keeps_own_but_drops_stud_sentence(self):
+        about = self.SIRE + "本馬は2025年5月に左前の繋靭帯炎を発症しました。"
+        ds = hh.auction_candidate(self._rec(about), "rakuten")["details"]
+        self.assertEqual(len(ds), 1)
+        self.assertNotIn("種牡馬", ds[0][0])
 
 
 if __name__ == "__main__":

@@ -36,7 +36,7 @@ ROOT = HERE.parent
 sys.path.insert(0, str(ROOT / "pipeline"))
 from load_nar_official import load_env  # noqa: E402
 
-PARSER_VERSION = "health-v1.2.1"   # §193c オークションだけ 13 分類(1 記述 1 件の鍵の作り方は変えない)・§205 打ち消しの語尾を 1 本足した
+PARSER_VERSION = "health-v1.2.2"   # §193c オークションだけ 13 分類(1 記述 1 件の鍵の作り方は変えない)・§205 打ち消しの語尾を 1 本足した・H2 楽天の血統紹介段落を除く
 JST = dt.timezone(dt.timedelta(hours=9))
 MIN_DATE = dt.date(2026, 1, 1)
 MAX_PDF_BYTES = 25 * 1024 * 1024
@@ -612,6 +612,25 @@ def _rakuten_about(record: dict) -> tuple[str, bool]:
     return "", not bool(re.search(r"骨折|屈腱炎|跛行|鼻出血|疾病|傷病|馬体故障", _html_plain(desc)))
 
 
+# H2(2026-09-29) 楽天の「本馬について」は 父・母系・きょうだいの紹介段落 → 本馬の戦績 の順に並ぶ。
+# 父の段落の 2 文目以降(「その後は…屈腱炎を発症して引退、種牡馬入り」)は文頭が「父」でないので
+# OTHER_HORSE_RE を抜け、本馬の疾病として出ていた(実測 32 行/32 出品・例 item/16297)。
+# ① 空行で区切った段落の先頭が血統の語なら段落ごと捨てる(段落が 1 つしか無いときは捨てない= 本馬の文を守る)
+# ② 段落に関係なく「種牡馬入り」「繁殖入り」「産駒」を含む文は本馬の事象にしない
+PEDIGREE_BLOCK_RE = re.compile(
+    r"^[\s　★※]*(?:本馬の)?(?:父|母|祖母|曾祖母|[2-5]代母|近親|きょうだい|兄弟|全兄|全姉|全弟|全妹|"
+    r"半兄|半姉|半弟|半妹|兄|姉|弟|妹)")
+PEDIGREE_SENTENCE_RE = re.compile(r"種牡馬入り|種牡馬として|繁殖入り|産駒")
+
+
+def _rakuten_own_sentences(about: str) -> list[str]:
+    """「本馬について」→ 本馬の文だけ(血統紹介の段落と、種牡馬入り等の文を除く)。"""
+    blocks = [b for b in re.split(r"\n[ \t　]*\n", str(about or "")) if b.strip()]
+    if len(blocks) > 1:
+        blocks = [b for b in blocks if not PEDIGREE_BLOCK_RE.match(nfkc(b))]
+    return [x for x in _sentences("\n".join(blocks)) if not PEDIGREE_SENTENCE_RE.search(x)]
+
+
 def _sat_allowed_lines(record: dict) -> tuple[list[str], bool, bool]:
     fields = (record.get("api") or {}).get("free_fields") or []
     out: list[str] = []
@@ -850,7 +869,7 @@ def auction_candidate(record: dict, source: str) -> dict | None:
         date = str(item.get("end_datetime") or "")[:10]
         raw_name = clean_text(item.get("name")).split(" ", 1)[0]
         about, shape_ok = _rakuten_about(record)
-        details, review = _auction_details(_sentences(about))
+        details, review = _auction_details(_rakuten_own_sentences(about))
         if not shape_ok:
             review.append("rakuten_about_shape")
         url = f"https://auction.keiba.rakuten.co.jp/item/{item_id}"
