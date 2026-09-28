@@ -299,7 +299,8 @@ def v_hyogo(s):
 SITES = [
     {"id": "kanazawa", "venue": "kanazawa", "list": list_kanazawa},
     {"id": "iwate", "venue": v_iwate, "list": list_iwate, "topical": True},   # 題は「走路状況について」= 本文で絞る
-    {"id": "nagoya", "venue": "nagoya", "list": list_nagoya, "topical": True},
+    # ⛔名古屋は外す(9/28 ユーザー決定)= 公式の表は掲載日だけで実施日が取れず重複した。整備記録は nar_sand_depth(/sand の「履歴」)が正本
+    # {"id": "nagoya", "venue": "nagoya", "list": list_nagoya, "topical": True},
     {"id": "hyogo", "venue": v_hyogo, "list": list_hyogo},
     {"id": "monbetsu", "venue": "monbetsu", "list": list_monbetsu},
     {"id": "banei", "venue": "obihiro", "list": list_banei},
