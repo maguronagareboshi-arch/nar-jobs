@@ -527,8 +527,9 @@ jobs:
 
       # 監査 A8(2026-09-24) 最終成功時刻(表 nar_job_heartbeat)。外の見張り nar-watchdog と画面が読む。⛔表が無くても落ちない
       #   refresh= daily の成功ごと / stats= nar-stats(apply)が書く / refresh_evening= 17 時以降の便の成功(refresh_morning は下の段)
+      # §302 class calc・karte facts は continue-on-error= success() のままなので outcome も見る(落ちたら ok でなく fail)
       - name: heartbeat ok
-        if: success()
+        if: success() && steps.am_class_calc.outcome != 'failure' && steps.am_karte_facts.outcome != 'failure'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -536,7 +537,7 @@ jobs:
           if [ "$MODE" != "monthly" ]; then python3 cloud/beat.py refresh ok "JST $(TZ=Asia/Tokyo date +%H:%M)"; fi
           if [ "$MODE" != "monthly" ] && [ "$EVENING" = 1 ]; then python3 cloud/beat.py refresh_evening ok; fi
       - name: heartbeat fail
-        if: failure()
+        if: "!cancelled() && (failure() || steps.am_class_calc.outcome == 'failure' || steps.am_karte_facts.outcome == 'failure')"
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -554,6 +555,13 @@ jobs:
         run: |
           BAD=$(python3 -c "import json,os; s=json.loads(os.environ['STEPS']); print(' '.join(k[3:] for k,v in s.items() if k.startswith('am_') and v.get('outcome')=='failure'))")
           if [ -z "$BAD" ]; then python3 cloud/beat.py refresh_morning ok; else python3 cloud/beat.py refresh_morning fail "落ちた段 $BAD"; fi
+      # §302 最後に便を赤くする(失敗メールを届ける)。他の段は continue-on-error で最後まで走った後
+      - name: fail if class calc or karte facts failed
+        if: always()
+        run: |
+          if [ "${{ steps.am_class_calc.outcome }}" = failure ] || [ "${{ steps.am_karte_facts.outcome }}" = failure ]; then
+            echo "落ちた段 class_calc=${{ steps.am_class_calc.outcome }} karte_facts=${{ steps.am_karte_facts.outcome }}"; exit 1
+          fi
 
   # 監査 A7(2026-09-24) 集計は Actions 内の Postgres で作る便 nar-stats(mode=apply= 差分だけ本番へ・heartbeat 'stats' もここ)。
   stats_check:
