@@ -65,3 +65,16 @@
 - 空で上書きしない: cloud の push_kb_runs.py は送る前に nar_kb_runs のその日の既存行を読み(読むだけ)、送る値が空で既存に値がある列(horse_name・kb_race_id・blinker・gear・first3f・avg_f・pace・kimete・start_note)は既存を残す。PC の台本は変えていない。単体テスト cloud/kb/test_push_kb_runs.py 3 件(便の最初でも流す)。
 - dry-run で既存を残した値= 23(0922: pace 12・first3f 10 / 0925: gear 1 / ほかの日 0)。0922 浦和 前半3F −10 はこれで既存が残る。
 - 中央戦績の失敗 18= 全部 no_kanzendata_blocks(馬の頁に走が無い)。失敗に数える扱い(`ok= fetch_error が空`)と「翌日は取り直さない」扱いは PC と同じコードの写し= 差なし(PC の 13:00 便は該当馬が 0 頭だっただけ)。
+
+## 福ちゃん新聞・兵庫 能検 区切り(2026-09-30・.github/workflows/kb-extra.yml)
+- kb-daily と別の yml にした理由: 出どころが別(福ちゃんは競馬ブックでない)・pdfplumber が要る・kb-daily は 1 回 約 21 分= 片方の失敗で他方を巻き込まない。
+- 台本の写し: fetch_fukuchan.py・push_fukuchan.py・nar_push.py・fetch_kb_noken_hyogo.py・push_kb_noken_split.py。直したのは保存先(KB_DATA_DIR)と鍵(環境変数)だけ+下の守り 2 つ。
+- run_step_312= pdfplumber が PC の 3.12 にしか無いだけ。cloud は 3.12+pip pdfplumber。
+- 試し run: https://github.com/maguronagareboshi-arch/nar-jobs/actions/runs/36597193365 (成功・apply 空)
+  - fukuchan.net: Actions から HTTP 200= 取れる。最新号 2026-09-27 を読んで 122 行(突合 122)= PC の 2026-09-27.json 122 行と差 0。
+  - 兵庫: 本番 nar_meta の今の値 26 日・104 レース・368 行を種にして、そのまま 26 日(2026-03-06..09-01)= PC の hyogo_split.json と差 0。
+- 守り(空で消さない):
+  - 福ちゃん: 談話が空の枠は元から送らない= 空で上書きは起きない。守りは足していない。
+  - 兵庫: push は nar_meta を丸ごと差し替える= 今月だけで送ると過去の日が消える→ 手元に JSON が無ければ本番 nar_meta の値を種にする(seed_from_meta・読むだけ)。
+  - 兵庫: 板の読み(映像・PC の s77-w1\pipeline\noken_offsets\out)が cloud に無い→ PC の規則のままだと全部の日が「板が無い= 出さない」で消える。cloud では板の出どころが無ければ「触らない」(消さない・済みにしない)。
+- 未解決(要判断): 兵庫は板の読みが PC にしか無い= cloud では新しい日を 1 日も足せない(9 月の 4 日= 09-01・09-14 西脇・09-15・09-28 は触らないで終わった)。PC は 9/29 の便で「対象 1 日」= 月の一覧頁をキャッシュから読んでいて 09-14・09-15・09-28 を見落としている見込み(client.get の refresh なし)。
