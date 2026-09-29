@@ -12,8 +12,6 @@ on:
         description: '1= 本番 DB へ書く(nar_kb_runs・nar_jra_runs・nar_jra_horses・heartbeat)。空= 書かない'
         required: false
         default: ''
-  push:
-    branches: [kb-cloud]
 
 permissions:
   contents: read
