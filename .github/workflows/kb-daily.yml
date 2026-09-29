@@ -1,11 +1,14 @@
 # 競馬ブックの 2 段(PC タスク daily_update.py の「馬具 6場 成績→馬具 投入」と「中央戦績」)をクラウドへ移す(2026-09-29)。
-# ⛔まだ手で回すだけ(cron なし)。入力 apply が空= 取得と整形だけで件数を出す(本番 DB に書かない・読むのは可)。
+# 定時(2026-09-30〜)= 毎日 JST 13:17 に本番 DB へ書く(PC の 13:00 便と数日並走→差が無ければ PC の 2 段を止める)。
+# 手で回すときは入力 apply が空= 取得と整形だけで件数を出す(本番 DB に書かない・読むのは可)。
 # ⛔public repo: ID/PW・Cookie・頁の HTML・取得した中身をログ・artifact・cache に出さない。cache に入れるのは
 #   done.tsv(日付・場の組・件数だけ)。頁と取得物は /tmp/kbdata(ジョブが終われば消える)。
 # 台本 cloud/kb/ は PC の scraper の 9/29 版の写し。直したのは鍵(環境変数)と保存先(KB_DATA_DIR)だけ。
 name: kb-daily
 
 on:
+  schedule:
+    - cron: '17 4 * * *'   # JST 13:17
   workflow_dispatch:
     inputs:
       apply:
@@ -23,7 +26,7 @@ concurrency:
 env:
   TZ: Asia/Tokyo
   KB_DATA_DIR: /tmp/kbdata
-  APPLY: ${{ github.event.inputs.apply }}
+  APPLY: ${{ github.event_name == 'schedule' && '1' || github.event.inputs.apply }}
   PYTHONUNBUFFERED: '1'
 
 jobs:
