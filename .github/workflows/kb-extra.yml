@@ -1,11 +1,14 @@
 # PC タスク daily_update.py の「福ちゃん新聞→福ちゃん 投入」と「兵庫 能検 区切り→投入」をクラウドへ移す(2026-09-30)。
 # kb-daily.yml と別にした理由: 出どころが別(福ちゃんは競馬ブックでない・海外 IP で拒まれうる)・pdfplumber が要る・
 #   kb-daily は 1 回 約 21 分あり、片方の失敗で他方を巻き込まないため。
-# ⛔手で回すだけ(cron なし)。apply 空= 本番 DB に書かない(読むのは nar_meta・nar_runs)。
+# 定時(2026-09-30〜)= 毎日 JST 13:27 に福ちゃんだけ本番へ書く。兵庫の区切りは板の読み(映像)が PC にしか無いので定時では流さない。
+# 手で回すときは apply 空= 本番 DB に書かない(読むのは nar_meta・nar_runs)。
 # ⛔public repo: PDF・JSON・頁の HTML・談話の本文をログ・artifact・cache に出さない。cache は done.tsv(名前・日付・件数)だけ。
 name: kb-extra
 
 on:
+  schedule:
+    - cron: '27 4 * * *'   # JST 13:27
   workflow_dispatch:
     inputs:
       apply:
@@ -23,7 +26,7 @@ concurrency:
 env:
   TZ: Asia/Tokyo
   KB_DATA_DIR: /tmp/kbdata
-  APPLY: ${{ github.event.inputs.apply }}
+  APPLY: ${{ github.event_name == 'schedule' && '1' || github.event.inputs.apply }}
   PYTHONUNBUFFERED: '1'
 
 jobs:
@@ -74,7 +77,7 @@ jobs:
           if [ "$APPLY" = "1" ]; then python cloud/kb/push_fukuchan.py --all
           else python cloud/kb/push_fukuchan.py --all --dry-run; fi
       - name: hyogo noken split
-        if: '!cancelled()'
+        if: "!cancelled() && github.event_name != 'schedule'"
         env:
           KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}
           KEIBABOOK_PASSWORD: ${{ secrets.KEIBABOOK_PASSWORD }}
@@ -82,7 +85,7 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: python cloud/kb/fetch_kb_noken_hyogo.py --since "$(date +%Y%m)01"
       - name: hyogo noken split push
-        if: '!cancelled()'
+        if: "!cancelled() && github.event_name != 'schedule'"
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
