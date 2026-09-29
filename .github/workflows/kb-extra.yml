@@ -12,8 +12,6 @@ on:
         description: '1= 本番 DB へ書く(nar_paper_talks・nar_meta hyogo_noken_split)。空= 書かない'
         required: false
         default: ''
-  push:
-    branches: [kb-cloud]
 
 permissions:
   contents: read
