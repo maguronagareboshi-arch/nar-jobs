@@ -100,7 +100,7 @@ _LED = {}
 def led():
     if not _LED:
         L, kmap, info = v7d.ledger()
-        J = pd.read_parquet(V3 / 'kd_jra_runs.parquet')
+        J = v7d.kd_jra_runs()  # 固定ファイル + live(nk_pedjra)
         _LED.update(L=L, kmap=kmap, nmap=v7d.jra_names(J), JT=v7d.jra_table(J), jlast=str(J.date.max().date()))
     return _LED
 

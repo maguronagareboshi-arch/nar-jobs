@@ -57,9 +57,59 @@ def res_save(k, v):
     RESJ.write_text(json.dumps(R, ensure_ascii=False, indent=1), encoding='utf-8')
 
 
+# ================================================================ 固定ファイル + 毎日の live(nk_pedjra.py・ユーザー承認 2026-09-29)
+def _live_dir():
+    """live の置き場 = 環境変数 V3_KD_LIVE(off で使わない)、無ければ V3_KD。どちらも無ければ使わない(手元の学習は固定ファイルのまま)。"""
+    import os
+    d = os.environ.get('V3_KD_LIVE') or os.environ.get('V3_KD')
+    return None if not d or d == 'off' else Path(d)
+
+
+def _live(name, fixed, key):
+    d = _live_dir()
+    if d is None:
+        return None
+    p = d / name
+    try:
+        if not p.exists():
+            log('live 無し・固定ファイルのまま', p); return None
+        x = pd.read_parquet(p)
+        miss = [c for c in fixed.columns if c not in x.columns]
+        if miss or not len(x) or x[key].isna().to_numpy().any():
+            log('live 壊れ・固定ファイルのまま', p, miss[:5], len(x)); return None
+        x = x[list(fixed.columns)]
+        for c in fixed.columns:  # 型を固定ファイルに合わせる
+            x[c] = x[c].astype(fixed[c].dtype)
+        return x
+    except Exception as e:  # noqa: BLE001
+        log('live 読めない・固定ファイルのまま', p, repr(e)[:120]); return None
+
+
+def kd_horse():
+    """kd_horse.parquet(書き換えない)+ live(固定に無い ketto だけ足す)。"""
+    k = pd.read_parquet(V3 / 'kd_horse.parquet')
+    x = _live('kd_live_horse.parquet', k, ['ketto'])
+    if x is not None:
+        x = x[~x.ketto.isin(set(k.ketto.dropna()))].drop_duplicates('ketto')
+        log('live 台帳に足す', len(x))
+        k = pd.concat([k, x], ignore_index=True)
+    return k
+
+
+def kd_jra_runs():
+    """kd_jra_runs.parquet(書き換えない)+ live を縦に足し (ketto, date, 場, R) で重複を消す(固定ファイルの行を残す)。"""
+    J = pd.read_parquet(V3 / 'kd_jra_runs.parquet')
+    x = _live('kd_live_jra_runs.parquet', J, ['ketto', 'date', 'jyo', 'race'])
+    if x is not None:
+        n0 = len(J)
+        J = pd.concat([J, x], ignore_index=True).drop_duplicates(['ketto', 'date', 'jyo', 'race'], keep='first')
+        log('live 中央の走りを足す', len(J) - n0, '/', len(x))
+    return J
+
+
 # ================================================================ 台帳(kd_horse)
 def ledger():
-    k = pd.read_parquet(V3 / 'kd_horse.parquet')
+    k = kd_horse()
     n0 = len(k)
     k = k[k.ketto.notna() & k.birth.notna()].copy()
     k['pri'] = (k.src != 'NU').astype(int)
