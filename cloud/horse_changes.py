@@ -3,6 +3,8 @@
 
   transfer_in(転入)  = nar_runs の trainer_area が直前走と違う      → 遡れる
   stable_change(転厩)= 同じ地区で trainer が変わった               → 遡れる
+  jra_in(中央→地方)= 中央(nar_jra_runs+nar_runs の trainer_area='JRA')の走のあと、地方の走が来た日   → 遡れる
+                        (§移籍まとめ D1・2026-09-30。下の JRA_IN_SQL の注記)
   owner_change(馬主) = nar_horses.owner の日次スナップショット差分  → ⛔遡れない(owner は最新値の上書きで
                         履歴が無い)= **今日から録り始めるだけ**。過去の馬主変更は取り戻せない
 
@@ -52,10 +54,70 @@ select horse_name, birth_date, race_date,
 from r
 where p_date is not null
   and race_date >= :since
-  and ((trainer_area is not null and p_area is not null and trainer_area <> p_area)
+  and ((trainer_area is not null and p_area is not null and trainer_area <> p_area
+        and p_area <> 'JRA')   -- 中央から来た転入は jra_in に寄せる(下の注記)
     or (trainer_area is not null and p_area is not null and trainer_area = p_area
         and trainer is not null and p_trainer is not null and trainer <> p_trainer))
 """
+
+# §移籍まとめ D1(2026-09-30): 中央→地方の転入 kind='jra_in'(from_value='中央'・to_value=地方の trainer_area)。
+#   race_date= 中央の走のあと、地方で初めて走った日。再転入(地方→中央→地方)は戻った日に数える
+#   = 中央と地方の走を 1 本に並べ、直前の走が中央だった地方の走を全部拾う(窓関数 1 回)。
+#   中央の走= ①nar_jra_runs(競馬ブック・鍵 kb_horse_id→nar_jra_horses の 馬名+生年月日。生年月日が空の馬は
+#   馬名+生年で nar_runs に 1 頭だけ当たるときに使う) ②nar_runs の trainer_area='JRA'(地方の交流に中央所属で出た走)。
+#   ⛔②を入れるのは nar_jra_horses に行の無い「確実な取り漏れ」(下調べ 15 頭)を拾うため。
+#   ⛔寄せ方: 旧 transfer_in の from_value='JRA'(②で中央から来た馬)は②で必ず jra_in にも出る= 2 重になるので、
+#     上の DETECT_SQL で p_area='JRA' を transfer_in から外し jra_in に寄せた。既存の行の片付けは sql/transfer_jra_in.sql。
+#   ⛔交流の除外: nar_jra_horses.jra_career_runs(競馬ブック公開頁の「中央在籍 N戦」)が 0 の馬の①は数えない
+#     (地方所属のまま中央の交流に出ただけ)。列がまだ無い/値が空の馬は除外できない= そのまま数える。
+JRA_IN_SQL = """
+with jh as (
+  select h.kb_horse_id, h.horse_name,
+         coalesce(h.birth_date,
+                  (select min(r.birth_date) from nar_runs r
+                    where r.horse_name = h.horse_name and extract(year from r.birth_date) = h.birth_year
+                   having count(distinct r.birth_date) = 1)) as birth_date
+  from nar_jra_horses h
+  where {career}
+),
+keys as (   -- 中央の走がある馬だけに絞る(nar_runs 全体の窓関数を避ける)
+  select horse_name, birth_date from jh where birth_date is not null
+  union
+  select horse_name, birth_date from nar_runs where trainer_area = 'JRA' and birth_date is not null
+),
+ev as (      -- 中央と地方の走を 1 本の時系列に(is_jra=1 が中央)
+  select jh.horse_name, jh.birth_date, j.race_date, 0 as race_no, 1 as is_jra, null::text as trainer_area
+  from nar_jra_runs j join jh using (kb_horse_id)
+  where jh.birth_date is not null
+  union all
+  select r.horse_name, r.birth_date, r.race_date, r.race_no,
+         case when r.trainer_area = 'JRA' then 1 else 0 end, r.trainer_area
+  from nar_runs r join keys k on k.horse_name = r.horse_name and k.birth_date = r.birth_date
+  where r.trainer_area is not null
+),
+s as (       -- 同じ日は地方を先に並べる(同じ日の中央の走を「前」と数えない)
+  select ev.*, lag(is_jra) over (partition by horse_name, birth_date order by race_date, is_jra, race_no) as p_jra
+  from ev
+)
+select horse_name, birth_date, race_date, 'jra_in' as kind, '中央' as from_value, trainer_area as to_value
+from s
+where is_jra = 0 and p_jra = 1 and race_date >= :since
+"""
+CAREER_ON = "coalesce(h.jra_career_runs, 1) > 0"   # 中央在籍 0 戦= 交流だけ= 外す(空は外さない)
+CAREER_OFF = "true"                                # 列がまだ無い(sql/transfer_jra_in.sql の適用前)
+
+
+def jra_in_sql(has_career):
+    return JRA_IN_SQL.format(career=CAREER_ON if has_career else CAREER_OFF)
+
+
+def jra_in_insert(has_career):
+    return ("insert into nar_horse_changes (horse_name, birth_date, race_date, kind, from_value, to_value)\n"
+            + jra_in_sql(has_career) + f"\non conflict {CONFLICT} do nothing")
+
+
+HAS_CAREER_SQL = ("select count(*) from information_schema.columns where table_schema = 'public' "
+                  "and table_name = 'nar_jra_horses' and column_name = 'jra_career_runs'")
 
 INSERT_SQL = ("insert into nar_horse_changes (horse_name, birth_date, race_date, kind, from_value, to_value)\n"
               + DETECT_SQL +
@@ -118,11 +180,15 @@ def main():
     try:
         rows = con.run("select count(*), kind from (" + DETECT_SQL + ") x group by kind", since=since)
         found = {k: n for n, k in rows}
-        log(f"検出({since}〜): 転入 {found.get('transfer_in', 0)}件 / 転厩 {found.get('stable_change', 0)}件")
+        has_career = con.run(HAS_CAREER_SQL)[0][0] > 0
+        n_jra = con.run("select count(*) from (" + jra_in_sql(has_career) + ") x", since=since)[0][0]
+        log(f"検出({since}〜): 転入 {found.get('transfer_in', 0)}件 / 転厩 {found.get('stable_change', 0)}件"
+            f" / 中央から {n_jra}件(交流の除外 {'あり' if has_career else 'なし= 列 jra_career_runs が未作成'})")
         if not a.apply:
             log("ドライラン(--apply で書く)")
             return 0
         con.run(INSERT_SQL, since=since)
+        con.run(jra_in_insert(has_career), since=since)
         n1 = con.run("select count(*) from nar_horse_changes where kind <> 'owner_change'")[0][0]
 
         seeded_before = con.run("select count(*) from nar_owner_state")[0][0]
