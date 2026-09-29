@@ -1,0 +1,102 @@
+# PC タスク daily_update.py の「福ちゃん新聞→福ちゃん 投入」と「兵庫 能検 区切り→投入」をクラウドへ移す(2026-09-30)。
+# kb-daily.yml と別にした理由: 出どころが別(福ちゃんは競馬ブックでない・海外 IP で拒まれうる)・pdfplumber が要る・
+#   kb-daily は 1 回 約 21 分あり、片方の失敗で他方を巻き込まないため。
+# ⛔手で回すだけ(cron なし)。apply 空= 本番 DB に書かない(読むのは nar_meta・nar_runs)。
+# ⛔public repo: PDF・JSON・頁の HTML・談話の本文をログ・artifact・cache に出さない。cache は done.tsv(名前・日付・件数)だけ。
+name: kb-extra
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: '1= 本番 DB へ書く(nar_paper_talks・nar_meta hyogo_noken_split)。空= 書かない'
+        required: false
+        default: ''
+  push:
+    branches: [kb-cloud]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kb-extra
+  cancel-in-progress: false
+
+env:
+  TZ: Asia/Tokyo
+  KB_DATA_DIR: /tmp/kbdata
+  APPLY: ${{ github.event.inputs.apply }}
+  PYTHONUNBUFFERED: '1'
+
+jobs:
+  extra:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install
+        run: pip install -q requests beautifulsoup4 lxml pdfplumber
+      - name: restore done marks
+        uses: actions/cache/restore@v4
+        with:
+          path: |
+            /tmp/kbdata/fukuchan/done.tsv
+            /tmp/kbdata/kb_noken/done.tsv
+          key: kb-extra-done-${{ github.run_id }}
+          restore-keys: kb-extra-done-
+      # 福ちゃん: まず公開頁に届くか(HTTP 状態と大きさだけ)。届かなければ福ちゃんの段は飛ぶ
+      - name: fukuchan reach
+        id: reach
+        continue-on-error: true
+        run: |
+          python - <<'EOF'
+          import sys, urllib.request
+          req = urllib.request.Request("http://fukuchan.net/publics/index/176/", headers={"User-Agent": "Mozilla/5.0 (personal archive)"})
+          try:
+              with urllib.request.urlopen(req, timeout=60) as r:
+                  b = r.read()
+                  print(f"fukuchan: HTTP {r.status} bytes={len(b)}")
+                  sys.exit(0 if r.status == 200 and b else 1)
+          except Exception as e:
+              print(f"fukuchan: 届かない {type(e).__name__}")
+              sys.exit(1)
+          EOF
+      - name: fukuchan fetch
+        if: steps.reach.outcome == 'success'
+        run: python cloud/kb/fetch_fukuchan.py
+      - name: fukuchan push
+        if: steps.reach.outcome == 'success' && !cancelled()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ "$APPLY" = "1" ]; then python cloud/kb/push_fukuchan.py --all
+          else python cloud/kb/push_fukuchan.py --all --dry-run; fi
+      - name: hyogo noken split
+        if: '!cancelled()'
+        env:
+          KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}
+          KEIBABOOK_PASSWORD: ${{ secrets.KEIBABOOK_PASSWORD }}
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/kb/fetch_kb_noken_hyogo.py --since "$(date +%Y%m)01"
+      - name: hyogo noken split push
+        if: '!cancelled()'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          python -c "import json;d=json.load(open('/tmp/kbdata/kb_noken/hyogo_split.json',encoding='utf-8'))['days'];print('日',len(d),'レース',sum(len(x['races']) for x in d.values()),'行',sum(len(r['rows']) for x in d.values() for r in x['races']))" || true
+          if [ "$APPLY" = "1" ]; then python cloud/kb/push_kb_noken_split.py
+          else python cloud/kb/push_kb_noken_split.py --dry-run; fi
+      - name: save done marks
+        if: env.APPLY == '1' && !cancelled()
+        uses: actions/cache/save@v4
+        with:
+          path: |
+            /tmp/kbdata/fukuchan/done.tsv
+            /tmp/kbdata/kb_noken/done.tsv
+          key: kb-extra-done-${{ github.run_id }}
