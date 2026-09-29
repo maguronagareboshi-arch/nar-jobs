@@ -56,6 +56,7 @@ COURSE_DAYS = 365                            # §281 今日と同じ場・同じ
 DIST_BANDS = (1200, 1600)                    # §281 距離帯= 〜1200 / 1201〜1600 / 1601〜
 CLASSES = ("A1", "A2", "B1", "B2", "B3", "C1", "C2", "C3")   # §281 ⛔cloud/nankan_hist.py CLASSES と同じ並び(上→下)
 Z2H = str.maketrans("ＡＢＣ１２３", "ABC123")
+Z2H_ALL = {c: c - 0xFEE0 for c in range(0xFF01, 0xFF5F)}   # 9/29 全角英数記号→半角(字の位置はそろう)
 NAME_JUNK = re.compile(r"[\s\u3000▲△☆★◇◆◎○●◯]|[（(].*?[)）]")   # 騎手・調教師の名前の比べ方(空白・減量の印・所属の括弧を外す)
 
 
@@ -356,24 +357,56 @@ def dist_change(starts, distance):
     return prev, int_or_none(distance)
 
 
-def race_class(name):
-    """レース名 → いちばん上のクラス('A1'〜'C3')。⛔cloud/nankan_hist.race_classes と同じ読み方。読めなければ None。"""
-    s = str(name or "").translate(Z2H)
-    cs = sorted({c for c in re.findall(r"([ABC][123])", s) if c in CLASSES}, key=CLASSES.index)
-    return cs[0] if cs else None
+NK_TRACKS = ("名古屋", "笠松")               # 9/29 字の後ろの数字は組(台帳 #473)= 級は字だけ
+CLS_RE = re.compile(r"([ABC])([0-9]*)([a-z]?)")
+
+
+def race_class(name, track=None):
+    """レース名 → いちばん上のクラス('A1'〜'C3')。読めなければ None。
+    9/29 viewer js/class-parts.js raceClassParts と同じ読み方にそろえた=
+      ①英単語の中の字は拾わない(ＪＲＡ・ＣＵＰ・Ｋａｃｈｉ の直後など)。ただし序数(3rd)の後ろ・字+数字(+組/ダッシュ/漢数字/終わり)は拾う
+      ②名古屋・笠松は字の後ろの数字が組= 'A'/'B'/'C' の字だけ(名古屋の特別 Ａ１ａ は 'A1')"""
+    s = str(name or "").translate(Z2H_ALL)
+    nk = track in NK_TRACKS
+    found = []
+    for m in CLS_RE.finditer(s):
+        i, blk_end = m.start(), m.start() + 1
+        if i + 1 < len(s) and s[i + 1].islower() and s[i + 1].isascii():
+            continue
+        if blk_end < len(s) and s[blk_end].isascii() and s[blk_end].isalpha():
+            continue                                     # ＣＵＰ・ＢＲＥＷ の中の字
+        if i > 0 and s[i - 1].isascii() and s[i - 1].isalpha():
+            ord_ok = re.search(r"[0-9](st|nd|rd|th)$", s[max(0, i - 6):i], re.I)
+            if not ord_ok and not re.match(r"[0-9]+([一二三四五六七八九十\-―‐−組]|$)", s[blk_end:]):
+                continue
+        letter, digits, low = m.group(1), m.group(2), m.group(3)
+        if nk:
+            found.append(letter + digits if (digits and low) else letter)
+        elif digits and letter + digits[0] in CLASSES:
+            found.append(letter + digits[0])
+    if not found:
+        return None
+    return sorted(set(found), key=_class_key)[0]
+
+
+def _class_key(c):
+    return ("ABC".index(c[0]), int(c[1]) if len(c) > 1 else 0)
 
 
 def class_move(starts, track, race_name):
     """クラスの変化= 同じ場の前の走(直近)のクラスとくらべて '上' / '同じ' / '下'。⛔どちらかのクラスが読めない・
-    同じ場の走が無ければ None(推定で埋めない)。"""
-    now = race_class(race_name)
+    同じ場の走が無ければ None(推定で埋めない)。9/29 名古屋・笠松は字(A/B/C)だけで比べる。"""
+    now = race_class(race_name, track)
     if now is None:
         return None
     prev = next((r for r in starts if r.get("track") == track), None)
-    pc = race_class(prev.get("race_name")) if prev else None
+    pc = race_class(prev.get("race_name"), track) if prev else None
     if pc is None:
         return None
-    i, j = CLASSES.index(now), CLASSES.index(pc)
+    if len(now) == 1 or len(pc) == 1:
+        i, j = "ABC".index(now[0]), "ABC".index(pc[0])
+    else:
+        i, j = CLASSES.index(now), CLASSES.index(pc)
     return "上" if i < j else "下" if i > j else "同じ"
 
 
@@ -660,6 +693,9 @@ def selftest(quiet=False):
     check("class_move 同じ場の前の走", class_move(s3, "浦和", "B3"), "上")
     check("class_move 同じ", class_move(s3, "浦和", "C1"), "同じ")
     check("class_move 読めない", class_move(s3, "浦和", "オープン"), None)
+    check("race_class 英字の中・序数・名古屋笠松", (race_class("ＪＲＡ認定２歳"), race_class("３ｒｄＣ２三３歳以上"),
+          race_class("ＫａｃｈｉＢ３－３"), race_class("Ｃ２７", "笠松"), race_class("Ａ１ａ特別", "名古屋"), race_class("Ｃ１０組", "名古屋")),
+          (None, "C2", "B3", "C", "A1", "C"))
     check("jockey_change 略しても同じ人", jockey_change(s3, "森泰"), (False, None))
     check("jockey_change 再騎乗", jockey_change(s3[1:], "森泰斗"), (True, 1))
     check("trainer_move 転厩", trainer_move(s3[2:], "Z師"), "転厩")
