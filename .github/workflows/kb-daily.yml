@@ -1,0 +1,84 @@
+# 競馬ブックの 2 段(PC タスク daily_update.py の「馬具 6場 成績→馬具 投入」と「中央戦績」)をクラウドへ移す(2026-09-29)。
+# ⛔まだ手で回すだけ(cron なし)。入力 apply が空= 取得と整形だけで件数を出す(本番 DB に書かない・読むのは可)。
+# ⛔public repo: ID/PW・Cookie・頁の HTML・取得した中身をログ・artifact・cache に出さない。cache に入れるのは
+#   done.tsv(日付・場の組・件数だけ)。頁と取得物は /tmp/kbdata(ジョブが終われば消える)。
+# 台本 cloud/kb/ は PC の scraper の 9/29 版の写し。直したのは鍵(環境変数)と保存先(KB_DATA_DIR)だけ。
+name: kb-daily
+
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: '1= 本番 DB へ書く(nar_kb_runs・nar_jra_runs・nar_jra_horses・heartbeat)。空= 書かない'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: kb-daily
+  cancel-in-progress: false
+
+env:
+  TZ: Asia/Tokyo
+  KB_DATA_DIR: /tmp/kbdata
+  APPLY: ${{ github.event.inputs.apply }}
+  PYTHONUNBUFFERED: '1'
+
+jobs:
+  kb:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install
+        run: pip install -q requests beautifulsoup4 lxml
+      - name: dates
+        run: |
+          echo "W=$(date -d '7 days ago' +%Y%m%d)" >> "$GITHUB_ENV"
+          echo "JST 今日= $(date +%Y%m%d)・馬具は $(date -d '7 days ago' +%Y%m%d) から・apply=[$APPLY]"
+      # done.tsv(取得済みの印)だけを cache で持ち越す。無ければ 7 日分を全部取り直す(安全側)。
+      - name: restore done marks
+        uses: actions/cache/restore@v4
+        with:
+          path: /tmp/kbdata/kb_all/done.tsv
+          key: kb-done-${{ github.run_id }}
+          restore-keys: kb-done-
+      - name: gear six tracks seiseki
+        env:
+          KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}
+          KEIBABOOK_PASSWORD: ${{ secrets.KEIBABOOK_PASSWORD }}
+        run: python cloud/kb/fetch_kb_all.py --since "$W" --what seiseki --track 門別,大井,船橋,川崎,浦和,園田
+      - name: gear counts
+        if: '!cancelled()'
+        run: python cloud/kb/kb_counts.py /tmp/kbdata/kb_all --since "$W"
+      - name: gear push
+        if: '!cancelled()'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ "$APPLY" = "1" ]; then python cloud/kb/push_kb_runs.py --since "$W"
+          else python cloud/kb/push_kb_runs.py --since "$W" --dry-run; fi
+      # apply のときだけ done.tsv を残す(dry-run で「済み」にすると、次の apply がその日を飛ばして書かないため)
+      - name: save done marks
+        if: env.APPLY == '1' && !cancelled()
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/kbdata/kb_all/done.tsv
+          key: kb-done-${{ github.run_id }}
+      - name: jra runs
+        if: '!cancelled()'
+        env:
+          KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}
+          KEIBABOOK_PASSWORD: ${{ secrets.KEIBABOOK_PASSWORD }}
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          D="$(date +%Y%m%d),$(date -d tomorrow +%Y%m%d),$(date -d '2 days' +%Y%m%d)"
+          if [ "$APPLY" = "1" ]; then python cloud/kb/fetch_jra_runs.py --dates "$D" --collect-cards --push
+          else python cloud/kb/fetch_jra_runs.py --dates "$D" --collect-cards; fi
