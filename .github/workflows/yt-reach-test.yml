@@ -1,0 +1,24 @@
+# 能検の映像(YouTube)がクラウドから取れるかの試し(2026-09-30)。⛔手で回すだけ・DB にも R2 にも書かない・映像は残さない。
+name: yt-reach-test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install
+        run: pip install -q -U yt-dlp
+      - name: metadata only
+        run: yt-dlp --simulate --print "%(id)s %(duration)s %(upload_date)s" "https://www.youtube.com/watch?v=_1m5IaKXt0w" || echo "NG metadata"
+      - name: download 10 seconds
+        run: |
+          yt-dlp -q -f "worst[ext=mp4]/worst" --download-sections "*0-10" -o /tmp/t.%(ext)s "https://www.youtube.com/watch?v=_1m5IaKXt0w" && ls -l /tmp/t.* && echo "OK download" || echo "NG download"
