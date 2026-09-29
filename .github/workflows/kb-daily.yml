@@ -12,6 +12,9 @@ on:
         description: '1= 本番 DB へ書く(nar_kb_runs・nar_jra_runs・nar_jra_horses・heartbeat)。空= 書かない'
         required: false
         default: ''
+  # 試しの 1 回だけ(master に無いと dispatch できないため)。枝への push で dry-run が走る。次のコミットで外す。
+  push:
+    branches: [kb-cloud]
 
 permissions:
   contents: read
