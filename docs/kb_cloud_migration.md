@@ -60,3 +60,8 @@
 2. 0922 浦和 前半3F −10 行(上)= apply で PC の値を None で上書きしないか。
 3. apply=1 と cron は未。PC タスクの 2 段を止めるのと同時に(両方で書かない)。master へ merge しないと dispatch できない。
 4. 所要 約 21 分/回(能力表を毎回 165 頁取るため。PC は 58 頁)。
+
+## 続き(2026-09-29 夜・run https://github.com/maguronagareboshi-arch/nar-jobs/actions/runs/36551419393 ・成功・apply 空)
+- 空で上書きしない: cloud の push_kb_runs.py は送る前に nar_kb_runs のその日の既存行を読み(読むだけ)、送る値が空で既存に値がある列(horse_name・kb_race_id・blinker・gear・first3f・avg_f・pace・kimete・start_note)は既存を残す。PC の台本は変えていない。単体テスト cloud/kb/test_push_kb_runs.py 3 件(便の最初でも流す)。
+- dry-run で既存を残した値= 23(0922: pace 12・first3f 10 / 0925: gear 1 / ほかの日 0)。0922 浦和 前半3F −10 はこれで既存が残る。
+- 中央戦績の失敗 18= 全部 no_kanzendata_blocks(馬の頁に走が無い)。失敗に数える扱い(`ok= fetch_error が空`)と「翌日は取り直さない」扱いは PC と同じコードの写し= 差なし(PC の 13:00 便は該当馬が 0 頭だっただけ)。
