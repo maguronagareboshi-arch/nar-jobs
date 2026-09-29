@@ -1,12 +1,12 @@
 # -*- coding: utf-8 -*-
-"""南関 AI v3 第 8 版の毎日の前日版(= t8_forecast.py table DATE pre)を便で回す入口。学習はしない。
+"""南関 AI v3 第 9 版(人気を見ない版・182 列)の毎日の前日版(= t9_forecast.py table DATE pre)を便で回す入口。学習はしない。
 
   python -X utf8 pipeline/ai/v3/v3_daily.py DATE OUTDIR [--write]
 
 1. 追い切りの毎日の分: 鍵(SUPABASE_URL・SUPABASE_SERVICE_KEY)があれば nar_kb_works から(kb_works.install)、
    無ければ(または V3_WORKS_SRC=json)手元の JSON(V3_CYOKYO_JSON)から = 従来の道。
-2. t8_forecast.table(DATE, 'pre', OUTDIR) → OUTDIR/DATE_第8版_前日版.csv・.md
-3. --write のときだけ nar_ai_marks に model='v3-8'・timing='morning' で書く(base_v1.write_marks = 朝の行は凍結・読み直し)。
+2. t9_forecast.table(DATE, 'pre', OUTDIR) → OUTDIR/DATE_第9版_前日版.csv・.md(追い切り・材料の差し替えは t8 の関数に入れる = t9 が呼ぶ)
+3. --write のときだけ nar_ai_marks に model='v3-9'・timing='morning' で書く(base_v1.write_marks = 朝の行は凍結・読み直し)。
    marks = 印の付いた馬(◎○▲△・順位の順)・score = 3 着以内の確率 p3′ × 100。
    meta = n・model・stamp・works の元・runners(全馬の num・p1 = 勝つ確率・p3 = 3 着以内の確率 p3′(表の値)・p3_raw = 上乗せ後の p3)。
 固定ファイルの置き場は環境変数 V3_DATA・V3_RAW・V3_MODELS・V3_CYOKYO_CSV・V3_KD(無ければ手元のパス)。
@@ -20,15 +20,16 @@ import pandas as pd
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 import t8_forecast as t8  # noqa: E402
+import t9_forecast as t9  # noqa: E402  (import 時に t7e の列を 182・模型の名前を t9 に差し替える)
 import kb_works  # noqa: E402
 
 if sys.platform != 'win32':
     # v8s1_run.wait_mem は Windows の tasklist で他の python を待つ。便(Linux)には tasklist が無い = 待たない(1 本しか走らない)
     t8.s1.wait_mem = lambda: None
 
-MODEL_ID = 'v3-8'
+MODEL_ID = 'v3-9'
 TIMING = 'morning'
-STAMP = 't7e_Y1/Y3+t8_s2(2022-01〜2026-08)'
+STAMP = 't9_Y1/Y3(182 列・j7_last_pop なし)+t9_s2(2022-01〜2026-08)'
 MK = ['◎', '○', '▲', '△']
 
 
@@ -97,13 +98,13 @@ def main():
     log('day', day, 'works', src, 'write', write)
     if __import__('os').environ.get('V3_DUMP_FEATS') == '1':  # 照合用: 材料(T・調教 F)をその日の分だけ csv に出す
         _dump_feats(day, out)
-    t8.table(day, 'pre', str(out))
-    csv_path = out / f'{day}_第8版_前日版.csv'
+    t9.table(day, 'pre', str(out))
+    csv_path = out / f'{day}_第9版_前日版.csv'
     rows = build_rows(csv_path, day, src)
     log('races', len(rows), '◎', ' '.join(f"{r['track']}{r['race_no']}R:{r['marks'][0]['num']}" for r in rows[:12] if r['marks']))
     hon, h = table_digest(csv_path)
     log('digest ◎', hon, 'sha256', h)
-    (out / f'{day}_v3-8_marks.json').write_text(json.dumps(rows, ensure_ascii=False), encoding='utf-8')
+    (out / f'{day}_v3-9_marks.json').write_text(json.dumps(rows, ensure_ascii=False), encoding='utf-8')
     if write and rows:
         sys.path.insert(0, str(HERE.parent))
         import base_v1 as B1

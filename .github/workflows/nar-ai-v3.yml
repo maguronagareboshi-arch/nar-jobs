@@ -1,11 +1,11 @@
-# 南関 AI v3 第 8 版の毎日の前日版(下書き・段 1)。手元の `py -3.12 -X utf8 src/t8_forecast.py table DATE pre` を PC 無しで回す。
+# 南関 AI v3 第 9 版(人気を見ない版・182 列)の毎日の前日版。手元の `py -3.12 -X utf8 src/t9_forecast.py table DATE pre` を PC 無しで回す。
 #
-# ⛔学習はしない(固定の模型 t7e_Y1/Y3・t8_s2.json を固定ファイルから読む)。
-# ⛔本番に書くのは最後の 1 手順だけ(nar_ai_marks の REST upsert・model='v3-8'・timing='morning')。write=yes の dispatch のときだけ。
+# ⛔学習はしない(固定の模型 t9_Y1/Y3・t9_models.json・t9_s2.json を固定ファイルから読む)。
+# ⛔本番に書くのは最後の 1 手順だけ(nar_ai_marks の REST upsert・model='v3-9'・timing='morning')。write=yes の dispatch のときだけ。
 # 固定ファイル(毎日変わらないもの・約 293MB の tar.gz)は公開 repo なので暗号化したリリース資産に置く:
-#   tag = inputs.asset_tag(既定 v3-assets-20260928)・資産 v3_fixed.tar.gz.enc・鍵 = secrets.V3_ASSET_KEY。作り方(手元・1 回):
+#   tag = inputs.asset_tag(既定 v3-assets-20260929・第 8 版に戻すときは v3-assets-20260928)・資産 v3_fixed.tar.gz.enc・鍵 = secrets.V3_ASSET_KEY。作り方(手元・1 回):
 #   tar -czf - -C <組んだフォルダ> v3_data raw models cyokyo_csv kd | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:V3_ASSET_KEY -out v3_fixed.tar.gz.enc
-#   中の形: v3_data/*.parquet・*.json / raw/archive/*.csv.gz / models/t7e_*・t8_s2.json / cyokyo_csv/cyokyo_{場}_{年}.csv / kd/NR/NR.DAT・kd/NS/NS.DAT
+#   中の形: v3_data/*.parquet・*.json / raw/archive/*.csv.gz / models/t7e_*・t8_s2.json・t9_*・t9_s2.json / cyokyo_csv/cyokyo_{場}_{年}.csv / kd/NR/NR.DAT・kd/NS/NS.DAT
 # 毎日変わる材料は便の中で取る: 前向きの写し(db_*_forward_t3 = t7e_forecast.py fetch・公開の読み鍵)・能力試験(t7e_forecast.py nk・公式サイト)・
 #   追い切りの毎日の分(v3_daily.py が nar_kb_works から読む・読むだけ)。
 name: nar-ai-v3
@@ -20,13 +20,13 @@ on:
         required: false
         default: ''
       write:
-        description: '本番 nar_ai_marks(v3-8・morning)に書く(yes/no)'
+        description: '本番 nar_ai_marks(v3-9・morning)に書く(yes/no)'
         required: false
         default: 'no'
       asset_tag:
         description: '固定ファイルのリリース tag'
         required: false
-        default: 'v3-assets-20260928'
+        default: 'v3-assets-20260929'
 
 concurrency:
   group: nar-ai-v3
@@ -77,7 +77,7 @@ jobs:
           V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY  # Get-Content 経由の末尾改行を除く
           : "${V3_ASSET_KEY:?secrets.V3_ASSET_KEY が無い}"
           mkdir -p in v3
-          gh release download "${TAG:-v3-assets-20260928}" -p 'v3_fixed.tar.gz.enc' -D in
+          gh release download "${TAG:-v3-assets-20260929}" -p 'v3_fixed.tar.gz.enc' -D in
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_fixed.tar.gz.enc | tar -C v3 -xzf -
           rm -f in/v3_fixed.tar.gz.enc
           du -sh v3/*; df -h / | tail -n 1
