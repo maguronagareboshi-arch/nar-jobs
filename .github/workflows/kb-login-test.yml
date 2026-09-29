@@ -1,0 +1,26 @@
+# 競馬ブックにクラウドからログインできるかの試し(2026-09-29)。⛔手で回すだけ(cron なし)・本番 DB に書かない。
+# secrets KEIBABOOK_LOGIN_ID / KEIBABOOK_PASSWORD を使う。台本 cloud/kb_login_test.py は値も頁の中身も表示しない。
+name: kb-login-test
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install
+        run: pip install -q requests
+      - name: login test
+        env:
+          KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}
+          KEIBABOOK_PASSWORD: ${{ secrets.KEIBABOOK_PASSWORD }}
+        run: python cloud/kb_login_test.py
