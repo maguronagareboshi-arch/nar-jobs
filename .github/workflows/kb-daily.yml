@@ -12,6 +12,8 @@ on:
         description: '1= 本番 DB へ書く(nar_kb_runs・nar_jra_runs・nar_jra_horses・heartbeat)。空= 書かない'
         required: false
         default: ''
+  push:
+    branches: [kb-cloud]
 
 permissions:
   contents: read
@@ -37,6 +39,8 @@ jobs:
           python-version: '3.12'
       - name: install
         run: pip install -q requests beautifulsoup4 lxml
+      - name: unit tests
+        run: python cloud/kb/test_push_kb_runs.py
       - name: dates
         run: |
           echo "W=$(date -d '7 days ago' +%Y%m%d)" >> "$GITHUB_ENV"

@@ -70,6 +70,50 @@ def rows_of(path):
     return out
 
 
+# cloud(2026-09-29): 空で上書きしない。競馬ブックの頁は前半3F などが取るたびに伏せ字になったり
+#   ならなかったりする。PC は runs_*.json を便ごとに足し合わせて(None で上書きしない)守っていたが、
+#   cloud は毎回まっさらなので、送る前に本番の既存行を読んで、空の列は既存の値を残す。
+KEEP_COLS = ("horse_name", "kb_race_id") + PAYLOAD
+
+
+def _empty(v):
+    return v is None or v == ""
+
+
+def keep_existing(rows, existing):
+    """rows を直に直す。existing= {(track, race_date, race_no, umaban): 既存行}。→ {列: 残した数}"""
+    kept = {}
+    for r in rows:
+        ex = existing.get((r["track"], str(r["race_date"]), int(r["race_no"]), int(r["umaban"])))
+        if not ex:
+            continue
+        for k in KEEP_COLS:
+            if _empty(r.get(k)) and not _empty(ex.get(k)):
+                r[k] = ex[k]
+                kept[k] = kept.get(k, 0) + 1
+    return kept
+
+
+def read_existing(base, key, race_date):
+    """nar_kb_runs のその日の 6 場の行(読むだけ)→ {(track, race_date, race_no, umaban): 行}"""
+    import urllib.parse
+    out, off = {}, 0
+    tracks = ",".join(f'"{t}"' for t in KB_PUBLIC)
+    while True:
+        q = urllib.parse.urlencode({
+            "select": ",".join(COLS), "race_date": f"eq.{race_date}", "track": f"in.({tracks})",
+            "order": "track,race_no,umaban", "limit": "1000", "offset": str(off)})
+        req = urllib.request.Request(base.rstrip("/") + "/rest/v1/nar_kb_runs?" + q,
+                                     headers={"apikey": key, "Authorization": f"Bearer {key}"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            got = json.loads(resp.read().decode("utf-8"))
+        for e in got:
+            out[(e["track"], str(e["race_date"]), int(e["race_no"]), int(e["umaban"]))] = e
+        if len(got) < 1000:
+            return out
+        off += 1000
+
+
 def upsert(base, key, rows):
     url = base.rstrip("/") + "/rest/v1/nar_kb_runs?on_conflict=track,race_date,race_no,umaban"
     for i in range(0, len(rows), CHUNK):
@@ -105,7 +149,7 @@ def main():
     if not key and not args.dry_run:
         log("✗ SUPABASE_SERVICE_KEY が無い")
         return 1
-    total = 0
+    total = kept_all = 0
     for f in files:
         rows = rows_of(f)
         by = {}
@@ -114,11 +158,18 @@ def main():
         if not rows:
             log(f"{f.stem[5:]}: 送る行なし")
             continue
+        # cloud(2026-09-29): 送る前に既存行を読み、空で既存に値がある列は既存を残す(鍵が無ければ読まない)
+        kept = {}
+        if key:
+            kept = keep_existing(rows, read_existing(base, key, rows[0]["race_date"]))
+        kept_all += sum(kept.values())
         if not args.dry_run:
             upsert(base, key, rows)
         total += len(rows)
-        log(f"{f.stem[5:]}: {len(rows)} 行 {by}{'(dry-run)' if args.dry_run else ''}")
-    log(f"おわり: {len(files)} ファイル {total} 行{'(dry-run・書いていない)' if args.dry_run else ' 投入'}")
+        log(f"{f.stem[5:]}: {len(rows)} 行 {by}・既存を残した値 {sum(kept.values())} {kept}"
+            f"{'(dry-run)' if args.dry_run else ''}")
+    log(f"おわり: {len(files)} ファイル {total} 行・既存を残した値 {kept_all}"
+        f"{'(dry-run・書いていない)' if args.dry_run else ' 投入'}")
     return 0
 
 
