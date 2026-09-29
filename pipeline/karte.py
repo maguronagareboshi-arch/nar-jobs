@@ -365,7 +365,7 @@ def race_class(name, track=None):
     """レース名 → いちばん上のクラス('A1'〜'C3')。読めなければ None。
     9/29 viewer js/class-parts.js raceClassParts と同じ読み方にそろえた=
       ①英単語の中の字は拾わない(ＪＲＡ・ＣＵＰ・Ｋａｃｈｉ の直後など)。ただし序数(3rd)の後ろ・字+数字(+組/ダッシュ/漢数字/終わり)は拾う
-      ②名古屋・笠松は字の後ろの数字が組= 'A'/'B'/'C' の字だけ(名古屋の特別 Ａ１ａ は 'A1')"""
+      ②名古屋・笠松は字の後ろの数字が組= 'A'/'B'/'C' の字だけ(名古屋の特別 Ａ１ａ も 'A')・他の場で字+2 桁は割らない(None)"""
     s = str(name or "").translate(Z2H_ALL)
     nk = track in NK_TRACKS
     found = []
@@ -381,7 +381,9 @@ def race_class(name, track=None):
                 continue
         letter, digits, low = m.group(1), m.group(2), m.group(3)
         if nk:
-            found.append(letter + digits if (digits and low) else letter)
+            found.append(letter)                         # 名古屋の特別 Ａ１ａ も A級 1組(#473)
+        elif len(digits) >= 2:
+            continue                                     # 字+2 桁(Ｃ１０組)は割らない= 読めない扱い
         elif digits and letter + digits[0] in CLASSES:
             found.append(letter + digits[0])
     if not found:
@@ -694,8 +696,8 @@ def selftest(quiet=False):
     check("class_move 同じ", class_move(s3, "浦和", "C1"), "同じ")
     check("class_move 読めない", class_move(s3, "浦和", "オープン"), None)
     check("race_class 英字の中・序数・名古屋笠松", (race_class("ＪＲＡ認定２歳"), race_class("３ｒｄＣ２三３歳以上"),
-          race_class("ＫａｃｈｉＢ３－３"), race_class("Ｃ２７", "笠松"), race_class("Ａ１ａ特別", "名古屋"), race_class("Ｃ１０組", "名古屋")),
-          (None, "C2", "B3", "C", "A1", "C"))
+          race_class("ＫａｃｈｉＢ３－３"), race_class("Ｃ２７", "笠松"), race_class("Ａ１ａ特別", "名古屋"), race_class("Ｃ１０組", "名古屋"), race_class("Ｃ１０組")),
+          (None, "C2", "B3", "C", "A", "C", None))
     check("jockey_change 略しても同じ人", jockey_change(s3, "森泰"), (False, None))
     check("jockey_change 再騎乗", jockey_change(s3[1:], "森泰斗"), (True, 1))
     check("trainer_move 転厩", trainer_move(s3[2:], "Z師"), "転厩")
