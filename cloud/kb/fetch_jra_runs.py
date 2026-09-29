@@ -696,6 +696,13 @@ def main(argv=None):
     ok = [h for h in horses if not h.get("fetch_error")]
     summary_line = f"馬 {len(horses)} 頭(失敗 {len(horses) - len(ok)})・中央の走 {len(runs)} 行"
     log(summary_line)
+    # cloud(2026-09-29): 失敗の種類を件数だけ出す(初回の dry-run で 56 頭中 18 頭が失敗・種類がログに無かった)
+    errs = {}
+    for h in horses:
+        if h.get("fetch_error"):
+            errs[h["fetch_error"]] = errs.get(h["fetch_error"], 0) + 1
+    if errs:
+        log(f"失敗の種類: {json.dumps(errs, ensure_ascii=False)}")
     if push:
         flush()
         log("本番へ upsert 済み")
