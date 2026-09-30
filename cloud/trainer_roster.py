@@ -16,7 +16,9 @@
     (別の免許番号に載った/新しく載った= from が null/消えた= to が null)。
     前夜の表が空(初回)は差分を出さない(基準づくりだけ)。主キー (lineage_code, seen_on)+重複は無視= 冪等。
     ① 取れなかった人(失敗・0 頭・頁送りが途中で止まった)は前夜の行をそのまま持ち越し、その人がからむ差分は出さない
-       (その人の頁から来た馬・その人へ行った馬とも)。人数は heartbeat の note「取れず n」。
+       (その人の名簿から消えた扱いにしない)。人数は heartbeat の note「取れず n」。
+       ただし取れた人の名簿に前夜と違う免許番号の馬が載ったら、元の人が取れなかったかに関係なく移籍として記録
+       (from は前夜の行)。持ち越し行は upsert(主キー lineage_code)で上書き= 同じ馬が 2 厩舎に残らない。
     ② 新しく載った馬は、nar_roster_moves の直近 14 日に別の免許番号の記録があれば from をそれで埋める。
     ③ 消えたは 2 夜続けて載らなかったときだけ(1 夜目は missing_since を入れて行を残す・載り直せば null に戻る)。
   → heartbeat 'trainer_roster'
@@ -240,8 +242,6 @@ def diff_moves(prev, cur, seen_on, fetched, gone_licenses=(), recent=None):
         p = prev.get(code)
         if p is not None and p["license_no"] == c["license_no"]:
             continue
-        if p is not None and p["license_no"] not in known:
-            continue                                  # ① 取れなかった人から来た馬= 出さない
         fl, fa = (p["license_no"], p["area"]) if p is not None else (None, None)
         if p is None and code in recent and recent[code][0] != c["license_no"]:
             fl, fa = recent[code]                     # ② 直近 14 日に別の免許番号にいた

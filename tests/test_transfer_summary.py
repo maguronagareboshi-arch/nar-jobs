@@ -76,9 +76,16 @@ class TestRosterMoves(unittest.TestCase):
         self.assertTrue(all(r["seen_on"] == self.D for r in m))
 
     def test_failed_trainer_carried_over(self):
-        # A が取れなかった夜: A の馬は持ち越し・A から B へ来た馬も出さない
-        cur = {"1": _h("B", "北海道"), "3": _h("B", "北海道")}
+        # A が取れなかった夜: A の名簿の馬(2・6)は持ち越し= 欠けにも消えたにもしない
+        cur = {"3": _h("B", "北海道")}
         self.assertEqual(T.diff_moves(self.PREV, cur, self.D, {"B", "C"}), ([], ["4"], []))
+
+    def test_move_from_failed_trainer_recorded(self):
+        # A が取れなかった夜でも、取れた B の名簿に A の馬が載ったら移籍(from は前夜の行)
+        cur = {"1": _h("B", "北海道", "イチ"), "3": _h("B", "北海道")}
+        m, miss, gone = T.diff_moves(self.PREV, cur, self.D, {"B", "C"})
+        self.assertEqual(_got(m), {"1": ("A", "B", "船橋", "北海道")})
+        self.assertEqual((miss, gone), (["4"], []))
 
     def test_gone_licenses(self):
         # 一覧から居なくなった人(C)の馬は取れた扱い= 1 夜目の欠けになる
