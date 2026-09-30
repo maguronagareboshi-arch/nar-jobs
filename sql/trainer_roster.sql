@@ -21,8 +21,10 @@ create table if not exists nar_trainer_roster (
   birth_year   integer,
   sire         text,
   dam          text,
-  fetched_on   date not null                -- この日の一覧に載っていた
+  fetched_on   date not null,               -- この日の一覧に載っていた
+  missing_since date                        -- D3: 取れた人の一覧に初めて居なかった夜。2 夜続けば行を消す(載り直せば null)
 );
+alter table nar_trainer_roster add column if not exists missing_since date;
 create index if not exists nar_trainer_roster_license on nar_trainer_roster (license_no);
 create index if not exists nar_trainer_roster_horse on nar_trainer_roster (horse_name, birth_year);
 
@@ -36,6 +38,7 @@ create policy nar_trainer_roster_read on nar_trainer_roster for select using (tr
 -- §移籍まとめ D3(9/30): 名簿の差分(cloud/trainer_roster.py が書き換え前に前夜と比べて追記)。
 --   別の免許番号に載った= from/to とも値・新しく載った= from が null・消えた= to が null。
 --   ⛔過去は遡れない(取り始めの日から)。初回の夜は出さない。1 頭 1 日 1 行= 打ち直しは重複を無視(冪等)。
+--   取れなかった人は持ち越し・差分を出さない/新しく載ったは直近 14 日の記録で from を埋める/消えたは 2 夜続けて居ないときだけ。
 create table if not exists nar_roster_moves (
   lineage_code text not null,               -- 公式の馬の番号(k_lineageLoginCode)
   horse_name   text not null,

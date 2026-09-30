@@ -48,38 +48,66 @@ class TestRoster(unittest.TestCase):
         self.assertIsNone(T.short_guess("名前だけ"))
 
 
-def _h(lic, area, name="馬"):
-    return {"license_no": lic, "area": area, "horse_name": name}
+def _h(lic, area, name="馬", ms=None):
+    return {"license_no": lic, "area": area, "horse_name": name, "missing_since": ms}
+
+
+def _got(m):
+    return {r["lineage_code"]: (r["from_license"], r["to_license"], r["from_area"], r["to_area"]) for r in m}
 
 
 class TestRosterMoves(unittest.TestCase):
     PREV = {"1": _h("A", "船橋", "イチ"), "2": _h("A", "船橋", "ニ"), "3": _h("B", "北海道", "サン"),
-            "4": _h("C", "高知", "ヨン")}
+            "4": _h("C", "高知", "ヨン"), "6": _h("A", "船橋", "ロク", "2026-09-30")}
+    D = "2026-10-01"
 
     def test_first_night_no_diff(self):
-        self.assertEqual(T.diff_moves({}, {"1": _h("A", "船橋")}, "2026-10-01", {"A"}), [])
+        self.assertEqual(T.diff_moves({}, {"1": _h("A", "船橋")}, self.D, {"A"}), ([], [], []))
 
-    def test_moved_new_gone(self):
+    def test_moved_new_and_two_night_gone(self):
         cur = {"1": _h("B", "北海道", "イチ"), "3": _h("B", "北海道", "サン"), "5": _h("B", "北海道", "ゴ"),
                "4": _h("C", "高知", "ヨン")}
-        m = T.diff_moves(self.PREV, cur, "2026-10-01", {"A", "B", "C"})
-        got = {r["lineage_code"]: (r["from_license"], r["to_license"], r["from_area"], r["to_area"]) for r in m}
-        self.assertEqual(got, {"1": ("A", "B", "船橋", "北海道"),     # 別の免許番号に載った
-                               "2": ("A", None, "船橋", None),        # 消えた
-                               "5": (None, "B", None, "北海道")})     # 新しく載った
-        self.assertTrue(all(r["seen_on"] == "2026-10-01" for r in m))
+        m, miss, gone = T.diff_moves(self.PREV, cur, self.D, {"A", "B", "C"})
+        self.assertEqual(_got(m), {"1": ("A", "B", "船橋", "北海道"),     # 別の免許番号に載った
+                                   "5": (None, "B", None, "北海道"),      # 新しく載った
+                                   "6": ("A", None, "船橋", None)})       # 2 夜続けて居ない= 消えた
+        self.assertEqual(miss, ["2"])                                     # 1 夜目は差分なし・印だけ
+        self.assertEqual(gone, ["6"])
+        self.assertTrue(all(r["seen_on"] == self.D for r in m))
 
-    def test_gone_only_for_fetched(self):
-        # 取れなかった人(C)の馬は「消えた」にしない。一覧から居なくなった人(gone_licenses)は消えた
+    def test_failed_trainer_carried_over(self):
+        # A が取れなかった夜: A の馬は持ち越し・A から B へ来た馬も出さない
+        cur = {"1": _h("B", "北海道"), "3": _h("B", "北海道")}
+        self.assertEqual(T.diff_moves(self.PREV, cur, self.D, {"B", "C"}), ([], ["4"], []))
+
+    def test_gone_licenses(self):
+        # 一覧から居なくなった人(C)の馬は取れた扱い= 1 夜目の欠けになる
         cur = {"1": _h("A", "船橋"), "2": _h("A", "船橋"), "3": _h("B", "北海道")}
-        self.assertEqual(T.diff_moves(self.PREV, cur, "d", {"A", "B"}), [])
-        m = T.diff_moves(self.PREV, cur, "d", {"A", "B"}, {"C"})
-        self.assertEqual([(r["lineage_code"], r["to_license"]) for r in m], [("4", None)])
+        m, miss, gone = T.diff_moves(self.PREV, cur, self.D, {"A", "B"}, {"C"})
+        self.assertEqual(miss, ["4"])
+        self.assertEqual((_got(m), gone), ({"6": ("A", None, "船橋", None)}, ["6"]))
+
+    def test_new_fills_from_recent(self):
+        rec = T.last_known([
+            {"lineage_code": "9", "from_license": "A", "to_license": None, "from_area": "船橋", "to_area": None,
+             "seen_on": "2026-09-25"},
+            {"lineage_code": "8", "from_license": None, "to_license": "B", "from_area": None, "to_area": "北海道",
+             "seen_on": "2026-09-20"}])
+        self.assertEqual(rec, {"9": ("A", "船橋"), "8": ("B", "北海道")})
+        cur = {"9": _h("B", "北海道"), "8": _h("B", "北海道"), "3": _h("B", "北海道")}
+        m, _, _ = T.diff_moves({"3": _h("B", "北海道")}, cur, self.D, {"B"}, recent=rec)
+        self.assertEqual(_got(m), {"9": ("A", "B", "船橋", "北海道"),    # 直近に別の免許番号= from を埋める
+                                   "8": (None, "B", None, "北海道")})    # 同じ免許番号の記録= 埋めない
 
     def test_idempotent(self):
-        # 同じ夜の打ち直し= 今夜の名簿が前夜になるので差分は 0
-        cur = {"1": _h("B", "北海道", "イチ"), "3": _h("B", "北海道", "サン")}
-        self.assertEqual(T.diff_moves(cur, dict(cur), "d", {"B"}), [])
+        # 同じ夜の打ち直し= 今夜の名簿(1 夜目の欠けは missing_since= 今日)が前夜になるので差分は 0
+        prev = {"1": _h("B", "北海道"), "2": _h("B", "北海道", ms=self.D)}
+        self.assertEqual(T.diff_moves(prev, {"1": _h("B", "北海道")}, self.D, {"B"}), ([], [], []))
+
+    def test_reappear_no_diff(self):
+        # 1 夜欠けて同じ所に載り直した馬は差分なし(行は upsert で missing_since= null に戻る)
+        prev = {"1": _h("B", "北海道", ms="2026-09-30")}
+        self.assertEqual(T.diff_moves(prev, {"1": _h("B", "北海道")}, self.D, {"B"}), ([], [], []))
 
 
 class TestJraIn(unittest.TestCase):

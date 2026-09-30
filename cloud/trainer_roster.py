@@ -10,13 +10,15 @@
 書き先(--apply のときだけ。表の形は sql/trainer_roster.sql・適用は本体が手動モードで):
   nar_trainers(license_no, trainer_name, area, short_guess, short_name, updated_at)
   nar_trainer_roster(lineage_code 主キー, license_no, trainer_name, area, horse_name, sex_age, birth_year, sire, dam, fetched_on)
-  → 取れた人ごとに fetched_on が今日より古い行を消す(その人の一覧から消えた馬)
+  → 行は 2 夜続けて一覧に居なかったときだけ消す(1 夜目は missing_since に日付を入れて残す)
   → rpc nar_trainers_match_short()= nar_runs の略称と突き合わせ(決まらない人は null のまま)
   D3(9/30): 書き換える前に前夜の nar_trainer_roster を読み、差分を nar_roster_moves に追記
     (別の免許番号に載った/新しく載った= from が null/消えた= to が null)。
     前夜の表が空(初回)は差分を出さない(基準づくりだけ)。主キー (lineage_code, seen_on)+重複は無視= 冪等。
-    「消えた」は今夜取れた人の一覧(と、一覧を全部読めた日の居なくなった人)だけで判定する= 行を消す範囲と同じ。
-    ⛔取れなかった人へ移った馬は、その夜は「消えた」・翌夜に「新しく載った」になる(from は残らない)。
+    ① 取れなかった人(失敗・0 頭・頁送りが途中で止まった)は前夜の行をそのまま持ち越し、その人がからむ差分は出さない
+       (その人の頁から来た馬・その人へ行った馬とも)。人数は heartbeat の note「取れず n」。
+    ② 新しく載った馬は、nar_roster_moves の直近 14 日に別の免許番号の記録があれば from をそれで埋める。
+    ③ 消えたは 2 夜続けて載らなかったときだけ(1 夜目は missing_since を入れて行を残す・載り直せば null に戻る)。
   → heartbeat 'trainer_roster'
 
   py -3.12 -X utf8 cloud/trainer_roster.py --licenses 11088,11309 --out roster.csv   # 試し(書かない)
@@ -152,7 +154,8 @@ def parse_mark(h):
 
 
 def fetch_roster(no, wait=WAIT):
-    """1 人ぶん全頁 → (生の氏名, 所属, [馬])"""
+    """1 人ぶん全頁 → (生の氏名, 所属, [馬], 全部読めたか)。
+    次頁が残っているのに新しい馬が無い/頁数の安全弁に達した= 途中で止まった(False)。"""
     url, raw, area, horses, seen = MARK_URL.format(no=no), "", "", [], set()
     for _ in range(MAX_PAGES):
         r, a, hs, nxt = parse_mark(get(url))
@@ -160,11 +163,13 @@ def fetch_roster(no, wait=WAIT):
         new = [x for x in hs if x["lineage_code"] not in seen]
         seen.update(x["lineage_code"] for x in new)
         horses += new
-        if not nxt or not new:
-            break
+        if not nxt:
+            return raw, area, horses, True
+        if not new:
+            return raw, area, horses, False
         url = nxt
         time.sleep(wait)
-    return raw, area, horses
+    return raw, area, horses, False
 
 
 # ---- 書き込み(--apply) ----
@@ -184,39 +189,75 @@ def upsert(table, rows, on_conflict, resolution="merge-duplicates"):
               prefer=f"resolution={resolution},return=minimal")
 
 
-def fetch_prev():
-    """前夜の名簿 {lineage_code: {license_no, area, horse_name}}。⛔offset は一意の order(lineage_code)で。"""
-    out, off = {}, 0
+def _get_all(path, order):
+    """GET を 1000 行ずつ全部。⛔offset は一意の order で。"""
+    out, off = [], 0
     while True:
-        rows = _rest("GET", f"nar_trainer_roster?select=lineage_code,license_no,area,horse_name"
-                            f"&order=lineage_code&limit=1000&offset={off}") or []
-        for r in rows:
-            out[r["lineage_code"]] = r
+        rows = _rest("GET", f"{path}&order={order}&limit=1000&offset={off}") or []
+        out += rows
         if len(rows) < 1000:
             return out
         off += 1000
 
 
-def diff_moves(prev, cur, seen_on, fetched, gone_licenses=()):
-    """前夜 prev と今夜 cur({lineage_code: {license_no, area, horse_name}})の差分 → nar_roster_moves の行。
-    fetched= 今夜取れた免許番号・gone_licenses= 一覧から居なくなった人(一覧を全部読めた日だけ)。
-    prev が空(初回)は [](基準づくりだけ)。"""
+def fetch_prev():
+    """前夜の名簿 {lineage_code: {license_no, area, horse_name, missing_since}}"""
+    rows = _get_all("nar_trainer_roster?select=lineage_code,license_no,area,horse_name,missing_since", "lineage_code")
+    return {r["lineage_code"]: r for r in rows}
+
+
+def fetch_recent(since):
+    """nar_roster_moves の since 以降(主キー順)"""
+    return _get_all(f"nar_roster_moves?select=lineage_code,from_license,to_license,from_area,to_area,seen_on"
+                    f"&seen_on=gte.{since}", "seen_on,lineage_code")
+
+
+def last_known(recent):
+    """直近の記録から馬ごとの最後の居場所 {lineage_code: (license, area)}(消えたの行は from 側)"""
+    out = {}
+    for r in sorted(recent, key=lambda r: (str(r["seen_on"]), r["lineage_code"])):
+        lic = r["to_license"] or r["from_license"]
+        area = r["to_area"] if r["to_license"] else r["from_area"]
+        if lic:
+            out[r["lineage_code"]] = (lic, area)
+    return out
+
+
+def diff_moves(prev, cur, seen_on, fetched, gone_licenses=(), recent=None):
+    """前夜 prev と今夜 cur({lineage_code: {license_no, area, horse_name(, missing_since)}})の差分。
+    fetched= 今夜 全部読めた免許番号・gone_licenses= 一覧から居なくなった人(一覧を全部読めた日だけ)。
+    recent= last_known() の {lineage_code: (license, area)}(直近 14 日)。
+    → (nar_roster_moves の行, 1 夜目の欠け= missing_since を入れる lineage_code, 消えた= 行を消す lineage_code)。
+    prev が空(初回)は全部空(基準づくりだけ)。"""
     if not prev:
-        return []
-    fetched, gone_licenses = set(fetched), set(gone_licenses)
-    out = []
+        return [], [], []
+    known = set(fetched) | set(gone_licenses)
+    recent = recent or {}
+    out, first_miss, gone = [], [], []
     for code, c in cur.items():
+        if c["license_no"] not in known:
+            continue                                  # 取れなかった人の行(本来は来ない)
         p = prev.get(code)
-        if p is None or p["license_no"] != c["license_no"]:
-            out.append({"lineage_code": code, "horse_name": c["horse_name"],
-                        "from_license": p and p["license_no"], "to_license": c["license_no"],
-                        "from_area": p and p["area"], "to_area": c["area"], "seen_on": seen_on})
+        if p is not None and p["license_no"] == c["license_no"]:
+            continue
+        if p is not None and p["license_no"] not in known:
+            continue                                  # ① 取れなかった人から来た馬= 出さない
+        fl, fa = (p["license_no"], p["area"]) if p is not None else (None, None)
+        if p is None and code in recent and recent[code][0] != c["license_no"]:
+            fl, fa = recent[code]                     # ② 直近 14 日に別の免許番号にいた
+        out.append({"lineage_code": code, "horse_name": c["horse_name"], "from_license": fl,
+                    "to_license": c["license_no"], "from_area": fa, "to_area": c["area"], "seen_on": seen_on})
     for code, p in prev.items():
-        if code not in cur and (p["license_no"] in fetched or p["license_no"] in gone_licenses):
-            out.append({"lineage_code": code, "horse_name": p["horse_name"],
-                        "from_license": p["license_no"], "to_license": None,
-                        "from_area": p["area"], "to_area": None, "seen_on": seen_on})
-    return sorted(out, key=lambda r: r["lineage_code"])
+        if code in cur or p["license_no"] not in known:
+            continue                                  # ① 取れなかった人の馬は持ち越し
+        ms = p.get("missing_since")
+        if not ms:
+            first_miss.append(code)                   # ③ 1 夜目は残す(差分なし)
+        elif str(ms) < str(seen_on):
+            gone.append(code)                         # ③ 2 夜続けて居ない= 消えた
+            out.append({"lineage_code": code, "horse_name": p["horse_name"], "from_license": p["license_no"],
+                        "to_license": None, "from_area": p["area"], "to_area": None, "seen_on": seen_on})
+    return sorted(out, key=lambda r: r["lineage_code"]), sorted(first_miss), sorted(gone)
 
 
 def write_csv(path, rows):
@@ -238,7 +279,7 @@ def main(argv=None):
 
     if a.probe:
         try:
-            raw, area, hs = fetch_roster("11088", wait=a.wait)
+            raw, area, hs, _whole = fetch_roster("11088", wait=a.wait)
         except Exception as e:  # noqa: BLE001
             log(f"取れない: {type(e).__name__} {e}")
             return 2
@@ -257,10 +298,14 @@ def main(argv=None):
     rows, trainers, failed = [], [], []
     for i, no in enumerate(targets):
         try:
-            raw, area, hs = fetch_roster(no, wait=a.wait)
+            raw, area, hs, whole = fetch_roster(no, wait=a.wait)
         except Exception as e:  # noqa: BLE001  1 人の失敗で全体を止めない(その人の古い行は残る)
             failed.append(no)
             log(f"  ! {no} {type(e).__name__}")
+            continue
+        if not hs or not whole:                         # 0 頭・途中で止まった= 取れなかった扱い(前夜の行を持ち越す)
+            failed.append(no)
+            log(f"  ! {no} {'0 頭' if not hs else '頁送りが途中で止まった'}")
             continue
         name = official_name(raw)
         trainers.append({"license_no": no, "trainer_name": name, "area": area,
@@ -269,7 +314,7 @@ def main(argv=None):
             rows.append(dict(x, license_no=no, trainer_name=name, area=area, fetched_on=today))
         if i < len(targets) - 1:
             time.sleep(a.wait)
-    log(f"取得 {len(trainers)} 人 / {len(rows)} 頭 / 失敗 {len(failed)} 人")
+    log(f"取得 {len(trainers)} 人 / {len(rows)} 頭 / 取れず {len(failed)} 人")
     if a.out:
         write_csv(a.out, rows)
         log(f"CSV {a.out}")
@@ -283,21 +328,23 @@ def main(argv=None):
         prev = fetch_prev()
         cur = {r["lineage_code"]: r for r in rows}
         done = {t["license_no"] for t in trainers}
-        gone = ({p["license_no"] for p in prev.values()} - set(tr) - set(failed)) if full_list else set()
-        moves = diff_moves(prev, cur, today, done, gone)
+        gone_lic = ({p["license_no"] for p in prev.values()} - set(tr) - set(failed)) if full_list else set()
+        since = str(dt.date.fromisoformat(today) - dt.timedelta(days=14))
+        recent = last_known(fetch_recent(since)) if prev else {}
+        moves, first_miss, gone = diff_moves(prev, cur, today, done, gone_lic, recent)
         upsert("nar_roster_moves", moves, "lineage_code,seen_on", resolution="ignore-duplicates")
-        log(f"差分 {len(moves)} 行(前夜 {len(prev)} 頭{'・初回= 基準づくり' if not prev else ''})")
+        log(f"差分 {len(moves)} 行・1 夜目の欠け {len(first_miss)}・消えた {len(gone)}"
+            f"(前夜 {len(prev)} 頭{'・初回= 基準づくり' if not prev else ''})")
         upsert("nar_trainers", trainers, "license_no")
-        upsert("nar_trainer_roster", rows, "lineage_code")
-        # 取れた人ごとに、今回の一覧から消えた馬(fetched_on が今日より古い行)を消す
-        for t in trainers:
-            _rest("DELETE", f"nar_trainer_roster?license_no=eq.{t['license_no']}&fetched_on=lt.{today}")
-        # 一覧を全部読めた日だけ、一覧に居なくなった人(引退など)の行を消す
-        if full_list:
-            _rest("DELETE", f"nar_trainer_roster?fetched_on=lt.{today}"
-                            f"&license_no=not.in.({','.join(t['license_no'] for t in trainers + [{'license_no': f} for f in failed])})")
+        upsert("nar_trainer_roster", [dict(r, missing_since=None) for r in rows], "lineage_code")
+        # ③ 1 夜目の欠けは印だけ・2 夜続けて居ない馬の行だけ消す(取れなかった人の行は持ち越し)
+        for k in range(0, len(first_miss), 200):
+            _rest("PATCH", f"nar_trainer_roster?lineage_code=in.({','.join(first_miss[k:k + 200])})",
+                  {"missing_since": today})
+        for k in range(0, len(gone), 200):
+            _rest("DELETE", f"nar_trainer_roster?lineage_code=in.({','.join(gone[k:k + 200])})")
         matched = _rest("POST", "rpc/nar_trainers_match_short", {}, prefer="return=representation")
-        note = f"{len(trainers)}人 {len(rows)}頭 失敗{len(failed)} 略称{matched} 差分{len(moves)}"
+        note = f"{len(trainers)}人 {len(rows)}頭 取れず{len(failed)} 略称{matched} 差分{len(moves)}"
         ok = len(failed) <= max(5, len(targets) // 20)   # 5% を超えて落ちた日は失敗と記す
         B.beat(BEAT_JOB, ok, note)
         log(f"書いた: {note}")
