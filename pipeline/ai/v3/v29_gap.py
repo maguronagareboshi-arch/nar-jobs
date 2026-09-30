@@ -242,6 +242,16 @@ def post_at(day, pt):
     return dt.datetime.combine(dt.date.fromisoformat(day), dt.time(int(s[:-2]), int(s[-2:])), JST)
 
 
+def _record_after(day, write):
+    if not write:
+        return
+    d0 = dt.date.fromisoformat(day)
+    try:
+        record([(d0 - dt.timedelta(days=k)).isoformat() for k in (2, 1, 0)])
+    except Exception as e:  # noqa: BLE001  答え合わせの失敗で便を赤くしない
+        log('答え合わせ: 失敗', type(e).__name__)
+
+
 def live(day, base_csv, mdir, write, until):
     model, meta = load_model(mdir)
     B = _nk(pd.read_csv(base_csv, encoding='utf-8-sig'))
@@ -271,6 +281,7 @@ def live(day, base_csv, mdir, write, until):
             todo.append((mins, r, k, at))
         if not todo:
             log('終わり: 書いた', n_w, 'R・候補', n_buy, '頭')
+            _record_after(day, write)
             return 0
         due = [x for x in todo if x[0] <= DECIDE_MIN]
         if due:
@@ -322,8 +333,58 @@ def live(day, base_csv, mdir, write, until):
                     f'・候補 {len(c)} 頭・書き込み {st}')
         if now > end:
             log('時間切れ: 書いた', n_w, 'R・候補', n_buy, '頭')
+            _record_after(day, write)
             return 0
         time.sleep(20)
+
+
+# ================================================================ 4) 夜の答え合わせ(当日の便の終わりに自動・直近 3 日を作り直す)
+REC_KEY = 'v3_gap_record'
+
+
+def record(days):
+    """nar_meta の v3_gap:DAY:場:R の候補 × nar_race_payouts の単勝 → 日ごとの点数・的中・払戻を nar_meta 'v3_gap_record' に貯める。
+    払戻がまだ無いレースは数えない(次の日の便で作り直す)。1 点 100 円。"""
+    try:
+        cur = (_get(f'/rest/v1/nar_meta?key=eq.{REC_KEY}&select=value') or [{}])[0].get('value') or {}
+    except Exception:  # noqa: BLE001
+        cur = {}
+    dd = dict(cur.get('days') or {})
+    for day in days:
+        rows = _get(f"/rest/v1/nar_meta?key=like.{urllib.parse.quote(f'v3_gap:{day}:')}*&select=key,value")
+        if not rows:
+            continue
+        q = urllib.parse.quote(','.join(NANKAN))
+        pay = {(r['track'], int(r['race_no'])): r.get('payouts') or [] for r in _get(
+            f'/rest/v1/nar_race_payouts?race_date=eq.{day}&track=in.({q})&select=track,race_no,payouts')}
+        n = hit = ret = races = pend = 0
+        for r in rows:
+            _, _, tr, rno = r['key'].split(':')
+            buy = (r.get('value') or {}).get('buy') or []
+            if not buy:
+                continue
+            p = pay.get((tr, int(rno)))
+            if not p:
+                pend += 1
+                continue
+            win = {}
+            for x in p:
+                if x.get('t') == 'win':
+                    win[str(x.get('c'))] = win.get(str(x.get('c')), 0) + int(x.get('y') or 0)
+            races += 1
+            for b in buy:
+                n += 1
+                y = win.get(str(b['num']), 0)
+                hit += y > 0
+                ret += y
+        dd[day] = {'races': races, 'bets': n, 'hits': hit, 'return': ret, 'pending': pend}
+    tot = {k: sum(v.get(k, 0) for v in dd.values()) for k in ('races', 'bets', 'hits', 'return')}
+    tot['roi'] = round(100 * tot['return'] / (100 * tot['bets']), 1) if tot['bets'] else None
+    val = {'model': 'v29', 'unit': 100, 'days': dict(sorted(dd.items())), 'total': tot,
+           'built': dt.datetime.now(JST).isoformat(timespec='seconds')}
+    put_meta(REC_KEY, val)
+    log('答え合わせ: 通算', tot['bets'], '点・的中', tot['hits'], '・回収率', tot['roi'], '%')
+    return val
 
 
 # ================================================================ 3) 検算
@@ -354,6 +415,9 @@ def main():
     if a[0] == 'live':
         until = a[a.index('--until') + 1] if '--until' in a else '21:15'
         return live(a[1], a[2], a[3], '--write' in a, until)
+    if a[0] == 'record':  # python v29_gap.py record DAY [DAY ...](手元・鍵が要る)
+        record(a[1:])
+        return 0
     if a[0] == 'replay':
         replay(*a[1:7])
         return 0
