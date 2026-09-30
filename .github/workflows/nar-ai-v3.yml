@@ -145,3 +145,25 @@ jobs:
           path: sealed_csv/
           retention-days: 7
           if-no-files-found: warn
+          
+      # ---------------------------------------------------------------- v29(市場のずれ模型)の前日の土台 → 当日の便 v3-gap-live が読む
+      - name: seal v29 base with V3_ASSET_KEY
+        if: always()
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+          DAY: ${{ steps.d.outputs.day }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          mkdir -p sealed_v29
+          [ -f "out/${DAY}_v29_base.csv" ] || { echo "v29 base が無い"; exit 0; }
+          openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:V3_ASSET_KEY -in "out/${DAY}_v29_base.csv" -out sealed_v29/v29_base.csv.enc
+          ls -l sealed_v29
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v3-gap-base-${{ steps.d.outputs.day }}
+          path: sealed_v29/
+          retention-days: 7
+          if-no-files-found: warn
+          overwrite: true
