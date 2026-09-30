@@ -82,6 +82,22 @@ def _dump_feats(day, out):
     t8.e7.features, t8.cy_feats = f1, c1
 
 
+def _capture(cap):
+    """v29(市場のずれ模型)の前日の土台のために、t9.table の中の e7.features の (h, T) と t8.cy_feats の F を控える(値は変えない)。"""
+    f0, c0 = t8.e7.features, t8.cy_feats
+
+    def f1(h, races, *a, **k):
+        r = f0(h, races, *a, **k)
+        cap['h'], cap['T'] = h, r[0]
+        return r
+
+    def c1(*a, **k):
+        r = c0(*a, **k)
+        cap['F'] = r
+        return r
+    t8.e7.features, t8.cy_feats = f1, c1
+
+
 def main():
     a = sys.argv[1:]
     if a and a[0] == 'digest':  # 手元で同じ関数を使う: python v3_daily.py digest <csv>
@@ -98,8 +114,18 @@ def main():
     log('day', day, 'works', src, 'write', write)
     if __import__('os').environ.get('V3_DUMP_FEATS') == '1':  # 照合用: 材料(T・調教 F)をその日の分だけ csv に出す
         _dump_feats(day, out)
+    cap = {}
+    _capture(cap)
     t9.table(day, 'pre', str(out))
     csv_path = out / f'{day}_第9版_前日版.csv'
+    try:  # v29 の前日の土台(失敗しても予想の表と書き込みは止めない)
+        import v29_gap
+        vb = v29_gap.base(day, cap['h'], cap['T'], cap.get('F'), csv_path)
+        vb.to_csv(out / f'{day}_v29_base.csv', index=False, encoding='utf-8-sig')
+        log('v29 base', len(vb), '頭', 'hist', round(float(vb.bw_norm.notna().mean()), 3))
+    except Exception as e:  # noqa: BLE001
+        log('v29 base 失敗', type(e).__name__, str(e)[:200])
+    del cap
     rows = build_rows(csv_path, day, src)
     log('races', len(rows), '◎', ' '.join(f"{r['track']}{r['race_no']}R:{r['marks'][0]['num']}" for r in rows[:12] if r['marks']))
     hon, h = table_digest(csv_path)
