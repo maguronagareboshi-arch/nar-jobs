@@ -2482,12 +2482,16 @@ def nankan_offsets(video_url):
     return out or None
 
 
+BACKFILL_SINCE = None                 # §305 --since YYYY-MM-DD(main が入れる)
+
+
 def nankan_dates(prefix, backfill):
     """差分= 索引に出ている日 + 今日から NANKAN_RECENT 日前まで。--backfill= 今年の1/1から今日まで。
     ⛔過去の年は足さない(スコープの床=1年単位)。"""
     today = dt.datetime.now(JST).date()
     if backfill:
-        start = dt.date(today.year, 1, 1)
+        # §305 --since(南関だけ)で開始日を前へ出せる。既定= 今年の1/1(変えない)
+        start = dt.date.fromisoformat(BACKFILL_SINCE) if BACKFILL_SINCE else dt.date(today.year, 1, 1)
         return [(start + dt.timedelta(days=i)).isoformat()
                 for i in range((today - start).days + 1)]
     days = {(today - dt.timedelta(days=i)).isoformat() for i in range(NANKAN_RECENT + 1)}
@@ -3182,12 +3186,17 @@ def main():
     ap.add_argument("--backfill", action="store_true", help="全量を取り直す(既存の日と合流する)")
     ap.add_argument("--replace", action="store_true",
                     help="§212 取れた日だけで置き換える(既存の日を消す= 明示したときだけ)")
+    ap.add_argument("--since", help="§305 --backfill の開始日 YYYY-MM-DD(南関4場だけ。省くと今年の1/1)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--out", help="days を <ここ>/{venue}_noken.json に書き出す(投入とは別)")
     ap.add_argument("--env")
     ap.add_argument("--split-file", help="§117e 兵庫のレース割り(提供データ)の JSON。"
                                           "省くと nar_meta の hyogo_noken_split を読む")
     args = ap.parse_args()
+    global BACKFILL_SINCE
+    if args.since:
+        dt.date.fromisoformat(args.since)            # 形が違えばここで落とす
+        BACKFILL_SINCE = args.since
     if args.env:
         load_env(args.env)
     base = os.environ.get("SUPABASE_URL", "").rstrip("/")
