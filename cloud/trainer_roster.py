@@ -12,6 +12,11 @@
   nar_trainer_roster(lineage_code 主キー, license_no, trainer_name, area, horse_name, sex_age, birth_year, sire, dam, fetched_on)
   → 取れた人ごとに fetched_on が今日より古い行を消す(その人の一覧から消えた馬)
   → rpc nar_trainers_match_short()= nar_runs の略称と突き合わせ(決まらない人は null のまま)
+  D3(9/30): 書き換える前に前夜の nar_trainer_roster を読み、差分を nar_roster_moves に追記
+    (別の免許番号に載った/新しく載った= from が null/消えた= to が null)。
+    前夜の表が空(初回)は差分を出さない(基準づくりだけ)。主キー (lineage_code, seen_on)+重複は無視= 冪等。
+    「消えた」は今夜取れた人の一覧(と、一覧を全部読めた日の居なくなった人)だけで判定する= 行を消す範囲と同じ。
+    ⛔取れなかった人へ移った馬は、その夜は「消えた」・翌夜に「新しく載った」になる(from は残らない)。
   → heartbeat 'trainer_roster'
 
   py -3.12 -X utf8 cloud/trainer_roster.py --licenses 11088,11309 --out roster.csv   # 試し(書かない)
@@ -173,10 +178,45 @@ def _rest(method, path, body=None, prefer="return=minimal"):
     return json.loads(raw) if raw else None
 
 
-def upsert(table, rows, on_conflict):
+def upsert(table, rows, on_conflict, resolution="merge-duplicates"):
     for i in range(0, len(rows), 500):
         _rest("POST", f"{table}?on_conflict={on_conflict}", rows[i:i + 500],
-              prefer="resolution=merge-duplicates,return=minimal")
+              prefer=f"resolution={resolution},return=minimal")
+
+
+def fetch_prev():
+    """前夜の名簿 {lineage_code: {license_no, area, horse_name}}。⛔offset は一意の order(lineage_code)で。"""
+    out, off = {}, 0
+    while True:
+        rows = _rest("GET", f"nar_trainer_roster?select=lineage_code,license_no,area,horse_name"
+                            f"&order=lineage_code&limit=1000&offset={off}") or []
+        for r in rows:
+            out[r["lineage_code"]] = r
+        if len(rows) < 1000:
+            return out
+        off += 1000
+
+
+def diff_moves(prev, cur, seen_on, fetched, gone_licenses=()):
+    """前夜 prev と今夜 cur({lineage_code: {license_no, area, horse_name}})の差分 → nar_roster_moves の行。
+    fetched= 今夜取れた免許番号・gone_licenses= 一覧から居なくなった人(一覧を全部読めた日だけ)。
+    prev が空(初回)は [](基準づくりだけ)。"""
+    if not prev:
+        return []
+    fetched, gone_licenses = set(fetched), set(gone_licenses)
+    out = []
+    for code, c in cur.items():
+        p = prev.get(code)
+        if p is None or p["license_no"] != c["license_no"]:
+            out.append({"lineage_code": code, "horse_name": c["horse_name"],
+                        "from_license": p and p["license_no"], "to_license": c["license_no"],
+                        "from_area": p and p["area"], "to_area": c["area"], "seen_on": seen_on})
+    for code, p in prev.items():
+        if code not in cur and (p["license_no"] in fetched or p["license_no"] in gone_licenses):
+            out.append({"lineage_code": code, "horse_name": p["horse_name"],
+                        "from_license": p["license_no"], "to_license": None,
+                        "from_area": p["area"], "to_area": None, "seen_on": seen_on})
+    return sorted(out, key=lambda r: r["lineage_code"])
 
 
 def write_csv(path, rows):
@@ -205,7 +245,7 @@ def main(argv=None):
         log(f"probe {official_name(raw)}({area}) {len(hs)} 頭")
         return 0 if hs else 2
 
-    full_list = None
+    full_list, tr = None, {}
     if a.licenses:
         targets = [x.strip() for x in a.licenses.split(",") if x.strip()]
     else:
@@ -239,6 +279,14 @@ def main(argv=None):
 
     import beat as B
     try:
+        # D3: 書き換える前に前夜の名簿と比べて差分を追記(初回は出さない・同じ日の打ち直しは重複を無視)
+        prev = fetch_prev()
+        cur = {r["lineage_code"]: r for r in rows}
+        done = {t["license_no"] for t in trainers}
+        gone = ({p["license_no"] for p in prev.values()} - set(tr) - set(failed)) if full_list else set()
+        moves = diff_moves(prev, cur, today, done, gone)
+        upsert("nar_roster_moves", moves, "lineage_code,seen_on", resolution="ignore-duplicates")
+        log(f"差分 {len(moves)} 行(前夜 {len(prev)} 頭{'・初回= 基準づくり' if not prev else ''})")
         upsert("nar_trainers", trainers, "license_no")
         upsert("nar_trainer_roster", rows, "lineage_code")
         # 取れた人ごとに、今回の一覧から消えた馬(fetched_on が今日より古い行)を消す
@@ -249,7 +297,7 @@ def main(argv=None):
             _rest("DELETE", f"nar_trainer_roster?fetched_on=lt.{today}"
                             f"&license_no=not.in.({','.join(t['license_no'] for t in trainers + [{'license_no': f} for f in failed])})")
         matched = _rest("POST", "rpc/nar_trainers_match_short", {}, prefer="return=representation")
-        note = f"{len(trainers)}人 {len(rows)}頭 失敗{len(failed)} 略称{matched}"
+        note = f"{len(trainers)}人 {len(rows)}頭 失敗{len(failed)} 略称{matched} 差分{len(moves)}"
         ok = len(failed) <= max(5, len(targets) // 20)   # 5% を超えて落ちた日は失敗と記す
         B.beat(BEAT_JOB, ok, note)
         log(f"書いた: {note}")

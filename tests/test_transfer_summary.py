@@ -48,6 +48,40 @@ class TestRoster(unittest.TestCase):
         self.assertIsNone(T.short_guess("名前だけ"))
 
 
+def _h(lic, area, name="馬"):
+    return {"license_no": lic, "area": area, "horse_name": name}
+
+
+class TestRosterMoves(unittest.TestCase):
+    PREV = {"1": _h("A", "船橋", "イチ"), "2": _h("A", "船橋", "ニ"), "3": _h("B", "北海道", "サン"),
+            "4": _h("C", "高知", "ヨン")}
+
+    def test_first_night_no_diff(self):
+        self.assertEqual(T.diff_moves({}, {"1": _h("A", "船橋")}, "2026-10-01", {"A"}), [])
+
+    def test_moved_new_gone(self):
+        cur = {"1": _h("B", "北海道", "イチ"), "3": _h("B", "北海道", "サン"), "5": _h("B", "北海道", "ゴ"),
+               "4": _h("C", "高知", "ヨン")}
+        m = T.diff_moves(self.PREV, cur, "2026-10-01", {"A", "B", "C"})
+        got = {r["lineage_code"]: (r["from_license"], r["to_license"], r["from_area"], r["to_area"]) for r in m}
+        self.assertEqual(got, {"1": ("A", "B", "船橋", "北海道"),     # 別の免許番号に載った
+                               "2": ("A", None, "船橋", None),        # 消えた
+                               "5": (None, "B", None, "北海道")})     # 新しく載った
+        self.assertTrue(all(r["seen_on"] == "2026-10-01" for r in m))
+
+    def test_gone_only_for_fetched(self):
+        # 取れなかった人(C)の馬は「消えた」にしない。一覧から居なくなった人(gone_licenses)は消えた
+        cur = {"1": _h("A", "船橋"), "2": _h("A", "船橋"), "3": _h("B", "北海道")}
+        self.assertEqual(T.diff_moves(self.PREV, cur, "d", {"A", "B"}), [])
+        m = T.diff_moves(self.PREV, cur, "d", {"A", "B"}, {"C"})
+        self.assertEqual([(r["lineage_code"], r["to_license"]) for r in m], [("4", None)])
+
+    def test_idempotent(self):
+        # 同じ夜の打ち直し= 今夜の名簿が前夜になるので差分は 0
+        cur = {"1": _h("B", "北海道", "イチ"), "3": _h("B", "北海道", "サン")}
+        self.assertEqual(T.diff_moves(cur, dict(cur), "d", {"B"}), [])
+
+
 class TestJraIn(unittest.TestCase):
     def test_career_switch(self):
         self.assertIn(hc.CAREER_ON, hc.jra_in_sql(True))

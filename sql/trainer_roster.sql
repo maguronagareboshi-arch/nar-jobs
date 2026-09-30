@@ -33,6 +33,25 @@ create policy nar_trainers_read on nar_trainers for select using (true);
 drop policy if exists nar_trainer_roster_read on nar_trainer_roster;
 create policy nar_trainer_roster_read on nar_trainer_roster for select using (true);
 
+-- §移籍まとめ D3(9/30): 名簿の差分(cloud/trainer_roster.py が書き換え前に前夜と比べて追記)。
+--   別の免許番号に載った= from/to とも値・新しく載った= from が null・消えた= to が null。
+--   ⛔過去は遡れない(取り始めの日から)。初回の夜は出さない。1 頭 1 日 1 行= 打ち直しは重複を無視(冪等)。
+create table if not exists nar_roster_moves (
+  lineage_code text not null,               -- 公式の馬の番号(k_lineageLoginCode)
+  horse_name   text not null,
+  from_license text,                        -- 前夜の免許番号(新しく載ったときは null)
+  to_license   text,                        -- 今夜の免許番号(消えたときは null)
+  from_area    text,
+  to_area      text,
+  seen_on      date not null,               -- 差分を見つけた日(JST)
+  primary key (lineage_code, seen_on)
+);
+create index if not exists nar_roster_moves_seen on nar_roster_moves (seen_on);
+create index if not exists nar_roster_moves_to_area on nar_roster_moves (to_area, seen_on);
+alter table nar_roster_moves enable row level security;
+drop policy if exists nar_roster_moves_read on nar_roster_moves;
+create policy nar_roster_moves_read on nar_roster_moves for select using (true);
+
 -- 略称の確定(便が毎日 rpc で呼ぶ)。当て推量しない:
 --   ① 名前から作った候補 short_guess が、同じ地区の他の人と重ならない
 --   ② その人の在厩馬の「最後の地方の走」の調教師(nar_runs.trainer・同じ地区)で最も多いものが候補と一致
