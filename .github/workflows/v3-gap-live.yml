@@ -1,0 +1,90 @@
+# 南関 AI v3 の買う層 v29(市場のずれ模型)の当日の便。各レースの締め切り 8 分前(発走 10 分前)に単勝の候補を決めて nar_meta に書く。
+# 起動は pg_cron の dispatch(10:15 JST part=am / 15:50 JST part=pm・write=yes)。学習はしない。
+# 土台 = 前日の nar-ai-v3 の成果物 v3-gap-base-DAY(V3_ASSET_KEY で暗号化)・模型 = リリース v3-gap-model-*(V3_GAP_KEY で暗号化)。
+# ⛔本番に書くのは nar_meta(key = v3_gap:DAY:場:R)の REST upsert だけ。⛔公開ログに候補は出さない(件数だけ)。
+name: v3-gap-live
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: '日付(空= JST 今日)'
+        required: false
+        default: ''
+      part:
+        description: 'am(〜16:05)/ pm(〜21:15)'
+        required: false
+        default: 'am'
+      write:
+        description: 'nar_meta に書く(yes/no)'
+        required: false
+        default: 'no'
+      model_tag:
+        description: '模型のリリース tag'
+        required: false
+        default: 'v3-gap-model-20260930'
+
+concurrency:
+  group: v3-gap-live-${{ github.event.inputs.part }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  live:
+    runs-on: ubuntu-latest
+    timeout-minutes: 358
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install
+        run: pip install -q "pandas==2.2.3" "numpy==1.26.4" "lightgbm==4.7.0" requests
+
+      - name: day
+        id: d
+        env:
+          IN_DATE: ${{ github.event.inputs.date }}
+          PART: ${{ github.event.inputs.part }}
+        run: |
+          if [ -n "$IN_DATE" ]; then DAY="$IN_DATE"; else DAY=$(TZ=Asia/Tokyo date +%F); fi
+          echo "$DAY" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || { echo "date は YYYY-MM-DD で"; exit 1; }
+          if [ "$PART" = "pm" ]; then UNTIL=21:15; else UNTIL=16:05; fi
+          echo "day=$DAY" >> "$GITHUB_OUTPUT"; echo "until=$UNTIL" >> "$GITHUB_OUTPUT"; echo "day=$DAY until=$UNTIL"
+
+      - name: base and model
+        id: b
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+          V3_GAP_KEY: ${{ secrets.V3_GAP_KEY }}
+          DAY: ${{ steps.d.outputs.day }}
+          TAG: ${{ github.event.inputs.model_tag }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          mkdir -p in gapm
+          AID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=v3-gap-base-$DAY&per_page=10" --jq '[.artifacts[] | select(.expired == false)][0].id // empty')
+          if [ -z "$AID" ]; then echo "土台が無い(開催なし・前日の便が失敗)= 何もしない"; echo "ok=no" >> "$GITHUB_OUTPUT"; exit 0; fi
+          gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$AID/zip" > in/base.zip
+          unzip -q -o in/base.zip -d in
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v29_base.csv.enc -out in/v29_base.csv
+          V3_GAP_KEY=$(printf %s "$V3_GAP_KEY" | tr -d '\r\n'); export V3_GAP_KEY
+          gh release download "${TAG:-v3-gap-model-20260930}" -p 'v3_gap_model.tar.gz.enc' -D in
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_GAP_KEY -in in/v3_gap_model.tar.gz.enc | tar -C gapm -xzf -
+          ls gapm; wc -l in/v29_base.csv
+          echo "ok=yes" >> "$GITHUB_OUTPUT"
+
+      - name: live
+        if: steps.b.outputs.ok == 'yes'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          WRITE: ${{ github.event.inputs.write }}
+        run: |
+          if [ "$WRITE" = "yes" ]; then W=--write; else W=; fi
+          python -X utf8 pipeline/ai/v3/v29_gap.py live "${{ steps.d.outputs.day }}" in/v29_base.csv gapm $W --until "${{ steps.d.outputs.until }}"
