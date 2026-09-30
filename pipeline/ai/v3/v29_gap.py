@@ -172,6 +172,47 @@ def decide(B, odds, wt, going, model, meta):
     return score(b, model, meta) if len(b) else b
 
 
+MARKS = ['◎', '○', '▲', '△', '△']
+COMBO_LINE = 1.4   # ワイド・馬連は「記録だけ」(買わない・ユーザー 2026-09-30)。研究 v28 の線。
+
+
+def combo_probs(b):
+    """模型の勝つ率 pg1 → ハーヴィルの式で ワイド(2 頭とも 3 着内)と馬連の率。{'wide': {(a,b): q}, 'umaren': {...}}"""
+    import itertools
+    p = {int(x.umaban): float(x.pg1) for x in b.itertuples()}
+    us = sorted(p)
+    Q = {(a, c): p[a] * p[c] / (1 - p[a]) + p[c] * p[a] / (1 - p[c]) for a, c in itertools.combinations(us, 2)}
+    W = {}
+    for x, y, z in itertools.permutations(us, 3):
+        pr = p[x] * p[y] / (1 - p[x]) * p[z] / (1 - p[x] - p[y])
+        for a, c in ((x, y), (x, z), (y, z)):
+            k = (min(a, c), max(a, c))
+            W[k] = W.get(k, 0.0) + pr
+    return {'wide': W, 'umaren': Q}
+
+
+def combo_pick(b, combos_by_kind):
+    """combos_by_kind = {'wide': [[a,b,下限,…],…], 'umaren': [[a,b,オッズ,…],…]} → 期待値 ≥ 1.4 かつ 2 頭とも p3′ ≥ 0.05 の組。"""
+    ok = {int(x.umaban) for x in b.itertuples() if x.p3p >= 0.05}
+    P = combo_probs(b)
+    out = {}
+    for k, rows in combos_by_kind.items():
+        got = []
+        for c in rows or []:
+            try:
+                a, d, o = int(c[0]), int(c[1]), float(c[2])
+            except (TypeError, ValueError, IndexError):
+                continue
+            key = (min(a, d), max(a, d))
+            if o <= 0 or key not in P[k] or not (key[0] in ok and key[1] in ok):
+                continue
+            ev = P[k][key] * o
+            if ev >= COMBO_LINE:
+                got.append({'pair': f'{key[0]}-{key[1]}', 'odds': o, 'ev': round(ev, 3), 'q': round(P[k][key], 4)})
+        out[k] = sorted(got, key=lambda g: -g['ev'])
+    return out
+
+
 # ================================================================ 本番の読み書き(REST・読むのは公開の表・書くのは nar_v3_gap だけ)
 def _req(path, method='GET', body=None):
     base, key = os.environ['SUPABASE_URL'].rstrip('/'), os.environ['SUPABASE_SERVICE_KEY']
@@ -202,6 +243,16 @@ def latest_odds(track, day, rno):
 
 
 GAP = '/rest/v1/nar_v3_gap'
+
+
+def latest_combos(track, day, rno):
+    t = urllib.parse.quote(track)
+    r = _get(f'/rest/v1/nar_odds_full_ticks?track=eq.{t}&race_date=eq.{day}&race_no=eq.{rno}&kind=in.(wide,umaren)'
+             '&f=eq.false&select=kind,combos&order=id.desc&limit=6')
+    out = {}
+    for x in r:
+        out.setdefault(x['kind'], x.get('combos') or [])
+    return out
 
 
 def exists(key):
@@ -317,14 +368,23 @@ def live(day, base_csv, mdir, write, until):
                     done.add(k)
                     continue
                 c = b[b.buy]
+                rk = {int(u): i for i, u in enumerate(b.sort_values(['p3p', 'p1', 'umaban'], ascending=[False, False, True]).umaban)}
+                try:
+                    combo = combo_pick(b, latest_combos(tr, day, rno))
+                except Exception as e:  # noqa: BLE001  組は記録だけ= 取れなくても単勝は書く
+                    log(f'{tr}{rno}R: 組のオッズ 失敗 {type(e).__name__}')
+                    combo = {}
                 val = {'model': 'v29', 'line': meta['line'], 'p3_min': meta['p3_min'], 'post': at.strftime('%H:%M'),
                        'decided_at': now.strftime('%H:%M:%S'), 'odds_asof': asof, 'n': int(len(b)),
                        'weights': int(b.bw.notna().sum()),
                        'buy': [{'num': int(x.umaban), 'name': x.horse_name, 'odds': float(x.win),
                                 'ev': round(float(x.ev), 3), 'pg1': round(float(x.pg1), 4), 'q': round(float(x.q), 4),
                                 'p3': round(float(x.p3p), 4)} for x in c.itertuples()],
-                       'runners': [{'num': int(x.umaban), 'odds': float(x.win), 'pg1': round(float(x.pg1), 4),
-                                    'ev': round(float(x.ev), 3)} for x in b.itertuples()]}
+                       'runners': [{'num': int(x.umaban), 'name': x.horse_name, 'rank': rk[int(x.umaban)] + 1,
+                                    'mark': MARKS[rk[int(x.umaban)]] if rk[int(x.umaban)] < 5 else '',
+                                    'p3': round(float(x.p3p), 4), 'odds': float(x.win), 'pg1': round(float(x.pg1), 4),
+                                    'ev': round(float(x.ev), 3), 'buy': bool(x.buy)} for x in b.itertuples()],
+                       'combo_line': COMBO_LINE, 'combo': combo}
                 try:
                     st = put_gap(k, val, tr, day, rno) if write else 'dry'
                 except Exception as e:  # noqa: BLE001
@@ -362,28 +422,44 @@ def record(days):
         pay = {(r['track'], int(r['race_no'])): r.get('payouts') or [] for r in _get(
             f'/rest/v1/nar_race_payouts?race_date=eq.{day}&track=in.({q})&select=track,race_no,payouts')}
         n = hit = ret = races = pend = 0
+        cb = {k: {'bets': 0, 'hits': 0, 'return': 0} for k in ('wide', 'umaren')}
         for r in rows:
             _, tr, rno = r['key'].split(':')
             buy = (r.get('value') or {}).get('buy') or []
-            if not buy:
+            combo = (r.get('value') or {}).get('combo') or {}
+            if not buy and not any(combo.values()):
                 continue
             p = pay.get((tr, int(rno)))
             if not p:
                 pend += 1
                 continue
-            win = {}
+            win, cp = {}, {'wide': {}, 'umaren': {}}
             for x in p:
-                if x.get('t') == 'win':
-                    win[str(x.get('c'))] = win.get(str(x.get('c')), 0) + int(x.get('y') or 0)
+                t, cc, yy = x.get('t'), str(x.get('c')), int(x.get('y') or 0)
+                if t == 'win':
+                    win[cc] = win.get(cc, 0) + yy
+                elif t in ('wide', 'quinella'):
+                    kk = 'wide' if t == 'wide' else 'umaren'
+                    cp[kk][cc] = cp[kk].get(cc, 0) + yy
+            for kk, lst in combo.items():
+                for g in lst or []:
+                    y = cp.get(kk, {}).get(g['pair'], 0)
+                    cb[kk]['bets'] += 1
+                    cb[kk]['hits'] += y > 0
+                    cb[kk]['return'] += y
             races += 1
             for b in buy:
                 n += 1
                 y = win.get(str(b['num']), 0)
                 hit += y > 0
                 ret += y
-        dd[day] = {'races': races, 'bets': n, 'hits': hit, 'return': ret, 'pending': pend}
+        dd[day] = {'races': races, 'bets': n, 'hits': hit, 'return': ret, 'pending': pend, **cb}
     tot = {k: sum(v.get(k, 0) for v in dd.values()) for k in ('races', 'bets', 'hits', 'return')}
     tot['roi'] = round(100 * tot['return'] / (100 * tot['bets']), 1) if tot['bets'] else None
+    for kk in ('wide', 'umaren'):
+        t = {k: sum((v.get(kk) or {}).get(k, 0) for v in dd.values()) for k in ('bets', 'hits', 'return')}
+        t['roi'] = round(t['return'] / t['bets'], 1) if t['bets'] else None
+        tot[kk] = t
     val = {'model': 'v29', 'unit': 100, 'days': dict(sorted(dd.items())), 'total': tot,
            'built': dt.datetime.now(JST).isoformat(timespec='seconds')}
     put_gap(REC_KEY, val)
