@@ -9,7 +9,8 @@
   2) 当日(v3-gap-live の便): python -X utf8 pipeline/ai/v3/v29_gap.py live DAY BASE_CSV MODEL_DIR [--write] [--until HH:MM]
      各レースの締め切り(発走 2 分前)の 8 分前 = 発走 10 分前を過ぎたら 1 回だけ、
      その時点の単勝オッズ(nar_odds_ticks の最新)・公式の当日の体重と馬場で材料を作り、候補を決める。
-     --write のときだけ nar_meta に key = 'v3_gap:DAY:場:R' で upsert(レースごとに別の key = 2 本の便が重なっても壊れない)。
+     --write のときだけ nar_v3_gap(anon から読めない・管理者画面の RPC admin_gap だけが読む)に key = 'DAY:場:R' で upsert
+     (レースごとに別の key = 2 本の便が重なっても壊れない)。⛔nar_meta は anon から読めるので使わない。
      ⛔公開 repo のログに候補(馬番・オッズ)は出さない。出すのは件数だけ。
   3) 検算(手元): python -X utf8 pipeline/ai/v3/v29_gap.py replay DAY BASE_CSV MODEL_DIR ODDS_CSV WEIGHTS_CSV
      = 与えたオッズ・体重で同じ計算をして表を出す(研究側の予想と照合する用)。
@@ -171,7 +172,7 @@ def decide(B, odds, wt, going, model, meta):
     return score(b, model, meta) if len(b) else b
 
 
-# ================================================================ 本番の読み書き(REST・読むのは公開の表・書くのは nar_meta だけ)
+# ================================================================ 本番の読み書き(REST・読むのは公開の表・書くのは nar_v3_gap だけ)
 def _req(path, method='GET', body=None):
     base, key = os.environ['SUPABASE_URL'].rstrip('/'), os.environ['SUPABASE_SERVICE_KEY']
     r = urllib.request.Request(base + path, method=method, data=body, headers={
@@ -200,19 +201,22 @@ def latest_odds(track, day, rno):
     return {int(k): float(v) for k, v in w.items() if v not in (None, '') and float(v) > 0}, r[0].get('asof') or r[0].get('t')
 
 
+GAP = '/rest/v1/nar_v3_gap'
+
+
 def exists(key):
-    return bool(_get(f"/rest/v1/nar_meta?key=eq.{urllib.parse.quote(key)}&select=key"))
+    return bool(_get(f"{GAP}?key=eq.{urllib.parse.quote(key)}&select=key"))
 
 
 def done_keys(day):
-    r = _get(f"/rest/v1/nar_meta?key=like.{urllib.parse.quote(f'v3_gap:{day}:')}*&select=key")
+    r = _get(f"{GAP}?race_date=eq.{day}&select=key")
     return {x['key'] for x in r}
 
 
-def put_meta(key, value):
-    body = json.dumps([{'key': key, 'value': value, 'updated_at': dt.datetime.now(dt.timezone.utc).isoformat()}],
-                      ensure_ascii=False).encode('utf-8')
-    st, _ = _req('/rest/v1/nar_meta?on_conflict=key', 'POST', body)
+def put_gap(key, value, track=None, day=None, rno=None):
+    body = json.dumps([{'key': key, 'track': track, 'race_date': day, 'race_no': rno, 'value': value,
+                        'updated_at': dt.datetime.now(dt.timezone.utc).isoformat()}], ensure_ascii=False).encode('utf-8')
+    st, _ = _req(f'{GAP}?on_conflict=key', 'POST', body)
     return st
 
 
@@ -271,7 +275,7 @@ def live(day, base_csv, mdir, write, until):
         todo = []
         for r in races:
             at = post_at(day, r.get('post_time'))
-            k = f"v3_gap:{day}:{r['track']}:{int(r['race_no'])}"
+            k = f"{day}:{r['track']}:{int(r['race_no'])}"
             if at is None or k in done or at > end + dt.timedelta(minutes=DECIDE_MIN):
                 continue
             mins = (at - now).total_seconds() / 60
@@ -322,7 +326,7 @@ def live(day, base_csv, mdir, write, until):
                        'runners': [{'num': int(x.umaban), 'odds': float(x.win), 'pg1': round(float(x.pg1), 4),
                                     'ev': round(float(x.ev), 3)} for x in b.itertuples()]}
                 try:
-                    st = put_meta(k, val) if write else 'dry'
+                    st = put_gap(k, val, tr, day, rno) if write else 'dry'
                 except Exception as e:  # noqa: BLE001
                     log(f'{tr}{rno}R: 書けない {type(e).__name__}(次の回)')
                     continue
@@ -339,19 +343,19 @@ def live(day, base_csv, mdir, write, until):
 
 
 # ================================================================ 4) 夜の答え合わせ(当日の便の終わりに自動・直近 3 日を作り直す)
-REC_KEY = 'v3_gap_record'
+REC_KEY = 'record'
 
 
 def record(days):
-    """nar_meta の v3_gap:DAY:場:R の候補 × nar_race_payouts の単勝 → 日ごとの点数・的中・払戻を nar_meta 'v3_gap_record' に貯める。
+    """nar_v3_gap の DAY:場:R の候補 × nar_race_payouts の単勝 → 日ごとの点数・的中・払戻を nar_v3_gap 'record' に貯める。
     払戻がまだ無いレースは数えない(次の日の便で作り直す)。1 点 100 円。"""
     try:
-        cur = (_get(f'/rest/v1/nar_meta?key=eq.{REC_KEY}&select=value') or [{}])[0].get('value') or {}
+        cur = (_get(f'{GAP}?key=eq.{REC_KEY}&select=value') or [{}])[0].get('value') or {}
     except Exception:  # noqa: BLE001
         cur = {}
     dd = dict(cur.get('days') or {})
     for day in days:
-        rows = _get(f"/rest/v1/nar_meta?key=like.{urllib.parse.quote(f'v3_gap:{day}:')}*&select=key,value")
+        rows = _get(f"{GAP}?race_date=eq.{day}&select=key,value")
         if not rows:
             continue
         q = urllib.parse.quote(','.join(NANKAN))
@@ -359,7 +363,7 @@ def record(days):
             f'/rest/v1/nar_race_payouts?race_date=eq.{day}&track=in.({q})&select=track,race_no,payouts')}
         n = hit = ret = races = pend = 0
         for r in rows:
-            _, _, tr, rno = r['key'].split(':')
+            _, tr, rno = r['key'].split(':')
             buy = (r.get('value') or {}).get('buy') or []
             if not buy:
                 continue
@@ -382,7 +386,7 @@ def record(days):
     tot['roi'] = round(100 * tot['return'] / (100 * tot['bets']), 1) if tot['bets'] else None
     val = {'model': 'v29', 'unit': 100, 'days': dict(sorted(dd.items())), 'total': tot,
            'built': dt.datetime.now(JST).isoformat(timespec='seconds')}
-    put_meta(REC_KEY, val)
+    put_gap(REC_KEY, val)
     log('答え合わせ: 通算', tot['bets'], '点・的中', tot['hits'], '・回収率', tot['roi'], '%')
     return val
 
