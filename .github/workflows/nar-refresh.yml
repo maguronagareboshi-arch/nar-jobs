@@ -100,9 +100,10 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        # 翌日の出馬表(s-next-day-card): 17:00 以降の便(EVENING=1)だけ --next-day で翌日の日次ZIPも取る。公式に無ければ投入なしで 0
+        # 翌日の出馬表(s-next-day-card): MODE=daily の毎便で --next-day= 翌日を含む月の月次ZIPから翌日の行だけ取る
+        #   (日次ZIPは今日分しか返さない)。monthly/both は元から月次を取るので付けない。翌日の行が無ければ投入なしで 0
         run: |
-          if [ "$MODE" != "monthly" ] && [ "$EVENING" = 1 ]; then NX=--next-day; else NX=; fi
+          if [ "$MODE" = "daily" ]; then NX=--next-day; else NX=; fi
           python cloud/refresh.py --mode "$MODE" $NX
       # §291 チェック馬のお知らせ(web push): 取り込み(上の refresh)の直後に A= 出走が決まった / C= 結果が出た を送る。
       #   nar_push_sent に先に入れた分だけ送る(二重送信なし)。⛔secret NAR_VAPID_PRIVATE が無ければ送らず緑で抜ける。

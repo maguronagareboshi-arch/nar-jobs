@@ -6,7 +6,7 @@
   python cloud/refresh.py --mode daily     # 今日の日次ZIP(当日の出馬表+確定済みの結果・払戻)。20分おき想定
   python cloud/refresh.py --mode monthly   # 当月(+月初3日は前月)の月次ZIP(先の日程の出馬表+過去日の確定結果)。1日1回
   python cloud/refresh.py --mode both
-  python cloud/refresh.py --mode daily --next-day   # 17:00 以降の便(EVENING=1): 翌日の日次ZIP(出馬表)も取る。公式に無ければ静かに諦める
+  python cloud/refresh.py --mode daily --next-day   # daily の毎便: 翌日を含む月の月次ZIPから翌日の出馬表だけ取る(日次ZIPは今日分しか返さない)
 環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY(GitHub Secrets)。ローカル試験は --env pipeline/.env.nar
 終了コード: 0 成功(開催なしで投入なしも 0) / 1 投入失敗 / 2 取得失敗(次回の実行に任せる)
 """
@@ -52,7 +52,7 @@ def main():
     ap.add_argument("--only", choices=["races", "runs", "payouts", "horses", "profiles"],
                     help="1 表だけ投入(監査 #21: 過去の血統の取り直しは --months … --only profiles)")
     ap.add_argument("--next-day", action="store_true",
-                    help="翌日の日次ZIP(出馬表)も取る。nar-refresh.yml が EVENING=1(JST 17:00 以降)の便だけで付ける")
+                    help="翌日を含む月の月次ZIPから翌日の行だけ取る。nar-refresh.yml が MODE=daily の便で付ける")
     args = ap.parse_args()
     if args.env:
         load_env(args.env)
@@ -76,41 +76,44 @@ def main():
             nxt = (today.replace(day=28) + dt.timedelta(days=4)).replace(day=1)
             targets.append(("monthly-next", {"year": nxt.year, "month": nxt.month}))
     tomorrow = today + dt.timedelta(days=1)
-    if args.next_day and not args.months:                    # 前日夜から翌日の出馬表を見せる(公式に無ければ静かに諦める)
-        targets.append(("daily-next", {"race_date": tomorrow.isoformat()}))
+    if args.next_day and not args.months:                    # 前日から翌日の出馬表を見せる(日次ZIPは今日分だけ= 月次ZIPから取る・月末は翌月)
+        targets.append(("nextday", {"year": tomorrow.year, "month": tomorrow.month}))
 
     docs = []; failed = 0
     for scope, kw in targets:
-        optional = scope in ("monthly-next", "daily-next")
-        nextday = scope == "daily-next"
-        scope = {"monthly-next": "monthly", "daily-next": "daily"}.get(scope, scope)
-        want = tomorrow if nextday else today                # daily の中身の判定に使う日
+        optional = scope == "monthly-next"
+        nextday = scope == "nextday"
+        scope = "monthly" if (optional or nextday) else scope
+        t0 = time.time()
         try:
             doc, h = fetch_doc(scope, **kw)
         except ValueError as e:                              # ZIP でない応答(開催なしの日 or エラーページ)
             if nextday:
-                log(f"翌日 {kw['race_date']}: まだ公式に無い({e}) → 投入なし"); continue
+                log(f"翌日 {tomorrow} (月次 {kw}): まだ公式に無い({e}) → 投入なし"); continue
             if scope == "daily":
                 log(f"daily {kw['race_date']}: 公式が ZIP を返さない({e}) → 開催なしとみなして投入なし"); continue
             if optional:
                 log(f"翌月 {kw}: まだ公式に無い({e})"); continue
             failed += 1; log(f"取得失敗 {scope} {kw}: {e}"); continue
         except Exception as e:                               # ネットワーク断など。次回の実行で取り直す
-            if nextday:                                      # 翌日分は失敗扱いにしない(次の夕方の便が取り直す)
-                log(f"翌日 {kw['race_date']}: 取れない({type(e).__name__}: {str(e)[:120]}) → 投入なし"); continue
+            if nextday:                                      # 翌日分は失敗扱いにしない(次の便が取り直す)
+                log(f"翌日 {tomorrow} (月次 {kw}): 取れない({type(e).__name__}: {str(e)[:120]}) → 投入なし"); continue
             if scope == "daily" and not_found(e):            # §186 daily の 404= ZIP でない応答と同じ(夜の手押しで rc=2 が 2 回)
                 log(f"daily {kw['race_date']}: 公式が 404 を返す → 開催なしとみなして投入なし"); continue
             failed += 1; log(f"取得失敗 {scope} {kw}: {type(e).__name__}: {str(e)[:200]}"); continue
         races = doc.get("races") or []
         dates = sorted({r.get("race_date") for r in races if r.get("race_date")})
-        if scope == "daily" and want.isoformat() not in dates:
-            log(f"daily {kw['race_date']}: {'翌日' if nextday else '当日'}のレースが無い(中身 {dates[:1]}..{dates[-1:]}) → 投入なし"); continue
-        if nextday:                                          # 翌日の文書は翌日の行だけ使う(当日の結果行に触らない)
-            w = want.isoformat()
+        if scope == "daily" and today.isoformat() not in dates:
+            log(f"daily {kw['race_date']}: 当日のレースが無い(中身 {dates[:1]}..{dates[-1:]}) → 投入なし"); continue
+        if nextday:                                          # 月次の文書は翌日の行だけ使う(当日・過去の行に一切触らない)
+            w = tomorrow.isoformat()
+            if w not in dates:
+                log(f"翌日 {w} (月次 {kw}): 翌日のレースが無い({time.time() - t0:.0f}s) → 投入なし"); continue
             for k in ("races", "horses", "payouts"):
                 doc[k] = [x for x in (doc.get(k) or []) if x.get("race_date") == w]
             races = doc["races"]; dates = [w]
-            scope = "daily-next"
+            scope = "nextday"
+            log(f"翌日 {w}: 月次ZIPの取得 {time.time() - t0:.1f}s")
         fin = sum(1 for x in (doc.get("horses") or []) if str(x.get("finish") or "").strip())
         log(f"{scope} {kw}: 取得 {h} races={len(races)} 結果あり走={fin} 払戻={len(doc.get('payouts') or [])} "
             f"期間={dates[0] if dates else '-'}..{dates[-1] if dates else '-'}")
