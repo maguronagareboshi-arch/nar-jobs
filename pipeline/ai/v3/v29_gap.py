@@ -44,6 +44,10 @@ HIST = ['bw_norm', 'BEST', 'PREVW', 'PREVF', 'PREVD']
 MODEL_FILE, META_FILE = 'v29_gap_y1.txt', 'v29_gap.json'
 DECIDE_MIN = 10   # 発走 10 分前 = 締め切り(発走 2 分前)の 8 分前を過ぎたら決める
 LATE_MIN = 3      # 発走 3 分前を過ぎても決まっていないレースは見送る(古い材料で後から書かない)
+REC_FROM_MIN = 15  # 答え合わせは最後の発走の 15 分後から(払戻は発走の 15〜18 分後に入る)
+REC_TO_MIN = 45    # 払戻待ちが残っても最後の発走の 45 分後で打ち切る(残りは翌日の便で作り直す)
+REC_POLL_S = 120
+JOB_MAX_S = 340 * 60  # 便の上限(timeout-minutes 358)より手前で必ず終える
 
 
 def log(*a):
@@ -297,6 +301,36 @@ def post_at(day, pt):
     return dt.datetime.combine(dt.date.fromisoformat(day), dt.time(int(s[:-2]), int(s[-2:])), JST)
 
 
+def _record_wait(day, write, last_at, t_start):
+    """最後の発走の REC_FROM_MIN 分後まで待ち、その日の払戻待ちが 0 になるまで REC_POLL_S ごとに答え合わせを作り直す
+    (最後の発走の REC_TO_MIN 分後か便の上限の手前で打ち切り)。9/30 に最後の R の払戻前に作って点数が ★ と合わなかった直し。"""
+    if not write or last_at is None:
+        _record_after(day, write)
+        return
+    t_from = last_at + dt.timedelta(minutes=REC_FROM_MIN)
+    t_to = last_at + dt.timedelta(minutes=REC_TO_MIN)
+    while True:
+        now = dt.datetime.now(JST)
+        if time.monotonic() - t_start > JOB_MAX_S or now >= t_to:
+            log('答え合わせ: 打ち切り(払戻待ちは翌日の便で作り直す)')
+            _record_after(day, write)
+            return
+        if now < t_from:
+            time.sleep(min(REC_POLL_S, (t_from - now).total_seconds() + 1))
+            continue
+        try:
+            val = record([(dt.date.fromisoformat(day) - dt.timedelta(days=k)).isoformat() for k in (2, 1, 0)])
+            pend = ((val.get('days') or {}).get(day) or {}).get('pending', 0)
+        except Exception as e:  # noqa: BLE001  答え合わせの失敗で便を赤くしない
+            log('答え合わせ: 失敗', type(e).__name__)
+            pend = None
+        if pend == 0:
+            log('答え合わせ: 払戻待ち 0 で完了')
+            return
+        log('答え合わせ: 払戻待ち', pend, 'R・待つ')
+        time.sleep(REC_POLL_S)
+
+
 def _record_after(day, write):
     if not write:
         return
@@ -315,6 +349,7 @@ def live(day, base_csv, mdir, write, until):
     done = done_keys(day) if write else set()
     wt, go, wt_at = {}, {}, None
     n_w = n_buy = 0
+    t_start, last_at = time.monotonic(), None
     while True:
         now = dt.datetime.now(JST)
         try:
@@ -326,6 +361,8 @@ def live(day, base_csv, mdir, write, until):
         todo = []
         for r in races:
             at = post_at(day, r.get('post_time'))
+            if at is not None and at <= end + dt.timedelta(minutes=DECIDE_MIN) and (last_at is None or at > last_at):
+                last_at = at
             k = f"{day}:{r['track']}:{int(r['race_no'])}"
             if at is None or k in done or at > end + dt.timedelta(minutes=DECIDE_MIN):
                 continue
@@ -335,8 +372,8 @@ def live(day, base_csv, mdir, write, until):
                 continue
             todo.append((mins, r, k, at))
         if not todo:
-            log('終わり: 書いた', n_w, 'R・候補', n_buy, '頭')
-            _record_after(day, write)
+            log('終わり: 書いた', n_w, 'R・候補', n_buy, '頭・最後の発走', last_at and f'{last_at:%H:%M}')
+            _record_wait(day, write, last_at, t_start)
             return 0
         due = [x for x in todo if x[0] <= DECIDE_MIN]
         if due:
