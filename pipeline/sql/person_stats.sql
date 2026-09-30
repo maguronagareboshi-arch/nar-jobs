@@ -98,9 +98,10 @@ insert into public.nar_person_stats (kind, name, track, period, stats, updated_a
 select g.kind, g.name, 'all', p.period,
   pg_temp.basic(g.kind, g.name, 'all', p.y_from, p.y_to)
   || jsonb_build_object(
+    -- 2026-09-30 fix-person-w2w3: 場別の行が無い場(10 走未満)も画面が 2着・3着を出せるよう w2/w3 を足す(種牡馬・母父の (c) は列が増えるので足さない)
     'by_track', (
-      select coalesce(jsonb_agg(jsonb_build_object('track', track, 'n', n, 'w1', w1, 'win', round(100.0 * w1 / n, 1), 'top3', round(100.0 * t3 / n, 1)) order by n desc, track), '[]'::jsonb)
-      from (select track, count(*) n, count(*) filter (where finish = 1) w1, count(*) filter (where finish <= 3) t3
+      select coalesce(jsonb_agg(jsonb_build_object('track', track, 'n', n, 'w1', w1, 'w2', w2, 'w3', w3, 'win', round(100.0 * w1 / n, 1), 'top3', round(100.0 * t3 / n, 1)) order by n desc, track), '[]'::jsonb)
+      from (select track, count(*) n, count(*) filter (where finish = 1) w1, count(*) filter (where finish = 2) w2, count(*) filter (where finish = 3) w3, count(*) filter (where finish <= 3) t3
             from tmp_pp x where x.kind = g.kind and x.name = g.name and x.yr between p.y_from and p.y_to group by track) t),
     'by_distance', (
       select coalesce(jsonb_agg(jsonb_build_object('distance', distance_m, 'n', n, 'w1', w1, 'win', round(100.0 * w1 / n, 1), 'top3', round(100.0 * t3 / n, 1)) order by distance_m), '[]'::jsonb)
