@@ -43,13 +43,16 @@ INPUTS = {
                          "alter table public.nar_race_payouts add primary key (track, race_date, race_no)"),
     "nar_horses": ("horse_name, sire, broodmare_sire, owner, dam, breeder, updated_at",
                    "alter table public.nar_horses add primary key (horse_name)"),
+    # 10/2 KDSCOPE の血統((馬名, 生年月日) で引く・shinba_stats.sql の tmp_ped)。生まれの表なので asof で絞らない
+    "nar_kd_pedigree": ("ketto, horse_name, birth_date, sire, dam, broodmare_sire, breeder, src, updated_at",
+                        "create index on public.nar_kd_pedigree (horse_name, birth_date)"),
     "nar_ai_marks": ("model, track, race_date, race_no, timing, marks, computed_at, updated_at",
                      "create index on public.nar_ai_marks (track, race_date, race_no)"),
     # §280 落札価格帯(kind=au)。レースの日付が無いので asof で絞らない(nar_horses と同じ)
     "auction_sales": ("source, horse_name, birth_date, auction_date, price, sold",
                       "create index on public.auction_sales (horse_name)"),
 }
-NO_ASOF = ("nar_horses", "auction_sales")
+NO_ASOF = ("nar_horses", "nar_kd_pedigree", "auction_sales")
 # §280 能検索引= nar_meta key='noken_index' の 1 行(nar-ai-feat.yml と同じ \copy)。
 # ⛔INPUTS に入れない= 手元の public.nar_meta は出力(big_payouts)の器で、入れると diff が「手元だけ」として本番へ書き戻す。
 #   手元では別の表 public.noken_meta に置き、cmd_shinba が noken_recs に開く。

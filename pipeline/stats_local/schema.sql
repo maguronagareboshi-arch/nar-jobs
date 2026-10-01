@@ -28,6 +28,11 @@ create table public.nar_horses (
   horse_name text not null, sire text, broodmare_sire text, owner text, dam text, breeder text,
   updated_at timestamptz not null
 );
+-- 10/2 KDSCOPE の血統
+create table public.nar_kd_pedigree (
+  ketto text not null, horse_name text not null, birth_date date, sire text, dam text, broodmare_sire text,
+  breeder text, src text not null, updated_at timestamptz not null
+);
 create table public.nar_ai_marks (
   model text not null, track text not null, race_date date not null, race_no integer not null, timing text not null,
   marks jsonb not null, computed_at timestamptz not null, updated_at timestamptz not null
