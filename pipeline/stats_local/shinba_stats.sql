@@ -57,6 +57,12 @@ select (current_date - interval '3 years')::date as w_from,
        (current_date - interval '3 years')::date as sv_from,
        (select ((value->>'built')::date - interval '3 years')::date + 180
           from public.noken_meta where key = 'noken_index') as nk_from;
+-- (10/2 ユーザー決定) 場ごとの数え始め= 砂を全部入れ替えた後。船橋= 豪州産の砂に全部入れ替え(2022/10/29〜11/27)→ 次の開催 2022-11-28 から。
+--   使う所= 場で数える sv・bv(父/母父×場×距離帯)と jk(騎手×場の新馬戦)。表に無い場は今までどおり(sv/bv= sv_from・jk= w_from)。
+--   画面の見出しの字は 'win' の行(a= 場)から読む。⛔場を足すときはここに 1 行(track は nar_runs の字)
+drop table if exists tmp_sand;
+create temp table tmp_sand (track text primary key, from_date date not null, why text not null);
+insert into tmp_sand values ('船橋', '2022-11-28', '豪州産の砂に全部入れ替え');
 
 -- ---------------------------------------------------------------- 「走った」行(person_stats.sql と同じ定義・同じ単勝払戻の式)
 drop table if exists tmp_sr;
@@ -87,11 +93,11 @@ create temp table tmp_d2 as
 select horse_name, birth_date, race_date, age, distance_m, track, finish, win_pay from tmp_sr   -- 生年月日・日付・齢= ped_key 用(10/2)
 where age = 2 and race_date >= (select w_from from tmp_sw);
 create index on tmp_d2 (horse_name);
--- D2v= sv/bv の母集団(2 歳の走ぜんぶ・窓は tmp_sw.sv_from)
+-- D2v= sv/bv の母集団(2 歳の走ぜんぶ・窓は場ごとの数え始め tmp_sand、無い場は tmp_sw.sv_from)
 drop table if exists tmp_d2v;
 create temp table tmp_d2v as
 select horse_name, birth_date, race_date, age, distance_m, track, finish, win_pay from tmp_sr
-where age = 2 and race_date >= (select sv_from from tmp_sw);
+where age = 2 and race_date >= coalesce((select x.from_date from tmp_sand x where x.track = tmp_sr.track), (select sv_from from tmp_sw));
 create index on tmp_d2v (horse_name);
 
 -- 血統(10/2・案 c)= 走の鍵 pk で nar_kd_pedigree を引き、無い項目は nar_horses(馬名だけの鍵)へ落とす。
@@ -142,6 +148,12 @@ drop table if exists tmp_s;
 create temp table tmp_s as
 select * from tmp_sr
 where race_date >= (select w_from from tmp_sw) and (race_name like '%新馬%' or race_name like '%初出走%');
+-- Sj= jk(騎手×場の新馬戦)の母集団= 場ごとの数え始め(tmp_sand)・無い場は w_from(10/2)
+drop table if exists tmp_sj;
+create temp table tmp_sj as
+select * from tmp_sr
+where race_date >= coalesce((select x.from_date from tmp_sand x where x.track = tmp_sr.track), (select w_from from tmp_sw))
+  and (race_name like '%新馬%' or race_name like '%初出走%');
 
 -- D∩能検= 初戦より前の索引の記録がある馬(初戦日 ≥ 索引の端+180 日だけ)。能検の値は初戦直前の 1 件
 drop table if exists tmp_dn;
@@ -222,7 +234,7 @@ insert into tmp_kv select 'td', s.trainer, '', s.finish, s.win_pay from tmp_s s;
 insert into tmp_kv
 select 'br', h.breeder, '', s.finish, s.win_pay
 from tmp_s s join tmp_ped h on h.horse_name = s.horse_name and h.pk = pg_temp.ped_key(s.birth_date, s.race_date, s.age);
-insert into tmp_kv select 'jk', s.jockey, s.track, s.finish, s.win_pay from tmp_s s;
+insert into tmp_kv select 'jk', s.jockey, s.track, s.finish, s.win_pay from tmp_sj s;
 
 -- nj 能検の騎手→初戦の騎手(同じ= same / 替わった= chg)。a= 調教師と '*'。索引に j の無い馬は数えない
 -- §304c(10/2 ユーザー指示) nj/nq/nw/ka/kt/nc に a='v:'||初出走の場 を足す(画面の比べ表・カードはこの場で数える)。接頭辞= 調教師名・地区との字の衝突よけ
@@ -298,6 +310,11 @@ select 'dm', dam, '',
        current_date, now()
 from tmp_dm
 group by dam;
+
+
+-- 場ごとの数え始め(画面の見出し用・10/2)。stats= {from, why}
+insert into public.nar_shinba_stats (kind, a, b, stats, as_of, updated_at)
+select 'win', track, '', jsonb_build_object('from', from_date, 'why', why), current_date, now() from tmp_sand;
 
 commit;
 
