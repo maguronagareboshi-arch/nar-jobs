@@ -84,9 +84,9 @@ NAR = ["iwate", "hyogo", "saga", "banei", "kasamatsu", "nagoya", "kochi", "kanaz
        "monbetsu", "ooi", "funabashi", "kawasaki", "urawa"]
 ALL = CHIHOU + NAR
 # §33.7-3/§33.7-5 1日1本の通し動画をレース別に頭出しできる場(`{prefix}_noken_offsets`)。
-# §117b 川崎・浦和・大井も nar_meta 側へ(⛔船橋は画面(js/data.js NOKEN_OFFSETS)が読まないので入れない)
+# §117b 川崎・浦和・大井も nar_meta 側へ。2026-10-01 船橋・兵庫も(画面の NOKEN_OFFSETS・R2 のクリップと揃えた)
 OFFSETS = []
-OFFSETS_NAR = ["saga", "banei", "kawasaki", "urawa", "ooi"]
+OFFSETS_NAR = ["saga", "banei", "kawasaki", "urawa", "ooi", "funabashi", "hyogo"]
 # 1つの地区に競馬場が2つある=どちらで受けたかを持たないと「8/1 水沢」と書けない
 MULTI_VENUE = {"iwate", "hyogo"}
 
