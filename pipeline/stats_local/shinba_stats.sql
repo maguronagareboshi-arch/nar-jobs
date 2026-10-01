@@ -225,7 +225,7 @@ from tmp_s s join tmp_ped h on h.horse_name = s.horse_name and h.pk = pg_temp.pe
 insert into tmp_kv select 'jk', s.jockey, s.track, s.finish, s.win_pay from tmp_s s;
 
 -- nj 能検の騎手→初戦の騎手(同じ= same / 替わった= chg)。a= 調教師と '*'。索引に j の無い馬は数えない
--- §304c(10/2 ユーザー指示) nj/nq/nw/ka/kt に a='v:'||初出走の場 を足す(画面の比べ表・カードはこの場で数える)。接頭辞= 調教師名・地区との字の衝突よけ
+-- §304c(10/2 ユーザー指示) nj/nq/nw/ka/kt/nc に a='v:'||初出走の場 を足す(画面の比べ表・カードはこの場で数える)。接頭辞= 調教師名・地区との字の衝突よけ
 insert into tmp_kv
 select 'nj', v.a, case when regexp_replace(coalesce(x.jockey, ''), '\s', '', 'g') = x.nk_j then 'same' else 'chg' end,
        x.finish, x.win_pay
@@ -246,7 +246,7 @@ select 'nw', v.a, pg_temp.band_week(x.race_date - x.nk_date), x.finish, x.win_pa
 from tmp_dn x cross join lateral (values (x.nk_d), ('*'), ('v:' || x.track)) v(a);
 insert into tmp_kv
 select 'nc', v.a, pg_temp.band_cnt(x.nk_cnt), x.finish, x.win_pay
-from tmp_dn x cross join lateral (values (x.nk_d), ('*')) v(a);
+from tmp_dn x cross join lateral (values (x.nk_d), ('*'), ('v:' || x.track)) v(a);
 insert into tmp_kv
 select 'ka', v.a, pg_temp.band_race(x.ar, x.nk_n), x.finish, x.win_pay
 from tmp_dn x cross join lateral (values (x.nk_d), ('*'), ('v:' || x.track)) v(a);
