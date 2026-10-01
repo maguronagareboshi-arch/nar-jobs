@@ -22,6 +22,7 @@ sys.path.insert(0, str(HERE))
 sys.path.insert(0, str(HERE.parent / "pipeline"))
 from nar_official_csv import digest_bytes, download_archive, download_url, normalize_archive  # noqa: E402
 from load_nar_official import build_dedup, load_env, summarize, upsert_all  # noqa: E402
+import nextday_card  # noqa: E402
 
 JST = dt.timezone(dt.timedelta(hours=9))
 
@@ -80,6 +81,7 @@ def main():
         targets.append(("nextday", {"year": tomorrow.year, "month": tomorrow.month}))
 
     docs = []; failed = 0
+    have_next = set()                                        # 月次ZIPに入っていた翌日の (場, R)
     for scope, kw in targets:
         optional = scope == "monthly-next"
         nextday = scope == "nextday"
@@ -112,6 +114,7 @@ def main():
             for k in ("races", "horses", "payouts"):
                 doc[k] = [x for x in (doc.get(k) or []) if x.get("race_date") == w]
             races = doc["races"]; dates = [w]
+            have_next = {(r["track"], r["race_no"]) for r in races}
             scope = "nextday"
             log(f"翌日 {w}: 月次ZIPの取得 {time.time() - t0:.1f}s")
         fin = sum(1 for x in (doc.get("horses") or []) if str(x.get("finish") or "").strip())
@@ -119,6 +122,28 @@ def main():
             f"期間={dates[0] if dates else '-'}..{dates[-1] if dates else '-'}")
         docs.append((doc.get("source_observed_at") or "", f"{scope}:{h}", doc))
 
+    # 翌日の出馬表の穴埋め(2026-10-01): 月次ZIPに無い翌日のレース(月末の翌月 1 日・ZIPの更新遅れ)を公式の出馬表ページから。
+    #   入れるのは nar_races・nar_runs だけ(馬主・生産者はページで 10 字に切れるので nar_horses・profiles は当日の日次ZIPに任せる)。
+    #   取れなくても失敗にしない(次の便が取り直す)。
+    fill = None
+    if args.next_day and not args.months:
+        try:
+            fill = nextday_card.fill_doc(tomorrow, have_next, log=log)
+        except Exception as e:                               # noqa: BLE001
+            log(f"翌日 {tomorrow} 出馬表ページ: 取れない({type(e).__name__}: {str(e)[:120]}) → 次の便で取り直す")
+    rc = main_docs(args, url, key, docs, failed)
+    if fill and fill["races"]:
+        d2, _ = build_dedup([(fill["source_observed_at"], "nextday-html", fill)])
+        for k in ("payouts", "horses", "profiles"):
+            d2[k] = {}
+        if args.dry_run:
+            log(f"dry-run: 翌日の出馬表ページ races={len(d2['races'])} runs={len(d2['runs'])} は投入しない")
+        elif upsert_all(url, key, d2, batch=1000, log=log):
+            log("翌日の出馬表ページの投入に失敗(次の便で取り直す)")
+    return rc
+
+
+def main_docs(args, url, key, docs, failed):
     if not docs:
         log("投入なし"); return 2 if failed else 0
     dedup, stats = build_dedup(docs)

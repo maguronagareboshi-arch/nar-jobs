@@ -37,6 +37,25 @@ jobs:
           raise SystemExit(0 if age < 3 * 3600 else 1)
           PY
 
+  # 2026-10-01: 南関 AI v3 の予想(nar-ai-v3)が出ているかの見張り(9/30 に前日の便が 0 頭で落ちても誰も気付かなかった)。
+  #   10 時以降 = 今日の南関のレースに v3-9 の印が無い/当日の便の土台が無い → 赤。22 時以降 = 明日の分も同じ。
+  #   中身は pipeline/ai/v3/v3_watch.py(公開の読み鍵で読むだけ)。
+  v3-forecast:
+    if: github.event.schedule != '40 23 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: check v3 forecast marks and v29 base (fail if a Nankan race has no forecast)
+        run: |
+          pip install -q requests
+          python -X utf8 pipeline/ai/v3/v3_watch.py
+
   # §77 W3: 2 分刻みのオッズ(公開リポ nar-odds-collector の loop.py)が生きているかの見張り。
   # 「発走 40 分前〜8 分後のレースが今あるのに、nar_odds_ticks の当日最新が 12 分より古い」なら赤(=所有者へメール)。
   # 対象レースが無い時間帯・非開催日は緑。復旧= 公開リポの collect を手で起こす(workflow_dispatch)。

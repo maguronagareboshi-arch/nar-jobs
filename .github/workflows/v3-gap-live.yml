@@ -68,8 +68,21 @@ jobs:
           set -o pipefail
           V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
           mkdir -p in gapm
-          AID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=v3-gap-base-$DAY&per_page=10" --jq '[.artifacts[] | select(.expired == false)][0].id // empty')
-          if [ -z "$AID" ]; then echo "土台が無い(開催なし・前日の便が失敗)= 何もしない"; echo "ok=no" >> "$GITHUB_OUTPUT"; exit 0; fi
+          # 2026-10-01: 土台が無くても終わらずに待つ(前日の便が遅れた・当日の朝に取り直した日も拾う)。
+          #   南関の開催が無い日は待たない。締めの 10 分前まで来なければ赤(= 持ち主へ失敗のメール)。
+          END=$(TZ=Asia/Tokyo date -d "$DAY ${{ steps.d.outputs.until }}" +%s)
+          while :; do
+            AID=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=v3-gap-base-$DAY&per_page=10" --jq '[.artifacts[] | select(.expired == false)][0].id // empty')
+            [ -n "$AID" ] && break
+            N=$(python -X utf8 pipeline/ai/v3/v3_precheck.py "$DAY" --count || echo "?")
+            if [ "$N" = "0" ]; then echo "今日は南関の開催なし = 何もしない"; echo "ok=no" >> "$GITHUB_OUTPUT"; exit 0; fi
+            if [ "$(date +%s)" -ge $((END - 600)) ]; then
+              echo "::error::⛔ $DAY は南関 ${N} R あるのに前日の土台(v3-gap-base-$DAY)が締めまで来なかった。nar-ai-v3 を確かめる"
+              echo "ok=no" >> "$GITHUB_OUTPUT"; exit 1
+            fi
+            echo "土台がまだ無い(南関 ${N} R)= 5 分後に見直す $(TZ=Asia/Tokyo date +%H:%M)"
+            sleep 300
+          done
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$AID/zip" > in/base.zip
           unzip -q -o in/base.zip -d in
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v29_base.csv.enc -out in/v29_base.csv
