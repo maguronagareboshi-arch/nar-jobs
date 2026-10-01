@@ -22,13 +22,17 @@ class NokenRowsTest(unittest.TestCase):
         }}
         got = stats_local.noken_rows(value)
         self.assertEqual(len(got), 3)   # 日付の読めない 1 件は捨てる
-        self.assertEqual(got[0], ("アカ", "2026-08-01", "kochi", 3, 8, 2, 20, 1, 12.7, 2, "赤岡", 452))
-        self.assertEqual(got[1], ("アオ", "2026-05-10", "monbetsu", 1, 6, None, None, None, None, None, "石川", None))
-        self.assertEqual(got[2], ("キ", "2026-07-01", "ooi", None, 10, None, None, None, 12.1, 1, None, None))
+        self.assertEqual(got[0], ("アカ", "2026-08-01", "kochi", 3, 8, 2, 20, 1, 12.7, 2, "赤岡", 452, None, None, None, 51.5))
+        self.assertEqual(got[1], ("アオ", "2026-05-10", "monbetsu", 1, 6, None, None, None, None, None, "石川", None, None, None, None, None))
+        self.assertEqual(got[2], ("キ", "2026-07-01", "ooi", None, 10, None, None, None, 12.1, 1, None, None, None, None, None, None))
         # 列の数と並び= NOKEN_KEYS(horse_name, date の後)
         self.assertEqual(len(got[0]), 2 + len(stats_local.NOKEN_KEYS))
         self.assertEqual(got[0][2 + stats_local.NOKEN_KEYS.index("w")], 452)
         self.assertEqual(got[0][2 + stats_local.NOKEN_KEYS.index("t1r")], 2)
+        # §304c 時計を秒に(分つきも)・p/dm/ag
+        g = stats_local.noken_rows({"horses": {"ク": [{"d": "iwate", "p": "盛岡", "date": "2026-06-01",
+                                                      "time": "1:02.3", "dm": 800, "ag": 2}]}})[0]
+        self.assertEqual(g[-4:], ("盛岡", 800, 2, 62.3))
 
     def test_empty(self):
         self.assertEqual(stats_local.noken_rows({}), [])
