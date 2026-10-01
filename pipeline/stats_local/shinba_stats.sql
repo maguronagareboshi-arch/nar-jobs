@@ -83,22 +83,35 @@ select horse_name, distance_m, track, finish, win_pay from tmp_sr
 where age = 2 and race_date >= (select w_from from tmp_sw);
 create index on tmp_d2 (horse_name);
 
--- 血統(10/2)= (馬名, 生年月日) で nar_kd_pedigree を引き、無い項目は nar_horses(馬名だけの鍵)へ落とす。
---   KD の同じ (馬名, 生年月日) が 2 頭あるときは NU を先・ketto の小さい方。bk= 生年月日が無い走の結び用(1900-01-01)
+-- 血統(10/2・案 c)= 走の鍵 pk で nar_kd_pedigree を引き、無い項目は nar_horses(馬名だけの鍵)へ落とす。
+--   pk= 生年月日がある走は 'YYYY-MM-DD'(KD の (馬名, 生年月日)・同じ組が 2 頭なら NU を先・ketto の小さい方)。
+--       無い古い走(2022-11 より前)は 'y' || 生年(= 走った年 − 馬齢・馬齢は 1/1 に加算)。KD で (馬名, 生年) が 1 頭に決まるときだけ結ぶ。
+--       どちらも無ければ ''(= nar_horses だけ)。⛔tmp_d / tmp_d2 / tmp_s / dm は同じ pg_temp.ped_key で結ぶ
+create or replace function pg_temp.ped_key(bd date, rd date, age int) returns text language sql immutable as $$
+  select case when bd is not null then bd::text
+              when rd is not null and age is not null then 'y' || (extract(year from rd)::int - age)::text
+              else '' end $$;
 drop table if exists tmp_ped;
 create temp table tmp_ped as
-with k as (select distinct horse_name, birth_date from tmp_sr where race_date >= (select w_from from tmp_sw)),
+with k as (select distinct horse_name, pg_temp.ped_key(birth_date, race_date, age) as pk
+           from tmp_sr where race_date >= (select w_from from tmp_sw)),
 kd as (select distinct on (horse_name, birth_date) * from public.nar_kd_pedigree
-       order by horse_name, birth_date, (src = 'NU') desc, ketto)
-select k.horse_name, coalesce(k.birth_date, date '1900-01-01') as bk,
-       coalesce(nullif(kd.sire, ''), h.sire) as sire,
-       coalesce(nullif(kd.broodmare_sire, ''), h.broodmare_sire) as broodmare_sire,
-       coalesce(nullif(kd.dam, ''), h.dam) as dam,
-       coalesce(nullif(kd.breeder, ''), h.breeder) as breeder
+       where birth_date is not null
+       order by horse_name, birth_date, (src = 'NU') desc, ketto),
+ky as (select horse_name, 'y' || extract(year from birth_date)::int::text as pk,
+              min(sire) as sire, min(broodmare_sire) as broodmare_sire, min(dam) as dam, min(breeder) as breeder
+       from public.nar_kd_pedigree where birth_date is not null
+       group by 1, 2 having count(*) = 1)
+select k.horse_name, k.pk,
+       coalesce(nullif(kd.sire, ''), nullif(ky.sire, ''), h.sire) as sire,
+       coalesce(nullif(kd.broodmare_sire, ''), nullif(ky.broodmare_sire, ''), h.broodmare_sire) as broodmare_sire,
+       coalesce(nullif(kd.dam, ''), nullif(ky.dam, ''), h.dam) as dam,
+       coalesce(nullif(kd.breeder, ''), nullif(ky.breeder, ''), h.breeder) as breeder
 from k
-left join kd on kd.horse_name = k.horse_name and kd.birth_date = k.birth_date
+left join kd on kd.horse_name = k.horse_name and kd.birth_date::text = k.pk
+left join ky on ky.horse_name = k.horse_name and ky.pk = k.pk
 left join public.nar_horses h on h.horse_name = k.horse_name;
-create index on tmp_ped (horse_name, bk);
+create index on tmp_ped (horse_name, pk);
 
 -- S= 新馬戦の出走(判定語は viewer の SHINBA_WORDS と同じ「新馬」「初出走」)
 drop table if exists tmp_s;
@@ -125,28 +138,28 @@ create temp table tmp_kv (kind text, a text, b text, finish int, win_pay int);
 -- sd 父×距離帯 / bd 母父×距離帯 / st 父×場(D2= 2 歳の走ぜんぶ)
 insert into tmp_kv
 select 'sd', h.sire, pg_temp.band_dist(d.distance_m), d.finish, d.win_pay
-from tmp_d2 d join tmp_ped h on h.horse_name = d.horse_name and h.bk = coalesce(d.birth_date, date '1900-01-01');
+from tmp_d2 d join tmp_ped h on h.horse_name = d.horse_name and h.pk = pg_temp.ped_key(d.birth_date, d.race_date, d.age);
 insert into tmp_kv
 select 'bd', h.broodmare_sire, pg_temp.band_dist(d.distance_m), d.finish, d.win_pay
-from tmp_d2 d join tmp_ped h on h.horse_name = d.horse_name and h.bk = coalesce(d.birth_date, date '1900-01-01');
+from tmp_d2 d join tmp_ped h on h.horse_name = d.horse_name and h.pk = pg_temp.ped_key(d.birth_date, d.race_date, d.age);
 insert into tmp_kv
 select 'st', h.sire, d.track, d.finish, d.win_pay
-from tmp_d2 d join tmp_ped h on h.horse_name = d.horse_name and h.bk = coalesce(d.birth_date, date '1900-01-01');
+from tmp_d2 d join tmp_ped h on h.horse_name = d.horse_name and h.pk = pg_temp.ped_key(d.birth_date, d.race_date, d.age);
 -- §304(10/2) sv 父×場×距離帯 / bv 母父×場×距離帯(D2)。b= 場|距離帯(例 'funabashi|d1000')。帯が無い走は作らない
 insert into tmp_kv
 select 'sv', h.sire, d.track || '|' || pg_temp.band_dist(d.distance_m), d.finish, d.win_pay
-from tmp_d2 d join tmp_ped h on h.horse_name = d.horse_name and h.bk = coalesce(d.birth_date, date '1900-01-01')
+from tmp_d2 d join tmp_ped h on h.horse_name = d.horse_name and h.pk = pg_temp.ped_key(d.birth_date, d.race_date, d.age)
 where pg_temp.band_dist(d.distance_m) is not null;
 insert into tmp_kv
 select 'bv', h.broodmare_sire, d.track || '|' || pg_temp.band_dist(d.distance_m), d.finish, d.win_pay
-from tmp_d2 d join tmp_ped h on h.horse_name = d.horse_name and h.bk = coalesce(d.birth_date, date '1900-01-01')
+from tmp_d2 d join tmp_ped h on h.horse_name = d.horse_name and h.pk = pg_temp.ped_key(d.birth_date, d.race_date, d.age)
 where pg_temp.band_dist(d.distance_m) is not null;
 
 -- td 厩舎の新馬戦 / br 生産牧場 / jk 騎手×場の新馬戦(S)
 insert into tmp_kv select 'td', s.trainer, '', s.finish, s.win_pay from tmp_s s;
 insert into tmp_kv
 select 'br', h.breeder, '', s.finish, s.win_pay
-from tmp_s s join tmp_ped h on h.horse_name = s.horse_name and h.bk = coalesce(s.birth_date, date '1900-01-01');
+from tmp_s s join tmp_ped h on h.horse_name = s.horse_name and h.pk = pg_temp.ped_key(s.birth_date, s.race_date, s.age);
 insert into tmp_kv select 'jk', s.jockey, s.track, s.finish, s.win_pay from tmp_s s;
 
 -- nj 能検の騎手→初戦の騎手(同じ= same / 替わった= chg)。a= 調教師と '*'。索引に j の無い馬は数えない
@@ -188,7 +201,7 @@ cross join lateral (values (pg_temp.auc_group(s.source)), ('*')) v(a);
 drop table if exists tmp_dm;
 create temp table tmp_dm as
 select h.dam, d.*, row_number() over (partition by h.dam order by d.race_date desc, d.horse_name) as rn
-from tmp_d d join tmp_ped h on h.horse_name = d.horse_name and h.bk = coalesce(d.birth_date, date '1900-01-01')
+from tmp_d d join tmp_ped h on h.horse_name = d.horse_name and h.pk = pg_temp.ped_key(d.birth_date, d.race_date, d.age)
 where h.dam is not null and h.dam <> '';
 
 -- ---------------------------------------------------------------- 書き込み(消して入れ直すまでを 1 トランザクション)
