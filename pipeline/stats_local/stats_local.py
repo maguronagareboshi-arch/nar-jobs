@@ -57,7 +57,7 @@ NO_ASOF = ("nar_horses", "nar_kd_pedigree", "auction_sales")
 # ⛔INPUTS に入れない= 手元の public.nar_meta は出力(big_payouts)の器で、入れると diff が「手元だけ」として本番へ書き戻す。
 #   手元では別の表 public.noken_meta に置き、cmd_shinba が noken_recs に開く。
 NOKEN_COPY = "select key, value, updated_at from public.nar_meta where key = 'noken_index'"
-NOKEN_KEYS = ("d", "r", "n", "dr", "dn", "ar", "t1", "t1r", "j", "w")   # ⛔schema.sql の noken_recs の並び(horse_name, date の後)
+NOKEN_KEYS = ("d", "r", "n", "dr", "dn", "ar", "t1", "t1r", "j", "w", "p", "dm", "ag", "sec")   # ⛔schema.sql の noken_recs の並び(horse_name, date の後)
 
 # 出力表= (主キー, 比べる列の式)。updated_at は now() なので比べない。
 # ⛔nar_jockey_track_stats.as_of(集計した日)も比べない= 毎日全行が「変わった」になるため(要判断: 画面は as_of を表示に使う)
@@ -201,9 +201,17 @@ def _num(v):
         return None
 
 
+def _time_sec(v):
+    """能検の time 表示('1:02.3' / '58.4')→ 秒。読めなければ None(research/noken-time-measure と同じ読み方)"""
+    m = re.fullmatch(r"(?:(\d+):)?(\d{1,2}\.\d)", str(v or ""))
+    if not m:
+        return None
+    return float(m.group(2)) + (int(m.group(1)) * 60 if m.group(1) else 0)
+
+
 def noken_rows(value):
     """能検索引の JSON({"built", "horses": {馬名: [記録…]}})→ noken_recs の行
-    (horse_name, date, d, r, n, dr, dn, ar, t1, t1r, j, w)。日付の読めない記録は捨てる・無いキーは None"""
+    (horse_name, date, d, r, n, dr, dn, ar, t1, t1r, j, w, p, dm, ag, sec)。日付の読めない記録は捨てる・無いキーは None"""
     out = []
     horses = value.get("horses") if isinstance(value, dict) else None
     for name, recs in (horses or {}).items():
@@ -218,7 +226,8 @@ def noken_rows(value):
             j = r.get("j")
             out.append((name, date, r.get("d") or None, _int(r.get("r")), _int(r.get("n")), _int(r.get("dr")),
                         _int(r.get("dn")), _int(r.get("ar")), _num(r.get("t1")), _int(r.get("t1r")),
-                        str(j) if j else None, _int(r.get("w"))))
+                        str(j) if j else None, _int(r.get("w")),
+                        r.get("p") or None, _int(r.get("dm")), _int(r.get("ag")), _time_sec(r.get("time"))))
     return out
 
 

@@ -47,7 +47,8 @@ create table public.noken_meta (
 );
 create table public.noken_recs (
   horse_name text not null, date date not null, d text, r integer, n integer, dr integer, dn integer,
-  ar integer, t1 numeric, t1r integer, j text, w integer
+  ar integer, t1 numeric, t1r integer, j text, w integer,
+  p text, dm integer, ag integer, sec numeric   -- §304c 能検の時計(案 C)の池= 地区×場×距離×齢帯・sec= time を秒に
 );
 create index on public.noken_recs (horse_name, date);
 

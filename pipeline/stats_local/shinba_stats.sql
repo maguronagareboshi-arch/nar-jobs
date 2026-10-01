@@ -27,6 +27,9 @@ create or replace function pg_temp.band_dist(m int) returns text language sql im
 create or replace function pg_temp.band_day(r int, n int) returns text language sql immutable as $$
   select case when r is null or n is null or n < 4 then null when r = 1 then 'r1'
               when r::numeric / n <= 0.3 then 'top30' when r::numeric / n <= 0.7 then 'mid' else 'low' end $$;
+-- §304c 能検の時計(案 C)の百分位 0〜1(小さいほど速い)。1 位帯は作らない(研究と同じ)。⛔画面 data.js の NOKEN_PCT_BANDS と同じ境目
+create or replace function pg_temp.band_pct(q numeric) returns text language sql immutable as $$
+  select case when q is null then null when q <= 0.3 then 'top30' when q <= 0.7 then 'mid' else 'low' end $$;
 -- 上がり・テン1F の検査レース内順位(ar/n・t1r/n)
 create or replace function pg_temp.band_race(r int, n int) returns text language sql immutable as $$
   select case when r is null or n is null or n < 1 then null when r = 1 then 'r1'
@@ -135,7 +138,8 @@ where race_date >= (select w_from from tmp_sw) and (race_name like '%新馬%' or
 -- D∩能検= 初戦より前の索引の記録がある馬(初戦日 ≥ 索引の端+180 日だけ)。能検の値は初戦直前の 1 件
 drop table if exists tmp_dn;
 create temp table tmp_dn as
-select d.*, k.d as nk_d, k.date as nk_date, k.n as nk_n, k.dr, k.dn, k.ar, k.t1r, k.j as nk_j, c.cnt as nk_cnt
+select d.*, k.d as nk_d, k.date as nk_date, k.n as nk_n, k.dr, k.dn, k.ar, k.t1r, k.j as nk_j, c.cnt as nk_cnt,
+       k.p as nk_p, k.dm as nk_dm, k.ag as nk_ag, k.sec as nk_sec
 from tmp_d d
 cross join lateral (select count(*) as cnt from public.noken_recs k
                     where k.horse_name = d.horse_name and k.date < d.race_date) c
@@ -143,6 +147,43 @@ cross join lateral (select * from public.noken_recs k
                     where k.horse_name = d.horse_name and k.date < d.race_date
                     order by k.date desc, k.d limit 1) k
 where c.cnt > 0 and d.race_date >= (select nk_from from tmp_sw);
+
+-- §304c(10/2 ユーザー決定) 能検の時計 案 C= 同じ池(地区×場×距離×齢帯)の、その能検日より前 365 日の時計の中での百分位。
+--   各日の時計は「その日の中央値−窓の中央値」を n/(n+k) 倍だけ引いて補正(縮み推定・k=11.1・頭数が少ない日は 0 に寄せる)。
+--   本人の時計も同じく本人の日で補正。窓の頭数 20 未満は帯なし。⛔窓は能検日より前だけ(未来を入れない)。
+--   定義は nar-site/research/noken-time-measure/measure.py の C と同じ。⛔画面 data.js nokenTimePct と同じ k・境目
+drop table if exists tmp_nu;
+create temp table tmp_nu as   -- 一意の記録(別名キーで同じ記録が複数の馬名に入るので重複を除く)
+select distinct d, p, date, r, sec, j, w, dm, ag from public.noken_recs where sec is not null;
+drop table if exists tmp_nday;
+create temp table tmp_nday as
+select d, p, dm, ag, date, count(*) as n, percentile_cont(0.5) within group (order by sec)::numeric as med
+from tmp_nu group by d, p, dm, ag, date;
+drop table if exists tmp_ntg;
+create temp table tmp_ntg as   -- 求める (池, 能検日) と窓の中央値・頭数
+select t.*, w.m, w.cnt
+from (select distinct nk_d as d, nk_p as p, nk_dm as dm, nk_ag as ag, nk_date as date from tmp_dn where nk_sec is not null) t
+cross join lateral (
+  select percentile_cont(0.5) within group (order by u.sec)::numeric as m, count(*) as cnt from tmp_nu u
+  where u.d is not distinct from t.d and u.p is not distinct from t.p and u.dm is not distinct from t.dm
+    and u.ag is not distinct from t.ag and u.date >= t.date - 365 and u.date < t.date) w;
+drop table if exists tmp_nq;
+create temp table tmp_nq as   -- 初戦の行(馬名, 生年月日)ごとの百分位
+select x.horse_name, x.birth_date, (
+  select (count(*) filter (where a.v < s2.v) + 0.5 * count(*) filter (where a.v = s2.v)) / count(*)
+  from (select u.sec - (dy.med - g.m) * dy.n / (dy.n + 11.1) as v
+        from tmp_nu u join tmp_nday dy
+          on dy.d is not distinct from u.d and dy.p is not distinct from u.p and dy.dm is not distinct from u.dm
+         and dy.ag is not distinct from u.ag and dy.date = u.date
+        where u.d is not distinct from g.d and u.p is not distinct from g.p and u.dm is not distinct from g.dm
+          and u.ag is not distinct from g.ag and u.date >= g.date - 365 and u.date < g.date) a) as q
+from tmp_dn x
+join tmp_ntg g on g.d is not distinct from x.nk_d and g.p is not distinct from x.nk_p and g.dm is not distinct from x.nk_dm
+              and g.ag is not distinct from x.nk_ag and g.date = x.nk_date and g.cnt >= 20
+join tmp_nday td on td.d is not distinct from x.nk_d and td.p is not distinct from x.nk_p and td.dm is not distinct from x.nk_dm
+              and td.ag is not distinct from x.nk_ag and td.date = x.nk_date
+cross join lateral (select x.nk_sec - (td.med - g.m) * td.n / (td.n + 11.1) as v) s2
+where x.nk_sec is not null;
 
 -- ---------------------------------------------------------------- 縦持ち(kind, a, b, 着, 単勝払戻)
 drop table if exists tmp_kv;
@@ -186,6 +227,11 @@ where x.nk_j is not null and x.nk_j <> '' and x.jockey is not null and x.jockey 
 insert into tmp_kv
 select 'nr', v.a, pg_temp.band_day(x.dr, x.dn), x.finish, x.win_pay
 from tmp_dn x cross join lateral (values (x.nk_d), ('*')) v(a);
+-- §304c nq 能検の時計 案 C の帯(top30/mid/low)。a= 地区と '*'。⛔nr は残す
+insert into tmp_kv
+select 'nq', v.a, pg_temp.band_pct(q.q), x.finish, x.win_pay
+from tmp_dn x join tmp_nq q on q.horse_name = x.horse_name and q.birth_date is not distinct from x.birth_date
+cross join lateral (values (x.nk_d), ('*')) v(a);
 insert into tmp_kv
 select 'nw', v.a, pg_temp.band_week(x.race_date - x.nk_date), x.finish, x.win_pay
 from tmp_dn x cross join lateral (values (x.nk_d), ('*')) v(a);
