@@ -53,16 +53,20 @@ create or replace function pg_temp.auc_group(src text) returns text language sql
 drop table if exists tmp_sw;
 create temp table tmp_sw as
 select (current_date - interval '3 years')::date as w_from,
-       -- §304c sv/bv(父・母父×場×距離帯)の窓= ここ 1 か所。今は 3 年(2014 年からに広げるかはユーザー確認中)
-       (current_date - interval '3 years')::date as sv_from,
+       -- §304c 場で数える sv・bv・td・jk の既定の窓= 5 年(10/2 ユーザー「豪州の砂以外は 3 年か 5 年」)。豪州の砂の場は tmp_sand の日から
+       (current_date - interval '5 years')::date as sv_from,
        (select ((value->>'built')::date - interval '3 years')::date + 180
           from public.noken_meta where key = 'noken_index') as nk_from;
--- (10/2 ユーザー決定) 場ごとの数え始め= 砂を全部入れ替えた後。船橋= 豪州産の砂に全部入れ替え(2022/10/29〜11/27)→ 次の開催 2022-11-28 から。
---   使う所= 場で数える sv・bv(父/母父×場×距離帯)と jk(騎手×場の新馬戦)。表に無い場は今までどおり(sv/bv= sv_from・jk= w_from)。
+-- (10/2 ユーザー決定) 場ごとの数え始め= 豪州産の砂に変えた後(変えた入れ替えの後の最初の開催日・出どころは viewer の data/sand-history.json)。
+--   船橋 2022/10/29〜11/27 宮城産山砂→豪州産陸砂・大井 2023/10/8〜21 豪州アルバニー産(10/29 から)・門別 2023/3/30 豪州産珪砂(4/19 開幕)・
+--   名古屋 2025/8/18 再開 豪州アルバニー産・園田 2020/4/3〜6 六ケ所村→豪州アルバニー産(2024・2025 は豪州産どうしの入れ替え)。
+--   使う所= 場で数える sv・bv(父/母父×場×距離帯)・td(厩舎の新馬戦)・jk(騎手×場の新馬戦)・能検の比べ表の 'v:' 行。表に無い場は sv_from(5 年)。
 --   画面の見出しの字は 'win' の行(a= 場)から読む。⛔場を足すときはここに 1 行(track は nar_runs の字)
 drop table if exists tmp_sand;
 create temp table tmp_sand (track text primary key, from_date date not null, why text not null);
-insert into tmp_sand values ('船橋', '2022-11-28', '豪州産の砂に全部入れ替え');
+insert into tmp_sand values
+  ('船橋', '2022-11-28', '豪州産の砂'), ('大井', '2023-10-29', '豪州産の砂'), ('門別', '2023-04-19', '豪州産の砂'),
+  ('名古屋', '2025-08-18', '豪州産の砂'), ('園田', '2020-04-07', '豪州産の砂');
 
 -- ---------------------------------------------------------------- 「走った」行(person_stats.sql と同じ定義・同じ単勝払戻の式)
 drop table if exists tmp_sr;
@@ -148,11 +152,11 @@ drop table if exists tmp_s;
 create temp table tmp_s as
 select * from tmp_sr
 where race_date >= (select w_from from tmp_sw) and (race_name like '%新馬%' or race_name like '%初出走%');
--- Sj= jk(騎手×場の新馬戦)の母集団= 場ごとの数え始め(tmp_sand)・無い場は w_from(10/2)
+-- Sj= td(厩舎の新馬戦)・jk(騎手×場の新馬戦)の母集団= 場ごとの数え始め(tmp_sand)・無い場は sv_from(5 年)(10/2)
 drop table if exists tmp_sj;
 create temp table tmp_sj as
 select * from tmp_sr
-where race_date >= coalesce((select x.from_date from tmp_sand x where x.track = tmp_sr.track), (select w_from from tmp_sw))
+where race_date >= coalesce((select x.from_date from tmp_sand x where x.track = tmp_sr.track), (select sv_from from tmp_sw))
   and (race_name like '%新馬%' or race_name like '%初出走%');
 
 -- D∩能検= 初戦より前の索引の記録がある馬(初戦日 ≥ 索引の端+180 日だけ)。能検の値は初戦直前の 1 件
@@ -230,7 +234,7 @@ from tmp_d2v d join tmp_ped h on h.horse_name = d.horse_name and h.pk = pg_temp.
 where pg_temp.band_dist(d.distance_m) is not null;
 
 -- td 厩舎の新馬戦 / br 生産牧場 / jk 騎手×場の新馬戦(S)
-insert into tmp_kv select 'td', s.trainer, '', s.finish, s.win_pay from tmp_s s;
+insert into tmp_kv select 'td', s.trainer, '', s.finish, s.win_pay from tmp_sj s;   -- 厩舎は地元の場で走る= 場の数え始めに合わせる(10/2)
 insert into tmp_kv
 select 'br', h.breeder, '', s.finish, s.win_pay
 from tmp_s s join tmp_ped h on h.horse_name = s.horse_name and h.pk = pg_temp.ped_key(s.birth_date, s.race_date, s.age);
@@ -241,7 +245,7 @@ insert into tmp_kv select 'jk', s.jockey, s.track, s.finish, s.win_pay from tmp_
 insert into tmp_kv
 select 'nj', v.a, case when regexp_replace(coalesce(x.jockey, ''), '\s', '', 'g') = x.nk_j then 'same' else 'chg' end,
        x.finish, x.win_pay
-from tmp_dn x cross join lateral (values (x.trainer), ('*'), ('v:' || x.track)) v(a)
+from tmp_dn x cross join lateral (values (x.trainer), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a)
 where x.nk_j is not null and x.nk_j <> '' and x.jockey is not null and x.jockey <> '';
 
 -- nr 日全体順位帯 / nw 週数帯 / nc 回数 / ka 上がり順位帯 / kt テン1F 順位帯。a= 地区と '*'
@@ -252,19 +256,19 @@ from tmp_dn x cross join lateral (values (x.nk_d), ('*')) v(a);
 insert into tmp_kv
 select 'nq', v.a, pg_temp.band_pct(q.q), x.finish, x.win_pay
 from tmp_dn x join tmp_nq q on q.horse_name = x.horse_name and q.birth_date is not distinct from x.birth_date
-cross join lateral (values (x.nk_d), ('*'), ('v:' || x.track)) v(a);
+cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
 insert into tmp_kv
 select 'nw', v.a, pg_temp.band_week(x.race_date - x.nk_date), x.finish, x.win_pay
-from tmp_dn x cross join lateral (values (x.nk_d), ('*'), ('v:' || x.track)) v(a);
+from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
 insert into tmp_kv
 select 'nc', v.a, pg_temp.band_cnt(x.nk_cnt), x.finish, x.win_pay
-from tmp_dn x cross join lateral (values (x.nk_d), ('*'), ('v:' || x.track)) v(a);
+from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
 insert into tmp_kv
 select 'ka', v.a, pg_temp.band_race(x.ar, x.nk_n), x.finish, x.win_pay
-from tmp_dn x cross join lateral (values (x.nk_d), ('*'), ('v:' || x.track)) v(a);
+from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
 insert into tmp_kv
 select 'kt', v.a, pg_temp.band_race(x.t1r, x.nk_n), x.finish, x.win_pay
-from tmp_dn x cross join lateral (values (x.nk_d), ('*'), ('v:' || x.track)) v(a);
+from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
 
 -- au 落札価格帯(初戦より前の最後の落札・生年月日は両方あるときだけ合わせる= R5)。a= オークション / セリ と '*'
 insert into tmp_kv
@@ -312,9 +316,21 @@ from tmp_dm
 group by dam;
 
 
--- 場ごとの数え始め(画面の見出し用・10/2)。stats= {from, why}
+-- 場ごとの数え始め(画面の見出し用・10/2)。stats= {from, label= 父・母父・厩舎・騎手の行の見出し, nk_from, nk_label= 能検の比べ表の見出し}
 insert into public.nar_shinba_stats (kind, a, b, stats, as_of, updated_at)
-select 'win', track, '', jsonb_build_object('from', from_date, 'why', why), current_date, now() from tmp_sand;
+select 'win', t.track, '',
+       jsonb_build_object(
+         'from', f.d,
+         'label', case when s.track is not null then '豪州産の砂に変わった' || to_char(f.d, 'YYYY"年"FMMM"月から"') else '前日までの5年' end,
+         'nk_from', g.d,
+         'nk_label', case when s.track is not null and s.from_date > w.nk_from then '豪州産の砂に変わった' || to_char(g.d, 'YYYY"年"FMMM"月から"')
+                          else to_char(g.d, 'YYYY"年"FMMM"月から"') end),
+       current_date, now()
+from (select distinct track from tmp_sr) t
+left join tmp_sand s on s.track = t.track
+cross join tmp_sw w
+cross join lateral (select coalesce(s.from_date, w.sv_from) as d) f
+cross join lateral (select greatest(w.nk_from, coalesce(s.from_date, w.nk_from)) as d) g;
 
 commit;
 
