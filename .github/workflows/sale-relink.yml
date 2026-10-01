@@ -1,0 +1,38 @@
+# 2026-10-01 セール上場記録(表 sale_listings)の再ひも付けだけを毎日(cloud/sale_listings.py relink)。
+#   目的= 新馬の nar_horse_profiles は出馬表に載ってから入る→週 1 の weekly(月曜)だと初出走に間に合わない。
+#   取り直しはしない。直近 5 世代の未結び(null/multi)を結び直し+名前だけの結びに後から code を入れる→upsert→heartbeat 'sale_relink'。
+#   JST 06:20・18:20。weekly と同じ concurrency group で重ならない。
+# ⛔便を足したら viewer の /update-times にも行を足す。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: sale-relink
+on:
+  schedule:
+    - cron: '20 21 * * *'    # JST 毎日 06:20
+    - cron: '20 9 * * *'     # JST 毎日 18:20
+  workflow_dispatch:
+concurrency:
+  group: sale-listings
+  cancel-in-progress: false
+jobs:
+  relink:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: sale listings relink
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/sale_listings.py relink --apply
+
+      # 想定外で落ちたときの印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py sale_relink fail 便が落ちた

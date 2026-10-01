@@ -21,6 +21,7 @@
   py -3.12 -X utf8 cloud/sale_listings.py load  --rows linked.csv [--apply]        # --apply で upsert(既定はドライラン)
   python cloud/sale_listings.py buyer --years 2024 [--apply]   # 埋め直し(§302): その年の全市場を取り直し、既存の落札行の buyer だけ書く
   python cloud/sale_listings.py weekly [--apply]    # 便: 今年の一覧から終わって 60 日以内の市場を取り直す→ひも付け→upsert→未結びの再ひも付け→heartbeat
+  python cloud/sale_listings.py relink [--apply]    # 便(毎日・2026-10-01): 取り直さず、未結びの再ひも付け+名前だけの結びに後から code だけ→upsert→heartbeat 'sale_relink'
 環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY(--apply)/ SUPABASE_ANON_KEY(読むだけ)
 終了コード: 0 正常 / 1 一部失敗 / 2 前提失敗
 """
@@ -439,6 +440,36 @@ def upsert_rows(base, key, rows, batch=500):
     return bad
 
 
+def relink_stored(base, rkey, prof, auc, today, exclude=()):
+    """表に入っている行の再ひも付け(weekly と relink で共用・2026-10-01 切り出し)。
+      1) 未結び(null/multi)を結び直す(競走馬登録は上場の後= 後から結べる)。直近 5 世代だけ。exclude の (年, 市場) は除く。
+      2) 名前だけで結んだ行(code null の馬)に後から code が付いたら入れる(馬名+生年で 1 頭だけ)。
+    返り値 (old, newly)= 対象の未結び行・書く行。"""
+    old = rest_get(base, rkey, f"{TABLE}?select={','.join(COLS)}&or=(link_method.is.null,link_method.eq.multi)&birth_year=gte.{today.year - 5}"
+                               "&order=sale_year.asc,market_code.asc,hip_no.asc,jbis_horse_id.asc")
+    ex = set(exclude)
+    old = [x for x in old if (x["sale_year"], x["market_code"]) not in ex]
+    link(old, prof, auc)
+    newly = [x for x in old if x["link_method"] not in (None, "multi")]
+    named = rest_get(base, rkey, f"{TABLE}?select={','.join(COLS)}&horse_code=is.null&horse_name=not.is.null"
+                                 f"&link_method=not.is.null&link_method=neq.multi&birth_year=gte.{today.year - 5}"
+                                 "&order=sale_year.asc,market_code.asc,hip_no.asc,jbis_horse_id.asc")
+    coded = defaultdict(list)
+    for q in prof:
+        if q.get("code") and q.get("horse_name") and q.get("birth_date"):
+            coded[(q["horse_name"], int(q["birth_date"][:4]))].append(q["code"])
+    got_code = []
+    for x in named:
+        cc = coded.get((x["horse_name"], x["birth_year"]), [])
+        if len(cc) == 1:
+            x["horse_code"] = cc[0]
+            got_code.append(x)
+    newly += got_code
+    log(f"名前だけの結び {len(named)}・後から code が付いた {len(got_code)}")
+    log(f"再ひも付け 対象 {len(old)}・新たに結べた {len(newly)}")
+    return old, newly
+
+
 def write_csv(rows, path):
     with open(path, "w", encoding="utf-8", newline="") as f:
         w = csv.DictWriter(f, fieldnames=COLS)
@@ -467,7 +498,7 @@ def _years(s):
 
 def main(argv=None):
     ap = argparse.ArgumentParser()
-    ap.add_argument("cmd", choices=["fetch", "parse", "link", "load", "weekly", "buyer"])
+    ap.add_argument("cmd", choices=["fetch", "parse", "link", "load", "weekly", "buyer", "relink"])
     ap.add_argument("--raw", default=str(HERE / "data" / "sales" / "jbis"))
     ap.add_argument("--years", default=None)
     ap.add_argument("--catalog-dir")
@@ -538,10 +569,28 @@ def main(argv=None):
                         log(f"  upsert 失敗 {y} {i}: {s2} {msg[:200]}")
         return 1 if bad else 0
 
-    # weekly(便): 取り直し→ひも付け→upsert→heartbeat
     import beat as B
     if not base or not rkey:
         log("SUPABASE_URL / KEY が無い"); return 2
+
+    # relink(便・毎日 2026-10-01): 取り直さず、表の行の再ひも付けだけ(今年の市場も除かない)→upsert→heartbeat
+    if a.cmd == "relink":
+        try:
+            prof = read_profiles(base, rkey)
+            auc = read_auction(base, rkey)
+            old, newly = relink_stored(base, rkey, prof, auc, today)
+            if not a.apply:
+                log("ドライラン= 書かない"); return 0
+            bad = upsert_rows(base, wkey, newly) if newly else 0
+            B.beat("sale_relink", bad == 0, f"再結{len(newly)}")
+            return 1 if bad else 0
+        except Exception as e:  # noqa: BLE001
+            log(f"失敗: {type(e).__name__}: {e}")
+            if a.apply:
+                B.beat("sale_relink", False, f"{type(e).__name__}")
+            return 1
+
+    # weekly(便): 取り直し→ひも付け→upsert→heartbeat
     try:
         idx, got = fetch_year(today.year, raw, force=True, only_recent_days=a.days, today=today)
         rows, st = parse_all(raw, [today.year], a.catalog_dir)
@@ -552,29 +601,7 @@ def main(argv=None):
         auc = read_auction(base, rkey)
         c = link(rows, prof, auc)
         log(f"今年の対象市場 {len(keep)}・行 {len(rows)}・ひも付け {dict(c)}")
-        # 未結びの再ひも付け(競走馬登録は上場の後= 後から結べる)。直近 5 世代だけ
-        old = rest_get(base, rkey, f"{TABLE}?select={','.join(COLS)}&or=(link_method.is.null,link_method.eq.multi)&birth_year=gte.{today.year - 5}"
-                                   "&order=sale_year.asc,market_code.asc,hip_no.asc,jbis_horse_id.asc")
-        old = [x for x in old if (x["sale_year"], x["market_code"]) not in {(today.year, k) for k in keep}]
-        c2 = link(old, prof, auc)
-        newly = [x for x in old if x["link_method"] not in (None, "multi")]
-        # 名前だけで結んだ行(code null の馬)に後から code が付いたら入れる(馬名+生年で 1 頭だけ)
-        named = rest_get(base, rkey, f"{TABLE}?select={','.join(COLS)}&horse_code=is.null&horse_name=not.is.null"
-                                     f"&link_method=not.is.null&link_method=neq.multi&birth_year=gte.{today.year - 5}"
-                                     "&order=sale_year.asc,market_code.asc,hip_no.asc,jbis_horse_id.asc")
-        coded = defaultdict(list)
-        for q in prof:
-            if q.get("code") and q.get("horse_name") and q.get("birth_date"):
-                coded[(q["horse_name"], int(q["birth_date"][:4]))].append(q["code"])
-        got_code = []
-        for x in named:
-            cc = coded.get((x["horse_name"], x["birth_year"]), [])
-            if len(cc) == 1:
-                x["horse_code"] = cc[0]
-                got_code.append(x)
-        newly += got_code
-        log(f"名前だけの結び {len(named)}・後から code が付いた {len(got_code)}")
-        log(f"再ひも付け 対象 {len(old)}・新たに結べた {len(newly)}")
+        old, newly = relink_stored(base, rkey, prof, auc, today, exclude={(today.year, k) for k in keep})
         if not a.apply:
             log("ドライラン= 書かない"); return 0
         bad = upsert_rows(base, wkey, rows + newly)
