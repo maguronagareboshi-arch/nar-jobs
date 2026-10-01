@@ -79,7 +79,7 @@ create index on tmp_d (horse_name);
 -- D2= 2 歳の走ぜんぶ(窓の中の age=2 の「走った」行・9/25 ユーザー決定)。sd/bd/st の母集団
 drop table if exists tmp_d2;
 create temp table tmp_d2 as
-select horse_name, distance_m, track, finish, win_pay from tmp_sr
+select horse_name, birth_date, race_date, age, distance_m, track, finish, win_pay from tmp_sr   -- 生年月日・日付・齢= ped_key 用(10/2)
 where age = 2 and race_date >= (select w_from from tmp_sw);
 create index on tmp_d2 (horse_name);
 
