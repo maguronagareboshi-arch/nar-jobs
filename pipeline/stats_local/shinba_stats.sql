@@ -53,6 +53,8 @@ create or replace function pg_temp.auc_group(src text) returns text language sql
 drop table if exists tmp_sw;
 create temp table tmp_sw as
 select (current_date - interval '3 years')::date as w_from,
+       -- §304c sv/bv(父・母父×場×距離帯)の窓= ここ 1 か所。今は 3 年(2014 年からに広げるかはユーザー確認中)
+       (current_date - interval '3 years')::date as sv_from,
        (select ((value->>'built')::date - interval '3 years')::date + 180
           from public.noken_meta where key = 'noken_index') as nk_from;
 
@@ -85,6 +87,12 @@ create temp table tmp_d2 as
 select horse_name, birth_date, race_date, age, distance_m, track, finish, win_pay from tmp_sr   -- 生年月日・日付・齢= ped_key 用(10/2)
 where age = 2 and race_date >= (select w_from from tmp_sw);
 create index on tmp_d2 (horse_name);
+-- D2v= sv/bv の母集団(2 歳の走ぜんぶ・窓は tmp_sw.sv_from)
+drop table if exists tmp_d2v;
+create temp table tmp_d2v as
+select horse_name, birth_date, race_date, age, distance_m, track, finish, win_pay from tmp_sr
+where age = 2 and race_date >= (select sv_from from tmp_sw);
+create index on tmp_d2v (horse_name);
 
 -- 血統(10/2・案 c)= 走の鍵 pk で nar_kd_pedigree を引き、無い項目は nar_horses(馬名だけの鍵)へ落とす。
 --   pk= 生年月日がある走は 'YYYY-MM-DD'(KD の (馬名, 生年月日)・同じ組が 2 頭なら NU を先・ketto の小さい方)。
@@ -202,11 +210,11 @@ from tmp_d2 d join tmp_ped h on h.horse_name = d.horse_name and h.pk = pg_temp.p
 -- §304(10/2) sv 父×場×距離帯 / bv 母父×場×距離帯(D2)。b= 場|距離帯(例 'funabashi|d1000')。帯が無い走は作らない
 insert into tmp_kv
 select 'sv', h.sire, d.track || '|' || pg_temp.band_dist(d.distance_m), d.finish, d.win_pay
-from tmp_d2 d join tmp_ped h on h.horse_name = d.horse_name and h.pk = pg_temp.ped_key(d.birth_date, d.race_date, d.age)
+from tmp_d2v d join tmp_ped h on h.horse_name = d.horse_name and h.pk = pg_temp.ped_key(d.birth_date, d.race_date, d.age)
 where pg_temp.band_dist(d.distance_m) is not null;
 insert into tmp_kv
 select 'bv', h.broodmare_sire, d.track || '|' || pg_temp.band_dist(d.distance_m), d.finish, d.win_pay
-from tmp_d2 d join tmp_ped h on h.horse_name = d.horse_name and h.pk = pg_temp.ped_key(d.birth_date, d.race_date, d.age)
+from tmp_d2v d join tmp_ped h on h.horse_name = d.horse_name and h.pk = pg_temp.ped_key(d.birth_date, d.race_date, d.age)
 where pg_temp.band_dist(d.distance_m) is not null;
 
 -- td 厩舎の新馬戦 / br 生産牧場 / jk 騎手×場の新馬戦(S)
@@ -217,10 +225,11 @@ from tmp_s s join tmp_ped h on h.horse_name = s.horse_name and h.pk = pg_temp.pe
 insert into tmp_kv select 'jk', s.jockey, s.track, s.finish, s.win_pay from tmp_s s;
 
 -- nj 能検の騎手→初戦の騎手(同じ= same / 替わった= chg)。a= 調教師と '*'。索引に j の無い馬は数えない
+-- §304c(10/2 ユーザー指示) nj/nq/nw/ka/kt に a='v:'||初出走の場 を足す(画面の比べ表・カードはこの場で数える)。接頭辞= 調教師名・地区との字の衝突よけ
 insert into tmp_kv
 select 'nj', v.a, case when regexp_replace(coalesce(x.jockey, ''), '\s', '', 'g') = x.nk_j then 'same' else 'chg' end,
        x.finish, x.win_pay
-from tmp_dn x cross join lateral (values (x.trainer), ('*')) v(a)
+from tmp_dn x cross join lateral (values (x.trainer), ('*'), ('v:' || x.track)) v(a)
 where x.nk_j is not null and x.nk_j <> '' and x.jockey is not null and x.jockey <> '';
 
 -- nr 日全体順位帯 / nw 週数帯 / nc 回数 / ka 上がり順位帯 / kt テン1F 順位帯。a= 地区と '*'
@@ -231,19 +240,19 @@ from tmp_dn x cross join lateral (values (x.nk_d), ('*')) v(a);
 insert into tmp_kv
 select 'nq', v.a, pg_temp.band_pct(q.q), x.finish, x.win_pay
 from tmp_dn x join tmp_nq q on q.horse_name = x.horse_name and q.birth_date is not distinct from x.birth_date
-cross join lateral (values (x.nk_d), ('*')) v(a);
+cross join lateral (values (x.nk_d), ('*'), ('v:' || x.track)) v(a);
 insert into tmp_kv
 select 'nw', v.a, pg_temp.band_week(x.race_date - x.nk_date), x.finish, x.win_pay
-from tmp_dn x cross join lateral (values (x.nk_d), ('*')) v(a);
+from tmp_dn x cross join lateral (values (x.nk_d), ('*'), ('v:' || x.track)) v(a);
 insert into tmp_kv
 select 'nc', v.a, pg_temp.band_cnt(x.nk_cnt), x.finish, x.win_pay
 from tmp_dn x cross join lateral (values (x.nk_d), ('*')) v(a);
 insert into tmp_kv
 select 'ka', v.a, pg_temp.band_race(x.ar, x.nk_n), x.finish, x.win_pay
-from tmp_dn x cross join lateral (values (x.nk_d), ('*')) v(a);
+from tmp_dn x cross join lateral (values (x.nk_d), ('*'), ('v:' || x.track)) v(a);
 insert into tmp_kv
 select 'kt', v.a, pg_temp.band_race(x.t1r, x.nk_n), x.finish, x.win_pay
-from tmp_dn x cross join lateral (values (x.nk_d), ('*')) v(a);
+from tmp_dn x cross join lateral (values (x.nk_d), ('*'), ('v:' || x.track)) v(a);
 
 -- au 落札価格帯(初戦より前の最後の落札・生年月日は両方あるときだけ合わせる= R5)。a= オークション / セリ と '*'
 insert into tmp_kv
