@@ -93,8 +93,9 @@ create or replace function pg_temp.ped_key(bd date, rd date, age int) returns te
               else '' end $$;
 drop table if exists tmp_ped;
 create temp table tmp_ped as
+-- (10/2) 窓で絞らない= 兄姉 dm は 2014 年からの初戦を使う(tmp_dall)
 with k as (select distinct horse_name, pg_temp.ped_key(birth_date, race_date, age) as pk
-           from tmp_sr where race_date >= (select w_from from tmp_sw)),
+           from tmp_sr),
 kd as (select distinct on (horse_name, birth_date) * from public.nar_kd_pedigree
        where birth_date is not null
        order by horse_name, birth_date, (src = 'NU') desc, ketto),
@@ -112,6 +113,18 @@ left join kd on kd.horse_name = k.horse_name and kd.birth_date::text = k.pk
 left join ky on ky.horse_name = k.horse_name and ky.pk = k.pk
 left join public.nar_horses h on h.horse_name = k.horse_name;
 create index on tmp_ped (horse_name, pk);
+
+-- Dall= 兄姉 dm 用の 2 歳の地方初戦(10/2・窓なし= nar_runs の端 2014-01 から)。
+--   馬= (馬名, 生年)。生年= 生年月日の年、無い古い走は 走った年 − 馬齢(2022-11 の前後で鍵の形が変わっても同じ馬を 2 頭にしない)。
+--   血統はその初戦の行の ped_key で tmp_ped を引く(古い初戦は KD の (馬名, 生年) が 1 頭のときだけ・無ければ nar_horses)
+drop table if exists tmp_dall;
+create temp table tmp_dall as
+select f.* from (
+  select distinct on (horse_name, coalesce(extract(year from birth_date)::int, extract(year from race_date)::int - age)) *
+  from tmp_sr where age is not null or birth_date is not null
+  order by horse_name, coalesce(extract(year from birth_date)::int, extract(year from race_date)::int - age), race_date, race_no
+) f
+where f.age = 2;
 
 -- S= 新馬戦の出走(判定語は viewer の SHINBA_WORDS と同じ「新馬」「初出走」)
 drop table if exists tmp_s;
@@ -197,11 +210,11 @@ cross join lateral (select * from public.auction_sales s
                     order by s.auction_date desc limit 1) s
 cross join lateral (values (pg_temp.auc_group(s.source)), ('*')) v(a);
 
--- dm 兄姉の初戦(D・a= 母)。sib= 新しい順に最大 5 頭 {h 馬名, d 初戦日, t 場, f 着(中止・失格は null), p 人気}
+-- dm 兄姉の初戦(Dall・a= 母)。sib= 新しい順に最大 5 頭 {h 馬名, d 初戦日, t 場, f 着(中止・失格は null), p 人気}
 drop table if exists tmp_dm;
 create temp table tmp_dm as
 select h.dam, d.*, row_number() over (partition by h.dam order by d.race_date desc, d.horse_name) as rn
-from tmp_d d join tmp_ped h on h.horse_name = d.horse_name and h.pk = pg_temp.ped_key(d.birth_date, d.race_date, d.age)
+from tmp_dall d join tmp_ped h on h.horse_name = d.horse_name and h.pk = pg_temp.ped_key(d.birth_date, d.race_date, d.age)
 where h.dam is not null and h.dam <> '';
 
 -- ---------------------------------------------------------------- 書き込み(消して入れ直すまでを 1 トランザクション)
