@@ -177,7 +177,8 @@ def decide(B, odds, wt, going, model, meta):
 
 
 MARKS = ['◎', '○', '▲', '△', '△']
-COMBO_LINE = 1.4   # ワイド・馬連は「記録だけ」(買わない・ユーザー 2026-09-30)。研究 v28 の線。
+COMBO_LINES = {'wide': 1.4, 'umaren': 1.4}  # ワイド・馬連は「記録だけ」(買わない・ユーザー 2026-09-30)。研究 v28 の線。模型の json の combo_lines が優先
+COMBO_FLOOR = 1.2  # 線より下でも期待値 ≥ 1.2 の組は combo_all に残す(あとで線を変えて数え直すため・ユーザー 2026-10-01)
 
 
 def combo_probs(b):
@@ -195,11 +196,13 @@ def combo_probs(b):
     return {'wide': W, 'umaren': Q}
 
 
-def combo_pick(b, combos_by_kind):
-    """combos_by_kind = {'wide': [[a,b,下限,…],…], 'umaren': [[a,b,オッズ,…],…]} → 期待値 ≥ 1.4 かつ 2 頭とも p3′ ≥ 0.05 の組。"""
+def combo_pick(b, combos_by_kind, lines=None):
+    """combos_by_kind = {'wide': [[a,b,下限,…],…], 'umaren': [[a,b,オッズ,…],…]} → (線以上の組, 期待値 ≥ COMBO_FLOOR の組)。
+    どちらも 2 頭とも p3′ ≥ 0.05。線は券種ごと(lines・無ければ COMBO_LINES)。"""
+    lines = {**COMBO_LINES, **(lines or {})}
     ok = {int(x.umaban) for x in b.itertuples() if x.p3p >= 0.05}
     P = combo_probs(b)
-    out = {}
+    out, every = {}, {}
     for k, rows in combos_by_kind.items():
         got = []
         for c in rows or []:
@@ -211,10 +214,12 @@ def combo_pick(b, combos_by_kind):
             if o <= 0 or key not in P[k] or not (key[0] in ok and key[1] in ok):
                 continue
             ev = P[k][key] * o
-            if ev >= COMBO_LINE:
+            if ev >= min(COMBO_FLOOR, lines.get(k, 1.4)):
                 got.append({'pair': f'{key[0]}-{key[1]}', 'odds': o, 'ev': round(ev, 3), 'q': round(P[k][key], 4)})
-        out[k] = sorted(got, key=lambda g: -g['ev'])
-    return out
+        got = sorted(got, key=lambda g: -g['ev'])
+        every[k] = got
+        out[k] = [g for g in got if g['ev'] >= lines.get(k, 1.4)]
+    return out, every
 
 
 # ================================================================ 本番の読み書き(REST・読むのは公開の表・書くのは nar_v3_gap だけ)
@@ -406,11 +411,12 @@ def live(day, base_csv, mdir, write, until):
                     continue
                 c = b[b.buy]
                 rk = {int(u): i for i, u in enumerate(b.sort_values(['p3p', 'p1', 'umaban'], ascending=[False, False, True]).umaban)}
+                lines = {**COMBO_LINES, **(meta.get('combo_lines') or {})}
                 try:
-                    combo = combo_pick(b, latest_combos(tr, day, rno))
+                    combo, combo_all = combo_pick(b, latest_combos(tr, day, rno), lines)
                 except Exception as e:  # noqa: BLE001  組は記録だけ= 取れなくても単勝は書く
                     log(f'{tr}{rno}R: 組のオッズ 失敗 {type(e).__name__}')
-                    combo = {}
+                    combo, combo_all = {}, {}
                 val = {'model': 'v29', 'line': meta['line'], 'p3_min': meta['p3_min'], 'post': at.strftime('%H:%M'),
                        'decided_at': now.strftime('%H:%M:%S'), 'odds_asof': asof, 'n': int(len(b)),
                        'weights': int(b.bw.notna().sum()),
@@ -421,7 +427,7 @@ def live(day, base_csv, mdir, write, until):
                                     'mark': MARKS[rk[int(x.umaban)]] if rk[int(x.umaban)] < 5 else '',
                                     'p3': round(float(x.p3p), 4), 'odds': float(x.win), 'pg1': round(float(x.pg1), 4),
                                     'ev': round(float(x.ev), 3), 'buy': bool(x.buy)} for x in b.itertuples()],
-                       'combo_line': COMBO_LINE, 'combo': combo}
+                       'combo_line': lines['wide'], 'combo_lines': lines, 'combo': combo, 'combo_all': combo_all}
                 try:
                     st = put_gap(k, val, tr, day, rno) if write else 'dry'
                 except Exception as e:  # noqa: BLE001
