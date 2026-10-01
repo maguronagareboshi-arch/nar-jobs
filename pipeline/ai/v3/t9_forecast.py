@@ -178,6 +178,9 @@ def table(date, v, out=None):
         base = base.drop(columns=['u_p3', 'u_p1'], errors='ignore')
         log('t10 上乗せ 失敗(第 9 版のまま)', type(e).__name__, str(e)[:200])
     x = t8.apply_s2(base, M)
+    # 当日版の印の土台(2026-10-02): 上乗せの前の 段 2 の率。10 分前の便が発走 30 分前に、当日の体重を足した上乗せをこれに足して出し直す
+    x0 = t8.apply_s2(base.drop(columns=['u_p3', 'u_p1'], errors='ignore'), M)
+    x = x.merge(x0[Q5 + ['p1', 'p3']].rename(columns={'p1': 'p1_s2', 'p3': 'p3_s2'}), on=Q5, how='left', validate='1:1')
     x = x.merge(base[Q5 + ['_linked']], on=Q5, how='left', validate='1:1')
     x = x.merge(x7[Q5 + ['mark']].rename(columns={'mark': 'mark7e'}), on=Q5, how='left', validate='1:1')
     x = x.merge(vo.nk(T[Q5 + ['o_bw']]), on=Q5, how='left', validate='1:1') if 'o_bw' in T.columns \
@@ -207,7 +210,7 @@ def table(date, v, out=None):
         L += ['', '| 印 | 馬番 | 馬名 | 3 着以内の確率 | 勝つ確率 |', '|---|---|---|---|---|']
         L += [f'| {r.mark} | {r.umaban} | {r.horse_name} | {r.p3p:.3f} | {r.p1:.3f} |' for r in g.itertuples()]
     out.mkdir(parents=True, exist_ok=True)
-    x[KEY + ['umaban', 'horse_name', 'n', 'rank', 'mark', 'p3p', 'p1', 'p3', '_linked', 'mark7e']].to_csv(
+    x[KEY + ['umaban', 'horse_name', 'n', 'rank', 'mark', 'p3p', 'p1', 'p3', '_linked', 'mark7e', 'p1_s2', 'p3_s2']].to_csv(
         out / f'{name}.csv', index=False, encoding='utf-8-sig')
     (out / f'{name}.md').write_text('\n'.join(L) + '\n', encoding='utf-8')
     print(f"{date} 第 9 版 {o.VN[v]}: {x[KEY].drop_duplicates().shape[0]} R・{len(x)} 頭 → {out / (name + '.md')}"

@@ -89,6 +89,12 @@ jobs:
           V3_GAP_KEY=$(printf %s "$V3_GAP_KEY" | tr -d '\r\n'); export V3_GAP_KEY
           gh release download "${TAG:-v3-gap-model-20261001}" -p 'v3_gap_model.tar.gz.enc' -D in
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_GAP_KEY -in in/v3_gap_model.tar.gz.enc | tar -C gapm -xzf -
+          # 2026-10-02: 当日版の印(発走 30 分前・当日の体重入り)の模型。無ければ当日版は出さない(10 分前の候補はそのまま)
+          if gh release download v3-t11-day-20261002 -p 'v3_t11_day.tar.gz.enc' -D in; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_GAP_KEY -in in/v3_t11_day.tar.gz.enc | tar -C gapm -xzf - || echo "当日版の模型を開けない"
+          else
+            echo "当日版の模型なし(当日版の印は出さない)"
+          fi
           ls gapm; wc -l in/v29_base.csv
           echo "ok=yes" >> "$GITHUB_OUTPUT"
 

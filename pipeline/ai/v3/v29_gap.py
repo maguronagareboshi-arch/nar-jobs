@@ -42,6 +42,9 @@ XCOL = ['c_fin1', 'c_fin5', 'c_top3_5', 'a_si1', 'a_ab', 'k_si_rank', 'k_ab_rank
 CY6 = ['cy_day_pct', 'cy_self', 'cy_stable', 'cy_int', 'cy_n14', 'cy_gap']
 HIST = ['bw_norm', 'BEST', 'PREVW', 'PREVF', 'PREVD']
 MODEL_FILE, META_FILE = 'v29_gap_y1.txt', 'v29_gap.json'
+DAY_META = 't11_day.json'  # 当日版の印の上乗せ(51 本 + 当日の体重 15 本・研究 nankan-ai-v3 src/f5_scripts/t11_day.py)
+DAY_MIN = 30      # 当日版の印は発走 30 分前から出す(体重はもう出ている・ユーザー 2026-10-01)
+DAY_LAST_MIN = 16  # 発走 15 分前を過ぎた印は DB のトリガーが捨てるので、その手前まで
 DECIDE_MIN = 10   # 発走 10 分前 = 締め切り(発走 2 分前)の 8 分前を過ぎたら決める
 LATE_MIN = 3      # 発走 3 分前を過ぎても決まっていないレースは見送る(古い材料で後から書かない)
 REC_FROM_MIN = 15  # 答え合わせは最後の発走の 15 分後から(払戻は発走の 15〜18 分後に入る)
@@ -90,7 +93,8 @@ def bw_hist(h, day, hids):
 
 def base(day, h, T, F, table_csv):
     """前日の表(p1・p3′・印)+ 理由の列 + 調教 6 列 + 体重の履歴 → 1 馬 1 行。"""
-    x = _nk(pd.read_csv(table_csv, encoding='utf-8-sig'))[Q5 + ['horse_name', 'n', 'p1', 'p3p']]
+    x = _nk(pd.read_csv(table_csv, encoding='utf-8-sig'))
+    x = x[Q5 + ['horse_name', 'n', 'p1', 'p3p'] + [c for c in ('p1_s2', 'p3_s2') if c in x.columns]]  # p*_s2 = 当日版の印の土台
     t = _nk(T[T.race_date.astype(str).str[:10] == day])[Q5 + XCOL].drop_duplicates(Q5)
     f = _nk(F)[Q5 + CY6].drop_duplicates(Q5) if F is not None and len(F) else pd.DataFrame(columns=Q5 + CY6)
     d = _nk(h[(h.race_date.astype(str).str[:10] == day) & h.track.isin(NANKAN)])
@@ -150,6 +154,66 @@ def feats(B, odds, wt, going):
     b['G4'] = b.G3 * (b.PREVF >= 4)
     b['G5'] = b.G3.where((b.PREVF >= 4) & (dprev.abs() >= 8))
     return b
+
+
+def load_day(mdir):
+    """当日版の印の上乗せの模型(t11_day.json・t11_day_{p3,p1}_s*.txt)。無ければ None = 当日版は出さない(10 分前の候補はそのまま)。"""
+    p = Path(mdir) / DAY_META
+    if not p.exists():
+        return None
+    import lightgbm as lgb
+    m = json.loads(p.read_text(encoding='utf-8'))
+    return m['feats'], {t: [lgb.Booster(model_str=(Path(mdir) / Path(f).name).read_text(encoding='utf-8')) for f in fs]
+                        for t, fs in m['targets'].items()}
+
+
+def _sum3(p3):
+    """合計 3 にそろえる(t6_base.p3prime と同じ: logit をずらす二分法 [−30, +30]・100 回)。"""
+    p = np.clip(np.asarray(p3, float), 1e-6, 1 - 1e-6)
+    z = np.log(p / (1 - p))
+    lo, hi = -30.0, 30.0
+    for _ in range(100):
+        mid = (lo + hi) / 2
+        lo, hi = (mid, hi) if (1 / (1 + np.exp(-(z + mid)))).sum() < 3 else (lo, mid)
+    return 1 / (1 + np.exp(-(z + (lo + hi) / 2)))
+
+
+def day_marks(Bk, odds, w, going, dm, day):
+    """当日版の印 = 前日の段 2 の率(上乗せの前 p1_s2・p3_s2)の logit に、51 本 + 当日の体重 15 本の上乗せを足す。
+    オッズのある馬だけ(取消を除く)。→ nar_ai_marks の 1 行(model v3-9・timing last 用)か None。"""
+    if dm is None or not {'p1_s2', 'p3_s2'} <= set(Bk.columns) or Bk.p1_s2.isna().all():
+        return None
+    b = feats(Bk, odds, w, going)
+    if len(b) < 2:
+        return None
+    cols, M = dm
+    X = b.reindex(columns=cols).astype(float).to_numpy()
+
+    def lg(p):
+        p = np.clip(np.asarray(p, float), 1e-6, 1 - 1e-6)
+        return np.log(p / (1 - p))
+    r = {t: 1 / (1 + np.exp(-(lg(b[f'p{t[1]}_s2']) + np.mean([m.predict(X, raw_score=True) for m in ms], axis=0))))
+         for t, ms in M.items()}
+    p1 = r['p1'] / r['p1'].sum()
+    p3 = np.maximum(r['p3'], p1)
+    p3p = _sum3(p3) if len(b) > 3 else np.minimum(p3, 1.0)
+    d = pd.DataFrame({'num': b.umaban.astype(int).to_numpy(), 'p1': p1, 'p3': p3p, 'p3_raw': p3})
+    d = d.sort_values(['p3', 'p1', 'num'], ascending=[False, False, True], kind='mergesort').reset_index(drop=True)
+    marks = [{'num': int(x.num), 'mark': MARKS[i], 'score': round(float(x.p3) * 100, 1)} for i, x in enumerate(d.itertuples()) if i < 5]
+    runners = [{'num': int(x.num), 'p1': round(float(x.p1), 4), 'p3': round(float(x.p3), 4), 'p3_raw': round(float(x.p3_raw), 4)}
+               for x in d.sort_values('num').itertuples()]
+    tr, rno = Bk.track.iloc[0], int(Bk.race_no.iloc[0])
+    meta = {'n': int(len(d)), 'model': 'v3-9', 'timing': 'last', 'stamp': 'v3-9 当日版(第10版 + 当日の体重 15 本・t11)',
+            'weights': int(b.bw.notna().sum()), 'going': going, 'runners': runners}
+    return {'track': tr, 'race_date': day, 'race_no': rno, 'marks': marks, 'meta': meta}
+
+
+def write_day(row, day):
+    """当日版の印を nar_ai_marks(model v3-9・timing last = 直前予想の枠・毎回上書き)に書く。前日の印(morning)は凍結のまま。"""
+    sys.path.insert(0, str(HERE.parent))
+    import base_v1 as B1
+    B1.MODEL_ID = 'v3-9'
+    return B1.write_marks([row], day, 'last')
 
 
 def load_model(mdir):
@@ -351,9 +415,17 @@ def live(day, base_csv, mdir, write, until):
     B = _nk(pd.read_csv(base_csv, encoding='utf-8-sig'))
     end = dt.datetime.combine(dt.date.fromisoformat(day), dt.time(*map(int, until.split(':'))), JST)
     log('day', day, 'base', len(B), '頭', B[KEY].drop_duplicates().shape[0], 'R', 'write', write, 'until', until)
+    try:
+        dm = load_day(mdir)
+    except Exception as e:  # noqa: BLE001  当日版が読めなくても 10 分前の候補は出す
+        log('当日版の模型 読めない', type(e).__name__)
+        dm = None
+    has_s2 = {'p1_s2', 'p3_s2'} <= set(B.columns) and B.p1_s2.notna().any()
+    log('当日版の印:', 'あり' if dm is not None and has_s2 else f'なし(模型 {dm is not None}・土台の段 2 の率 {has_s2})')
     done = done_keys(day) if write else set()
+    day_done = set()
     wt, go, wt_at = {}, {}, None
-    n_w = n_buy = 0
+    n_w = n_buy = n_day = 0
     t_start, last_at = time.monotonic(), None
     while True:
         now = dt.datetime.now(JST)
@@ -377,9 +449,41 @@ def live(day, base_csv, mdir, write, until):
                 continue
             todo.append((mins, r, k, at))
         if not todo:
-            log('終わり: 書いた', n_w, 'R・候補', n_buy, '頭・最後の発走', last_at and f'{last_at:%H:%M}')
+            log('終わり: 書いた', n_w, 'R・候補', n_buy, '頭・当日版の印', n_day, 'R・最後の発走', last_at and f'{last_at:%H:%M}')
             _record_wait(day, write, last_at, t_start)
             return 0
+        # 当日版の印(発走 30〜16 分前・体重が出たら 1 回)。失敗しても 10 分前の候補は止めない
+        dd = [x for x in todo if DAY_LAST_MIN < x[0] <= DAY_MIN and x[2] not in day_done] if dm is not None and has_s2 else []
+        if dd:
+            if any(not wt.get((x[1]['track'], int(x[1]['race_no']))) for x in dd) and (wt_at is None or (now - wt_at).total_seconds() > 60):
+                try:
+                    wt, go = official_today(day)
+                except Exception as e:  # noqa: BLE001
+                    log('公式の当日 ZIP: 失敗', type(e).__name__)
+                wt_at = now
+            for mins, r, k, at in dd:
+                tr, rno = r['track'], int(r['race_no'])
+                w = wt.get((tr, rno), {})
+                if not w:
+                    if mins > DAY_LAST_MIN + 1.5:
+                        continue  # 体重がまだ = 次の回
+                    log(f'{tr}{rno}R: 当日版の印 体重が出ないまま 16 分前(前日の印のまま)')
+                    day_done.add(k)
+                    continue
+                try:
+                    odds, _ = latest_odds(tr, day, rno)
+                    Bk = B[(B.track == tr) & (B.race_no == rno)]
+                    row = day_marks(Bk, odds or {}, w, go.get((tr, rno)) or r.get('going') or '', dm, day) if odds and not Bk.empty else None
+                    if row is None:
+                        log(f'{tr}{rno}R: 当日版の印 出せない(オッズか土台が無い)')
+                    else:
+                        took = write_day(row, day) if write else 'dry'
+                        n_day += 1
+                        log(f'{tr}{rno}R: 当日版の印 発走 {at:%H:%M}・{now:%H:%M:%S}・体重 {row["meta"]["weights"]}/{row["meta"]["n"]} 頭'
+                            f'・◎ {row["marks"][0]["num"] if row["marks"] else "-"}・書き込み {took}')
+                except Exception as e:  # noqa: BLE001
+                    log(f'{tr}{rno}R: 当日版の印 失敗 {type(e).__name__} {str(e)[:120]}')
+                day_done.add(k)
         due = [x for x in todo if x[0] <= DECIDE_MIN]
         if due:
             need = [x for x in due if len(wt.get((x[1]['track'], int(x[1]['race_no'])), {})) == 0]
