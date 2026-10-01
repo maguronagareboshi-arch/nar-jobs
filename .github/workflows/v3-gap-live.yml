@@ -22,7 +22,7 @@ on:
       model_tag:
         description: '模型のリリース tag'
         required: false
-        default: 'v3-gap-model-20260930'
+        default: 'v3-gap-model-20261001'
 
 concurrency:
   group: v3-gap-live-${{ github.event.inputs.part }}
@@ -87,7 +87,7 @@ jobs:
           unzip -q -o in/base.zip -d in
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v29_base.csv.enc -out in/v29_base.csv
           V3_GAP_KEY=$(printf %s "$V3_GAP_KEY" | tr -d '\r\n'); export V3_GAP_KEY
-          gh release download "${TAG:-v3-gap-model-20260930}" -p 'v3_gap_model.tar.gz.enc' -D in
+          gh release download "${TAG:-v3-gap-model-20261001}" -p 'v3_gap_model.tar.gz.enc' -D in
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_GAP_KEY -in in/v3_gap_model.tar.gz.enc | tar -C gapm -xzf -
           ls gapm; wc -l in/v29_base.csv
           echo "ok=yes" >> "$GITHUB_OUTPUT"
