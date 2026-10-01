@@ -100,6 +100,20 @@ jobs:
           rm -f in/v3_fixed.tar.gz.enc
           du -sh v3/*; df -h / | tail -n 1
 
+      # 第 10 版の上乗せの模型(t10_up.json・t10_up_{p3,p1}_s{0,1,2}.txt)。無ければ第 9 版のまま印を出す
+      - name: download t10 uplift models
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-t10-up-20261001 -p 'v3_t10_up.tar.gz.enc' -D in
+          mkdir -p v3/models
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_t10_up.tar.gz.enc | tar -C v3/models -xzf -
+          rm -f in/v3_t10_up.tar.gz.enc
+          ls -l v3/models | grep t10_up
+
       # ---------------------------------------------------------------- 毎日変わる材料(読むだけ)
       - name: fetch forward copy (db_*_forward_t3)
         if: steps.pc.outputs.run == 'yes'

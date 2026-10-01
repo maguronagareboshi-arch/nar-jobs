@@ -172,7 +172,8 @@ def apply_s2(x, M):
     r = {}
     for t, bc_ in (('Y1', 'p1'), ('Y3', 'p3')):
         w = np.array([M[t]['切片']] + [M[t][c] for c in cols])
-        r[t] = 1 / (1 + np.exp(-(s2.lg(D[bc_].to_numpy(float)) + w[0] + X @ w[1:])))
+        u = D['u_' + bc_].fillna(0.0).to_numpy(float) if 'u_' + bc_ in D.columns else 0.0  # 第 10 版の上乗せ(t10_up)
+        r[t] = 1 / (1 + np.exp(-(s2.lg(D[bc_].to_numpy(float)) + w[0] + X @ w[1:] + u)))
     y = D[KEY + ['umaban', 'n']].copy()
     y['p1'] = r['Y1'] / pd.Series(r['Y1'], index=y.index).groupby([y[k] for k in KEY]).transform('sum').to_numpy()
     y['p3'] = np.maximum(r['Y3'], y.p1)

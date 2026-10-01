@@ -88,7 +88,7 @@ def _capture(cap):
 
     def f1(h, races, *a, **k):
         r = f0(h, races, *a, **k)
-        cap['h'], cap['T'] = h, r[0]
+        cap['h'], cap['T'], cap['races'] = h, r[0], races
         return r
 
     def c1(*a, **k):
@@ -121,6 +121,17 @@ def main():
     try:  # v29 の前日の土台(失敗しても予想の表と書き込みは止めない)
         import v29_gap
         vb = v29_gap.base(day, cap['h'], cap['T'], cap.get('F'), csv_path)
+        try:  # v31: 前に捨てた材料の前日版 51 本(失敗しても v29 の土台は書く = 模型は欠けとして読む)
+            import time as _t
+            import v31_bundle
+            t0 = _t.time()
+            F51 = t9.LAST_F51.get(day)  # 第 10 版の上乗せで作った分を使い回す(無ければ作る)
+            if F51 is None:
+                F51 = v31_bundle.feats51(day, cap['h'], cap['races'], log=log)
+            vb = vb.merge(F51, on=['track', 'race_date', 'race_no', 'umaban'], how='left', validate='1:1')
+            log('v31 51 本', F51.shape, '秒', round(_t.time() - t0), 'あり率', round(float(F51.drop(columns=['track', 'race_date', 'race_no', 'umaban']).notna().mean().mean()), 3))
+        except Exception as e:  # noqa: BLE001
+            log('v31 51 本 失敗', type(e).__name__, str(e)[:200])
         vb.to_csv(out / f'{day}_v29_base.csv', index=False, encoding='utf-8-sig')
         log('v29 base', len(vb), '頭', 'hist', round(float(vb.bw_norm.notna().mean()), 3))
     except Exception as e:  # noqa: BLE001

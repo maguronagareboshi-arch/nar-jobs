@@ -160,7 +160,7 @@ def load_model(mdir):
 
 def score(b, model, meta):
     """模型の勝つ率 pg1(レース内で合計 1)・期待値 ev・候補の印 buy。"""
-    X = b[meta['features']].astype(float)
+    X = b.reindex(columns=meta['features']).astype(float)  # v31: 前日の土台に無い列(51 本の作りに失敗した日)は欠けとして読む
     q = b.q.clip(1e-4, 1 - 1e-4).to_numpy()
     z = np.log(q / (1 - q)) + model.predict(X, raw_score=True)
     p = 1 / (1 + np.exp(-z))

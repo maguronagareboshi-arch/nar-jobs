@@ -38,6 +38,7 @@ PFX = 't9'
 JP = MD / 't9_s2.json'
 OUT9 = V3 / 't9_open_preds.parquet'
 TR_LO, TR_HI = t8.TR_LO, t8.TR_HI
+LAST_F51 = {}  # table が作った 51 本(日付 → 表)。v3_daily が v29 の土台に使い回す
 
 # t7e の予想・学び直しを 182 列・t9 の名前で使う(t7e_forecast の関数は呼ぶ時に COLS・PFX を読む)
 e7.COLS = COLS
@@ -160,6 +161,22 @@ def table(date, v, out=None):
     Rd = base[Q5].merge(hd.drop_duplicates(Q5, keep='last'), on=Q5, how='left', validate='1:1')
     F = t8.cy_feats(date, Rd, h)
     base = base.merge(F[Q5 + CY6 + ['_linked']], on=Q5, how='left', validate='1:1')
+    up = '第 10 版の上乗せ: なし(第 9 版のまま)'
+    try:  # 第 10 版 = 51 本の上乗せ(失敗したら第 9 版のまま印を出す)
+        import time as _t
+        import t10_up
+        t0 = _t.time()
+        F51, U = t10_up.uplift(date, h, races, MD, log=log)
+        LAST_F51[date] = F51
+        U = t10_up.keys(base[Q5]).merge(U, on=Q5, how='left', validate='1:1')
+        base = base.assign(u_p3=U.u_p3.to_numpy(), u_p1=U.u_p1.to_numpy())
+        cov = float(base.u_p3.notna().mean())
+        up = f'第 10 版の上乗せ: あり(付いた割合 {100 * cov:.0f}%)'
+        log('t10 上乗せ', len(F51), '頭・付いた割合', round(cov, 3), '秒', round(_t.time() - t0),
+            'u_p3 平均', round(float(base.u_p3.mean()), 3), 'u_p1 平均', round(float(base.u_p1.mean()), 3))
+    except Exception as e:  # noqa: BLE001
+        base = base.drop(columns=['u_p3', 'u_p1'], errors='ignore')
+        log('t10 上乗せ 失敗(第 9 版のまま)', type(e).__name__, str(e)[:200])
     x = t8.apply_s2(base, M)
     x = x.merge(base[Q5 + ['_linked']], on=Q5, how='left', validate='1:1')
     x = x.merge(x7[Q5 + ['mark']].rename(columns={'mark': 'mark7e'}), on=Q5, how='left', validate='1:1')
@@ -175,6 +192,7 @@ def table(date, v, out=None):
     L = [f'# 予想表 {date}(第 9 版・{o.VN[v]}・オッズ・人気は見ない)', '',
          '第 9 版 = 第 8 版から中央の前走の人気(j7_last_pop)を外した 182 列 + 調教の数字の上乗せ(段 2・学び 2022-01〜2026-08)。'
          '調教の短評・印・談話は使わない。前日の材料だけの模型(当日版も同じ模型)。', '',
+         up + '(前に捨てた材料の前日版 51 本を 3 着内と勝つ率に上乗せ・学び 2016〜2026-08)。', '',
          '調教の付いた割合(場ごと): ' + '・'.join(f'{t} {100 * s:.0f}%' for t, s in share.items())
          + f'(追い切りの元: CSV + 毎日の JSON {wi["json_races"]} レース・JSON の最後 {wi["json_last"]})。調教の無い馬は欠け扱い。', '',
          f'注記: 中央の成績(kd_jra_runs)は {jl} までしか無い。能力試験は公式サイトから {info["試験の最後の日"]} まで。'
