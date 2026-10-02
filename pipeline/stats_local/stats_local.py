@@ -399,7 +399,10 @@ def _rest(method, path, body=None, prefer=None):
             req = urllib.request.Request(f"{url}/rest/v1/{path}", data=data, method=method, headers=h)
             with urllib.request.urlopen(req, timeout=120) as r:
                 r.read()
-            return
+                cr = r.headers.get("Content-Range") or ""
+            # Prefer: count=exact のとき Content-Range は "*/N"(N= 当たった行数)
+            tail = cr.rsplit("/", 1)[-1] if "/" in cr else ""
+            return int(tail) if tail.isdigit() else None
         except urllib.error.HTTPError as e:
             if e.code < 500 or i == 3:
                 raise RuntimeError(f"REST {method} {path.split('?')[0]} → {e.code} {e.read()[:300]!r}")
@@ -411,6 +414,19 @@ def _rest(method, path, body=None, prefer=None):
 
 def _q(v):
     return '"' + str(v).replace("\\", "\\\\").replace('"', '\\"') + '"'
+
+
+def _delete_filter(keys, part):
+    """消す行の鍵の値(各行 = keys と同じ長さの列)から PostgREST の filter を作る。"""
+    for r in part:
+        if len(r) != len(keys):
+            raise SystemExit(f"消す行の鍵の数が合わない: {keys} / {r!r}")
+    if len(keys) == 1:
+        flt = f"{keys[0]}=in.({','.join(_q(r[0]) for r in part)})"
+    else:
+        ors = ",".join("and(" + ",".join(f"{k}.eq.{_q(v)}" for k, v in zip(keys, r)) + ")" for r in part)
+        flt = "or=(" + ors + ")"
+    return urllib.parse.quote(flt, safe="=&")
 
 
 def cmd_apply(allow_large):
@@ -441,16 +457,19 @@ def cmd_apply(allow_large):
         for i in range(0, len(up), BATCH):
             _rest("POST", f"{t}?on_conflict={','.join(keys)}", up[i:i + BATCH],
                   prefer="resolution=merge-duplicates,return=minimal")
-        gone = rows(f"select {', '.join(f'{k}::text' for k in keys)} from prod.diff_{t} where st = 'prod_only'")
+        # rows() は "|" で割るので鍵の値に "|" がある(nar_shinba_stats の b = "佐賀|d1000" 等)と壊れる
+        # → json で受ける(2026-10-02 sv/bv 176 行が消えなかった件)
+        ko = ", ".join(f"'{k}', {k}::text" for k in keys)
+        gone = [[d[k] for k in keys] for d in (json.loads(ln) for ln in psql_local(
+            f"select json_build_object({ko}) from prod.diff_{t} where st = 'prod_only'", fetch=True).splitlines() if ln)]
+        deleted = 0
         for i in range(0, len(gone), 50):
             part = gone[i:i + 50]
-            if len(keys) == 1:
-                flt = f"{keys[0]}=in.({','.join(_q(r[0]) for r in part)})"
-            else:
-                ors = ",".join("and(" + ",".join(f"{k}.eq.{_q(v)}" for k, v in zip(keys, r)) + ")" for r in part)
-                flt = "or=(" + ors + ")"
-            _rest("DELETE", f"{t}?" + urllib.parse.quote(flt, safe="=&"), prefer="return=minimal")
-        log(f"apply {t}: upsert {len(up)} 行 / 消す {len(gone)} 行(見込み {s['changed'] + s['local_only']} / {s['prod_only']})")
+            n = _rest("DELETE", f"{t}?" + _delete_filter(keys, part), prefer="return=minimal,count=exact")
+            if n != len(part):
+                raise SystemExit(f"{t} の DELETE が {n} 行しか消えない(見込み {len(part)} 行)= 鍵の組み立てを確かめる")
+            deleted += n
+        log(f"apply {t}: upsert {len(up)} 行 / 消す {deleted} 行(見込み {s['changed'] + s['local_only']} / {s['prod_only']})")
 
 
 def main(argv):
