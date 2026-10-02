@@ -252,9 +252,15 @@ insert into tmp_kv
 select 'nq', v.a, pg_temp.band_pct(q.q), x.finish, x.win_pay
 from tmp_dn x join tmp_nq q on q.horse_name = x.horse_name and q.birth_date is not distinct from x.birth_date
 cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
+-- (10/2 ユーザー決定) nw だけ・兵庫だけ= 能検の記録の始まり+180 日より前の初出走を外す(記録より前に能検を受けた馬が入らず「9週〜」が少なく出るため)。
+--   外すのは a= 'hyogo'・'v:園田'・'v:姫路' の行だけ。'*' とほかの地区・ほかの kind は変えない。画面の見出しは 'win' 行の nw_from/nw_label
+drop table if exists tmp_nwh;
+create temp table tmp_nwh as
+select (min(k.date) + 180)::date as d from public.noken_recs k where k.d = 'hyogo';
 insert into tmp_kv
 select 'nw', v.a, pg_temp.band_week(x.race_date - x.nk_date), x.finish, x.win_pay
-from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
+from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a)
+where not (coalesce(v.a, '') in ('hyogo', 'v:園田', 'v:姫路') and x.race_date < coalesce((select d from tmp_nwh), x.race_date));
 insert into tmp_kv
 select 'nc', v.a, pg_temp.band_cnt(x.nk_cnt), x.finish, x.win_pay
 from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
@@ -310,11 +316,16 @@ select 'win', t.track, '',
          'nk_from', coalesce(case when s.track is not null and s.from_date > g.d then s.from_date end, g.d),
          'nk_label', case when g.d is null then '能検の記録なし'
                           when s.track is not null and s.from_date > g.d then '豪州産の砂に変わった' || to_char(s.from_date, 'YYYY"年"FMMM"月から"')
-                          else to_char(g.d, 'YYYY"年"FMMM"月から"') end),
+                          else to_char(g.d, 'YYYY"年"FMMM"月から"') end)
+       -- nw(能検から今回まで)だけの始まり= 兵庫の場だけ(10/2)。ほかの場は足さない(画面は nk_label のまま)
+       || case when t.track in ('園田', '姫路') and h.d is not null
+               then jsonb_build_object('nw_from', h.d, 'nw_label', to_char(h.d, 'YYYY"年"FMMM"月から"'))
+               else '{}'::jsonb end,
        current_date, now()
 from (select distinct track from tmp_sr) t
 left join tmp_sand s on s.track = t.track
 cross join tmp_sw w
+cross join tmp_nwh h
 cross join lateral (select coalesce(s.from_date, w.sv_from) as d) f
 -- g= その場の地区の能検の記録の一番古い日(地区ごとに始まりが違う= 船橋・川崎・浦和は 2026-01 から・10/2)。
 --   ⛔その場で初出走した馬の能検の日の最小にしない= 他地区で能検を受けた少数の馬で古い日に引っぱられる(船橋が 2024-07 になった)
