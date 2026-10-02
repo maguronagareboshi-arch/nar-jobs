@@ -694,7 +694,10 @@ def main(argv=None):
                     flush()
 
     ok = [h for h in horses if not h.get("fetch_error")]
-    summary_line = f"馬 {len(horses)} 頭(失敗 {len(horses) - len(ok)})・中央の走 {len(runs)} 行"
+    # 頁に走が無い馬(初出走など= 中央を走っていない)は失敗に数えない(10/3: 「失敗 26」の多くがこれで紛らわしかった)
+    no_jra = sum(1 for h in horses if h.get("fetch_error") == "no_kanzendata_blocks")
+    summary_line = (f"馬 {len(horses)} 頭(中央の走なし {no_jra}・失敗 {len(horses) - len(ok) - no_jra})"
+                    f"・中央の走 {len(runs)} 行")
     log(summary_line)
     # cloud(2026-09-29): 失敗の種類を件数だけ出す(初回の dry-run で 56 頭中 18 頭が失敗・種類がログに無かった)
     errs = {}
