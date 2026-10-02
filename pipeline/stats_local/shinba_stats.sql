@@ -342,8 +342,13 @@ from (select distinct track from tmp_sr) t
 left join tmp_sand s on s.track = t.track
 cross join tmp_sw w
 cross join lateral (select coalesce(s.from_date, w.sv_from) as d) f
--- g= その場で初出走した馬の、能検の記録の一番古い日(地区ごとに記録の始まりが違う= 船橋・川崎・浦和は 2026-01 から・10/2)
-cross join lateral (select min(x.nk_date) as d from tmp_dn x where x.track = t.track) g;
+-- g= その場の地区の能検の記録の一番古い日(地区ごとに始まりが違う= 船橋・川崎・浦和は 2026-01 から・10/2)。
+--   ⛔その場で初出走した馬の能検の日の最小にしない= 他地区で能検を受けた少数の馬で古い日に引っぱられる(船橋が 2024-07 になった)
+cross join lateral (select min(k.date) as d from public.noken_recs k
+                    where k.d = case t.track when '船橋' then 'funabashi' when '大井' then 'ooi' when '川崎' then 'kawasaki' when '浦和' then 'urawa'
+                                  when '門別' then 'monbetsu' when '園田' then 'hyogo' when '姫路' then 'hyogo' when '名古屋' then 'nagoya'
+                                  when '笠松' then 'kasamatsu' when '金沢' then 'kanazawa' when '高知' then 'kochi' when '佐賀' then 'saga'
+                                  when '盛岡' then 'iwate' when '水沢' then 'iwate' when '帯広ば' then 'banei' end) g;
 
 commit;
 
