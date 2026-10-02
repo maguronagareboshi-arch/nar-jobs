@@ -1,0 +1,23 @@
+# 2026-10-02 一回だけ: KDSCOPE 由来の血統(2014-01〜2022-10 に走った馬)を nar_horse_profiles・nar_horses に新規行だけ入れる。
+# 既存行は上書きしない(on conflict do nothing)。済んだら oneshot/kds_pedigree とこの便を消す。
+name: kds-pedigree-load
+on:
+  workflow_dispatch:
+    inputs:
+      apply:
+        description: 'true= 書く / false= 数えるだけ'
+        type: boolean
+        default: false
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: 解凍
+        run: cd oneshot/kds_pedigree && gunzip -k *.csv.gz && wc -l *.csv
+      - name: 投入
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: cd oneshot/kds_pedigree && python3 load_c_pedigree.py ${{ inputs.apply && '--apply' || '' }}
