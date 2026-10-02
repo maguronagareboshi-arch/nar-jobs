@@ -1,6 +1,6 @@
 -- §移籍まとめ D1(2026-09-30)。⛔本番への適用は本体が手動モードで(下請けは流していない)。
 -- ① 交流の除外に使う列: 競馬ブック公開頁 p.keibabook.co.jp/db/uma/{id} の「中央在籍 N戦」(表示なし= 0)。
---    書き手は 他場\scraper\fetch_jra_career.py(未コミット・本体が組み込み先を決める)。
+--    書き手は nar-jobs cloud/kb/fetch_jra_career.py(kb-daily.yml の最後の手順で毎日 --pending 300 --push)。
 --    null= まだ見ていない(cloud/horse_changes.py は null の馬を除外しない)。
 alter table nar_jra_horses add column if not exists jra_career_runs integer;
 comment on column nar_jra_horses.jra_career_runs is
