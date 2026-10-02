@@ -315,10 +315,10 @@ select 'win', t.track, '',
        jsonb_build_object(
          'from', f.d,
          'label', case when s.track is not null then '豪州産の砂に変わった' || to_char(f.d, 'YYYY"年"FMMM"月から"') else '前日までの5年' end,
-         'nk_from', coalesce(case when s.track is not null and s.from_date > g.d then s.from_date end, g.d),
-         'nk_label', case when g.d is null then '能検の記録なし'
-                          when s.track is not null and s.from_date > g.d then '豪州産の砂に変わった' || to_char(s.from_date, 'YYYY"年"FMMM"月から"')
-                          else to_char(g.d, 'YYYY"年"FMMM"月から"') end)
+         'nk_from', coalesce(case when s.track is not null and s.from_date > n.from_date then s.from_date end, n.from_date),
+         'nk_label', case when n.from_date is null then '能検の記録なし'
+                          when s.track is not null and s.from_date > n.from_date then '豪州産の砂に変わった' || to_char(s.from_date, 'YYYY"年"FMMM"月から"')
+                          else to_char(n.from_date, 'YYYY"年"FMMM"月から"') end)
        -- (10/2 案A) 能検の比べ表の数え始め= その場の属する地区の tmp_nkd(全部の場に出す・'*' の行は出さない)
        || case when n.from_date is not null
                then jsonb_build_object('nw_from', n.from_date, 'nw_label', to_char(n.from_date, 'YYYY"年"FMMM"月から"'))
