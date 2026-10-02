@@ -17,6 +17,7 @@ import copy
 import datetime as dt
 import json
 import os
+import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -39,6 +40,22 @@ CHUNK = 30
 # 競馬ブックの行の鍵(ROW_KEYS)→ 足す順。⛔寸評は元から取っていない
 KB_ROW_ORDER = ("name", "sexage", "time", "weight", "trainer", "ok", "kind", "fin", "umaban", "pass_order",
                 "last3f", "jockey")
+
+
+# 字を公式(今の hyogo_noken)にそろえる(dry-run 36998298428 で突き合わせた)
+#   種別= 公式は「ゲート検査/能力検査/発走検査/自主参加」。競馬ブックの「再能試」(再の能力試験)は能力検査へ
+KIND_MAP = {"ゲート試験": "ゲート検査", "能力試験": "能力検査", "自主能検": "自主参加", "再能試": "能力検査"}
+
+
+def fix_value(k, v):
+    if k == "time":
+        return NP.fix_time(v)
+    if k == "sexage":                                # 公式は齢だけ(「2」)。競馬ブックは「牡2」
+        m = re.search(r"\d+", v)
+        return m.group(0) if m else v
+    if k == "kind":
+        return KIND_MAP.get(v, v)
+    return v
 
 
 def log(m):
@@ -64,7 +81,7 @@ def to_day(kb_day, allowed):
                 if k not in allowed:
                     dropped[k] += 1
                     continue
-                row[k] = NP.fix_time(v) if k == "time" else v
+                row[k] = fix_value(k, v)
             if row.get("name"):
                 rows.append(row)
         if not rows:
