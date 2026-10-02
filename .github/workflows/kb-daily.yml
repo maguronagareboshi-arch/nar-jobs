@@ -87,3 +87,13 @@ jobs:
           D="$(date +%Y%m%d),$(date -d tomorrow +%Y%m%d),$(date -d '2 days' +%Y%m%d)"
           if [ "$APPLY" = "1" ]; then python cloud/kb/fetch_jra_runs.py --dates "$D" --collect-cards --push
           else python cloud/kb/fetch_jra_runs.py --dates "$D" --collect-cards; fi
+      # 中央在籍の戦数(nar_jra_horses.jra_career_runs)を未取得の馬から 300 頭(1 頭 3 秒待ち= 約 15 分)。落ちても便全体は落とさない。
+      - name: jra career pending
+        if: '!cancelled()'
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ "$APPLY" = "1" ]; then python cloud/kb/fetch_jra_career.py --pending 300 --push
+          else python cloud/kb/fetch_jra_career.py --pending 300; fi
