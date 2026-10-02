@@ -1,0 +1,39 @@
+# 案件 A・B・D(2026-10-02)の一回便: 騎手の勝負服・走りの例外・馬名の意味・兄弟の器を作って CSV を入れる。⛔手で回すだけ(cron なし)。
+# CSV は PC の KDSCOPE から research\kdscope-ideas\abd_build の台本で作り、pipeline/kds_abd/*.csv.gz に置く。
+# confirm が apply でなければ 1 つの取引で流して数を出し、巻き戻す(何も残らない)。済んだらこの便と CSV は消す。
+name: kds-abd-load
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 本番へ書くときだけ apply と打つ(それ以外は数えて巻き戻す)
+        required: false
+        type: string
+        default: ''
+
+concurrency:
+  group: kds-abd-load
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: unpack csv
+        run: gunzip -k pipeline/kds_abd/*.csv.gz && wc -l pipeline/kds_abd/*.csv
+      - name: ddl and load
+        env:
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+          PGSSLMODE: require
+          IN_CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -o pipefail
+          APPLY=false; if [ "$IN_CONFIRM" = "apply" ]; then APPLY=true; fi
+          echo "apply=$APPLY"
+          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -v apply=$APPLY -X -f pipeline/kds_abd/load_abd.sql
