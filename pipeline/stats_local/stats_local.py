@@ -104,7 +104,11 @@ def log(*a):
 
 def psql_local(sql, fetch=False):
     cmd = ["psql", "-v", "ON_ERROR_STOP=1", "-X", "-q"] + (["-At"] if fetch else []) + ["-c", sql]
-    r = subprocess.run(cmd, check=True, capture_output=fetch, text=True, encoding="utf-8")
+    r = subprocess.run(cmd, capture_output=fetch, text=True, encoding="utf-8")
+    if r.returncode != 0:
+        if fetch:
+            log("psql の誤り: " + (r.stderr or "")[-1500:])
+        raise subprocess.CalledProcessError(r.returncode, cmd[:6])
     return r.stdout if fetch else None
 
 
