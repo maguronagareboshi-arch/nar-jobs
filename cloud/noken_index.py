@@ -67,7 +67,7 @@ from load_nar_official import load_env, upsert  # noqa: E402
 UA = "nar-jobs/1.0"
 JST = dt.timezone(dt.timedelta(hours=9))
 META_KEY = "noken_index"
-YEARS = 3
+YEARS = 5                # 10/2 案A= 5 年(兵庫の過去分を競馬ブックから足した)
 
 # 旧DB(現行プロジェクト)。anon は公開キー= js/data.js の SUPABASE_KEY と同一なので既定値に持つ。
 # service key は絶対に使わない(PROJECT.md 技術方針)
@@ -647,7 +647,7 @@ def main():
     ap.add_argument("--dry-run", action="store_true", help="既定。書き出すだけで投入しない")
     ap.add_argument("--out", default=str(HERE.parent / "scratchpad" / "noken_index"),
                     help="noken_index.json の書き出し先ディレクトリ")
-    ap.add_argument("--years", type=int, default=YEARS, help="何年前までの検査を入れるか(既定3)")
+    ap.add_argument("--years", type=int, default=YEARS, help="何年前までの検査を入れるか(既定5)")
     ap.add_argument("--env", help="接続先 .env(pipeline/.env.nar)")
     ap.add_argument("--max-growth", type=float, default=None,
                     help="10/2 今の索引(本番)の素のバイト数のこの倍を超えたら投入しない(終了コード 3)")
