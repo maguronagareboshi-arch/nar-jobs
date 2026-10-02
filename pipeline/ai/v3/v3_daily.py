@@ -9,6 +9,7 @@
 3. --write のときだけ nar_ai_marks に model='v3-9'・timing='morning' で書く(base_v1.write_marks = 朝の行は凍結・読み直し)。
    marks = 印の付いた馬(◎○▲△・順位の順)・score = 3 着以内の確率 p3′ × 100。
    meta = n・model・stamp・works の元・runners(全馬の num・p1 = 勝つ確率・p3 = 3 着以内の確率 p3′(表の値)・p3_raw = 上乗せ後の p3)。
+   runners には札のある馬だけ note(公式の成績と発走状況から)・note_kb(競馬ブックの寸評から)を足す(v3_notes・表示だけ)。
 固定ファイルの置き場は環境変数 V3_DATA・V3_RAW・V3_MODELS・V3_CYOKYO_CSV・V3_KD(無ければ手元のパス)。
 """
 import json
@@ -136,8 +137,16 @@ def main():
         log('v29 base', len(vb), '頭', 'hist', round(float(vb.bw_norm.notna().mean()), 3))
     except Exception as e:  # noqa: BLE001
         log('v29 base 失敗', type(e).__name__, str(e)[:200])
+    notes = {}
+    try:  # ひとこと(表示だけ・予想の計算には使わない・失敗しても予想の表と書き込みは止めない)
+        import v3_notes
+        notes = v3_notes.make(day, cap['h'], cap['T'], log=log)
+    except Exception as e:  # noqa: BLE001
+        log('ひとこと 失敗', type(e).__name__, str(e)[:200])
     del cap
     rows = build_rows(csv_path, day, src)
+    if notes:
+        log('ひとこと 付けた', v3_notes.attach(rows, notes), '頭')
     log('races', len(rows), '◎', ' '.join(f"{r['track']}{r['race_no']}R:{r['marks'][0]['num']}" for r in rows[:12] if r['marks']))
     hon, h = table_digest(csv_path)
     log('digest ◎', hon, 'sha256', h)
