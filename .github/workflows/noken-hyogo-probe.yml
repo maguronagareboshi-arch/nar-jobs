@@ -1,0 +1,32 @@
+# 兵庫(園田・西脇)能検の過去分が競馬ブックで読めるかの下見(2026-10-02)。手で回すだけ。
+# ⛔DB に書かない(DB の secrets を渡さない)。⛔public repo= 頁の HTML を artifact・cache に出さない(形だけログへ)。
+name: noken-hyogo-probe
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  TZ: Asia/Tokyo
+  KB_DATA_DIR: /tmp/kbdata
+  FETCH_WAIT_SECONDS: '2.5'
+  PYTHONUNBUFFERED: '1'
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install
+        run: pip install -q requests beautifulsoup4 lxml
+      - name: probe hyogo noken
+        env:
+          KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}
+          KEIBABOOK_PASSWORD: ${{ secrets.KEIBABOOK_PASSWORD }}
+        run: python cloud/kb/probe_kb_noken_hyogo.py
