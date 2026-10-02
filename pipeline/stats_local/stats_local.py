@@ -299,6 +299,9 @@ def cmd_ob():
     psql_local("truncate public.trainer_same_abbr")
     ex = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trainer_same_abbr_exclude.csv")
     psql_local(f"\\copy public.trainer_same_abbr from '{ex}' with (format csv, header)")
+    psql_local("truncate public.trainer_same_abbr_keep")
+    kp = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trainer_same_abbr_keep.csv")
+    psql_local(f"\\copy public.trainer_same_abbr_keep from '{kp}' with (format csv, header)")
     psql_local("analyze public.nar_name_alias")
     for k in ("owner", "breeder"):
         a = [x for x in alias if x[0] == k]

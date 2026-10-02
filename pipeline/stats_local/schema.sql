@@ -73,6 +73,11 @@ create table public.nar_name_alias (
   updated_at timestamptz not null default now(), primary key (kind, alias)
 );
 create table public.trainer_same_abbr (abbr text primary key);
+-- 10/2 上の略称の 2014〜2021 で、KDSCOPE の調教師コードがページの本人と一致した走り(入力・repo の csv)
+create table public.trainer_same_abbr_keep (
+  track text not null, race_date date not null, race_no integer not null, runner_number integer not null,
+  primary key (track, race_date, race_no, runner_number)
+);
 
 -- ---------------------------------------------------------------- 照合用
 -- 本番の出力の写しは schema prod に置く(表は集計 SQL を流した後に `like public.<表>` で作る)

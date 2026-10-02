@@ -28,7 +28,7 @@ create table if not exists public.nar_ob_graded (
 -- ---------------------------------------------------------------- 数える走
 drop table if exists tmp_obrun;
 create temp table tmp_obrun as
-select u.track, u.race_date, u.race_no, u.horse_name, u.birth_date, u.trainer, u.finish,
+select u.track, u.race_date, u.race_no, u.runner_number, u.horse_name, u.birth_date, u.trainer, u.finish,
        extract(year from u.race_date)::int as yr
 from public.nar_runs u
 where u.finish is not null
@@ -42,8 +42,12 @@ select 'trainer', r.trainer, r.yr, r.track, count(*),
        count(*) filter (where r.finish = 1), count(*) filter (where r.finish = 2), count(*) filter (where r.finish = 3)
 from tmp_obrun r
 where r.trainer is not null and r.trainer <> ''
+  -- 2014〜2021 の同じ略称 55 は、KDSCOPE の調教師コードでページの本人と分かった走り(trainer_same_abbr_keep)だけ入れる
   and not (r.yr between 2014 and 2021
-           and regexp_replace(r.trainer, '\s', '', 'g') in (select regexp_replace(abbr, '\s', '', 'g') from public.trainer_same_abbr))
+           and regexp_replace(r.trainer, '\s', '', 'g') in (select regexp_replace(abbr, '\s', '', 'g') from public.trainer_same_abbr)
+           and not exists (select 1 from public.trainer_same_abbr_keep k
+                           where k.track = r.track and k.race_date = r.race_date
+                             and k.race_no = r.race_no and k.runner_number = r.runner_number))
 group by r.trainer, r.yr, r.track;
 
 -- ---------------------------------------------------------------- 名簿に代表表記を付ける(馬主・生産者を縦に)
