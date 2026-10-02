@@ -337,6 +337,74 @@ def better(a, b):
     return a if score(a) >= score(b) else b
 
 
+# §304c 能検の時計 案 C(2026-10-02 画面から移した)= 同じ池(地区×場×距離×齢帯)の、その能検日より前 365 日の
+# 時計の中での百分位(0〜1)を記録ごとに q で持つ。各日の時計は「その日の中央値−窓の中央値」を n/(n+k) 倍だけ
+# 引いて補正(頭数が少ない日は 0 に寄せる)。本人も本人の日で補正。窓の頭数 20 未満・時計が無い= q なし。
+# ⛔便 shinba_stats.sql の tmp_nq と同じ定義・同じ k。以前は画面(js/data.js nokenTimePct)が索引ぜんぶ
+#   (約 400KB)を取って毎回これを計算していた= 索引を出走馬ぶんだけ引けるよう、ここで前もって計算する
+NOKEN_PCT_K = 11.1
+NOKEN_PCT_MINW = 20
+
+
+def _median(a):
+    b = sorted(a)
+    h = len(b) >> 1
+    return b[h] if len(b) % 2 else (b[h - 1] + b[h]) / 2
+
+
+def time_pct(horses):
+    """horses(馬名 → 記録の配列)の各記録に q を付ける。別名キーで同じ記録が複数の馬名に入るので、
+    池に入れる時計は記録の中身で重複を除く(画面の nokenTimePct と同じ数え方)"""
+    import bisect
+    pools, seen = {}, set()
+    for recs in horses.values():
+        for r in recs:
+            sec = time_sec(r.get("time"))
+            if sec is None:
+                continue
+            u = (r.get("d"), r.get("p"), r["date"], r.get("r"), r.get("time"), r.get("j"), r.get("w"), r.get("dm"), r.get("ag"))
+            if u in seen:
+                continue
+            seen.add(u)
+            pools.setdefault((r.get("d"), r.get("p"), r.get("dm"), r.get("ag")), {}).setdefault(r["date"], []).append(sec)
+    memo = {}                                         # (池, 日付) → (補正後の窓の時計 昇順, その日の補正幅) か None
+
+    def day_of(key, date):
+        if (key, date) in memo:
+            return memo[(key, date)]
+        days = pools[key]
+        lo = (dt.date.fromisoformat(date) - dt.timedelta(days=365)).isoformat()
+        win = [a for d, a in days.items() if lo <= d < date]
+        alls = [x for a in win for x in a]
+        got = None
+        if len(alls) >= NOKEN_PCT_MINW:
+            m = _median(alls)
+
+            def shift(a):
+                return (_median(a) - m) * len(a) / (len(a) + NOKEN_PCT_K)
+            adj = sorted(x - d for a in win for d in (shift(a),) for x in a)
+            got = (adj, shift(days[date]))
+        memo[(key, date)] = got
+        return got
+
+    n = 0
+    for recs in horses.values():
+        for r in recs:
+            sec = time_sec(r.get("time"))
+            if sec is None:
+                continue
+            got = day_of((r.get("d"), r.get("p"), r.get("dm"), r.get("ag")), r["date"])
+            if got is None:
+                continue
+            adj, own = got
+            s2 = sec - own
+            lt = bisect.bisect_left(adj, s2)
+            eq = bisect.bisect_right(adj, s2) - lt
+            r["q"] = (lt + 0.5 * eq) / len(adj)
+            n += 1
+    return n
+
+
 def build(metas, offsets, cut, stats):
     """metas = {prefix: value} → {馬名: [記録…]}"""
     horses = {}
@@ -497,6 +565,7 @@ def build(metas, offsets, cut, stats):
     # 日付の新しい順(同じ日なら地区名で決めうち=毎回同じ並びになる)
     for name in horses:
         horses[name].sort(key=lambda r: (r["date"], r["d"]), reverse=True)
+    stats["_q"] = time_pct(horses)                   # §304c 能検の時計(記録ごとの q)
     return {n: horses[n] for n in sorted(horses)}
 
 
@@ -640,8 +709,8 @@ def main():
             + f"  騎手j {s['j']}(乗替2人 {s['j_multi']})"
             + f"  体重w {s['w']}  テン順t1r {s['t1r']}")
     log(f"合計: {len(horses):,} 頭 / {entries:,} 件 / 素 {len(body) / 1024:.1f}KB / gzip {gz / 1024:.1f}KB")
-    if gz > 150 * 1024:
-        log("⚠ gzip が 150KB を超えた。目標は数十KB=画面に載せる前に相談すること")
+    # 2026-10-02 画面は索引ぜんぶを取らない(要る馬だけ DB 関数 noken_for_names で引く)= 大きさの警告は外した
+    log(f"能検の時計 q: {entries:,} 件中 {stats.get('_q', 0):,} 件")
     # §279 騎手 j によるサイズ増(素のバイト数= 各記録の ,"j":"…" の分の合計)
     j_recs = [r for v in horses.values() for r in v if r.get("j")]
     j_bytes = sum(len(("," + json.dumps({"j": r["j"]}, ensure_ascii=False, separators=(",", ":"))[1:-1]).encode("utf-8"))
