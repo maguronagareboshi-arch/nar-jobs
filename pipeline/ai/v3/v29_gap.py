@@ -31,6 +31,9 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import v3_tri as TRI  # noqa: E402  3 連単・3 連複のずれ模型(記録だけ)
+
 HERE = Path(__file__).resolve().parent
 JST = dt.timezone(dt.timedelta(hours=9))
 KEY = ['track', 'race_date', 'race_no']
@@ -318,13 +321,15 @@ def latest_odds(track, day, rno):
 GAP = '/rest/v1/nar_v3_gap'
 
 
-def latest_combos(track, day, rno):
+def latest_combos(track, day, rno, kinds=('wide', 'umaren')):
+    """券種ごとに最新の 1 本(確定前)。2026-10-02: 3 連単・3 連複の記録のため券種ごとに読む(まとめて読むと更新の多い券種に押し出される)。"""
     t = urllib.parse.quote(track)
-    r = _get(f'/rest/v1/nar_odds_full_ticks?track=eq.{t}&race_date=eq.{day}&race_no=eq.{rno}&kind=in.(wide,umaren)'
-             '&f=eq.false&select=kind,combos&order=id.desc&limit=6')
     out = {}
-    for x in r:
-        out.setdefault(x['kind'], x.get('combos') or [])
+    for k in kinds:
+        r = _get(f'/rest/v1/nar_odds_full_ticks?track=eq.{t}&race_date=eq.{day}&race_no=eq.{rno}&kind=eq.{k}'
+                 '&f=eq.false&select=kind,combos&order=id.desc&limit=1')
+        if r:
+            out[k] = r[0].get('combos') or []
     return out
 
 
@@ -421,6 +426,12 @@ def live(day, base_csv, mdir, write, until):
         log('当日版の模型 読めない', type(e).__name__)
         dm = None
     has_s2 = {'p1_s2', 'p3_s2'} <= set(B.columns) and B.p1_s2.notna().any()
+    try:
+        tm = TRI.load(mdir)
+    except Exception as e:  # noqa: BLE001  3 連単・3 連複は記録だけ = 読めなくても単勝の候補は出す
+        log('3 連単・3 連複の模型 読めない', type(e).__name__)
+        tm = None
+    log('3 連単・3 連複の記録:', 'あり' if tm is not None else 'なし(模型なし)')
     log('当日版の印:', 'あり' if dm is not None and has_s2 else f'なし(模型 {dm is not None}・土台の段 2 の率 {has_s2})')
     done = done_keys(day) if write else set()
     day_done = set()
@@ -516,11 +527,21 @@ def live(day, base_csv, mdir, write, until):
                 c = b[b.buy]
                 rk = {int(u): i for i, u in enumerate(b.sort_values(['p3p', 'p1', 'umaban'], ascending=[False, False, True]).umaban)}
                 lines = {**COMBO_LINES, **(meta.get('combo_lines') or {})}
+                cmb = {}
                 try:
-                    combo, combo_all = combo_pick(b, latest_combos(tr, day, rno), lines)
+                    cmb = latest_combos(tr, day, rno, TRI.KINDS if tm is not None else ('wide', 'umaren'))
+                    combo, combo_all = combo_pick(b, {k: cmb.get(k) for k in ('wide', 'umaren')}, lines)
                 except Exception as e:  # noqa: BLE001  組は記録だけ= 取れなくても単勝は書く
                     log(f'{tr}{rno}R: 組のオッズ 失敗 {type(e).__name__}')
                     combo, combo_all = {}, {}
+                tri = None
+                if tm is not None and cmb:
+                    try:  # 3 連単(d1b)・3 連複(c8)の期待値 ≥ 1.0 の組 = 記録だけ(買わない)
+                        p3b = Bk.drop_duplicates('umaban').set_index('umaban').p3p
+                        h3 = b[['umaban', 'win', 'pg1', 'p1']].assign(p3p_base=b.umaban.map(p3b).to_numpy())
+                        tri = TRI.race(h3, cmb, tm)
+                    except Exception as e:  # noqa: BLE001
+                        log(f'{tr}{rno}R: 3 連単・3 連複 失敗 {type(e).__name__} {str(e)[:120]}')
                 val = {'model': 'v29', 'line': meta['line'], 'p3_min': meta['p3_min'], 'post': at.strftime('%H:%M'),
                        'decided_at': now.strftime('%H:%M:%S'), 'odds_asof': asof, 'n': int(len(b)),
                        'weights': int(b.bw.notna().sum()),
@@ -532,6 +553,9 @@ def live(day, base_csv, mdir, write, until):
                                     'p3': round(float(x.p3p), 4), 'odds': float(x.win), 'pg1': round(float(x.pg1), 4),
                                     'ev': round(float(x.ev), 3), 'buy': bool(x.buy)} for x in b.itertuples()],
                        'combo_line': lines['wide'], 'combo_lines': lines, 'combo': combo, 'combo_all': combo_all}
+                if tri:
+                    val['tri_model'] = {'tri': 'd1b', 'trio': 'c8', 'ev_min': TRI.EV_MIN, 'cols': ['組', 'オッズ', '期待値', '模型の率', '市場の率']}
+                    val.update(tri)
                 try:
                     st = put_gap(k, val, tr, day, rno) if write else 'dry'
                 except Exception as e:  # noqa: BLE001
@@ -541,7 +565,7 @@ def live(day, base_csv, mdir, write, until):
                 n_w += 1
                 n_buy += len(c)
                 log(f'{tr}{rno}R: 発走 {at:%H:%M}・{now:%H:%M:%S} に決めた・{len(b)} 頭(体重 {val["weights"]})'
-                    f'・候補 {len(c)} 頭・書き込み {st}')
+                    f'・候補 {len(c)} 頭・3 連単 {len(val.get("tri") or [])}・3 連複 {len(val.get("trio") or [])} 組(記録)・書き込み {st}')
         if now > end:
             log('時間切れ: 書いた', n_w, 'R・候補', n_buy, '頭')
             _record_after(day, write)
@@ -551,6 +575,10 @@ def live(day, base_csv, mdir, write, until):
 
 # ================================================================ 4) 夜の答え合わせ(当日の便の終わりに自動・直近 3 日を作り直す)
 REC_KEY = 'record'
+# 3 連単・3 連複の記録の数え方(研究 d3・c10 の選び方: その時の期待値 ≥ 線・オッズの帯・1R 最大 N 点・期待値の大きい順)。
+# 払戻の券種名(nar_race_payouts の t)。組は記録に全部残すので、ここを変えれば数え直せる。
+TRI_PICK = {'tri': (50, 500, 10, 'trifecta'), 'trio': (30, 300, 10, 'trio')}
+TRI_LINES = (1.1, 1.2, 1.3)
 
 
 def record(days):
@@ -570,8 +598,25 @@ def record(days):
             f'/rest/v1/nar_race_payouts?race_date=eq.{day}&track=in.({q})&select=track,race_no,payouts')}
         n = hit = ret = races = pend = 0
         cb = {k: {'bets': 0, 'hits': 0, 'return': 0} for k in ('wide', 'umaren')}
+        tc = {k: {str(L): {'bets': 0, 'hits': 0, 'return': 0} for L in TRI_LINES} for k in TRI_PICK}
         for r in rows:
             _, tr, rno = r['key'].split(':')
+            v = r.get('value') or {}
+            p = pay.get((tr, int(rno)))
+            if p and any(v.get(k) for k in TRI_PICK):
+                for k, (lo, hi, N, t) in TRI_PICK.items():
+                    yp = {}
+                    for x in p:
+                        if x.get('t') == t:
+                            yp[str(x.get('c'))] = yp.get(str(x.get('c')), 0) + int(x.get('y') or 0)
+                    for L in TRI_LINES:
+                        got = [g for g in v.get(k) or [] if g[2] >= L and lo <= g[1] < hi][:N]
+                        a = tc[k][str(L)]
+                        for g in got:
+                            y = yp.get(g[0], 0)
+                            a['bets'] += 1
+                            a['hits'] += y > 0
+                            a['return'] += y
             buy = (r.get('value') or {}).get('buy') or []
             combo = (r.get('value') or {}).get('combo') or {}
             if not buy and not any(combo.values()):
@@ -600,13 +645,19 @@ def record(days):
                 y = win.get(str(b['num']), 0)
                 hit += y > 0
                 ret += y
-        dd[day] = {'races': races, 'bets': n, 'hits': hit, 'return': ret, 'pending': pend, **cb}
+        dd[day] = {'races': races, 'bets': n, 'hits': hit, 'return': ret, 'pending': pend, **cb, **tc}
     tot = {k: sum(v.get(k, 0) for v in dd.values()) for k in ('races', 'bets', 'hits', 'return')}
     tot['roi'] = round(100 * tot['return'] / (100 * tot['bets']), 1) if tot['bets'] else None
     for kk in ('wide', 'umaren'):
         t = {k: sum((v.get(kk) or {}).get(k, 0) for v in dd.values()) for k in ('bets', 'hits', 'return')}
         t['roi'] = round(t['return'] / t['bets'], 1) if t['bets'] else None
         tot[kk] = t
+    for kk in TRI_PICK:
+        tot[kk] = {}
+        for L in TRI_LINES:
+            t = {k: sum(((v.get(kk) or {}).get(str(L)) or {}).get(k, 0) for v in dd.values()) for k in ('bets', 'hits', 'return')}
+            t['roi'] = round(t['return'] / t['bets'], 1) if t['bets'] else None
+            tot[kk][str(L)] = t
     val = {'model': 'v29', 'unit': 100, 'days': dict(sorted(dd.items())), 'total': tot,
            'built': dt.datetime.now(JST).isoformat(timespec='seconds')}
     put_gap(REC_KEY, val)
