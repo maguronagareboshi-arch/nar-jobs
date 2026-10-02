@@ -1,7 +1,7 @@
 -- §280(2026-09-25) 新馬戦の馬柱の「傾向カード」用の集計。設計書 nar-site/DESIGN_s280_shinba_cols_20260925.md §1〜§3。
 -- ⛔Actions の中の手元 Postgres でだけ流す(stats_local.py shinba)。本番へは diff/apply が差分だけ戻す。
 -- 入力= nar_runs(age, birth_date 込み)・nar_races・nar_race_payouts・nar_kd_pedigree(KDSCOPE の血統・(馬名, 生年月日) で引く)・
---        nar_horses(dam, breeder 込み・KD に無い馬だけ馬名で落とす)・auction_sales・
+--        nar_horses(dam, breeder 込み・KD に無い馬だけ馬名で落とす)・
 --        noken_meta / noken_recs(能検索引を python で行に開いた表)。
 -- 出力= nar_shinba_stats(kind, a, b, stats, as_of)。stats は件数だけ {n, w1, w2, w3, pay}(dm だけ sib を足す)。率は画面で割る。
 -- 母集団= sd/bd/st/sv/bv は 2 歳の走ぜんぶ(tmp_d2・9/25 ユーザー決定)・td/br/jk は新馬戦(tmp_s)・他は 2 歳の初戦(tmp_d)。
@@ -31,11 +31,8 @@ create or replace function pg_temp.band_day(r int, n int) returns text language 
 create or replace function pg_temp.band_pct(q numeric) returns text language sql immutable as $$
   select case when q is null then null when q <= 0.3 then 'top30' when q <= 0.7 then 'mid' else 'low' end $$;
 -- 上がり・テン1F の検査レース内順位(ar/n・t1r/n)
-create or replace function pg_temp.band_race(r int, n int) returns text language sql immutable as $$
-  select case when r is null or n is null or n < 1 then null when r = 1 then 'r1'
-              when r::numeric / n <= 0.3 then 'top30' else 'other' end $$;
 -- 上がり・テン1F の順位そのもの(10/2 ユーザー了承)= 1位 / 2位 / 3位以下。⛔viewer の SHINBA_BANDS.lapRank3 と同じ字。
---   ka/kt(上位3割の帯)は今の本番の画面が読むので残し、新しい画面は ka3/kt3 を読む(画面を出した後に ka/kt を消す)
+--   旧 ka/kt(上位3割の帯)は 10/2 に消した(画面は ka3/kt3 だけ読む)
 create or replace function pg_temp.band_rank3(r int) returns text language sql immutable as $$
   select case when r is null or r < 1 then null when r = 1 then 'r1' when r = 2 then 'r2' else 'r3' end $$;
 -- 最後の能検→初戦の日数
@@ -45,12 +42,6 @@ create or replace function pg_temp.band_week(days int) returns text language sql
 -- 能検の回数(初戦より前の索引の記録の数・再検査・不合格も数える= R12)
 create or replace function pg_temp.band_cnt(c bigint) returns text language sql immutable as $$
   select case when c is null or c < 1 then null when c = 1 then '1' when c = 2 then '2' else '3+' end $$;
--- 落札価格(表の値そのまま・円)
-create or replace function pg_temp.band_price(p int) returns text language sql immutable as $$
-  select case when p is null or p <= 0 then null when p < 1000000 then 'p100' when p < 3000000 then 'p300'
-              when p < 6000000 then 'p600' else 'p600u' end $$;
-create or replace function pg_temp.auc_group(src text) returns text language sql immutable as $$
-  select case when src in ('rakuten', 'sat') then 'オークション' when src in ('jrha', 'hba') then 'セリ' end $$;
 
 -- ---------------------------------------------------------------- 窓
 -- w_from= 3 年前・nk_from= 索引の端(built の 3 年前)+180 日(R6: これより前の初戦は能検が索引から切れている)
@@ -252,7 +243,7 @@ select 'nj', v.a, case when regexp_replace(coalesce(x.jockey, ''), '\s', '', 'g'
 from tmp_dn x cross join lateral (values (x.trainer), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a)
 where x.nk_j is not null and x.nk_j <> '' and x.jockey is not null and x.jockey <> '';
 
--- nr 日全体順位帯 / nw 週数帯 / nc 回数 / ka 上がり順位帯 / kt テン1F 順位帯。a= 地区と '*'
+-- nr 日全体順位帯 / nw 週数帯 / nc 回数 / ka3 上がり順位 / kt3 テン1F 順位。a= 地区と '*'
 insert into tmp_kv
 select 'nr', v.a, pg_temp.band_day(x.dr, x.dn), x.finish, x.win_pay
 from tmp_dn x cross join lateral (values (x.nk_d), ('*')) v(a);
@@ -267,30 +258,13 @@ from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date
 insert into tmp_kv
 select 'nc', v.a, pg_temp.band_cnt(x.nk_cnt), x.finish, x.win_pay
 from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
-insert into tmp_kv
-select 'ka', v.a, pg_temp.band_race(x.ar, x.nk_n), x.finish, x.win_pay
-from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
-insert into tmp_kv
-select 'kt', v.a, pg_temp.band_race(x.t1r, x.nk_n), x.finish, x.win_pay
-from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
--- ka3 上がりの順位 / kt3 テン1F の順位(1位/2位/3位以下・10/2)
+-- ka3 上がりの順位 / kt3 テン1F の順位(1位/2位/3位以下・10/2)。§304d au(落札価格帯)は 10/2 ユーザー決定で消した(落札額は馬柱のセール枠)
 insert into tmp_kv
 select 'ka3', v.a, pg_temp.band_rank3(x.ar), x.finish, x.win_pay
 from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
 insert into tmp_kv
 select 'kt3', v.a, pg_temp.band_rank3(x.t1r), x.finish, x.win_pay
 from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
-
--- au 落札価格帯(初戦より前の最後の落札・生年月日は両方あるときだけ合わせる= R5)。a= オークション / セリ と '*'
-insert into tmp_kv
-select 'au', v.a, pg_temp.band_price(s.price), d.finish, d.win_pay
-from tmp_d d
-cross join lateral (select * from public.auction_sales s
-                    where s.horse_name = d.horse_name and s.sold and s.price is not null
-                      and s.auction_date < d.race_date
-                      and (s.birth_date is null or d.birth_date is null or s.birth_date = d.birth_date)
-                    order by s.auction_date desc limit 1) s
-cross join lateral (values (pg_temp.auc_group(s.source)), ('*')) v(a);
 
 -- dm 兄姉の初戦(Dall・a= 母)。sib= 新しい順に最大 5 頭 {h 馬名, d 初戦日, t 場, f 着(中止・失格は null), p 人気}
 drop table if exists tmp_dm;
