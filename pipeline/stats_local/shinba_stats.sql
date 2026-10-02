@@ -34,6 +34,10 @@ create or replace function pg_temp.band_pct(q numeric) returns text language sql
 create or replace function pg_temp.band_race(r int, n int) returns text language sql immutable as $$
   select case when r is null or n is null or n < 1 then null when r = 1 then 'r1'
               when r::numeric / n <= 0.3 then 'top30' else 'other' end $$;
+-- 上がり・テン1F の順位そのもの(10/2 ユーザー了承)= 1位 / 2位 / 3位以下。⛔viewer の SHINBA_BANDS.lapRank3 と同じ字。
+--   ka/kt(上位3割の帯)は今の本番の画面が読むので残し、新しい画面は ka3/kt3 を読む(画面を出した後に ka/kt を消す)
+create or replace function pg_temp.band_rank3(r int) returns text language sql immutable as $$
+  select case when r is null or r < 1 then null when r = 1 then 'r1' when r = 2 then 'r2' else 'r3' end $$;
 -- 最後の能検→初戦の日数
 create or replace function pg_temp.band_week(days int) returns text language sql immutable as $$
   select case when days is null or days < 0 then null when days <= 14 then 'w2' when days <= 28 then 'w4'
@@ -269,6 +273,13 @@ from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date
 insert into tmp_kv
 select 'kt', v.a, pg_temp.band_race(x.t1r, x.nk_n), x.finish, x.win_pay
 from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
+-- ka3 上がりの順位 / kt3 テン1F の順位(1位/2位/3位以下・10/2)
+insert into tmp_kv
+select 'ka3', v.a, pg_temp.band_rank3(x.ar), x.finish, x.win_pay
+from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
+insert into tmp_kv
+select 'kt3', v.a, pg_temp.band_rank3(x.t1r), x.finish, x.win_pay
+from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
 
 -- au 落札価格帯(初戦より前の最後の落札・生年月日は両方あるときだけ合わせる= R5)。a= オークション / セリ と '*'
 insert into tmp_kv
@@ -322,15 +333,17 @@ select 'win', t.track, '',
        jsonb_build_object(
          'from', f.d,
          'label', case when s.track is not null then '豪州産の砂に変わった' || to_char(f.d, 'YYYY"年"FMMM"月から"') else '前日までの5年' end,
-         'nk_from', g.d,
-         'nk_label', case when s.track is not null and s.from_date > w.nk_from then '豪州産の砂に変わった' || to_char(g.d, 'YYYY"年"FMMM"月から"')
+         'nk_from', coalesce(case when s.track is not null and s.from_date > g.d then s.from_date end, g.d),
+         'nk_label', case when g.d is null then '能検の記録なし'
+                          when s.track is not null and s.from_date > g.d then '豪州産の砂に変わった' || to_char(s.from_date, 'YYYY"年"FMMM"月から"')
                           else to_char(g.d, 'YYYY"年"FMMM"月から"') end),
        current_date, now()
 from (select distinct track from tmp_sr) t
 left join tmp_sand s on s.track = t.track
 cross join tmp_sw w
 cross join lateral (select coalesce(s.from_date, w.sv_from) as d) f
-cross join lateral (select greatest(w.nk_from, coalesce(s.from_date, w.nk_from)) as d) g;
+-- g= その場で初出走した馬の、能検の記録の一番古い日(地区ごとに記録の始まりが違う= 船橋・川崎・浦和は 2026-01 から・10/2)
+cross join lateral (select min(x.nk_date) as d from tmp_dn x where x.track = t.track) g;
 
 commit;
 
