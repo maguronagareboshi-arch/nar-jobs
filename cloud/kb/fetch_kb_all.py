@@ -54,7 +54,8 @@ KB_TRACK = {
 KB_EXISTING = {"42", "10", "12", "11", "13"}
 # runs に出す鍵（⛔この順・この鍵だけ。増やすときは設計書の表と一緒に）
 RUN_KEYS = ("track", "race_date", "race_no", "umaban", "horse_name", "kb_race_id",
-            "blinker", "gear", "first3f", "avg_f", "pace", "kimete", "start_note")
+            "blinker", "gear", "first3f", "avg_f", "pace", "kimete", "start_note",
+            "corner4_pos", "comment")  # 2026-10-02: 4 角の内外・寸評(南関特化 AI の材料と「ひとこと」)
 
 # 2026-09-29 X3: 成績頁の備考(決め手・馬装具・発走状況他)が**後から載る**ことがある
 #   (園田の水・木= 翌日昼の取得で 3 つとも空→ 9/29 に取り直すと値あり)。
@@ -207,7 +208,8 @@ def collect_day(client, date, what, track, logged_in, refresh=False):
                         base, umaban=r["umaban"], horse_name=r["horse_name"],
                         gear=r.get("gear"), first3f=r.get("first3f"), avg_f=r.get("avg_f"),
                         pace=r.get("pace"), kimete=r.get("kimete"),
-                        start_note=r.get("start_note")))
+                        start_note=r.get("start_note"),
+                        corner4_pos=r.get("corner4_pos"), comment=r.get("comment")))
             if "syutuba" in out:
                 for e in out["syutuba"]["entries"]:
                     merge_rows(rows, rid, e["umaban"], dict(

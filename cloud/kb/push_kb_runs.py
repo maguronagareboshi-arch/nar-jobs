@@ -29,7 +29,8 @@ DATA = Path(os.environ["KB_DATA_DIR"]) if os.environ.get("KB_DATA_DIR") else HER
 OUT = DATA / "kb_all"
 NAR_ENV = Path(r"C:\Users\kouki\OneDrive\デスクトップ\s77-w1\pipeline\.env.nar")
 KB_PUBLIC = ("門別", "大井", "船橋", "川崎", "浦和", "園田")
-PAYLOAD = ("blinker", "gear", "first3f", "avg_f", "pace", "kimete", "start_note")
+PAYLOAD = ("blinker", "gear", "first3f", "avg_f", "pace", "kimete", "start_note",
+           "corner4_pos", "comment")  # 2026-10-02: ⛔先に DB に列を足す(alter table)。無いと既存行の読みが 400 で止まる
 COLS = ("track", "race_date", "race_no", "umaban", "horse_name", "kb_race_id") + PAYLOAD
 CHUNK = 500
 
