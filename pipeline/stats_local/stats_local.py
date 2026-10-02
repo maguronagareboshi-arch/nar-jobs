@@ -6,6 +6,7 @@ Actions 内の Postgres で計算し、本番との差分だけを戻す台本�
   python3 pipeline/stats_local/stats_local.py load                ② 手元に入れて analyze
   python3 pipeline/stats_local/stats_local.py run                 ③ 集計 SQL 6 本を**そのまま**手元で流す
   python3 pipeline/stats_local/stats_local.py shinba              ③' §280 能検索引を noken_recs に開き shinba_stats.sql を流す
+  python3 pipeline/stats_local/stats_local.py ob                  ③'' 10/2 名寄せ(ob_alias.py)と owner_breeder.sql(馬主・生産者・調教師の年)
   python3 pipeline/stats_local/stats_local.py diff                ⑤ 表ごとに 同じ/変わった/手元だけ/本番だけ をログへ
   python3 pipeline/stats_local/stats_local.py apply [--allow-large]  差分を REST で本番へ(安全柵に掛かれば何も書かない)
 
@@ -48,11 +49,14 @@ INPUTS = {
                         "create index on public.nar_kd_pedigree (horse_name, birth_date)"),
     "nar_ai_marks": ("model, track, race_date, race_no, timing, marks, computed_at, updated_at",
                      "create index on public.nar_ai_marks (track, race_date, race_no)"),
+    # 10/2 馬主・生産者の正本(owner_breeder.sql)。生まれの表なので asof で絞らない
+    "nar_horse_profiles": ("horse_name, birth_date, sex, sire, owner, breeder, last_seen, updated_at",
+                           "alter table public.nar_horse_profiles add primary key (horse_name, birth_date)"),
     # §280 落札価格帯(kind=au)。レースの日付が無いので asof で絞らない(nar_horses と同じ)
     "auction_sales": ("source, horse_name, birth_date, auction_date, price, sold",
                       "create index on public.auction_sales (horse_name)"),
 }
-NO_ASOF = ("nar_horses", "nar_kd_pedigree", "auction_sales")
+NO_ASOF = ("nar_horses", "nar_kd_pedigree", "auction_sales", "nar_horse_profiles")
 # §280 能検索引= nar_meta key='noken_index' の 1 行(nar-ai-feat.yml と同じ \copy)。
 # ⛔INPUTS に入れない= 手元の public.nar_meta は出力(big_payouts)の器で、入れると diff が「手元だけ」として本番へ書き戻す。
 #   手元では別の表 public.noken_meta に置き、cmd_shinba が noken_recs に開く。
@@ -75,6 +79,13 @@ OUTPUTS = {
     "nar_meta": (["key"], ["value - 'built'"]),
     # §280 新馬戦の傾向。as_of は比べない(nar_jockey_track_stats と同じ扱い)
     "nar_shinba_stats": (["kind", "a", "b"], ["stats"]),
+    # 10/2 馬主・生産者・調教師ページ(ob_alias.py + owner_breeder.sql)
+    "nar_name_alias": (["kind", "alias"], ["canonical"]),
+    "nar_person_year": (["kind", "name", "year", "track"], ["n", "w1", "w2", "w3"]),
+    "nar_ob_year": (["kind", "name", "year", "track"], ["horses", "n", "w1", "w2", "w3"]),
+    "nar_ob_horses": (["kind", "name", "horse_name", "birth_date"],
+                      ["sex", "sire", "first_date", "last_date", "n", "w1", "w2", "w3", "last_track"]),
+    "nar_ob_graded": (["kind", "name", "race_date", "track", "race_no", "horse_name"], ["race_name", "finish"]),
 }
 OUT_COLS = {
     "nar_venue_stats": "track, period, stats, updated_at",
@@ -87,6 +98,12 @@ OUT_COLS = {
                    "winner_horse, winner_jockey, winner_pop, updated_at"),
     "nar_meta": "key, value, updated_at",
     "nar_shinba_stats": "kind, a, b, stats, as_of, updated_at",
+    "nar_name_alias": "kind, alias, canonical, updated_at",
+    "nar_person_year": "kind, name, year, track, n, w1, w2, w3, updated_at",
+    "nar_ob_year": "kind, name, year, track, horses, n, w1, w2, w3, updated_at",
+    "nar_ob_horses": ("kind, name, horse_name, birth_date, sex, sire, first_date, last_date, n, w1, w2, w3, "
+                      "last_track, updated_at"),
+    "nar_ob_graded": "kind, name, race_date, track, race_no, horse_name, race_name, finish, updated_at",
 }
 OUT_WHERE = {"nar_meta": "where key = 'big_payouts'"}
 SQLS = ["venue_stats", "person_stats", "ai_record", "race_level", "graded", "big_payouts"]
@@ -261,6 +278,48 @@ def cmd_shinba():
     log(f"shinba 済み {time.time() - t0:.1f} 秒")
 
 
+# ------------------------------------------------------------------ ③'' 10/2 馬主・生産者・調教師ページ
+def cmd_ob():
+    """名寄せ表を ob_alias.py で作って public.nar_name_alias へ・除く 55 略称を入れ・owner_breeder.sql を流す"""
+    sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+    import ob_alias
+    t0 = time.time()
+    got = rows("select kind, raw, count(*), count(*) filter (where last_seen >= current_date - 730) from ("
+               "select 'owner' as kind, owner as raw, last_seen from public.nar_horse_profiles "
+               "union all select 'breeder', breeder, last_seen from public.nar_horse_profiles) s "
+               "where raw is not null and btrim(raw) <> '' group by kind, raw")
+    alias, missing = ob_alias.build(got, ob_alias.load_manual())
+    for m in missing:
+        log(f"  ⚠手で承認した組が名簿に無い: {m[0]} / {m[1]} / {m[2]}")
+    path = os.path.join(DUMP, "ob_alias.csv")
+    with open(path, "w", encoding="utf-8", newline="") as f:
+        csv.writer(f).writerows(alias)
+    psql_local("truncate public.nar_name_alias")
+    psql_local(f"\\copy public.nar_name_alias (kind, alias, canonical) from '{path}' with (format csv)")
+    psql_local("truncate public.trainer_same_abbr")
+    ex = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trainer_same_abbr_exclude.csv")
+    psql_local(f"\\copy public.trainer_same_abbr from '{ex}' with (format csv, header)")
+    psql_local("analyze public.nar_name_alias")
+    for k in ("owner", "breeder"):
+        a = [x for x in alias if x[0] == k]
+        log(f"  名寄せ {k}: 表記 {len(a)}・代表 {len(set(x[2] for x in a))}")
+    r = subprocess.run(["psql", "-v", "ON_ERROR_STOP=1", "-X", "-f",
+                        os.path.join(ROOT, "pipeline/stats_local/owner_breeder.sql")],
+                       capture_output=True, text=True, encoding="utf-8")
+    tail = "\n".join(r.stdout.splitlines()[-16:])
+    log(f"::group::owner_breeder.sql rc={r.returncode}\n{tail}\n{r.stderr[-2000:]}\n::endgroup::")
+    if r.returncode != 0:
+        raise SystemExit("owner_breeder.sql が失敗")
+    for t, k, n in rows("select 'nar_name_alias', kind, count(*) from public.nar_name_alias group by kind "
+                        "union all select 'nar_person_year', kind, count(*) from public.nar_person_year group by kind "
+                        "union all select 'nar_ob_year', kind, count(*) from public.nar_ob_year group by kind "
+                        "union all select 'nar_ob_horses', kind, count(*) from public.nar_ob_horses group by kind "
+                        "union all select 'nar_ob_graded', kind, count(*) from public.nar_ob_graded group by kind "
+                        "order by 1, 2"):
+        log(f"  {t} {k}: {n} 行")
+    log(f"ob 済み {time.time() - t0:.1f} 秒")
+
+
 # ------------------------------------------------------------------ ⑤ 差分
 def _load_prod_outputs():
     for t in OUTPUTS:
@@ -407,6 +466,8 @@ def main(argv):
         cmd_run()
     elif c == "shinba":
         cmd_shinba()
+    elif c == "ob":
+        cmd_ob()
     elif c == "diff":
         cmd_diff()
     elif c == "apply":

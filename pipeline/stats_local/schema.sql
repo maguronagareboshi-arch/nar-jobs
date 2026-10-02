@@ -37,6 +37,11 @@ create table public.nar_ai_marks (
   model text not null, track text not null, race_date date not null, race_no integer not null, timing text not null,
   marks jsonb not null, computed_at timestamptz not null, updated_at timestamptz not null
 );
+-- 10/2 馬主・生産者の正本((馬名, 生年月日) で一意)
+create table public.nar_horse_profiles (
+  horse_name text not null, birth_date date not null, sex text, sire text, owner text, breeder text,
+  last_seen date, updated_at timestamptz not null
+);
 -- §280 落札価格帯(kind=au)
 create table public.auction_sales (
   source text not null, horse_name text, birth_date date, auction_date date not null, price integer, sold boolean not null
@@ -61,6 +66,13 @@ create table public.nar_ai_record (
 create table public.nar_meta (
   key text primary key, value jsonb not null, updated_at timestamptz not null default now()
 );
+
+-- 10/2 馬主・生産者の名寄せ(出力・stats_local.py ob が ob_alias.py で作って入れる)と、除く 55 略称(入力・repo の csv)
+create table public.nar_name_alias (
+  kind text not null, alias text not null, canonical text not null,
+  updated_at timestamptz not null default now(), primary key (kind, alias)
+);
+create table public.trainer_same_abbr (abbr text primary key);
 
 -- ---------------------------------------------------------------- 照合用
 -- 本番の出力の写しは schema prod に置く(表は集計 SQL を流した後に `like public.<表>` で作る)

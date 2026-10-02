@@ -90,6 +90,10 @@ jobs:
       - name: run shinba stats sql (local only)
         run: python3 pipeline/stats_local/stats_local.py shinba
 
+      # ---------------------------------------------------------------- ③'' 10/2 馬主・生産者・調教師ページ(名寄せ → owner_breeder.sql・⛔手元だけ)
+      - name: run owner breeder stats (local only)
+        run: python3 pipeline/stats_local/stats_local.py ob
+
       # ---------------------------------------------------------------- ⑤ 照合(check)/ 差分を本番へ(apply)
       - name: diff against production
         if: env.MODE == 'check'
@@ -127,3 +131,16 @@ jobs:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: python3 cloud/beat.py shinba_stats fail 失敗
+      # 10/2 馬主・生産者・調教師ページ(nar_name_alias / nar_person_year / nar_ob_*)も同じ流れで書くので成否は同じ
+      - name: heartbeat owner breeder ok
+        if: success() && env.MODE == 'apply'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py owner_breeder ok
+      - name: heartbeat owner breeder fail
+        if: failure() && env.MODE == 'apply'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py owner_breeder fail 失敗
