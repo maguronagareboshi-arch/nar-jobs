@@ -86,7 +86,7 @@ ALL = CHIHOU + NAR
 # §33.7-3/§33.7-5 1日1本の通し動画をレース別に頭出しできる場(`{prefix}_noken_offsets`)。
 # §117b 川崎・浦和・大井も nar_meta 側へ。2026-10-01 船橋・兵庫も(画面の NOKEN_OFFSETS・R2 のクリップと揃えた)
 OFFSETS = []
-OFFSETS_NAR = ["saga", "banei", "kawasaki", "urawa", "ooi", "funabashi", "hyogo"]
+OFFSETS_NAR = ["saga", "banei", "kawasaki", "urawa", "ooi", "funabashi", "hyogo", "kanazawa", "nagoya"]
 # 1つの地区に競馬場が2つある=どちらで受けたかを持たないと「8/1 水沢」と書けない
 MULTI_VENUE = {"iwate", "hyogo"}
 
@@ -324,8 +324,14 @@ def day_offsets(off_value):
         # 読んだ「馬名→映像の組」を horses に持つ(10/2)。公式行に no が無いときだけ使う
         hs = d.get("horses")
         horses = {text(n): int(g) for n, g in hs.items() if text(n) and str(g).isdigit()} if isinstance(hs, dict) else {}
+        # 金沢 2026-06-29 は公式に no=2 が 2 組(1400m と 900m)あり、映像の 2R は 1400m だけ。11/08・12/06 の 2R も
+        # 映像に無い。no_video=[[組, 距離 or null]] の組は通し動画を付けない= ▶ なし(10/2)
+        nv = d.get("no_video")
+        no_video = {(int(x[0]), int(x[1]) if x[1] is not None else None) for x in nv
+                    if isinstance(x, list) and len(x) == 2 and str(x[0]).isdigit()
+                    and (x[1] is None or str(x[1]).isdigit())} if isinstance(nv, list) else set()
         if secs:
-            out[date] = (vid, secs, horses)
+            out[date] = (vid, secs, horses, no_video)
     return out
 
 
@@ -457,6 +463,9 @@ def build(metas, offsets, cut, stats):
                 dist = int_of(race.get("dist"))
                 if dist is None:
                     dist = day_fill
+                if cue and v and v == day_video and no is not None and (
+                        (no, None) in cue[3] or (no, dist) in cue[3]):
+                    v, s = None, None
                 shown, times, lasts = [], {}, {}
                 for i, row in enumerate(rows):
                     shown.append(time_of(row.get("time")))
