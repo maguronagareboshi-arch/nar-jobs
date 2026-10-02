@@ -3171,14 +3171,17 @@ def kana_videos():
     return out
 
 
-def fill_day_videos(days, videos, weak_from=None):
+VIDEO_FILL_DAYS = 365      # 10/2 ユーザー指定= 付け直すのは過去 1 年の日だけ
+
+
+def fill_day_videos(days, videos, weak_from=None, since=""):
     """10/2 既にある日でも video が空なら付ける(⛔値がある日は上書きしない)。戻り値= 付けた日数。
     差分便は PDF の済んだ日を飛ばすので、PDF を先に取った日は後から動画が出ても付かなかった。
     weak_from= 年度読みで入れた日 → その動画の暦どおりの日。暦どおりの日が置き場にあれば年度読みは使わない。"""
     dates = {d.get("date") for d in days}
     n = 0
     for d in days:
-        if d.get("video"):
+        if d.get("video") or str(d.get("date") or "") < since:
             continue
         url = videos.get(d.get("date"))
         if not url:
@@ -3591,15 +3594,16 @@ def main():
         # 10/2 金沢・名古屋= 既にある日でも video が空ならチャンネル一覧から付ける(値がある日は触らない)
         # 一覧を取るのは video の空いた日がある時だけ。空きが古い日だけなら朝の便(JST 9 時台)だけ=
         # 30 分おきの便で毎回 YouTube の全件一覧を取りに行かない(弾かれ防止)
-        need = [d for d in days if not d.get("video")]
         jst = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=9)
+        since = (jst.date() - dt.timedelta(days=VIDEO_FILL_DAYS)).isoformat()
+        need = [d for d in days if not d.get("video") and str(d.get("date") or "") >= since]
         recent_cut = (jst.date() - dt.timedelta(days=14)).isoformat()
         if name in VIDEO_FILL and need and not (jst.hour == 9 or any(str(d.get("date") or "") >= recent_cut for d in need)):
             log(f"{name}: 映像の空いた日 {len(need)} はどれも 14 日より前= 一覧は朝の便だけ(スキップ)")
         elif name in VIDEO_FILL and need:
             try:
                 vids, weak_from = VIDEO_FILL[name]()
-                vid_days = fill_day_videos(days, vids, weak_from)
+                vid_days = fill_day_videos(days, vids, weak_from, since)
             except Exception as e:                               # noqa: BLE001
                 log(f"{name}: 映像の付け直しに失敗 {type(e).__name__}: {str(e)[:100]}(続行)")
             log(f"{name}: 映像を付け直した日 {vid_days} / video のある日 "
