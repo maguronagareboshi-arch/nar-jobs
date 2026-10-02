@@ -95,6 +95,12 @@ jobs:
           else
             echo "当日版の模型なし(当日版の印は出さない)"
           fi
+          # 2026-10-02: 3 連単(d1b)・3 連複(c8)のずれ模型 = 記録だけ。無ければ記録しない(単勝の候補はそのまま)
+          if gh release download v3-tri-model-20261002 -p 'v3_tri.tar.gz.enc' -D in; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_GAP_KEY -in in/v3_tri.tar.gz.enc | tar -C gapm -xzf - || echo "3 連単・3 連複の模型を開けない"
+          else
+            echo "3 連単・3 連複の模型なし(記録しない)"
+          fi
           ls gapm; wc -l in/v29_base.csv
           echo "ok=yes" >> "$GITHUB_OUTPUT"
 
