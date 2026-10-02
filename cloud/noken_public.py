@@ -3589,7 +3589,14 @@ def main():
             for line in lines:
                 log("  " + line)
         # 10/2 金沢・名古屋= 既にある日でも video が空ならチャンネル一覧から付ける(値がある日は触らない)
-        if name in VIDEO_FILL:
+        # 一覧を取るのは video の空いた日がある時だけ。空きが古い日だけなら朝の便(JST 9 時台)だけ=
+        # 30 分おきの便で毎回 YouTube の全件一覧を取りに行かない(弾かれ防止)
+        need = [d for d in days if not d.get("video")]
+        jst = dt.datetime.now(dt.timezone.utc) + dt.timedelta(hours=9)
+        recent_cut = (jst.date() - dt.timedelta(days=14)).isoformat()
+        if name in VIDEO_FILL and need and not (jst.hour == 9 or any(str(d.get("date") or "") >= recent_cut for d in need)):
+            log(f"{name}: 映像の空いた日 {len(need)} はどれも 14 日より前= 一覧は朝の便だけ(スキップ)")
+        elif name in VIDEO_FILL and need:
             try:
                 vids, weak_from = VIDEO_FILL[name]()
                 vid_days = fill_day_videos(days, vids, weak_from)
