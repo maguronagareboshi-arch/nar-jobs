@@ -1636,7 +1636,7 @@ def collect_nagoya(existing, backfill):
         log("  名古屋: pdfplumber が入っていないので飛ばす(cloud/requirements.txt)")
         return []
     todo, last = nagoya_todo(backfill)
-    videos = nagoya_videos()               # §117b 能力審査結果ページの埋め込み(日→URL)
+    videos = nagoya_videos()               # 10/2 チャンネルの動画一覧(全件)+埋め込み(日→URL)
     days, drop, miss, gone = [], [], 0, 0
 
     def take(fy, kai, suf):
@@ -2281,7 +2281,7 @@ def collect_kanazawa(existing, backfill):
         log("  金沢: pdfplumber が入っていないので飛ばす(cloud/requirements.txt)")
         return []
     items = kana_index(backfill)
-    videos = kana_videos()                 # §117b 公式チャンネルの RSS(最新15本)
+    videos = kana_videos()                 # 10/2 公式チャンネルの動画一覧(全件)+RSS
     days, drop, miss, empty, seen_date = [], [], 0, 0, {}
     for href, label, when in items:
         # ⛔ファイル名は元の題の md5 なので**年月まで入れないと重なる**(実測 156件中34件が重複。
@@ -2999,7 +2999,13 @@ NAGOYA_CAP = NAGOYA_SITE + "/info/program/capability/index.html"
 NAGOYA_EMBED_RE = re.compile(r'<iframe[^>]+src="https://www\.youtube\.com/embed/([\w-]{11})')
 YT_TITLE_RE = re.compile(r'"videoDetails":\{.*?"title":"(.*?)","lengthSeconds"', re.S)
 # 「金シャチけいば情報(第11回能力審査)R8 08 24」= 令和8年8月24日。回番号も見て食い違いを言う
-NAGOYA_VID_RE = re.compile(r"R\s*(\d+)[\s./]+(\d{1,2})[\s./]+(\d{1,2})")
+# 10/2 題の揺れ: 「R7 0618」(月日の間に空白なし)・全角「Ｒ」(norm で半角へ)・「R4.6.10」
+NAGOYA_VID_RE = re.compile(r"R\s*(\d{1,2})[\s./]+(\d{1,2})[\s./]*(\d{1,2})(?!\d)")
+# 10/2 チャンネルの動画一覧(全件)。RSS/埋め込みは最新 15/2 本だけで古い日に付かなかった
+KANA_CH = "https://www.youtube.com/channel/UCMRX5ABMJWPR6aWlyZYeKog/videos"
+NAGOYA_CH = ("https://www.youtube.com/@%E9%87%91%E3%82%B7%E3%83%A3%E3%83%81%E3%81%91%E3%81%84"
+             "%E3%81%B0%E6%83%85%E5%A0%B1/videos")          # @金シャチけいば情報
+_CH_CACHE = {}
 NAGOYA_KAI_RE = re.compile(r"第\s*([0-9０-９]+)\s*回")
 KANA_YT = ("https://www.youtube.com/feeds/videos.xml?"
            "channel_id=UCMRX5ABMJWPR6aWlyZYeKog")
@@ -3022,61 +3028,171 @@ def yt_title(vid):
         return ""
 
 
-def nagoya_videos():
-    """能力審査結果ページに埋まっている動画 → {実施日: URL}。
-    ⚠題の「第N回」だけで合わせると年度をまたいで重なる(第11回は令和6・7・8年度にある)ので、
-    題の日付「R8 08 24」で合わせ、回番号は食い違いを言うためだけに使う。"""
+def yt_channel_list(url):
+    """10/2 チャンネルの動画一覧(全件)→ [(動画ID, 題)]。yt-dlp --flat-playlist(メタデータだけ・映像は落とさない)。
+    ⚠外部サイト・読めなければ [] を返し、呼び側は RSS/埋め込み(最新だけ)に戻る(⛔ここで落ちない)。"""
+    if url in _CH_CACHE:
+        return _CH_CACHE[url]
+    import subprocess
+    out = []
+    try:
+        res = subprocess.run([sys.executable, "-m", "yt_dlp", "--flat-playlist", "--no-warnings",
+                              "--print", "%(id)s\t%(title)s", url],
+                             capture_output=True, timeout=600,
+                             env={**os.environ, "PYTHONIOENCODING": "utf-8", "PYTHONUTF8": "1"})
+        text = res.stdout.decode("utf-8", "replace")
+        for line in text.splitlines():
+            vid, _, title = line.partition("\t")
+            if re.fullmatch(r"[\w-]{11}", vid.strip()):
+                out.append((vid.strip(), title.strip()))
+        if not out:
+            log(f"  動画一覧が空 {url} rc={res.returncode} "
+                f"{res.stderr.decode('utf-8', 'replace').strip()[-120:]}")
+    except Exception as e:                                       # noqa: BLE001
+        log(f"  動画一覧が読めない {url} {type(e).__name__}: {str(e)[:80]}")
+    out = list(dict.fromkeys(out))
+    _CH_CACHE[url] = out
+    return out
+
+
+def nagoya_title_dates(title):
+    """名古屋の題 → (暦どおりの日, 年度読みの日 or None)。読めなければ (None, None)。
+    ⚠1〜3 月は「令和 n 年度」で書く回がある(「第24回 R6 01 31」= 2025-01-31)ので年度読みも出す。"""
+    m = NAGOYA_VID_RE.search(norm(title or ""))
+    if not m:
+        return None, None
+    year, month, day = ERA["令和"] + int(m.group(1)), int(m.group(2)), int(m.group(3))
+    try:
+        strong = f"{dt.date(year, month, day):%Y-%m-%d}"
+    except ValueError:
+        return None, None
+    weak = f"{dt.date(year + 1, month, day):%Y-%m-%d}" if month <= 3 and not (
+        month == 2 and day == 29) else None
+    return strong, weak
+
+
+def nagoya_from_titles(items):
+    """[(動画ID, 題)] → ({日: URL}, {年度読みで入れた日: その動画の暦どおりの日})。
+    暦どおりの読みが先(同じ日に年度読みの動画があっても暦どおりの方を採る)。"""
+    strong, weak = {}, {}
+    for vid, title in items:
+        t = norm(title or "")
+        if "能力審査" not in t and "能力検査" not in t:
+            continue
+        s, w = nagoya_title_dates(t)
+        if not s:
+            log(f"  名古屋 動画 {vid} 「{t[:40]}」に日付が無い(使わない)")
+            continue
+        url = "https://www.youtube.com/watch?v=" + vid
+        if s in strong:
+            if strong[s] != url:
+                log(f"  名古屋 {s} に動画が2本(先に見つけた方を使う)")
+        else:
+            strong[s] = url
+        if w and w not in weak:
+            weak[w] = (url, s)
+    out, weak_from = dict(strong), {}
+    for d, (url, s) in weak.items():
+        if d not in out:
+            out[d] = url
+            weak_from[d] = s
+    return out, weak_from
+
+
+def nagoya_embed_videos():
+    """能力審査結果ページに埋まっている動画(最新 2 本)→ [(動画ID, 題)]。一覧が読めないときの予備。"""
     try:
         page = get(NAGOYA_CAP)
     except Exception as e:
-        log(f"  名古屋: 能力審査結果ページが読めない {type(e).__name__}: {str(e)[:80]}"
-            f"(映像は付けない)")
-        return {}
+        log(f"  名古屋: 能力審査結果ページが読めない {type(e).__name__}: {str(e)[:80]}")
+        return []
+    return [(vid, yt_title(vid)) for vid in dict.fromkeys(NAGOYA_EMBED_RE.findall(page))]
+
+
+def nagoya_videos():
+    """「金シャチけいば情報」チャンネルの一覧(全件)+公式ページの埋め込み → {実施日: URL}。
+    ⚠題の「第N回」だけで合わせると年度をまたいで重なる(第11回は令和6・7・8年度にある)ので、
+    題の日付「R8 08 24」で合わせる。結果は _CH_CACHE["nagoya"] に置く(main の付け直しで使い回す)。"""
+    if "nagoya" in _CH_CACHE:
+        return _CH_CACHE["nagoya"][0]
+    items = yt_channel_list(NAGOYA_CH)
+    n_ch = len(items)
+    items = items + nagoya_embed_videos()
+    out, weak_from = nagoya_from_titles(items)
+    _CH_CACHE["nagoya"] = (out, weak_from)
+    log(f"  名古屋: 動画 {len(out)} 日(チャンネル一覧 {n_ch} 本+埋め込み・年度読み {len(weak_from)} 日)")
+    return out
+
+
+def kana_from_titles(items):
+    """[(動画ID, 題)] → {実施日: URL}。題「2026年9月23日 1～2R 能力検査」。同じ日の2本目は使わない。"""
     out = {}
-    for vid in dict.fromkeys(NAGOYA_EMBED_RE.findall(page)):
-        title = norm(yt_title(vid))
-        m = NAGOYA_VID_RE.search(title)
-        km = NAGOYA_KAI_RE.search(title)
-        if not m:
-            log(f"  名古屋 動画 {vid} 「{title[:40]}」に日付が無い(使わない)")
+    for vid, title in items:
+        t = norm(title or "")
+        if "能力検査" not in t and "能力審査" not in t:
             continue
-        date = f"{ERA['令和'] + int(m.group(1))}-{int(m.group(2)):02d}-{int(m.group(3)):02d}"
-        if date in out:
-            log(f"  名古屋 {date} に動画が2本(先に見つけた方を使う)")
+        dm = YT_DATE_RE.search(t)
+        if not dm:
+            log(f"  金沢 動画 {vid} 「{t[:40]}」に日付が無い(使わない)")
             continue
-        out[date] = "https://www.youtube.com/watch?v=" + vid
-        log(f"  名古屋 動画 {date} 第{km.group(1) if km else '?'}回 {vid}")
-    log(f"  名古屋: ページの動画 {len(out)} 本(日付の読めたもの)")
+        try:
+            date = f"{dt.date(int(dm.group(1)), int(dm.group(2)), int(dm.group(3))):%Y-%m-%d}"
+        except ValueError:
+            continue
+        out.setdefault(date, "https://www.youtube.com/watch?v=" + vid)
+    return out
+
+
+def kana_rss_videos():
+    """公式チャンネルの RSS(最新15本)→ [(動画ID, 題)]。一覧が読めないときの予備。"""
+    try:
+        xml = get(KANA_YT)
+    except Exception as e:
+        log(f"  金沢: 公式チャンネルの RSS が読めない {type(e).__name__}: {str(e)[:80]}")
+        return []
+    out = []
+    for entry in KANA_ENTRY_RE.findall(xml):
+        tm = re.search(r"<title>(.*?)</title>", entry, re.S)
+        vm = re.search(r"<yt:videoId>([\w-]{11})</yt:videoId>", entry)
+        if tm and vm:
+            out.append((vm.group(1), H.unescape(tm.group(1))))
     return out
 
 
 def kana_videos():
-    """公式チャンネルの RSS(最新15本)から「◯年◯月◯日 … 能力検査」→ {実施日: URL}。
-    ⚠RSS は最新の15本だけ= 古い回には付かない(⛔無いものは書かない)。"""
-    try:
-        xml = get(KANA_YT)
-    except Exception as e:
-        log(f"  金沢: 公式チャンネルの RSS が読めない {type(e).__name__}: {str(e)[:80]}"
-            f"(映像は付けない)")
-        return {}
-    out = {}
-    for entry in KANA_ENTRY_RE.findall(xml):
-        tm = re.search(r"<title>(.*?)</title>", entry, re.S)
-        vm = re.search(r"<yt:videoId>([\w-]{11})</yt:videoId>", entry)
-        if not tm or not vm:
-            continue
-        title = norm(H.unescape(tm.group(1)))
-        if "能力検査" not in title and "能力審査" not in title:
-            continue
-        dm = YT_DATE_RE.search(title)
-        if not dm:
-            log(f"  金沢 動画 {vm.group(1)} 「{title[:40]}」に日付が無い(使わない)")
-            continue
-        date = f"{dm.group(1)}-{int(dm.group(2)):02d}-{int(dm.group(3)):02d}"
-        out.setdefault(date, "https://www.youtube.com/watch?v=" + vm.group(1))
-        log(f"  金沢 動画 {date} {vm.group(1)}")
-    log(f"  金沢: RSS の能検の動画 {len(out)} 本")
+    """公式チャンネルの一覧(全件)+RSS → {実施日: URL}(⛔無いものは書かない)。"""
+    if "kanazawa" in _CH_CACHE:
+        return _CH_CACHE["kanazawa"]
+    items = yt_channel_list(KANA_CH)
+    n_ch = len(items)
+    out = kana_from_titles(items + kana_rss_videos())
+    _CH_CACHE["kanazawa"] = out
+    log(f"  金沢: 能検の動画 {len(out)} 日(チャンネル一覧 {n_ch} 本+RSS)")
     return out
+
+
+def fill_day_videos(days, videos, weak_from=None):
+    """10/2 既にある日でも video が空なら付ける(⛔値がある日は上書きしない)。戻り値= 付けた日数。
+    差分便は PDF の済んだ日を飛ばすので、PDF を先に取った日は後から動画が出ても付かなかった。
+    weak_from= 年度読みで入れた日 → その動画の暦どおりの日。暦どおりの日が置き場にあれば年度読みは使わない。"""
+    dates = {d.get("date") for d in days}
+    n = 0
+    for d in days:
+        if d.get("video"):
+            continue
+        url = videos.get(d.get("date"))
+        if not url:
+            continue
+        s = (weak_from or {}).get(d.get("date"))
+        if s and s in dates:
+            continue
+        d["video"] = url
+        n += 1
+    return n
+
+
+VIDEO_FILL = {"kanazawa": lambda: (kana_videos(), None),
+              "nagoya": lambda: (nagoya_videos(), _CH_CACHE.get("nagoya", ({}, {}))[1])}
 
 
 # ---------------------------------------------------------------- まとめ
@@ -3472,6 +3588,15 @@ def main():
             vid_days, lines = kasa_videos(days)
             for line in lines:
                 log("  " + line)
+        # 10/2 金沢・名古屋= 既にある日でも video が空ならチャンネル一覧から付ける(値がある日は触らない)
+        if name in VIDEO_FILL:
+            try:
+                vids, weak_from = VIDEO_FILL[name]()
+                vid_days = fill_day_videos(days, vids, weak_from)
+            except Exception as e:                               # noqa: BLE001
+                log(f"{name}: 映像の付け直しに失敗 {type(e).__name__}: {str(e)[:100]}(続行)")
+            log(f"{name}: 映像を付け直した日 {vid_days} / video のある日 "
+                f"{sum(1 for d in days if d.get('video'))} / 全 {len(days)} 日")
         added = 0
         if name in CHIHOU_ENRICH:
             added, missed = chihou_enrich(name, days, base, key)

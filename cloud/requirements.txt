@@ -4,3 +4,4 @@ pg8000==1.31.5   # §54.3-bc horse_changes.py(検出SQLをDB側で流すため)
 anthropic>=0.40   # §140 news_writer.py(記事の下書きを書く)/ §146 sand_depth.py の予備の読み手
 pytesseract>=0.3.10   # §146 sand_depth.py(名古屋の砂厚は 1 断面が画像= 文字認識で読む。⚠便には apt-get install -y tesseract-ocr も要る)
 pywebpush>=2.0   # §291 push_notify.py(チェック馬のお知らせ・web push)
+yt-dlp>=2025.1   # 10/2 noken_public.py 金沢・名古屋の能検の映像(チャンネルの動画一覧だけ・映像は落とさない)
