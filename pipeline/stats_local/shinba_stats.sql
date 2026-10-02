@@ -44,14 +44,21 @@ create or replace function pg_temp.band_cnt(c bigint) returns text language sql 
   select case when c is null or c < 1 then null when c = 1 then '1' when c = 2 then '2' else '3+' end $$;
 
 -- ---------------------------------------------------------------- 窓
--- w_from= 3 年前・nk_from= 索引の端(built の 3 年前)+180 日(R6: これより前の初戦は能検が索引から切れている)
+-- w_from= 3 年前・nk_edge= 索引の端(built の 5 年前= cloud/noken_index.py の YEARS)
+-- (10/2 案A) 能検の数え始めは地区ごと= tmp_nkd(max(索引の端, その地区の noken_recs の最初の日)+180 日。R6: これより前の初戦は能検が記録から切れている)
 drop table if exists tmp_sw;
 create temp table tmp_sw as
 select (current_date - interval '3 years')::date as w_from,
        -- §304c 場で数える sv・bv・td・jk の既定の窓= 5 年(10/2 ユーザー「豪州の砂以外は 3 年か 5 年」)。豪州の砂の場は tmp_sand の日から
        (current_date - interval '5 years')::date as sv_from,
-       (select ((value->>'built')::date - interval '3 years')::date + 180
-          from public.noken_meta where key = 'noken_index') as nk_from;
+       (select ((value->>'built')::date - interval '5 years')::date
+          from public.noken_meta where key = 'noken_index') as nk_edge;
+drop table if exists tmp_nkd;
+create temp table tmp_nkd as
+select k.d, (greatest(w.nk_edge, min(k.date)) + 180)::date as from_date
+from public.noken_recs k cross join tmp_sw w
+where k.d is not null
+group by k.d, w.nk_edge;
 -- (10/2 ユーザー決定) 場ごとの数え始め= 豪州産の砂に変えた後(変えた入れ替えの後の最初の開催日・出どころは viewer の data/sand-history.json)。
 --   船橋 2022/10/29〜11/27 宮城産山砂→豪州産陸砂・大井 2023/10/8〜21 豪州アルバニー産(10/29 から)・門別 2023/3/30 豪州産珪砂(4/19 開幕)・
 --   名古屋 2025/8/18 再開 豪州アルバニー産・園田 2020/4/3〜6 六ケ所村→豪州アルバニー産(2024・2025 は豪州産どうしの入れ替え)。
@@ -154,7 +161,7 @@ select * from tmp_sr
 where race_date >= coalesce((select x.from_date from tmp_sand x where x.track = tmp_sr.track), (select sv_from from tmp_sw))
   and (race_name like '%新馬%' or race_name like '%初出走%');
 
--- D∩能検= 初戦より前の索引の記録がある馬(初戦日 ≥ 索引の端+180 日だけ)。能検の値は初戦直前の 1 件
+-- D∩能検= 初戦より前の索引の記録がある馬(初戦日 ≥ その能検の地区の数え始め tmp_nkd だけ)。能検の値は初戦直前の 1 件
 drop table if exists tmp_dn;
 create temp table tmp_dn as
 select d.*, k.d as nk_d, k.date as nk_date, k.n as nk_n, k.dr, k.dn, k.ar, k.t1r, k.j as nk_j, c.cnt as nk_cnt,
@@ -165,7 +172,7 @@ cross join lateral (select count(*) as cnt from public.noken_recs k
 cross join lateral (select * from public.noken_recs k
                     where k.horse_name = d.horse_name and k.date < d.race_date
                     order by k.date desc, k.d limit 1) k
-where c.cnt > 0 and d.race_date >= (select nk_from from tmp_sw);
+where c.cnt > 0 and d.race_date >= (select x.from_date from tmp_nkd x where x.d = k.d);
 
 -- §304c(10/2 ユーザー決定) 能検の時計 案 C= 同じ池(地区×場×距離×齢帯)の、その能検日より前 365 日の時計の中での百分位。
 --   各日の時計は「その日の中央値−窓の中央値」を n/(n+k) 倍だけ引いて補正(縮み推定・k=11.1・頭数が少ない日は 0 に寄せる)。
@@ -252,15 +259,10 @@ insert into tmp_kv
 select 'nq', v.a, pg_temp.band_pct(q.q), x.finish, x.win_pay
 from tmp_dn x join tmp_nq q on q.horse_name = x.horse_name and q.birth_date is not distinct from x.birth_date
 cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
--- (10/2 ユーザー決定) nw だけ・兵庫だけ= 能検の記録の始まり+180 日より前の初出走を外す(記録より前に能検を受けた馬が入らず「9週〜」が少なく出るため)。
---   外すのは a= 'hyogo'・'v:園田'・'v:姫路' の行だけ。'*' とほかの地区・ほかの kind は変えない。画面の見出しは 'win' 行の nw_from/nw_label
-drop table if exists tmp_nwh;
-create temp table tmp_nwh as
-select (min(k.date) + 180)::date as d from public.noken_recs k where k.d = 'hyogo';
+-- (10/2 案A) 兵庫だけの絞り(tmp_nwh)は外した= 地区ごとの数え始めは tmp_dn で全 kind にかかる。画面の見出しは 'win' 行の nw_from/nw_label
 insert into tmp_kv
 select 'nw', v.a, pg_temp.band_week(x.race_date - x.nk_date), x.finish, x.win_pay
-from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a)
-where not (coalesce(v.a, '') in ('hyogo', 'v:園田', 'v:姫路') and x.race_date < coalesce((select d from tmp_nwh), x.race_date));
+from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
 insert into tmp_kv
 select 'nc', v.a, pg_temp.band_cnt(x.nk_cnt), x.finish, x.win_pay
 from tmp_dn x cross join lateral (values (x.nk_d), ('*'), (case when x.race_date >= coalesce((select z.from_date from tmp_sand z where z.track = x.track), x.race_date) then 'v:' || x.track end)) v(a);
@@ -317,23 +319,23 @@ select 'win', t.track, '',
          'nk_label', case when g.d is null then '能検の記録なし'
                           when s.track is not null and s.from_date > g.d then '豪州産の砂に変わった' || to_char(s.from_date, 'YYYY"年"FMMM"月から"')
                           else to_char(g.d, 'YYYY"年"FMMM"月から"') end)
-       -- nw(能検から今回まで)だけの始まり= 兵庫の場だけ(10/2)。ほかの場は足さない(画面は nk_label のまま)
-       || case when t.track in ('園田', '姫路') and h.d is not null
-               then jsonb_build_object('nw_from', h.d, 'nw_label', to_char(h.d, 'YYYY"年"FMMM"月から"'))
+       -- (10/2 案A) 能検の比べ表の数え始め= その場の属する地区の tmp_nkd(全部の場に出す・'*' の行は出さない)
+       || case when n.from_date is not null
+               then jsonb_build_object('nw_from', n.from_date, 'nw_label', to_char(n.from_date, 'YYYY"年"FMMM"月から"'))
                else '{}'::jsonb end,
        current_date, now()
 from (select distinct track from tmp_sr) t
 left join tmp_sand s on s.track = t.track
 cross join tmp_sw w
-cross join tmp_nwh h
 cross join lateral (select coalesce(s.from_date, w.sv_from) as d) f
 -- g= その場の地区の能検の記録の一番古い日(地区ごとに始まりが違う= 船橋・川崎・浦和は 2026-01 から・10/2)。
 --   ⛔その場で初出走した馬の能検の日の最小にしない= 他地区で能検を受けた少数の馬で古い日に引っぱられる(船橋が 2024-07 になった)
-cross join lateral (select min(k.date) as d from public.noken_recs k
-                    where k.d = case t.track when '船橋' then 'funabashi' when '大井' then 'ooi' when '川崎' then 'kawasaki' when '浦和' then 'urawa'
+cross join lateral (select case t.track when '船橋' then 'funabashi' when '大井' then 'ooi' when '川崎' then 'kawasaki' when '浦和' then 'urawa'
                                   when '門別' then 'monbetsu' when '園田' then 'hyogo' when '姫路' then 'hyogo' when '名古屋' then 'nagoya'
                                   when '笠松' then 'kasamatsu' when '金沢' then 'kanazawa' when '高知' then 'kochi' when '佐賀' then 'saga'
-                                  when '盛岡' then 'iwate' when '水沢' then 'iwate' when '帯広ば' then 'banei' end) g;
+                                  when '盛岡' then 'iwate' when '水沢' then 'iwate' when '帯広ば' then 'banei' end as dk) m
+cross join lateral (select min(k.date) as d from public.noken_recs k where k.d = m.dk) g
+left join tmp_nkd n on n.d = m.dk;
 
 commit;
 

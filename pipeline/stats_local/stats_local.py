@@ -275,6 +275,8 @@ def cmd_shinba():
         raise SystemExit("shinba_stats.sql が失敗")
     for k, n in rows("select kind, count(*) from public.nar_shinba_stats group by kind order by kind"):
         log(f"  nar_shinba_stats {k}: {n} 行")
+    log("  能検の数え始め(win の nw_from): " + " / ".join(
+        f"{a} {f}" for a, f in rows("select a, coalesce(stats->>'nw_from', '-') from public.nar_shinba_stats where kind = 'win' order by a")))
     log(f"shinba 済み {time.time() - t0:.1f} 秒")
 
 
@@ -384,6 +386,14 @@ def cmd_diff():
                 f"where d.st = '{dst}' and jsonb_typeof(l.{col}) = 'object' and jsonb_typeof(p.{col}) = 'object' "
                 f"and (l.{col} -> k) is distinct from (p.{col} -> k) group by k order by 2 desc limit 12")
             log(f"    違う鍵({dst}): {[(a, int(b)) for a, b in got]}")
+    # 10/2 兵庫の能検の取り直し(案A)の確かめ= 新馬の表の nw(能検から今回まで)の帯の頭数 手元/本番
+    if "nar_shinba_stats" in OUTPUTS:
+        for a in ("hyogo", "v:園田", "v:姫路", "*"):
+            got = {}
+            for sch in ("public", "prod"):
+                for b, n in rows(f"select b, stats->>'n' from {sch}.nar_shinba_stats where kind = 'nw' and a = '{a}' order by b"):
+                    got.setdefault(b, ["-", "-"])[0 if sch == "public" else 1] = n
+            log(f"  nw {a}: " + " / ".join(f"{b} 手元 {v[0]}・本番 {v[1]}" for b, v in sorted(got.items())))
     with open(os.path.join(DUMP, "diff_summary.json"), "w", encoding="utf-8") as f:
         json.dump(summary, f, ensure_ascii=False)
     return summary
