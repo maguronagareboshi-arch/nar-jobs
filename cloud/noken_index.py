@@ -640,6 +640,8 @@ def main():
                     help="noken_index.json の書き出し先ディレクトリ")
     ap.add_argument("--years", type=int, default=YEARS, help="何年前までの検査を入れるか(既定3)")
     ap.add_argument("--env", help="接続先 .env(pipeline/.env.nar)")
+    ap.add_argument("--max-growth", type=float, default=None,
+                    help="10/2 今の索引(本番)の素のバイト数のこの倍を超えたら投入しない(終了コード 3)")
     args = ap.parse_args()
     if args.env:
         load_env(args.env)
@@ -724,12 +726,21 @@ def main():
     path.write_bytes(body)
     log(f"{path} に書き出し")
 
+    cur = sb_get(base, read_key, "nar_meta", META_KEY) if (args.apply or args.max_growth) else None
+    if isinstance(cur, dict):
+        cur_body = len(json.dumps(cur, ensure_ascii=False, separators=(",", ":")).encode("utf-8"))
+        cur_h = len(cur.get("horses") or {})
+        log(f"大きさ: 今の索引(本番) {cur_body:,} B・{cur_h:,} 頭 → 作り直し {len(body):,} B・{len(horses):,} 頭"
+            f"(倍率 {len(body) / max(cur_body, 1):.3f})")
+        if args.max_growth and len(body) > cur_body * args.max_growth:
+            log(f"⛔大きさが今の {args.max_growth} 倍を超えた= 投入しない")
+            return 3
+
     if not args.apply:
         log("ドライラン(--apply で投入)")
         return 0
 
     # 冪等: 中身が同じなら書かない(毎朝走るので、変わっていない日は DB を触らない)
-    cur = sb_get(base, read_key, "nar_meta", META_KEY)
     if isinstance(cur, dict) and cur.get("horses") == horses:
         log(f"nar_meta/{META_KEY} は変化なし(投入しない)")
         return 0

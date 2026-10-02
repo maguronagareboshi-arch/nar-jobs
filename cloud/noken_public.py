@@ -3448,12 +3448,20 @@ def hyogo_split_day(day, sp):
     return stat
 
 
+def is_kb_day(day):
+    """10/2 競馬ブックから足した兵庫の過去の日(cloud/kb/backfill_kb_noken_hyogo.py)= src_id が負の整数。"""
+    s = day.get("src_id")
+    return isinstance(s, int) and not isinstance(s, bool) and s < 0
+
+
 def hyogo_split(days, split):
     """兵庫の日を split(提供データ)で組み直す。split に無い日は **no を外す**。
     返り値 = (組み直した日数, 組不明の行がある日の一覧)"""
     got = (split or {}).get("days") or {}
     done, warn = 0, []
     for d in days:
+        if is_kb_day(d):
+            continue                                          # 10/2 競馬ブックから足した過去の日= 既にレース単位
         sp = got.get(str(d.get("date")))
         if not sp:
             for r in (d.get("races") or []):

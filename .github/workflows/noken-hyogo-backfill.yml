@@ -1,0 +1,83 @@
+# 10/2 兵庫(園田・西脇)の能検の取り直し(競馬ブック /chihou/nouken/{YYYYMMDD}{37|45})。手動実行だけ。
+# - 公式(sonoda-himeji.jp)は 2026-03-06 から= 足すのはそれより前(既定 2018-01-01〜2026-03-05)。同じ日・同じ場は公式を残す
+# - 月の一覧から日を拾う・2.5 秒おき・30 日ぶんごとに nar_meta 'hyogo_noken' を読み直して足して書く。毎日の差分(nar-refresh)は変えない
+# - 約 100 か月 + 約 430 日= 約 530 本・約 25 分
+# - dry_run= 書かずに 形・読み手(レース割り・索引の build)の確かめだけ(dates で日を絞れる)
+# - 最後に能検の索引を作り直す(rebuild_index)。今の索引の 1.8 倍を超えたら投入しない(終了コード 3)
+# ⛔頁の HTML を artifact・cache に出さない(public repo)。⛔寸評は取らない
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY / KEIBABOOK_LOGIN_ID / KEIBABOOK_PASSWORD
+name: noken-hyogo-backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: '開始日 YYYY-MM-DD'
+        required: true
+        default: '2018-01-01'
+      to:
+        description: '終了日 YYYY-MM-DD(公式の最初の日 2026-03-06 より前)'
+        required: true
+        default: '2026-03-05'
+      dates:
+        description: '試しの日 YYYYMMDD を「,」区切り(空= 範囲の月の一覧から全部)'
+        required: false
+        default: ''
+      dry_run:
+        description: '書かない(形と読み手の確かめだけ)'
+        type: boolean
+        default: true
+      fetch:
+        description: '取り直しをする(false= 索引の作り直しだけ)'
+        type: boolean
+        default: true
+      rebuild_index:
+        description: '終わったら能検の索引を作り直す(dry_run なら大きさを測るだけ)'
+        type: boolean
+        default: false
+
+concurrency:
+  group: noken-hyogo-backfill
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+env:
+  TZ: Asia/Tokyo
+  KB_DATA_DIR: /tmp/kbdata
+  FETCH_WAIT_SECONDS: '2.5'
+  PYTHONUNBUFFERED: '1'
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install
+        run: pip install -q requests beautifulsoup4 lxml
+      - name: hyogo noken backfill
+        if: inputs.fetch
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}
+          KEIBABOOK_PASSWORD: ${{ secrets.KEIBABOOK_PASSWORD }}
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+          DATES: ${{ inputs.dates }}
+          DRY: ${{ inputs.dry_run && '1' || '' }}
+        run: python cloud/kb/backfill_kb_noken_hyogo.py --from "$FROM" --to "$TO" ${DATES:+--dates "$DATES"} ${DRY:+--dry-run}
+      - name: noken index rebuild
+        if: inputs.rebuild_index && !cancelled()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          DRY: ${{ inputs.dry_run && '1' || '' }}
+        run: |
+          if [ -n "$DRY" ]; then python cloud/noken_index.py --max-growth 1.8
+          else python cloud/noken_index.py --apply --max-growth 1.8; fi
