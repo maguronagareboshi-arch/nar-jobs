@@ -101,6 +101,24 @@ def split_name(raw):
     return ("".join(parts), "")
 
 
+# 調教師の略称の上書き(license_no→nar_runs.trainer の実際の略称)。KDSCOPE の調教師コードで本人判定・
+# 2022〜の本人の走りの 99% 以上がその略称で、その略称の走りの 99% 以上が本人の人だけ(2026-10-02)。
+# 作り方は nar-site/research/owner-breeder/name_short_override.py。例 保利良平→保利平・九日俊光→九日光。
+OVERRIDE_CSV = os.path.join(os.path.dirname(os.path.abspath(__file__)), "trainer_abbr_override.csv")
+
+
+def load_override(path=OVERRIDE_CSV):
+    out = {}
+    if not os.path.exists(path):
+        return out
+    with open(path, encoding="utf-8-sig") as f:
+        for line in f.read().splitlines()[1:]:
+            parts = line.split(",")
+            if len(parts) >= 3 and parts[0].strip() and parts[2].strip():
+                out[parts[0].strip()] = parts[2].strip()
+    return out
+
+
 def short_name(sei, mei):
     """⭐nar_runs と同じ3文字の略称= 姓[:2] + 名[:3-len(姓[:2])]。"""
     a = sei[:2]
@@ -158,9 +176,10 @@ def collect(kind, full, limit=None):
     listed, total = fetch_list(kind)
     log(f"[{cfg['label']}] 一覧= {len(listed)} 人(公式の総件数 {total})")
     rows, dup = [], {}
+    ovr = load_override() if kind == "trainer" else {}
     for lic, raw in listed.items():
         sei, mei = split_name(raw)
-        s = short_name(sei, mei)
+        s = ovr.get(lic) or short_name(sei, mei)      # ⛔dup も上書き後の略称で数える
         dup.setdefault(s, []).append(sei + mei)
         rows.append({"kind": kind, "license_no": lic, "name_full": sei + mei,
                      "name_sei": sei, "name_mei": mei, "name_short": s,
