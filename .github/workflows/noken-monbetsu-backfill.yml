@@ -1,0 +1,63 @@
+# 10/2 門別の能検の取り直し(公式 hokkaidokeiba.net の user-data/noken/YYYYMMDD-00.pdf)。手動実行だけ。
+# - 索引は今年度しか日付を出さないので、日付は一覧ファイル(既定 44 日・2023-10〜2025)か範囲の総当たり(dates を空に)
+# - R の一覧は全R の PDF の見出しから・R ごとの pdf / mp4 は HEAD で有無を見る・1 秒おき・失敗は 3 回まで
+# - 既にある日は叩かない(上書きしない)・10 日ぶんごとに nar_meta 'monbetsu_noken' へ足して書く。毎日の差分(nar-refresh)は変えない
+# - 44 日 x (PDF 1 + HEAD 約 8)= 約 400 本・約 10 分
+# - 最後に能検の索引(noken_index.py --apply)を作り直す(rebuild_index=false で省ける)
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY(nar-refresh と同じ)
+name: noken-monbetsu-backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: '開始日 YYYY-MM-DD'
+        required: true
+        default: '2023-04-01'
+      to:
+        description: '終了日 YYYY-MM-DD'
+        required: true
+        default: '2026-03-31'
+      dates:
+        description: '日付の一覧ファイル or 「,」区切り(空= 範囲を総当たり)'
+        required: false
+        default: 'cloud/monbetsu_noken_dates_2023-2025.txt'
+      rebuild_index:
+        description: '終わったら能検の索引を作り直す'
+        type: boolean
+        default: true
+
+concurrency:
+  group: noken-monbetsu-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install pdfplumber
+        run: pip install "pdfplumber>=0.11"
+      - name: monbetsu noken backfill
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+          DATES: ${{ inputs.dates }}
+        run: |
+          if [ -n "$DATES" ]; then
+            python cloud/noken_public.py --monbetsu-backfill "$FROM" "$TO" --monbetsu-dates "$DATES"
+          else
+            python cloud/noken_public.py --monbetsu-backfill "$FROM" "$TO"
+          fi
+      - name: noken index rebuild
+        if: inputs.rebuild_index && !cancelled()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/noken_index.py --apply

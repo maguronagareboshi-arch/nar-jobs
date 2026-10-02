@@ -2631,6 +2631,7 @@ MONBETSU_PDF_RE = re.compile(r"user-data/noken/(\d{8}-\d{2}\.pdf)")
 MONBETSU_WX_RE = re.compile(r"〔([^〕]*)〕")
 MONBETSU_PASS_RE = re.compile(r"合格頭数([０-９\d]+)頭")
 MONBETSU_TIMEOVER = "タイムオーバー"
+MONBETSU_NG = "不合格"
 
 
 def monbetsu_dates(backfill):
@@ -2679,6 +2680,9 @@ def monbetsu_heads(page):
                 break
             if re.fullmatch(r"\d+", t):
                 order.append(int(t))
+            elif re.fullmatch(r"[.\d]*\.[.\d]*", t):
+                # 10/2 2024 年ごろの PDF は着順が1語にくっつく「．．４．５．６．２．３．１」
+                order.extend(int(x) for x in re.findall(r"\d+", t))
         out.append({"no": int(norm(m.group(1))), "x0": w["x0"], "top": w["top"],
                     "order": order, "dist": dist})
     return out
@@ -2793,7 +2797,9 @@ def monbetsu_ok(races, npass, marks, date, drop):
     # ⚠タイムの無い馬は「出走取消」「競走中止」= 検査を受けていない。合否のどちらでもないので付けない
     #   (旧データはこの馬を丸ごと落としていた。⛔落とさずに備考のまま残す)
     ran = [row for row in rows if row.get("time")]
-    bad = {id(row) for row in ran if MONBETSU_TIMEOVER in (row.get("note") or "")}
+    # 10/2 2024 年ごろの PDF は備考が「不合格」(タイムオーバーの字が無い)= どちらも不合格に数える
+    bad = {id(row) for row in ran
+           if any(w in (row.get("note") or "") for w in (MONBETSU_TIMEOVER, MONBETSU_NG))}
     if npass is None:
         drop.append(f"門別 {date} PDF に「合格頭数」が無い= 合否を付けない({len(rows)}頭)")
     elif len(ran) - len(bad) != npass:
@@ -2848,6 +2854,143 @@ def collect_monbetsu(existing, backfill):
     log(f"  門別: 索引の日 {len(dates)} / 取れた {len(days)} 日 / 取得失敗 {miss}")
     return days
 
+
+
+# 10/2 門別の過去の取り直し(--monbetsu-backfill FROM TO)。索引は今年度しか日付を出さず、
+# 過去日の index.php?p_day= には PDF/動画のリンクが出ない(= monbetsu_files は空)。
+# ただし user-data/noken/YYYYMMDD-00.pdf(全R)・-NN.pdf・-NN.mp4 はサーバーに残っている(実測 10/2)。
+# → R の一覧は -00.pdf の見出し(monbetsu_heads)から作り、R ごとの pdf / mp4 は HEAD で有無を見る。
+# ⛔毎日の差分(collect_monbetsu)は使わない= 動きを変えない。書き込み先・器の形は今の門別と同じ。
+MONBETSU_BF_SLEEP = 1.0               # 取り直しは 1 秒おき(HEAD も同じ間合い)
+MONBETSU_BF_TRIES = 3                 # 404 以外の失敗は 3 回まで
+MONBETSU_BF_CHUNK = 10                # 10 日ぶん取るごとに置き場へ書く
+
+
+def head_ok(url):
+    """HEAD で有無を見る(200= ある・404/403= 無い)。get() と同じ間合い(SLEEP)を守る。"""
+    wait = SLEEP - (time.monotonic() - _last[0])
+    if wait > 0:
+        time.sleep(wait)
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": UA}, method="HEAD")
+        res = urllib.request.urlopen(req, timeout=40)
+        return res.status == 200
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 404, 410):
+            return False
+        raise
+    finally:
+        _last[0] = time.monotonic()
+
+
+def monbetsu_bf_dates(d_from, d_to, dates_arg, existing):
+    """叩く日。dates_arg= 一覧ファイルのパス or 「,」区切りの日付(省くと範囲の総当たり)。範囲外・既にある日は除く。"""
+    start, end = dt.date.fromisoformat(d_from), dt.date.fromisoformat(d_to)
+    if dates_arg:
+        if os.path.isfile(dates_arg):
+            with open(dates_arg, encoding="utf-8") as f:
+                raw = [ln.split("	")[0].strip() for ln in f]
+        else:
+            raw = [x.strip() for x in dates_arg.split(",")]
+        cand = []
+        for x in raw:
+            if not x or x.startswith("#") or x == "DONE":
+                continue
+            x = x if "-" in x else f"{x[:4]}-{x[4:6]}-{x[6:8]}"
+            dt.date.fromisoformat(x)                 # 形が違えばここで落とす
+            cand.append(x)
+        cand = sorted({x for x in cand if start.isoformat() <= x <= end.isoformat()})
+        probe = False
+    else:
+        cand = [(start + dt.timedelta(days=i)).isoformat() for i in range((end - start).days + 1)]
+        probe = True
+    return [d for d in cand if d not in existing], len(cand), probe
+
+
+def monbetsu_bf_day(date, drop):
+    """1日分。全R の PDF が無ければ None(試験の無い日)。"""
+    stem = date.replace("-", "")
+    all_pdf = MONBETSU_FILE.format(stem, 0, "pdf")
+    try:
+        data, _lm = get_bin(all_pdf)
+    except urllib.error.HTTPError as e:
+        if e.code in (403, 404, 410):
+            return None
+        raise
+    races = monbetsu_pdf(data, date, {}, drop)
+    if not races:
+        drop.append(f"門別 {date} 表が読めない(捨てる)")
+        return None
+    for race in races:                               # 器の形は差分便と同じ= mp4 → pdf の順
+        for ext in ("mp4", "pdf"):
+            url = MONBETSU_FILE.format(stem, race["no"], ext)
+            if head_ok(url):
+                race[ext] = url
+    return {"date": date, "venue": "門別", "races": races, "all_pdf": all_pdf}
+
+
+def monbetsu_backfill(d_from, d_to, dates_arg, base, key, dry_run=False):
+    global SLEEP
+    if not pdf_lib():
+        log("門別: pdfplumber が入っていない(cloud/requirements.txt)")
+        return 2
+    SLEEP = max(SLEEP, MONBETSU_BF_SLEEP)
+    meta_key = "monbetsu_noken"
+    stored = (sb_get_meta(base, key, meta_key) if base and key else None) or {"days": []}
+    existing = {d["date"] for d in stored["days"]}
+    todo, n_cand, probe = monbetsu_bf_dates(d_from, d_to, dates_arg, existing)
+    log(f"門別: {'範囲の総当たり' if probe else '日付の一覧'} {n_cand} 日 / 叩く日 {len(todo)}"
+        f"(既にある日は除いた)")
+    pending, drop, failed = [], [], []
+    hit = written = 0
+    rc = 0
+
+    def flush():
+        nonlocal stored, pending, written, rc
+        if not pending:
+            return
+        days = merge_days(stored["days"], pending, lambda d: d["date"])   # 既存を先= 同じ日は既存を残す
+        if dry_run:
+            log(f"門別: (dry-run) 書くなら 新規 {len(pending)} 日 / 合計 {len(days)} 日")
+        else:
+            status, msg = upsert(base, key, "nar_meta", "key",
+                                 [{"key": meta_key, "value": {"days": days},
+                                   "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()}])
+            if status not in (200, 201):
+                log(f"門別: 投入失敗 {status} {msg}")
+                rc = 1
+                return
+            log(f"門別: nar_meta/{meta_key} 更新 新規 {len(pending)} 日 / 合計 {len(days)} 日")
+        written += len(pending)
+        stored = {"days": days}
+        pending = []
+
+    for i, date in enumerate(todo, 1):
+        day = None
+        for n in range(MONBETSU_BF_TRIES):
+            try:
+                day = monbetsu_bf_day(date, drop)
+                break
+            except Exception as e:
+                if n == MONBETSU_BF_TRIES - 1:
+                    failed.append(date)
+                    log(f"  門別 {date} 取得失敗(3回) {type(e).__name__}: {str(e)[:100]}")
+                else:
+                    time.sleep(3.0 * (n + 1))
+        if day:
+            hit += 1
+            pending.append(day)
+            rs = day["races"]
+            log(f"  門別 {date} {sum(len(r['rows']) for r in rs)}頭/{len(rs)}R "
+                f"映像 {sum(1 for r in rs if r.get('mp4'))}本 R別PDF {sum(1 for r in rs if r.get('pdf'))}本")
+        if i % MONBETSU_BF_CHUNK == 0:
+            flush()
+    flush()
+    for line in drop:
+        log("  " + line)
+    log(f"門別: 叩いた日 {len(todo)} / 試験のあった日 {hit} / 書いた日 {written} / 取得失敗 {len(failed)}"
+        + (f" {failed}" if failed else ""))
+    return 1 if (failed or rc) else 0
 
 # ---------------------------------------------------------------- §117b 名古屋・金沢の映像
 # 下調べ(docs/s117_survey_result.md §3)= どちらも「1日1本」。結果表の読み方は触らない。
@@ -3258,6 +3401,10 @@ def main():
     ap.add_argument("--since", help="§305 --backfill の開始日 YYYY-MM-DD(南関4場だけ。省くと今年の1/1)")
     ap.add_argument("--nankan-backfill", nargs=2, metavar=("FROM", "TO"),
                     help="10/2 南関4場の過去の取り直し YYYY-MM-DD YYYY-MM-DD(--venue で場を絞る・all= 4場)")
+    ap.add_argument("--monbetsu-backfill", nargs=2, metavar=("FROM", "TO"),
+                    help="10/2 門別の過去の取り直し YYYY-MM-DD YYYY-MM-DD(--monbetsu-dates が無ければ範囲を総当たり)")
+    ap.add_argument("--monbetsu-dates",
+                    help="--monbetsu-backfill の日付= 一覧ファイル(1行1日・タブ以降は無視)か「,」区切り")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--out", help="days を <ここ>/{venue}_noken.json に書き出す(投入とは別)")
     ap.add_argument("--env")
@@ -3275,6 +3422,11 @@ def main():
     if (not base or not key) and not args.dry_run:
         log("SUPABASE_URL / SUPABASE_SERVICE_KEY が無い(--dry-run なら鍵なしで動く)")
         return 2
+
+    if args.monbetsu_backfill:
+        d_from, d_to = args.monbetsu_backfill
+        dt.date.fromisoformat(d_from), dt.date.fromisoformat(d_to)   # 形が違えばここで落とす
+        return monbetsu_backfill(d_from, d_to, args.monbetsu_dates, base, key, args.dry_run)
 
     if args.nankan_backfill:
         d_from, d_to = args.nankan_backfill
