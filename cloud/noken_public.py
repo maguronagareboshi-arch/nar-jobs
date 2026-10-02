@@ -2539,6 +2539,75 @@ def collect_nankan(prefix, existing, backfill):
     return days, offsets
 
 
+NANKAN_BF_SLEEP = 1.5                 # 取り直しは 1.5 秒おき
+NANKAN_BF_TRIES = 3                   # 404 以外の失敗は 3 回まで
+NANKAN_BF_CHUNK = 30                  # 30 日ぶん叩くごとに置き場へ書く(途中で落ちても取った日は残る)
+
+
+def nankan_backfill(prefix, d_from, d_to, base, key, dry_run=False):
+    """10/2 南関の過去の取り直し(--nankan-backfill FROM TO)。既にある日は叩かない・404= 試験の無い日。
+    書き込みは今の '{場}_noken' に日を足すだけ(同じ日は既存を残す= 上書きしない・新しい順)。
+    ⛔映像の頭出し(offsets)は作らない。毎日の差分(collect_nankan)は使わない= 動きを変えない。"""
+    global SLEEP
+    SLEEP = max(SLEEP, NANKAN_BF_SLEEP)
+    name = NANKAN_NAME[prefix]
+    meta_key = f"{prefix}_noken"
+    stored = (sb_get_meta(base, key, meta_key) if base and key else None) or {"days": []}
+    existing = {d["date"] for d in stored["days"]}
+    start, end = dt.date.fromisoformat(d_from), dt.date.fromisoformat(d_to)
+    dates = [(start + dt.timedelta(days=i)).isoformat() for i in range((end - start).days + 1)]
+    todo = [d for d in dates if d not in existing]
+    log(f"{name}: 範囲 {len(dates)} 日 / 既にある日 {len(dates) - len(todo)} / 叩く日 {len(todo)}")
+    pending, drop, failed = [], [], []
+    hit = written = 0
+    rc = 0
+
+    def flush():
+        nonlocal stored, pending, written, rc
+        if not pending:
+            return
+        days = merge_days(stored["days"], pending, lambda d: d["date"])   # 既存を先= 同じ日は既存を残す
+        if dry_run:
+            log(f"{name}: (dry-run) 書くなら 新規 {len(pending)} 日 / 合計 {len(days)} 日")
+        else:
+            status, msg = upsert(base, key, "nar_meta", "key",
+                                 [{"key": meta_key, "value": {"days": days},
+                                   "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()}])
+            if status not in (200, 201):
+                log(f"{name}: 投入失敗 {status} {msg}")
+                rc = 1
+                return                     # pending は残す= 次の書き込みでもう一度
+            log(f"{name}: nar_meta/{meta_key} 更新 新規 {len(pending)} 日 / 合計 {len(days)} 日")
+        written += len(pending)
+        stored = {"days": days}
+        pending = []
+
+    for i, date in enumerate(todo, 1):
+        day = None
+        for n in range(NANKAN_BF_TRIES):
+            try:
+                day = nankan_day(prefix, date, drop)
+                break
+            except Exception as e:
+                if n == NANKAN_BF_TRIES - 1:
+                    failed.append(date)
+                    log(f"  {name} {date} 取得失敗(3回) {type(e).__name__}: {str(e)[:100]}")
+                else:
+                    time.sleep(3.0 * (n + 1))
+        if day:
+            hit += 1
+            pending.append(day)
+            log(f"  {name} {date} {sum(len(r['rows']) for r in day['races'])}頭/{len(day['races'])}R")
+        if i % NANKAN_BF_CHUNK == 0:
+            flush()
+    flush()
+    for line in drop:
+        log("  " + line)
+    log(f"{name}: 叩いた日 {len(todo)} / 試験のあった日 {hit} / 書いた日 {written} / 取得失敗 {len(failed)}"
+        + (f" {failed}" if failed else ""))
+    return 1 if (failed or rc) else 0
+
+
 def nankan_collector(prefix):
     def collect(existing, backfill):
         return collect_nankan(prefix, existing, backfill)
@@ -3187,6 +3256,8 @@ def main():
     ap.add_argument("--replace", action="store_true",
                     help="§212 取れた日だけで置き換える(既存の日を消す= 明示したときだけ)")
     ap.add_argument("--since", help="§305 --backfill の開始日 YYYY-MM-DD(南関4場だけ。省くと今年の1/1)")
+    ap.add_argument("--nankan-backfill", nargs=2, metavar=("FROM", "TO"),
+                    help="10/2 南関4場の過去の取り直し YYYY-MM-DD YYYY-MM-DD(--venue で場を絞る・all= 4場)")
     ap.add_argument("--dry-run", action="store_true")
     ap.add_argument("--out", help="days を <ここ>/{venue}_noken.json に書き出す(投入とは別)")
     ap.add_argument("--env")
@@ -3204,6 +3275,18 @@ def main():
     if (not base or not key) and not args.dry_run:
         log("SUPABASE_URL / SUPABASE_SERVICE_KEY が無い(--dry-run なら鍵なしで動く)")
         return 2
+
+    if args.nankan_backfill:
+        d_from, d_to = args.nankan_backfill
+        dt.date.fromisoformat(d_from), dt.date.fromisoformat(d_to)   # 形が違えばここで落とす
+        targets = list(NANKAN_CODE) if args.venue == "all" else [args.venue]
+        if any(v not in NANKAN_CODE for v in targets):
+            log(f"--nankan-backfill は南関4場だけ({', '.join(NANKAN_CODE)})")
+            return 2
+        rc = 0
+        for v in targets:
+            rc = max(rc, nankan_backfill(v, d_from, d_to, base, key, args.dry_run))
+        return rc
 
     rc = 0
     for name in (ORDER if args.venue == "all" else [args.venue]):

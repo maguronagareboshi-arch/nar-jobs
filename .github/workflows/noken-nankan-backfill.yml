@@ -1,0 +1,56 @@
+# 10/2 南関4場の能検の取り直し(公式 nankankeiba.com の日ページを日付の総当たり)。手動実行だけ。
+# - 既にある日は叩かない・404= 試験の無い日・1.5 秒おき・失敗は 3 回まで・30 日ぶんごとに nar_meta '{場}_noken' へ足して書く
+# - 同じ日は既存を残す(上書きしない)。映像の頭出し(offsets)は作らない。毎日の差分(nar-refresh)は変えない
+# - 4場 x 約 820 日= 約 3,300 本・1 本 約 1.6 秒= 約 85 分(場ごとに順に回す)
+# - 最後に能検の索引(noken_index.py --apply)を作り直す(rebuild_index=false で省ける)
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY(nar-refresh と同じ)
+name: noken-nankan-backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: '開始日 YYYY-MM-DD'
+        required: true
+        default: '2023-10-01'
+      to:
+        description: '終了日 YYYY-MM-DD'
+        required: true
+        default: '2025-12-31'
+      venue:
+        description: '場(all= 4場)'
+        type: choice
+        default: 'all'
+        options: [all, urawa, funabashi, ooi, kawasaki]
+      rebuild_index:
+        description: '終わったら能検の索引を作り直す'
+        type: boolean
+        default: true
+
+concurrency:
+  group: noken-nankan-backfill
+  cancel-in-progress: false
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: nankan noken backfill
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+          VENUE: ${{ inputs.venue }}
+        run: python cloud/noken_public.py --venue "$VENUE" --nankan-backfill "$FROM" "$TO"
+      - name: noken index rebuild
+        if: inputs.rebuild_index && !cancelled()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/noken_index.py --apply
