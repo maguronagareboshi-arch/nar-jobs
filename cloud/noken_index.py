@@ -320,8 +320,12 @@ def day_offsets(off_value):
                 continue
             if no >= 1 and sec >= 0:
                 secs[no] = sec
+        # 兵庫 5/12・6/08 は公式の組分けと映像の組が違い、公式行に組番号も無い。映像の札画面から
+        # 読んだ「馬名→映像の組」を horses に持つ(10/2)。公式行に no が無いときだけ使う
+        hs = d.get("horses")
+        horses = {text(n): int(g) for n, g in hs.items() if text(n) and str(g).isdigit()} if isinstance(hs, dict) else {}
         if secs:
-            out[date] = (vid, secs)
+            out[date] = (vid, secs, horses)
     return out
 
 
@@ -407,10 +411,15 @@ def build(metas, offsets, cut, stats):
                     if dropped:
                         st["dropped_ok"][dropped] = st["dropped_ok"].get(dropped, 0) + 1
                     keys = name_keys(name)
+                    rno, rs = no, s
+                    if no is None and cue and name in cue[2]:
+                        rno = cue[2][name]
+                        if v == day_video:
+                            rs = cue[1].get(rno)
                     if len(keys) > 1:
                         st["alias"].append(f"{name}→{keys[1:]}")
                     rec = {"d": prefix, "date": date, "time": shown[i], "ok": ok,
-                           "v": v, "s": s, "_no": no, "_keys": keys}
+                           "v": v, "s": rs, "_no": rno, "_keys": keys}
                     # §50 K-1c 距離と齢帯(日全体順位の池の鍵)。sexage='牡2'→2 / 3歳以上は3に畳む
                     if dist is not None:
                         rec["dm"] = dist
@@ -424,8 +433,8 @@ def build(metas, offsets, cut, stats):
                     if prefix in MULTI_VENUE and venue:
                         rec["p"] = venue
                     # 値の無いものはキーごと省略(地区で持っている列が違う。1件ずつのサイズを増やさないため)
-                    if no is not None:
-                        rec["r"] = no
+                    if rno is not None:
+                        rec["r"] = rno
                     rec["n"] = len(rows)
                     if i in tr_of:
                         rec["tr"] = tr_of[i]
