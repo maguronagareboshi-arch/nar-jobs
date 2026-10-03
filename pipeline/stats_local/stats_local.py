@@ -430,16 +430,19 @@ def _q(v):
 
 
 def _delete_filter(keys, part):
-    """消す行の鍵の値(各行 = keys と同じ長さの列)から PostgREST の filter を作る。"""
+    """消す行の鍵の値(各行 = keys と同じ長さの列)から PostgREST の filter を作る。
+    値は & = + % # 等も全部符号化する(2026-10-03 馬主名「Aaron&Mari」の & でクエリが割れて止まった件)。"""
     for r in part:
         if len(r) != len(keys):
             raise SystemExit(f"消す行の鍵の数が合わない: {keys} / {r!r}")
     if len(keys) == 1:
-        flt = f"{keys[0]}=in.({','.join(_q(r[0]) for r in part)})"
+        name = keys[0]
+        val = "in.(" + ",".join(_q(r[0]) for r in part) + ")"
     else:
         ors = ",".join("and(" + ",".join(f"{k}.eq.{_q(v)}" for k, v in zip(keys, r)) + ")" for r in part)
-        flt = "or=(" + ors + ")"
-    return urllib.parse.quote(flt, safe="=&")
+        name = "or"
+        val = "(" + ors + ")"
+    return name + "=" + urllib.parse.quote(val, safe="")
 
 
 def cmd_apply(allow_large):
@@ -478,6 +481,9 @@ def cmd_apply(allow_large):
         deleted = 0
         for i in range(0, len(gone), 50):
             part = gone[i:i + 50]
+            n0 = _rest("HEAD", f"{t}?select={keys[0]}&" + _delete_filter(keys, part), prefer="count=exact")
+            if n0 != len(part):
+                raise SystemExit(f"{t} の消す行が {n0} 行に当たる(見込み {len(part)} 行)= 本番は消していない")
             n = _rest("DELETE", f"{t}?" + _delete_filter(keys, part), prefer="return=minimal,count=exact")
             if n != len(part):
                 raise SystemExit(f"{t} の DELETE が {n} 行しか消えない(見込み {len(part)} 行)= 鍵の組み立てを確かめる")

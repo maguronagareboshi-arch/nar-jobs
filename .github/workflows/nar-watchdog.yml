@@ -345,12 +345,13 @@ jobs:
           now = dt.datetime.now(beat.JST)
           v = meta(); at = at_of(v)
           rc = 0
-          if at is None or at.date() != now.date():
-              print(f'db_sizes の最終 {at} = 今日まだ無いので流す', flush=True)
+          # 2026-10-03 一回きりの大量投入の警告が翌日 1 日じゅう毎時赤になった→ warn ありなら 12 時間で測り直す
+          if at is None or at.date() != now.date() or (v.get('warn') and (now - at).total_seconds() >= 12 * 3600):
+              print(f'db_sizes の最終 {at} = 今日まだ無い、または警告ありで 12 時間以上たったので流す', flush=True)
               rc = subprocess.run([sys.executable, 'cloud/db_sizes.py']).returncode
               v = meta(); at = at_of(v)
           else:
-              print(f'db_sizes は今日すでに記録済み({at})= 流さない')
+              print(f'db_sizes は今日すでに記録済み({at})で警告なしか 12 時間未満= 流さない')
           bad = []
           if rc != 0:
               bad.append(f'db_sizes.py が失敗(exit {rc})')
