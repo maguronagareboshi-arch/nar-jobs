@@ -46,8 +46,8 @@ jobs:
       PGDATABASE: postgres
       LOCAL_PGPASSWORD: feat        # ⛔このジョブの中だけの Postgres。鍵ではない
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: install

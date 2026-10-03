@@ -39,7 +39,7 @@ jobs:
     outputs:
       skip: ${{ steps.g.outputs.skip }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: cloud/beat.py
           sparse-checkout-cone-mode: false
@@ -64,8 +64,8 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: install
@@ -78,7 +78,7 @@ jobs:
           echo "JST 今日= $(date +%Y%m%d)・馬具は $(date -d '7 days ago' +%Y%m%d) から・apply=[$APPLY]"
       # done.tsv(取得済みの印)だけを cache で持ち越す。無ければ 7 日分を全部取り直す(安全側)。
       - name: restore done marks
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: /tmp/kbdata/kb_all/done.tsv
           key: kb-done-${{ github.run_id }}
@@ -102,7 +102,7 @@ jobs:
       # apply のときだけ done.tsv を残す(dry-run で「済み」にすると、次の apply がその日を飛ばして書かないため)
       - name: save done marks
         if: env.APPLY == '1' && !cancelled()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: /tmp/kbdata/kb_all/done.tsv
           key: kb-done-${{ github.run_id }}

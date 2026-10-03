@@ -48,7 +48,7 @@ jobs:
       PGDATABASE: postgres
       PGPASSWORD: stats            # ⛔このジョブの中だけの Postgres。鍵ではない
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       # ---------------------------------------------------------------- 器を立てる(本番と同じ PG17・ICU en-US・UTC)
       # asof があるときは手元の TimeZone をずらして current_date を「asof の UTC の日」(本番が計算した日・本番は TimeZone UTC)にそろえる。

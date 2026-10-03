@@ -45,7 +45,7 @@ jobs:
     outputs:
       skip: ${{ steps.g.outputs.skip }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: cloud/beat.py
           sparse-checkout-cone-mode: false
@@ -70,7 +70,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90   # §227b(2026-09-19) 朝の月次便が 60 分で打ち切られる日が続いたので 90 分へ(公開リポ= 分の上限なし)。#520(2026-09-07) 月次便が 30 分に達して person_stats の途中で切られた(9/5 28m58s・9/6 cancelled 30m20s)。日次便は 1〜2 分なので余裕は害なし
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # 監査 A1(2026-09-24): 朝の段は「JST 09:30 前の便」ではなく「今日まだ済んでいない(heartbeat 'refresh_morning')かつ JST 09:00 以降」の便で回す。
       #   時刻だけで決めると、朝の便が月次に待たされて 09:30 を越えた日に「スキップ」で黙って 1 日抜けた(9/22)。
       #   朝の段が終わったら成否に関係なく印を書く(全段成功= ok・どれか失敗= fail で note に落ちた段名)。
@@ -90,7 +90,7 @@ jobs:
           echo "MORNING=$M" >> "$GITHUB_ENV"
           echo "EVENING=$E" >> "$GITHUB_ENV"
           echo "朝の段= $M(refresh_morning を回す番= $D・JST $H)/ 夕の段= $E"
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - run: pip install -r cloud/requirements.txt
@@ -124,7 +124,7 @@ jobs:
       #   JST 06 時前の便は前日の遅い確定も拾う。⛔落ちても便は赤くしない(continue-on-error)・件数はログ・heartbeat 'share_image'
       - name: share image font cache
         if: env.MODE != 'monthly' && !cancelled()
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: fonts/BIZUDGothic-Bold.ttf
           key: font-bizudgothic-bold-98a528b6b638463041968783cc0f63adaf4cdc26f5398afed68bab712d1113f3

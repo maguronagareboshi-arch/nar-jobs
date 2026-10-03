@@ -55,7 +55,7 @@ jobs:
     outputs:
       skip: ${{ steps.g.outputs.skip }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: cloud/beat.py
           sparse-checkout-cone-mode: false
@@ -87,8 +87,8 @@ jobs:
       PGDATABASE: postgres
       LOCAL_PGPASSWORD: feat        # ⛔このジョブの中だけの Postgres。鍵ではない
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: install pg8000
@@ -248,7 +248,7 @@ jobs:
         run: |
           set -o pipefail
           bash ops/artifact_seal.sh seal out_dump sealed_dump/nar-ai-feat-dumps.tar.gz.enc
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         continue-on-error: true
         with:
           name: nar-ai-feat-dumps
@@ -273,7 +273,7 @@ jobs:
         run: |
           set -o pipefail
           bash ops/artifact_seal.sh seal out sealed/nar-ai-feat.tar.gz.enc
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: nar-ai-feat-${{ github.run_number }}
           path: sealed/

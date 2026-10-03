@@ -34,14 +34,14 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: install
         run: pip install -q requests beautifulsoup4 lxml pdfplumber
       - name: restore done marks
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@v6
         with:
           path: |
             /tmp/kbdata/fukuchan/done.tsv
@@ -95,7 +95,7 @@ jobs:
           else python cloud/kb/push_kb_noken_split.py --dry-run; fi
       - name: save done marks
         if: env.APPLY == '1' && !cancelled()
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@v6
         with:
           path: |
             /tmp/kbdata/fukuchan/done.tsv

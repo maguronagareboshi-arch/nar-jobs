@@ -70,8 +70,8 @@ jobs:
     env:
       GH_TOKEN: ${{ github.token }}
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: install python packages
@@ -181,7 +181,7 @@ jobs:
           mkdir -p stage
           cp out/*.csv out/*.txt stage/ 2>/dev/null || true
           bash ops/artifact_seal.sh seal stage sealed/nar-ai-v2.tar.gz.enc
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always()
         with:
           name: nar-ai-v2-${{ github.run_number }}

@@ -51,8 +51,8 @@ jobs:
       V3_CYOKYO_CSV: ${{ github.workspace }}/v3/cyokyo_csv
       V3_KD: ${{ github.workspace }}/v3/kd
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
       - name: install python packages (手元と同じ版)
@@ -157,7 +157,7 @@ jobs:
           mkdir -p stage
           cp out/* out_log.txt stage/ 2>/dev/null || true
           bash ops/artifact_seal.sh seal stage sealed/nar-ai-v3.tar.gz.enc
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && steps.pc.outputs.run == 'yes'
         with:
           name: nar-ai-v3-${{ github.run_number }}
@@ -177,7 +177,7 @@ jobs:
           ls out/*.csv >/dev/null 2>&1 || { echo "out/*.csv が無い"; exit 0; }
           tar -C out -czf - $(cd out && ls *.csv) | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:V3_ASSET_KEY -out sealed_csv/nar-ai-v3-csv.tar.gz.enc
           ls -l sealed_csv
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && steps.pc.outputs.run == 'yes'
         with:
           name: nar-ai-v3-csv-${{ github.run_number }}
@@ -198,7 +198,7 @@ jobs:
           [ -f "out/${DAY}_v29_base.csv" ] || { echo "v29 base が無い"; exit 0; }
           openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:V3_ASSET_KEY -in "out/${DAY}_v29_base.csv" -out sealed_v29/v29_base.csv.enc
           ls -l sealed_v29
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         if: always() && steps.pc.outputs.run == 'yes'
         with:
           name: v3-gap-base-${{ steps.d.outputs.day }}

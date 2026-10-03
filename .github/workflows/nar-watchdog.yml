@@ -60,7 +60,7 @@ jobs:
       red: ${{ steps.c.outcome == 'failure' }}
       reasons: ${{ steps.c.outputs.reasons }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: check v3 forecast marks and v29 base (fail if a Nankan race has no forecast)
         id: c
         continue-on-error: true
@@ -300,7 +300,7 @@ jobs:
       red: ${{ steps.c.outcome == 'failure' }}
       reasons: ${{ steps.c.outputs.reasons }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: cloud/beat.py
           sparse-checkout-cone-mode: false
@@ -371,7 +371,7 @@ jobs:
       red: ${{ steps.c.outcome == 'failure' }}
       reasons: ${{ steps.c.outputs.reasons }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: |
             cloud/beat.py
@@ -434,7 +434,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           sparse-checkout: |
             cloud/beat.py
