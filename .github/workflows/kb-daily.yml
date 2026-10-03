@@ -30,7 +30,37 @@ env:
   PYTHONUNBUFFERED: '1'
 
 jobs:
+  # 2026-10-03 本命は本番 DB(pg_cron)の dispatch(inputs apply=1・JST 13:17)・GitHub の schedule は遅れて来る予備。
+  #   予備の schedule で起きたとき、今日の成功(heartbeat 'jra_runs' の last_ok が JST 今日)があれば残りを飛ばして成功で終わる。
+  #   表がまだ無い/読めないときは従来どおり走る(黙って止めない)。
+  gate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      skip: ${{ steps.g.outputs.skip }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: cloud/beat.py
+          sparse-checkout-cone-mode: false
+      - name: skip when today's run is already done
+        id: g
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          S=0
+          if [ "$EVENT" = "schedule" ]; then
+            T=$(python3 cloud/beat.py --today jra_runs || echo '?')
+            echo "jra_runs の今日の成功= $T(1= 済・0= 未・?= 読めない)"
+            if [ "$T" = "1" ]; then S=1; echo "今日は済み= 予備の schedule は何もせず終わる"; fi
+          fi
+          echo "skip=$S" >> "$GITHUB_OUTPUT"
+
   kb:
+    needs: gate
+    if: needs.gate.outputs.skip != '1'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
