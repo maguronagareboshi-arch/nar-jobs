@@ -33,7 +33,7 @@ PER_DEVICE_MAX = 10                        # 1 回の実行で 1 端末に送る
 FAIL_MAX = 5
 PUSH_TIMEOUT = 10   # 秒。送信先 1 件の待ち上限(pywebpush 2.x の webpush(timeout=))
 SENT_KEEP_DAYS = 60
-UA = "nar-jobs push_notify (+https://nar.yukochi.com/)"
+UA = "nar-jobs push_notify (+https://yukochi.com/)"
 
 # サイトの URL 表記(share_image.py の TRACK_PREFIX と同じ)
 TRACK_PREFIX = {
@@ -92,15 +92,28 @@ def race_id(run):
     return "%s/%s/%d" % (pre, str(run["race_date"])[:10], int(run["race_no"]))
 
 
+def latest_per_device(subs):
+    """同じ device_id に送り先(endpoint)が複数ある= created_at が一番新しい 1 本だけ残す(DB 不要・純粋関数)。
+    同時刻(または created_at なし同士)は endpoint の文字順で最後の 1 本。住所の引っ越しで旧住所と新住所の
+    購読が同じ端末に並ぶと同じ通知が 2 回届くのを防ぐ。古い行は消さない(送らないだけ)。入力の順は保つ。"""
+    best = {}
+    for s in subs:
+        key = (parse_ts(s.get("created_at")) or dt.datetime.min.replace(tzinfo=dt.timezone.utc), s.get("endpoint") or "")
+        cur = best.get(s["device_id"])
+        if cur is None or key > cur[0]:
+            best[s["device_id"]] = (key, s)
+    keep = {id(v[1]) for v in best.values()}
+    return [s for s in subs if id(s) in keep]
+
+
 def pick(subs, horses, runs, now):
     """対象を出す(DB 不要・純粋関数)。→ [{device_id, horse_id, race_id, kind, name, track, race_date, race_no, finish}]
-    1 端末に複数の購読があっても対象は device 単位で 1 つ(送るときに購読ぶん配る)。"""
+    1 端末に複数の購読があっても一番新しい 1 本(latest_per_device)だけで want と基準時刻を決める。"""
     today = now.astimezone(JST).date().isoformat()
     by_dev = {}
-    for s in subs:
+    for s in latest_per_device(subs):
         d = by_dev.setdefault(s["device_id"], {"a": None, "c": None})
         ca = parse_ts(s.get("created_at"))
-        # 同じ端末に購読が複数= いちばん古い作成時刻を基準にする(want はどれか 1 つでも入っていれば)
         if s.get("want_a"):
             d["a"] = ca if d["a"] is None or ca < d["a"] else d["a"]
         if s.get("want_c"):
@@ -210,7 +223,7 @@ def claim(rest, x):
 def send_all(rest, subs, targets, vapid_private, vapid_sub):
     from pywebpush import webpush, WebPushException   # --apply のときだけ要る
     by_dev = {}
-    for s in subs:
+    for s in latest_per_device(subs):                  # 同じ端末へは一番新しい送り先 1 本だけ(二重送信よけ)
         by_dev.setdefault(s["device_id"], []).append(s)
     sent = skipped = failed = gone = 0
     dead = set()
@@ -292,7 +305,7 @@ def main():
     import beat
     try:
         sent, skipped, failed, gone = send_all(rest, subs, targets, vapid,
-                                               os.environ.get("NAR_VAPID_SUBJECT", "").strip() or "https://nar.yukochi.com")   # ⛔末尾の / があると py_vapid が弾く(§291 通し試験)
+                                               os.environ.get("NAR_VAPID_SUBJECT", "").strip() or "https://yukochi.com")   # ⛔末尾の / があると py_vapid が弾く(§291 通し試験)
         cut = (now - dt.timedelta(days=SENT_KEEP_DAYS)).isoformat()
         rest.req("nar_push_sent?sent_at=lt." + urllib.parse.quote(cut), "DELETE", prefer="return=minimal")
     except Exception as e:                                       # noqa: BLE001

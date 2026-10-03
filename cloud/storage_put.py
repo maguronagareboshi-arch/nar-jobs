@@ -21,7 +21,7 @@ import sys
 import urllib.request
 
 BUCKET = "odds-archive"
-UA = "nar-jobs storage_put (+https://nar.yukochi.com/)"
+UA = "nar-jobs storage_put (+https://yukochi.com/)"
 PRUNE_ROOTS = ("backup/", "viewer-notes/")
 JST = dt.timezone(dt.timedelta(hours=9))
 

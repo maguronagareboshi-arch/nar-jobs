@@ -33,7 +33,7 @@ FONT_FILE = os.path.join(FONT_DIR, "BIZUDGothic-Bold.ttf")
 FONT_URL = "https://raw.githubusercontent.com/google/fonts/main/ofl/bizudgothic/BIZUDGothic-Bold.ttf"
 FONT_SHA256 = "98a528b6b638463041968783cc0f63adaf4cdc26f5398afed68bab712d1113f3"
 BUCKET = "share"
-UA = "nar-jobs share_image (+https://nar.yukochi.com/)"
+UA = "nar-jobs share_image (+https://yukochi.com/)"
 JST = dt.timezone(dt.timedelta(hours=9))
 
 # サイトの URL 表記(viewer functions/_venues.js の TRACK_PREFIX と同じ)
@@ -305,7 +305,7 @@ def render(rc):
         if pop:
             d.text((px1 - 20, baseline(f20, cy)), pop, font=f20, fill=mix("#ffffff", "#111111", 0.8), anchor="rs")
         ry += 58
-    d.text((px1 - 20, y + 6 + 174 + 12), "地方競馬ウォッチ nar.yukochi.com", font=f17,
+    d.text((px1 - 20, y + 6 + 174 + 12), "地方競馬ウォッチ yukochi.com", font=f17,
            fill=mix("#ffffff", "#111111", 0.6), anchor="rs")
     buf = io.BytesIO()
     img.save(buf, "PNG", optimize=True)

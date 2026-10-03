@@ -49,7 +49,7 @@ class T(unittest.TestCase):
             rest = Rest()
             subs = [sub("bad", "https://push.example/bad", "="), sub("g1", "https://push.example/g1"),
                     sub("g2", "https://push.example/g2")]
-            got = P.send_all(rest, subs, [target("bad"), target("g1"), target("g2")], "VAPID", "https://nar.yukochi.com")
+            got = P.send_all(rest, subs, [target("bad"), target("g1"), target("g2")], "VAPID", "https://yukochi.com")
         finally:
             if old is None:
                 sys.modules.pop("pywebpush", None)

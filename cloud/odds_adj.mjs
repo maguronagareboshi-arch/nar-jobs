@@ -23,8 +23,8 @@ const addDays = (s, n) => { const d = new Date(s + 'T00:00:00Z'); d.setUTCDate(d
 const today = ymd(new Date(Date.now() + 9 * 3600e3));
 const stamp = Date.now();
 const BASE_DATE = opt('--date', today);
-const LIB = opt('--lib', `https://nar.yukochi.com/viewer-data/odds-forecast/odds-final.mjs?v=${stamp}`);
-const MODEL = opt('--model', `https://nar.yukochi.com/viewer-data/odds-forecast/model.json?v=${stamp}`);
+const LIB = opt('--lib', `https://yukochi.com/viewer-data/odds-forecast/odds-final.mjs?v=${stamp}`);
+const MODEL = opt('--model', `https://yukochi.com/viewer-data/odds-forecast/model.json?v=${stamp}`);
 const ADJ = opt('--adj', null);
 const DRY = flag('--dry-run');
 const OUT = opt('--out', null);

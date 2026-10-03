@@ -1,6 +1,6 @@
 # §256 最終オッズの見込み「これまでの答え合わせ」(/odds-record)の夜の便。
 # 目的: 日×場の答え合わせ(幅に入った割合・平均のずれ)を nar_meta 'odds_final_record' に焼く。既定は JST の今日の 2 日前〜今日を作り直す。
-# 判定は画面と同じ部品を本番から取る(https://nar.yukochi.com/viewer-data/odds-forecast/odds-final.mjs と model.json)。
+# 判定は画面と同じ部品を本番から取る(https://yukochi.com/viewer-data/odds-forecast/odds-final.mjs と model.json)。
 #   ここに写しを置くと画面の確定後の答え合わせと数字がずれるため。本番に部品が無ければ何も書かずに失敗する。
 # 遡り: workflow_dispatch で from=2026-09-02(to は空= 今日)。50 日より前は台本が --force なしでは止める(60 日を過ぎた刻みは間引かれる)。
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY

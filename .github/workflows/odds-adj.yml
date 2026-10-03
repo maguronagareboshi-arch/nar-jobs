@@ -1,7 +1,7 @@
 # §259 最終オッズの見込みの券種補正(§257)を月 1 回作り直す便。
 # 目的: 基準日の前日までの 60 日で T ごとに係数を作り直し、採点(直近 14 日)で「今の係数」と「補正なし」の両方に勝った T があれば
 #   nar_meta 'odds_forecast_adj' の一覧の末尾に 1 件足す(since= 基準日の翌日)。古い項目は消さない・書き換えない。
-# 行・係数・採点は画面と同じ部品を本番から取る(https://nar.yukochi.com/viewer-data/odds-forecast/odds-final.mjs と model.json)。
+# 行・係数・採点は画面と同じ部品を本番から取る(https://yukochi.com/viewer-data/odds-forecast/odds-final.mjs と model.json)。
 # 既定= 毎月 1 日 JST 06:10(= UTC 前月末日 21:10)。cron は UTC 28〜31 日 21:10 に起き、JST で 1 日のときだけ走る。
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
 name: odds-adj
