@@ -18,6 +18,7 @@
 import argparse
 import csv
 import datetime as dt
+import html as H
 import json
 import os
 import re
@@ -48,7 +49,7 @@ AGE_N = {"当歳": 0, "１歳": 1, "1歳": 1, "２歳": 2, "2歳": 2}
 
 
 def _txt(x):
-    return re.sub(r"\s+", " ", re.sub(r"<[^>]+>", " ", x)).strip()
+    return re.sub(r"\s+", " ", H.unescape(re.sub(r"<[^>]+>", " ", x))).strip()   # &#039; &amp; を字に(2026-10-03 監査)
 
 
 def _rows(table_html):

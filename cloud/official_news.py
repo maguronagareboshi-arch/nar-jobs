@@ -59,7 +59,7 @@ SITES = [
     {"id": "kochi", "venues": ["kochi"], "kind": "rss",
      "url": "https://www.keiba.or.jp/?feed=rss2"},
     {"id": "iwate", "venues": ["morioka", "mizusawa"], "kind": "rss",
-     "url": "https://www.iwatekeiba.or.jp/feed/"},
+     "url": "https://www.iwatekeiba.or.jp/news/feed/"},   # /feed/ は投稿の古い物だけ(2026-10-03 監査)
     {"id": "kanazawa", "venues": ["kanazawa"], "kind": "rss",
      "url": "https://www.kanazawakeiba.com/feed/"},
     {"id": "monbetsu", "venues": ["monbetsu"], "kind": "html",

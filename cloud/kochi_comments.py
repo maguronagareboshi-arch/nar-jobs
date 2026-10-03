@@ -169,6 +169,17 @@ def parse_comments(page):
     return [x for x in out if x["comment"]]           # ⛔本文の無い行は入れない
 
 
+RACE_NO_RE = re.compile(r"第\s*([0-9０-９]{1,2})\s*競走")
+
+
+def race_no_of(page, url_no):
+    """記事の本文にある「第N競走」の N(無ければ URL の番号)。
+    ⚠2026-09-26 は公式が 6R の記事を 7R の URL に載せた= 本文の番号を正とする(2026-10-03 監査)。"""
+    m = CONTENT_RE.search(page)
+    rm = RACE_NO_RE.search(_text(m.group(1))) if m else None
+    return int(rm.group(1).translate(ZEN)) if rm else url_no
+
+
 # ---------------------------------------------------------------- 本体
 
 def race_targets(base, key, since, until):
@@ -319,10 +330,13 @@ def main(argv=None):
                     stats["gave_up"] += 1
                     log(f"  {date} {no}R 未掲載(30日より前)= 諦める")
                 continue
-            got = rows_of(date, no, parsed, by_race.get(no, {}), url, stats, a.show)
+            rno = race_no_of(page, no)                    # 本文の「第N競走」を正とする(URL の番号ずれ対策)
+            if rno != no:
+                log(f"  ⚠ {date} {no}R の URL の記事は本文が第{rno}競走= {rno}R として扱う")
+            got = rows_of(date, rno, parsed, by_race.get(rno, {}), url, stats, a.show)
             stats["rows"] += len(got)
             all_rows += got
-            log(f"  {date} {no}R: 記事 {len(parsed)}頭 → 入れる {len(got)}行")
+            log(f"  {date} {rno}R: 記事 {len(parsed)}頭 → 入れる {len(got)}行")
 
     log(f"まとめ: 開いたレース {stats['races']} / 行 {stats['rows']} / 未掲載 {stats['empty']}"
         f"(うち諦め {stats['gave_up']}) / 馬番が結果に無い {stats['no_run']} /"
