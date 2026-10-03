@@ -56,7 +56,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: install python packages (手元と同じ版)
-        run: pip install -q "pandas==2.2.3" "numpy==1.26.4" "pyarrow==25.0.1" "lightgbm==4.7.0" "scipy==1.14.1" "scikit-learn==1.9.0" requests
+        run: pip install -q "pandas==2.2.3" "numpy==1.26.4" "pyarrow==25.0.1" "lightgbm==4.7.0" "scipy==1.14.1" "scikit-learn==1.9.0" requests beautifulsoup4 lxml
 
       - name: day
         id: d
@@ -138,6 +138,9 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
           WRITE: ${{ github.event_name == 'schedule' && 'yes' || github.event.inputs.write }}
           V3_DUMP_FEATS: '1'  # 照合用の材料 csv(暗号化した成果物にだけ入る)
+          KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}  # 談話の印: nar_kb_danwa に無いレースを競馬ブックの頁から読む(danwa_marks.py)
+          KEIBABOOK_PASSWORD: ${{ secrets.KEIBABOOK_PASSWORD }}
+          KB_DATA_DIR: /tmp/kbdata_v3
         run: |
           set -o pipefail
           mkdir -p out

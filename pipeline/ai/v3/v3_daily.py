@@ -30,7 +30,7 @@ if sys.platform != 'win32':
 
 MODEL_ID = 'v3-9'
 TIMING = 'morning'
-STAMP = 't9_Y1/Y3(182 列・j7_last_pop なし)+t9_s2(2022-01〜2026-08)'
+STAMP = 't9_Y1/Y3(182 列・j7_last_pop なし)+t9_s2(2022-01〜2026-08)+t10 上乗せ+談話の印 3 定数(v13y)'
 MK = ['◎', '○', '▲', '△']
 
 
@@ -137,6 +137,11 @@ def main():
         log('v29 base', len(vb), '頭', 'hist', round(float(vb.bw_norm.notna().mean()), 3))
     except Exception as e:  # noqa: BLE001
         log('v29 base 失敗', type(e).__name__, str(e)[:200])
+    try:  # 談話の印の 3 定数(v13y・2026-10)= 印と p3′ だけ。v29 の土台・v31 は上の第10版のまま(土台には dw_u を足す = 当日版の印が使う)
+        import danwa_marks
+        danwa_marks.apply_csv(csv_path, day, base_csv=out / f'{day}_v29_base.csv', log=log)
+    except Exception as e:  # noqa: BLE001
+        log('談話の印 失敗(第10版のまま)', type(e).__name__, str(e)[:200])
     notes = {}
     try:  # ひとこと(表示だけ・予想の計算には使わない・失敗しても予想の表と書き込みは止めない)
         import v3_notes

@@ -197,6 +197,8 @@ def day_marks(Bk, odds, w, going, dm, day):
         return np.log(p / (1 - p))
     r = {t: 1 / (1 + np.exp(-(lg(b[f'p{t[1]}_s2']) + np.mean([m.predict(X, raw_score=True) for m in ms], axis=0))))
          for t, ms in M.items()}
+    if 'dw_u' in b.columns:  # 談話の印の 3 定数(v13y・前日の便が土台に入れた・談話が無い馬は 0)
+        r['p3'] = 1 / (1 + np.exp(-(lg(r['p3']) + b.dw_u.fillna(0.0).to_numpy(float))))
     p1 = r['p1'] / r['p1'].sum()
     p3 = np.maximum(r['p3'], p1)
     p3p = _sum3(p3) if len(b) > 3 else np.minimum(p3, 1.0)
@@ -206,7 +208,7 @@ def day_marks(Bk, odds, w, going, dm, day):
     runners = [{'num': int(x.num), 'p1': round(float(x.p1), 4), 'p3': round(float(x.p3), 4), 'p3_raw': round(float(x.p3_raw), 4)}
                for x in d.sort_values('num').itertuples()]
     tr, rno = Bk.track.iloc[0], int(Bk.race_no.iloc[0])
-    meta = {'n': int(len(d)), 'model': 'v3-9', 'timing': 'last', 'stamp': 'v3-9 当日版(第10版 + 当日の体重 15 本・t11)',
+    meta = {'n': int(len(d)), 'model': 'v3-9', 'timing': 'last', 'stamp': 'v3-9 当日版(第10版 + 当日の体重 15 本・t11 + 談話の印 3 定数)',
             'weights': int(b.bw.notna().sum()), 'going': going, 'runners': runners}
     return {'track': tr, 'race_date': day, 'race_no': rno, 'marks': marks, 'meta': meta}
 
