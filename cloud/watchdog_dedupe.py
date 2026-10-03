@@ -35,7 +35,7 @@ def collect(needs):
     for job, v in sorted((needs or {}).items()):
         v = v or {}
         o = v.get("outputs") or {}
-        red = str(o.get("red", "")).lower() == "true" or v.get("result") == "failure"
+        red = str(o.get("red", "")).lower() == "true" or v.get("result") in ("failure", "cancelled")   # 時間切れの取り消しも赤
         if not red:
             continue
         try:
