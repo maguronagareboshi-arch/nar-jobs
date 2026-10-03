@@ -110,6 +110,21 @@ def http(url, head=False, timeout=40):
         except Exception as e:
             last = e
         time.sleep(3 * (i + 1))
+    # 2026-10-03 名古屋の公式の時間切れ= 30 秒おいて 1 回だけ再試行(⛔時間切れ・接続失敗のときだけ)
+    if isinstance(last, (TimeoutError, urllib.error.URLError)) and not isinstance(last, urllib.error.HTTPError):
+        print(f"⚠時間切れ({type(last).__name__})= 30 秒おいて 1 回だけ再試行 {url}", flush=True)
+        time.sleep(30)
+        try:
+            req = urllib.request.Request(url, method="HEAD" if head else "GET",
+                                         headers={"User-Agent": UA, "Accept-Language": "ja"})
+            with urllib.request.urlopen(req, timeout=timeout) as r:
+                return b"" if head else r.read()
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                return None
+            last = e
+        except Exception as e:
+            last = e
     raise RuntimeError(f"取得できない {url}: {type(last).__name__}: {str(last)[:120]}")
 
 

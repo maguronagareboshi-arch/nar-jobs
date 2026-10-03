@@ -19,8 +19,14 @@ jobs:
     if: github.event.schedule != '40 23 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # 2026-10-03 同じ赤のメールは 1 日 1 通= 点検は continue-on-error で赤を outputs に出し、最後の notify がまとめて判定
+    outputs:
+      red: ${{ steps.c.outcome == 'failure' }}
+      reasons: ${{ steps.c.outputs.reasons }}
     steps:
       - name: check nar_races freshness (fail if stale > 3h)
+        id: c
+        continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -49,9 +55,15 @@ jobs:
       actions: read
     env:
       GH_TOKEN: ${{ github.token }}
+    # 2026-10-03 同じ赤のメールは 1 日 1 通= 点検は continue-on-error で赤を outputs に出し、最後の notify がまとめて判定
+    outputs:
+      red: ${{ steps.c.outcome == 'failure' }}
+      reasons: ${{ steps.c.outputs.reasons }}
     steps:
       - uses: actions/checkout@v4
       - name: check v3 forecast marks and v29 base (fail if a Nankan race has no forecast)
+        id: c
+        continue-on-error: true
         run: |
           pip install -q requests
           python -X utf8 pipeline/ai/v3/v3_watch.py
@@ -63,8 +75,14 @@ jobs:
     if: github.event.schedule != '40 23 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # 2026-10-03 同じ赤のメールは 1 日 1 通= 点検は continue-on-error で赤を outputs に出し、最後の notify がまとめて判定
+    outputs:
+      red: ${{ steps.c.outcome == 'failure' }}
+      reasons: ${{ steps.c.outputs.reasons }}
     steps:
       - name: check 2-minute odds ticks (fail if stale > 12 min while races are near)
+        id: c
+        continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -101,8 +119,14 @@ jobs:
     if: github.event.schedule == '40 23 * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # 2026-10-03 同じ赤のメールは 1 日 1 通= 点検は continue-on-error で赤を outputs に出し、最後の notify がまとめて判定
+    outputs:
+      red: ${{ steps.c.outcome == 'failure' }}
+      reasons: ${{ steps.c.outputs.reasons }}
     steps:
       - name: check full odds boards for yesterday (fail if a track raced but has no board)
+        id: c
+        continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -138,6 +162,10 @@ jobs:
     if: github.event.schedule == '40 23 * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # 2026-10-03 同じ赤のメールは 1 日 1 通= 点検は continue-on-error で赤を outputs に出し、最後の notify がまとめて判定
+    outputs:
+      red: ${{ steps.c.outcome == 'failure' }}
+      reasons: ${{ steps.c.outputs.reasons }}
     steps:
       # §157 段 3(2026-09-12): 「結果ゼロ」の見張り(旧 DB keiba_*)は外した= 高知の結果は 15 場の公式取得(nar_runs)に一本化
       # §98 の見張り= 高知の翌朝自動計測(手元PCの kochi_auto.py)が動いているか。
@@ -145,6 +173,8 @@ jobs:
       #   赤= 開催から48時間たっても各馬の前半3F が1頭も入っていない日がある(=計測が回っていない)。
       #   黄(fail にしない)= kochi_auto_status.ran が7日より古い(PC放置の合図)。
       - name: check kochi first3f not measured (fail if a race day is still empty after 48h)
+        id: c
+        continue-on-error: true
         if: always()
         env:
           NAR_SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -204,8 +234,14 @@ jobs:
     if: github.event.schedule == '40 23 * * *' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # 2026-10-03 同じ赤のメールは 1 日 1 通= 点検は continue-on-error で赤を outputs に出し、最後の notify がまとめて判定
+    outputs:
+      red: ${{ steps.c.outcome == 'failure' }}
+      reasons: ${{ steps.c.outputs.reasons }}
     steps:
       - name: check ooi official health events are fresh (fail if 2+ days behind the last Oi race day)
+        id: c
+        continue-on-error: true
         env:
           NAR_SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           NAR_SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -249,7 +285,7 @@ jobs:
           PY
 
   # 監査 A8(2026-09-24) 定期便の最終成功時刻(表 nar_job_heartbeat)を外から見る。どれかに当たれば赤(= 所有者へ失敗メール)
-  #   ① dispatch か odds_watch か ai_last か monbetsu_calc の last_status が 'fail'(本番 DB の起動係・オッズ見張り・AI 直前便・門別の番組賞金の照合外れ §284①が自分で失敗を書いた)
+  #   ① どれかの job の last_status が 'fail'(2026-10-03 から全行。以前は dispatch・odds_watch・ai_last・monbetsu_calc だけ)
   #   ⑤ monbetsu_class の note の「見込み=YYYY-MM-DD」の翌日 JST 09:00 を過ぎても新しい回が無い(§284)
   #   ② JST 09:30〜22:00 に refresh の last_ok が 70 分より古い(daily 便は 30 分おき)
   #   ③ JST 09:30 以降に ai_feat・stats の last_ok が今日でない
@@ -259,12 +295,18 @@ jobs:
     if: github.event.schedule != '40 23 * * *'
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # 2026-10-03 同じ赤のメールは 1 日 1 通= 点検は continue-on-error で赤を outputs に出し、最後の notify がまとめて判定
+    outputs:
+      red: ${{ steps.c.outcome == 'failure' }}
+      reasons: ${{ steps.c.outputs.reasons }}
     steps:
       - uses: actions/checkout@v4
         with:
           sparse-checkout: cloud/beat.py
           sparse-checkout-cone-mode: false
       - name: check job heartbeats
+        id: c
+        continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -286,7 +328,8 @@ jobs:
               r = got[job]
               print(f"{job:24s} ok={r.get('last_ok')} try={r.get('last_try')} status={r.get('last_status')} note={r.get('note')}")
           bad = []
-          for job in ('dispatch', 'odds_watch', 'ai_last', 'monbetsu_calc'):
+          # 2026-10-03 監査 A-1: fail は全行を見る(古さの検査は下の対象のまま)
+          for job in sorted(got):
               if (got.get(job) or {}).get('last_status') == 'fail':
                   bad.append(f"{job} の last_status= fail(note={(got.get(job) or {}).get('note')})")
           if 930 <= hm < 2200:
@@ -310,6 +353,9 @@ jobs:
                   bad.append(f"門別の級別表が見込み日 {exp} を過ぎても取れていない(note={got['monbetsu_class'].get('note')})")
           for b in bad:
               print('::error::' + b)
+          import os, json
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              f.write('reasons=' + json.dumps(bad, ensure_ascii=False) + '\n')
           print('異常なし' if not bad else f'異常 {len(bad)} 件')
           raise SystemExit(1 if bad else 0)
           PY
@@ -320,6 +366,10 @@ jobs:
   db-size:
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    # 2026-10-03 同じ赤のメールは 1 日 1 通= 点検は continue-on-error で赤を outputs に出し、最後の notify がまとめて判定
+    outputs:
+      red: ${{ steps.c.outcome == 'failure' }}
+      reasons: ${{ steps.c.outputs.reasons }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -328,6 +378,8 @@ jobs:
             cloud/db_sizes.py
           sparse-checkout-cone-mode: false
       - name: record db sizes once a day and check thresholds
+        id: c
+        continue-on-error: true
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -365,6 +417,32 @@ jobs:
               print(f"  {t['name']:28s} {t['bytes'] / 1024**2:8.0f}MB {t['rows']:>10d} 行")
           for b in bad:
               print('::error::' + b)
+          import os, json
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              f.write('reasons=' + json.dumps(bad, ensure_ascii=False) + '\n')
           print('異常なし' if not bad else f'異常 {len(bad)} 件')
           raise SystemExit(1 if bad else 0)
           PY
+
+  # 2026-10-03 同じ赤のメールは 1 日 1 通(監査 B-1: 同じ警告で毎時メールが来た)。
+  #   上の点検は continue-on-error= job は緑のまま outputs red/reasons を出す。ここでまとめて
+  #   nar_meta 'watchdog_last_red'({date(JST), reasons[]})と比べ、同じ JST 日付で理由が全部既出なら警告だけで緑。
+  #   新しい理由が 1 つでもあれば赤(= 所有者へ失敗メール)。赤が無い run は保存を消す。中身は cloud/watchdog_dedupe.py。
+  notify:
+    needs: [freshness, v3-forecast, odds-live, boards-yesterday, kochi-results, ooi-official, heartbeat, db-size]
+    if: always()
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          sparse-checkout: |
+            cloud/beat.py
+            cloud/watchdog_dedupe.py
+          sparse-checkout-cone-mode: false
+      - name: mail once a day for the same red
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 cloud/watchdog_dedupe.py

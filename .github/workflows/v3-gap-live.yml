@@ -113,3 +113,16 @@ jobs:
         run: |
           if [ "$WRITE" = "yes" ]; then W=--write; else W=; fi
           python -X utf8 pipeline/ai/v3/v29_gap.py live "${{ steps.d.outputs.day }}" in/v29_base.csv gapm $W --until "${{ steps.d.outputs.until }}"
+      # 2026-10-03 監査 A-2: heartbeat を書く(見張りの fail 検査に載る)
+      - name: heartbeat ok
+        if: success()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py v3_gap_live ok
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py v3_gap_live fail 失敗

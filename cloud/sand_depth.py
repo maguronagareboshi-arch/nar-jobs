@@ -83,8 +83,17 @@ OCR_QUANT = 0.5                                    # 刻み
 
 def fetch(url, binary=False):
     req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=TIMEOUT) as res:
-        raw = res.read()
+    try:
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as res:
+            raw = res.read()
+    except urllib.error.HTTPError:
+        raise
+    except (TimeoutError, urllib.error.URLError) as e:
+        # 2026-10-03 名古屋の公式の時間切れ= 30 秒おいて 1 回だけ再試行(⛔時間切れ・接続失敗のときだけ)
+        print("⚠時間切れ(%s)= 30 秒おいて 1 回だけ再試行 %s" % (type(e).__name__, url), flush=True)
+        time.sleep(30)
+        with urllib.request.urlopen(req, timeout=TIMEOUT) as res:
+            raw = res.read()
     if binary:
         return raw
     for enc in ("utf-8", "cp932", "euc-jp"):

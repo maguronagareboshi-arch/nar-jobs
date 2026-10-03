@@ -206,3 +206,16 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
           overwrite: true
+      # 2026-10-03 監査 A-2: heartbeat を書く(見張りの fail 検査に載る)
+      - name: heartbeat ok
+        if: success()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py nar_ai_v3 ok
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py nar_ai_v3 fail 失敗
