@@ -290,7 +290,20 @@ def cmd_ob():
                "select 'owner' as kind, owner as raw, last_seen from public.nar_horse_profiles "
                "union all select 'breeder', breeder, last_seen from public.nar_horse_profiles) s "
                "where raw is not null and btrim(raw) <> '' group by kind, raw")
-    alias, missing = ob_alias.build(got, ob_alias.load_manual())
+    # 10/3 案 A= 切れた生産者名(10 字・20 字切れ)を同じ馬の KDSCOPE 全文へ寄せる・旧代表→新代表の転送行も足す
+    pairs = rows("select p.breeder, k.breeder from public.nar_horse_profiles p "
+                 "join public.nar_kd_pedigree k on k.horse_name = p.horse_name and k.birth_date = p.birth_date "
+                 "where p.breeder is not null and k.breeder is not null "
+                 "and (char_length(btrim(p.breeder)) = 10 or char_length(btrim(p.breeder)) between 15 and 20) "
+                 "group by 1, 2")
+    trunc, split = ob_alias.trunc_map(pairs)
+    log(f"  切れた生産者名: 全文へ寄せる {len(trunc)}・全文が 2 つ以上で外す {len(split)}")
+    manual = ob_alias.load_manual()
+    old, _ = ob_alias.build(got, manual)
+    alias, missing = ob_alias.build(got, manual, trunc)
+    redir = ob_alias.redirects(old, alias)
+    log(f"  旧代表→新代表の転送行 {len(redir)}")
+    alias = sorted(alias + redir)
     for m in missing:
         log(f"  ⚠手で承認した組が名簿に無い: {m[0]} / {m[1]} / {m[2]}")
     path = os.path.join(DUMP, "ob_alias.csv")

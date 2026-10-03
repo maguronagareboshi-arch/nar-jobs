@@ -51,7 +51,46 @@ def load_manual(path=MANUAL):
         return [(r["kind"], r["a"], r["b"]) for r in csv.DictReader(f)]
 
 
-def build(rows, manual):
+def key_ns(s):
+    """NFKC・空白を全部消す(大文字小文字はそのまま)= 今の公式取り込みの洋名と同じ形"""
+    return re.sub(r"\s+", "", nfkc(s))
+
+
+def is_trunc(raw, full):
+    """切れた生産者名か= 10 字ちょうど(10 字切れ)か 15〜20 字(公式の 20 字切れ・空白が落ちて短く見える)
+    かつ 全文(NFKC・空白なし)がそれより長く前方一致。たまたま 10 字の正しい名前(全文と同じ)は対象外"""
+    r, f = key_ns(raw), key_ns(full)
+    n = len(r)
+    return (n == 10 or 15 <= n <= 20) and len(f) > n and f.startswith(r)
+
+
+def trunc_map(pairs):
+    """pairs=[(名簿の生産者表記, 同じ馬の nar_kd_pedigree.breeder)] → ({表記: 全文}, [全文が 2 つ以上で外した表記])
+    全文は NFKC・空白なし。自分の馬たちの全文が 1 つに決まるものだけ寄せる(案 A・10/3)"""
+    cand = {}
+    for raw, full in pairs:
+        if raw and full and is_trunc(raw, full):
+            cand.setdefault(raw, set()).add(key_ns(full))
+    out = {r: next(iter(s)) for r, s in cand.items() if len(s) == 1}
+    split = sorted(r for r, s in cand.items() if len(s) > 1)
+    return out, split
+
+
+def redirects(old, new):
+    """旧住所の転送行= 名前が変わった組の 旧代表(NFKC)→新代表。alias に既にある旧代表は足さない"""
+    have = {(k, a) for k, a, _ in new}
+    old_c = {(k, a): c for k, a, c in old}
+    add = {}
+    for k, a, c in new:
+        oc = old_c.get((k, a))
+        if oc and oc != c and (k, oc) not in have:
+            add[(k, oc)] = c
+    return sorted((k, a, c) for (k, a), c in add.items())
+
+
+def build(rows, manual, trunc=None):
+    """trunc= {生産者の切れた表記: 全文}(trunc_map の結果)。全文を同じ組に入れ、代表は切れていない表記から選ぶ"""
+    trunc = trunc or {}
     parent = {}
 
     def find(x):
@@ -71,6 +110,18 @@ def build(rows, manual):
             continue
         stat[(kind, raw)] = (int(recent or 0), int(n or 0))
         parent[(kind, raw)] = (kind, raw)
+    # 切れた生産者名= 全文を表記として足し(頭数は切れた側の分を足す)、切れた表記と同じ組にする
+    cut = set()
+    for raw, full in sorted(trunc.items()):
+        t = ("breeder", raw)
+        if t not in stat or not full:
+            continue
+        f = ("breeder", full)
+        if f not in stat:
+            stat[f] = (0, 0)
+            parent[f] = f
+        stat[f] = (stat[f][0] + stat[t][0], stat[f][1] + stat[t][1])
+        cut.add(t)
     by_key = {}
     for kind, raw in stat:
         first = by_key.setdefault((kind, key_a(raw)), (kind, raw))
@@ -97,12 +148,15 @@ def build(rows, manual):
             continue
         for x in ga + gb:
             union(ga[0], x)
+    for t in cut:
+        union(t, ("breeder", trunc[t[1]]))
     groups = {}
     for x in stat:
         groups.setdefault(find(x), []).append(x)
     out = []
     for members in groups.values():
-        best = max(members, key=lambda x: (stat[x][0], stat[x][1], x[1]))
+        pool = [x for x in members if x not in cut] or members
+        best = max(pool, key=lambda x: (stat[x][0], stat[x][1], x[1]))
         canon = nfkc(best[1])
         for kind, raw in members:
             out.append((kind, raw, canon))
