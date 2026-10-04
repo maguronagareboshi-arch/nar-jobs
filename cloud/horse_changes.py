@@ -104,6 +104,7 @@ from s
 where is_jra = 0 and p_jra = 1 and race_date >= :since
 """
 CAREER_ON = "coalesce(h.jra_career_runs, 1) > 0"   # 中央在籍 0 戦= 交流だけ= 外す(空は外さない)
+#   案 F(10/4): KDSCOPE の仮の馬(kb_horse_id=kd*)も jra_career_runs(KD の中央在籍走数)を持つので同じ規則で外れる(0 は 337 頭)
 CAREER_OFF = "true"                                # 列がまだ無い(sql/transfer_jra_in.sql の適用前)
 
 

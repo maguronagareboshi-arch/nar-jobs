@@ -466,6 +466,28 @@ class Nar:
             if r.status_code >= 300:
                 raise RuntimeError(f"upsert {table}: HTTP {r.status_code} {r.text[:200]}")
 
+    def drop_kd_twins(self, horses):
+        """案 F: KDSCOPE から入れた仮の馬(kb_horse_id が 'kd' で始まる)のうち、いま競馬ブックで取れた馬と
+        同じ 馬名+生年 の行を消す(競馬ブックの行で置き換える)。KD 側は 2026-03 で止まり・騎手が 4 文字なので本物を優先。
+        → 消した仮 id の数"""
+        n = 0
+        for h in horses:
+            if not h.get("horse_name") or not h.get("birth_year"):
+                continue
+            rows = self.get("nar_jra_horses", {"select": "kb_horse_id", "kb_horse_id": "like.kd*",
+                                               "horse_name": f"eq.{h['horse_name']}",
+                                               "birth_year": f"eq.{h['birth_year']}"}) or []
+            for r in rows:
+                kid = r["kb_horse_id"]
+                for table in ("nar_jra_runs", "nar_jra_horses"):     # 走→馬の順(途中で落ちても馬が残れば翌日また消せる)
+                    d = self._call("DELETE", self.base + table, f"delete {table}",
+                                   headers=dict(self._h, Prefer="return=minimal"), params={"kb_horse_id": f"eq.{kid}"})
+                    if d.status_code >= 300:
+                        raise RuntimeError(f"delete {table} {kid}: HTTP {d.status_code} {d.text[:200]}")
+                log(f"  仮の行を置き換え: {kid} → {h['kb_horse_id']}({h['horse_name']} {h['birth_year']})")
+                n += 1
+        return n
+
     def heartbeat(self, ok, note):
         """nar_job_heartbeat に便の成否を書く(job=HB_JOB)。失敗の時は last_ok を書かない= 前回の成功時刻が残る。
         ここで落ちても本処理の結果は変えない(1 回だけ試す)。"""
@@ -610,6 +632,8 @@ def main(argv=None):
             # 失敗は既存の馬名・中央走数を消さないよう 3 列だけ書く
             nar_w.upsert("nar_jra_horses", [{k: h[k] for k in ("kb_horse_id", "fetch_error", "fetched_at")}
                                             for h in hs if h.get("fetch_error")], "kb_horse_id")
+            # 案 F: 本物を書けた馬だけ、同じ 馬名+生年 の KDSCOPE の仮の行を消す(書く前に消すと取りこぼし時に走が無くなる)
+            nar_w.drop_kd_twins([h for h in hs if not h.get("fetch_error")])
         except Exception:
             # 打ち直しても書けなかった分は手元に残す(取った頁を捨てない)。nar_jra_horses に入っていないので
             # 翌日の便が同じ馬を選び直して取り直す。急ぐときは --html-dir でなく --horse-ids で打ち直す。

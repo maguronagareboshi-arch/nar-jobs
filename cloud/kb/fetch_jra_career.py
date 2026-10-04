@@ -62,7 +62,8 @@ def main(argv=None):
     ids = [x.strip() for x in (a.horse_ids or "").split(",") if x.strip()]
     if a.pending:
         rows = nar.get("nar_jra_horses", {"select": "kb_horse_id", "jra_career_runs": "is.null",
-                                          "jra_runs": "gt.0", "order": "kb_horse_id", "limit": str(a.pending)})
+                                          "jra_runs": "gt.0", "kb_horse_id": "not.like.kd*",   # 案 F: KD の仮 id は頁が無い
+                                          "order": "kb_horse_id", "limit": str(a.pending)})
         ids += [r["kb_horse_id"] for r in rows or []]
     got, bad = 0, 0
     for i, hid in enumerate(ids):
