@@ -62,6 +62,7 @@ jobs:
         env:
           V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
           V3_GAP_KEY: ${{ secrets.V3_GAP_KEY }}
+          V3_TRI_KEY: ${{ secrets.V3_TRI_KEY }}
           DAY: ${{ steps.d.outputs.day }}
           TAG: ${{ github.event.inputs.model_tag }}
         run: |
@@ -100,6 +101,19 @@ jobs:
             openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_GAP_KEY -in in/v3_tri.tar.gz.enc | tar -C gapm -xzf - || echo "3 連単・3 連複の模型を開けない"
           else
             echo "3 連単・3 連複の模型なし(記録しない)"
+          fi
+          # 2026-10-04: 3 連単を d4(毎年学び直し・2026 年用)に入れ替え(公開の 3 連単 丙)。専用の鍵 V3_TRI_KEY。
+          #   開けたら上の d1b を上書きし tri_name.txt = d4-2026。開けなければ d1b のまま(v29_gap が d1b と記録)
+          V3_TRI_KEY=$(printf %s "$V3_TRI_KEY" | tr -d '\r\n'); export V3_TRI_KEY
+          if [ -n "$V3_TRI_KEY" ] && gh release download v3-tri-model-20261004 -p 'v3_tri_d4.tar.gz.enc' -D in; then
+            mkdir -p in/tri4
+            if openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_TRI_KEY -in in/v3_tri_d4.tar.gz.enc | tar -C in/tri4 -xzf - && [ -s in/tri4/d1b_tri_model.txt ] && [ -s in/tri4/c8_trio_model.txt ]; then
+              cp in/tri4/d1b_tri_model.txt in/tri4/c8_trio_model.txt gapm/ && printf d4-2026 > gapm/tri_name.txt && echo "3 連単 = d4-2026"
+            else
+              echo "::warning::3 連単 d4 の包みを開けない(d1b のまま)"
+            fi
+          else
+            echo "3 連単 d4 の包みなし(d1b のまま)"
           fi
           ls gapm; wc -l in/v29_base.csv
           echo "ok=yes" >> "$GITHUB_OUTPUT"

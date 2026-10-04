@@ -433,7 +433,9 @@ def live(day, base_csv, mdir, write, until):
     except Exception as e:  # noqa: BLE001  3 連単・3 連複は記録だけ = 読めなくても単勝の候補は出す
         log('3 連単・3 連複の模型 読めない', type(e).__name__)
         tm = None
-    log('3 連単・3 連複の記録:', 'あり' if tm is not None else 'なし(模型なし)')
+    # 2026-10-04: 3 連単は d4(毎年学び直し・2026 年用)の包みを便が開けたら tri_name.txt = 'd4-2026'。無ければ d1b のまま
+    tri_name = (Path(mdir) / 'tri_name.txt').read_text(encoding='utf-8').strip() if (Path(mdir) / 'tri_name.txt').exists() else 'd1b'
+    log('3 連単・3 連複の記録:', f'あり(3 連単 {tri_name})' if tm is not None else 'なし(模型なし)')
     log('当日版の印:', 'あり' if dm is not None and has_s2 else f'なし(模型 {dm is not None}・土台の段 2 の率 {has_s2})')
     done = done_keys(day) if write else set()
     day_done = set()
@@ -556,7 +558,7 @@ def live(day, base_csv, mdir, write, until):
                                     'ev': round(float(x.ev), 3), 'buy': bool(x.buy)} for x in b.itertuples()],
                        'combo_line': lines['wide'], 'combo_lines': lines, 'combo': combo, 'combo_all': combo_all}
                 if tri:
-                    val['tri_model'] = {'tri': 'd1b', 'trio': 'c8', 'ev_min': TRI.EV_MIN, 'cols': ['組', 'オッズ', '期待値', '模型の率', '市場の率']}
+                    val['tri_model'] = {'tri': tri_name, 'trio': 'c8', 'ev_min': TRI.EV_MIN, 'cols': ['組', 'オッズ', '期待値', '模型の率', '市場の率']}
                     val.update(tri)
                 try:
                     st = put_gap(k, val, tr, day, rno) if write else 'dry'
