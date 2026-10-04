@@ -112,7 +112,8 @@ def base(day, h, T, F, table_csv):
 # ================================================================ 2) 当日: 材料と候補
 def feats(B, odds, wt, going):
     """B = base の 1 レース分。odds = {馬番: 単勝}・wt = {馬番: (体重, 増減)}・going = 馬場。オッズのある馬だけ残す。"""
-    b = B.copy()
+    import v31_bundle
+    b = v31_bundle.pick_going(B, going)  # 馬場の得手 3 列を当日の馬場で(前の晩に 2 通り作ってある)
     b['win'] = b.umaban.map(lambda u: odds.get(int(u)))
     b = b[b.win.notna() & (b.win > 0)].copy()
     if len(b) < 2:

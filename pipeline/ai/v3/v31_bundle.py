@@ -28,6 +28,20 @@ KEY = ['track', 'race_date', 'race_no']
 Q5 = KEY + ['umaban']
 NANKAN = ['大井', '川崎', '船橋', '浦和']
 DROP = ['f5_BF', 'f5_BG']
+GOING_COLS = ['v8bl_S_g', 'v8bl_M_g', 'v8bl_D_g']
+GOING_ALT = {'A': '良', 'B': '重'}  # v8bl_probe.GOING の 2 つの帯の代表
+
+
+def pick_going(B, going):
+    """当日の馬場で馬場の得手 3 列を 2 通りの中から選ぶ(馬場が分からない・2 通りが無ければそのまま)。"""
+    ab = {'良': 'A', '稍重': 'A', '重': 'B', '不良': 'B'}.get(str(going or '').strip())
+    B = B.copy()
+    if ab is None:
+        return B
+    for c in GOING_COLS:
+        if f'{c}__{ab}' in B.columns:
+            B[c] = B[f'{c}__{ab}']
+    return B
 
 
 def _rows(h, day):
@@ -89,6 +103,16 @@ def feats51(day, h, races, U=None, log=print):
         D = _run(n, {'h': h, 'races': races, 'readU': readU, 'rows': rows}, cut)
         out = out.merge(D, on=Q5, how='left', validate='1:1')
     out = out.drop(columns=[c for c in DROP if c in out.columns])
+    # 馬場の得手 3 列(v8bl の S_g・M_g・D_g)は今回の馬場で決まる。前の晩は馬場が分からず空になるので、
+    # その日の南関の馬場を「良・稍重(A)」「重・不良(B)」に置いた 2 通りを作っておき、当日の便が実際の馬場で選ぶ
+    # (v29_gap.feats)。研究は実際の馬場で作っていた = 当日の便で研究と同じ値になる(check_going で照合)。
+    for ab, gv in GOING_ALT.items():
+        h2, r2 = h.copy(), races.copy()
+        h2.loc[today & h2.track.isin(NANKAN), 'going'] = gv
+        r2.loc[(r2.race_date.astype(str).str[:10] == day) & r2.track.isin(NANKAN), 'going'] = gv
+        D = _run('v8bl_probe', {'h': h2, 'races': r2, 'readU': readU, 'rows': rows}, cut)
+        D = D[Q5 + GOING_COLS].rename(columns={c: f'{c}__{ab}' for c in GOING_COLS})
+        out = out.merge(D, on=Q5, how='left', validate='1:1')
     out['race_date'] = out.race_date.astype(str).str[:10]
     out['race_no'] = pd.to_numeric(out.race_no).astype(int)
     out['umaban'] = pd.to_numeric(out.umaban).astype(int)
@@ -130,6 +154,43 @@ def check(days):
               '列', len(cs), '合わない列', len(bad), bad, flush=True)
 
 
+def check_going(days):
+    """手元: その日の馬場を隠して作り、実際の馬場で 2 通りから選んだ馬場の得手 3 列を研究の値と照合する。"""
+    import t4_forecast
+    import t4_open
+    V3 = Path(__import__('os').environ.get('V3_DATA', 'C:/Users/kouki/nankan_ai/v3'))
+    R = pd.read_parquet(V3 / 'probe_S26_v8bl_probe.parquet')
+    R = R.rename(columns={c: f'v8bl_{c[2:]}' for c in R.columns if c.startswith('S_')})[Q5 + GOING_COLS]
+    R['race_no'], R['umaban'] = R.race_no.astype(int), R.umaban.astype(int)
+    R['race_date'] = R.race_date.astype(str).str[:10]
+    h0, races0 = t4_forecast.fill_key(*t4_open.load4('open'))
+    for day in days:
+        h = h0[h0.race_date.astype(str).str[:10] <= day].copy()
+        races = races0.copy()
+        today = h.race_date.astype(str).str[:10] == day
+        for c in ('finish', 'time_sec', 'last3f', 'margin', 'f_l3', 'c1', 'n1', 'c2', 'n2', 'c3', 'n3', 'c4', 'n4',
+                  'body_weight', 'body_weight_change', 'popularity', 'odds_win'):
+            if c in h.columns:
+                h.loc[today, c] = np.nan
+        rt = races.race_date.astype(str).str[:10] == day
+        real = races.loc[rt & races.track.isin(NANKAN), KEY + ['going']].copy()
+        h.loc[today, 'going'] = None
+        races.loc[rt, 'going'] = None
+        F = feats51(day, h, races)
+        real['race_date'], real['race_no'] = real.race_date.astype(str).str[:10], real.race_no.astype(int)
+        F = F.merge(real, on=KEY, how='left')
+        G = pd.concat([pick_going(g, gv) for gv, g in F.groupby(F.going.fillna(''), sort=False)])
+        m = G.merge(R, on=Q5, how='left', suffixes=('', '_r'))
+        res = {}
+        for c in GOING_COLS:
+            a, b = m[c].to_numpy(float), m[c + '_r'].to_numpy(float)
+            ok = (np.isnan(a) & np.isnan(b)) | (np.abs(a - b) <= 1e-6)
+            res[c] = (int((~ok).sum()), round(float(np.isfinite(a).mean()), 3))
+        print('馬場の照合', day, '頭', len(G), '馬場', dict(real.going.value_counts()), '列ごと(合わない頭・あり率)', res, flush=True)
+
+
 if __name__ == '__main__':
     if sys.argv[1] == 'check':
         check(sys.argv[2:])
+    elif sys.argv[1] == 'check_going':
+        check_going(sys.argv[2:])
