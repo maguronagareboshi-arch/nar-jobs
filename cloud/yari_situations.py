@@ -1,24 +1,26 @@
 # -*- coding: utf-8 -*-
-"""研究用・1 回きり: 「勝負がかり」と言われる場面の馬が、確定単勝オッズの見込み以上に勝つか(2025-10-01〜2026-09-30・地方全場)。
+"""研究用・1 回きり: 「勝負がかり」と言われる場面の馬が、人気からの見込み以上に勝つか(2025-10-01〜2026-09-30・地方全場)。
 便 .github/workflows/yari-situations.yml(workflow_dispatch のみ)から走らせ、docs/yari-situations/result.md を書く。
 
 ⛔本番 DB では REST の単純 select だけ(取得関数は late_money.py を流用)。集計は全部ここ。書き込みなし。
+確定単勝は 2025-10〜2026-08 が無い(nar_odds_ticks・win_odds_close とも)→ 人気と単勝払戻で数える(2026-10-10 決定)。
 定義(すべてレース前に分かる値だけ):
   前走= 同じ馬(馬名+生年月日)の nar_runs で、その日より前の最後の出走(着順あり)。中央・海外の出走は入らない。
   騎手の勝率= そのレース日より前 365 日(当日を含まない)の nar_runs の 1 着数÷騎乗数。騎乗 MIN_RIDES 未満は判定不能。
   騎手強化/弱化= 前走と騎手が違い、今回の騎手の勝率 − 前走騎手の勝率 が +5pt 以上/−5pt 以下。
   転厩初戦= 前走と調教師が違う。遠征= 前走と場が違う(同じ地区内/地区外を別行)。
   減量= weight_mark(負担重量の頭の記号)がある。休み明け= 前走から 90 日以上。連闘= 8 日以内・中 1 週= 9〜14 日。
-  対照= 前走があり、どれにも当たらない馬。
-  見込み= 確定単勝(nar_odds_ticks の f=true の最大 id)の 1/倍率 をレース内で正規化した和。回収率= 単勝 100 円ずつ・確定倍率。
-  人気= 確定単勝倍率のレース内順位(同倍率は同順位)。
+  対照= 前走があり、どれにも当たらない馬(追加区分の 2 つは対照の判定に使わない)。
+  追加: 人気急上昇= 前走人気 − 今回人気 >= 5。前走凡走の上位人気= 前走 6 着以下で今回 1〜3 番人気。
+  見込み= 「人気順位×頭数(〜8/9〜10/11〜12/13〜)」ごとの勝率を当てた和。前半の馬は後半から作った表・後半の馬は前半の表(交差)。
+  回収率= 1 着馬は単勝払戻 y(100 円あたり)・他は 0 の和÷頭数。同着・払戻なし・人気が空のレースは除外。
+  9 月の照合= 確定単勝(nar_odds_ticks f=true の最大 id)の正規化確率を見込み・確定倍率で回収率(同じ馬だけ)。
 """
 import bisect
 import datetime as dt
 import io
 import os
 import sys
-import urllib.parse
 from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -27,6 +29,7 @@ from late_money import rows_by_id, rows_offset, num, JST, log  # noqa: E402
 D_FROM, D_TO = dt.date(2025, 10, 1), dt.date(2026, 9, 30)
 H_FROM = dt.date(2024, 10, 1)  # 前走と騎手勝率のための履歴
 HALF2 = dt.date(2026, 4, 1)
+SEP = dt.date(2026, 9, 1)
 MIN_RIDES = 30
 OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "yari-situations", "result.md")
 
@@ -50,22 +53,28 @@ def nm(s):
 
 
 def fetch(base, key):
-    runs, fins = [], []
+    runs, pays, fins = [], [], []
     for a, b in months(H_FROM, D_TO):
         q = "race_date=gte.%s&race_date=lte.%s" % (a.isoformat(), b.isoformat())
         r = rows_offset(base, key, "/rest/v1/nar_runs?select=track,race_date,race_no,runner_number,horse_name,birth_date,"
-                        "jockey,trainer,finish,weight_mark&%s&order=race_date.asc,track.asc,race_no.asc,runner_number.asc" % q)
+                        "jockey,trainer,finish,popularity,weight_mark&%s"
+                        "&order=race_date.asc,track.asc,race_no.asc,runner_number.asc" % q)
         runs.extend(r)
-        n_o = 0
+        n_p = n_o = 0
         if b >= D_FROM:
+            p = rows_offset(base, key, "/rest/v1/nar_race_payouts?select=track,race_date,race_no,payouts&%s"
+                            "&order=race_date.asc,track.asc,race_no.asc" % q)
+            pays.extend(p)
+            n_p = len(p)
+        if a >= SEP:
             o = rows_by_id(base, key, "/rest/v1/nar_odds_ticks?select=id,track,race_date,race_no,w&f=eq.true&%s" % q)
             fins.extend(o)
             n_o = len(o)
-        log("%s 出走 %d 行・確定単勝 %d 行" % (a.strftime("%Y-%m"), len(r), n_o))
-    return runs, fins
+        log("%s 出走 %d 行・払戻 %d 行・確定単勝 %d 行" % (a.strftime("%Y-%m"), len(r), n_p, n_o))
+    return runs, pays, fins
 
 
-def fin_int(v):
+def to_int(v):
     try:
         x = int(str(v).strip())
         return x if x > 0 else None
@@ -77,12 +86,12 @@ def cell():
     return {"n": 0, "win": 0, "exp": 0.0, "ret": 0.0, "races": set()}
 
 
-def add(c, v):
+def add(c, won, exp, ret, rid):
     c["n"] += 1
-    c["win"] += v["won"]
-    c["exp"] += v["pf"]
-    c["ret"] += v["won"] * v["fo"] * 100
-    c["races"].add(v["rid"])
+    c["win"] += won
+    c["exp"] += exp
+    c["ret"] += ret
+    c["races"].add(rid)
 
 
 SCENES = (("all", "全馬一律"), ("j_up", "騎手強化(+5pt 以上)"), ("j_dn", "騎手弱化(−5pt 以下)"),
@@ -90,7 +99,12 @@ SCENES = (("all", "全馬一律"), ("j_up", "騎手強化(+5pt 以上)"), ("j_dn
           ("ensei_out", "遠征・地区外"), ("genryo", "減量騎手"), ("yasumi", "休み明け(90 日以上)"),
           ("rento", "連闘(8 日以内)"), ("naka1", "中 1 週(9〜14 日)"), ("ctrl", "対照= どれにも当たらない"),
           ("noprev", "前走なし(データ内・参考)"))
+EXTRA = (("pop_up", "人気急上昇(前走人気より 5 つ以上上)"), ("weak_fav", "前走 6 着以下で今回 1〜3 番人気"))
 POPS = (("p1", "1〜3 人気"), ("p4", "4〜6 人気"), ("p7", "7 人気以下"))
+
+
+def fbin(n):
+    return "〜8" if n <= 8 else ("9〜10" if n <= 10 else ("11〜12" if n <= 12 else "13〜"))
 
 
 def main():
@@ -98,29 +112,30 @@ def main():
     key = os.environ.get("SUPABASE_SERVICE_KEY", "")
     if not base or not key:
         sys.exit("SUPABASE_URL / SUPABASE_SERVICE_KEY が無い")
-    runs, fins = fetch(base, key)
-    # 生年月日の補い(馬名に生年月日が 1 つだけなら空欄に当てる)
+    runs, pays, fins = fetch(base, key)
     bd = defaultdict(set)
     for r in runs:
         if r.get("birth_date"):
             bd[r["horse_name"]].add(r["birth_date"])
-    hist = defaultdict(list)   # 馬 → [(date, track, jockey, trainer)]
-    jk = defaultdict(list)     # 騎手 → [(date, won)]
+    hist = defaultdict(list)   # 馬 → [(date, track, jockey, trainer, pop, finish)]
+    jk = defaultdict(list)
     started = []
     for r in runs:
-        f = fin_int(r.get("finish"))
+        f = to_int(r.get("finish"))
         if f is None or not r.get("horse_name"):
             continue
         b = r.get("birth_date") or (next(iter(bd[r["horse_name"]])) if len(bd[r["horse_name"]]) == 1 else "")
         d = dt.date.fromisoformat(r["race_date"])
         hk = (r["horse_name"], b)
         j = nm(r.get("jockey"))
-        hist[hk].append((d, r["track"], j, nm(r.get("trainer"))))
+        hist[hk].append((d, r["track"], j, nm(r.get("trainer")), to_int(r.get("popularity")), f))
         if j:
             jk[j].append((d, 1 if f == 1 else 0))
         started.append((r, hk, d, f, j))
-    for v in hist.values():
-        v.sort()
+    hdates = {}
+    for k, v in hist.items():
+        v.sort(key=lambda x: x[0])
+        hdates[k] = [x[0] for x in v]
     jd, jc = {}, {}
     for j, v in jk.items():
         v.sort()
@@ -140,52 +155,92 @@ def main():
             return None
         return (jc[j][b] - jc[j][a]) / (b - a)
 
+    def rk(o):
+        return (o["track"], o["race_date"], int(o["race_no"]))
+
+    payk = {}
+    for p in pays:
+        w = [x for x in (p.get("payouts") or []) if isinstance(x, dict) and x.get("t") == "win"]
+        payk[rk(p)] = w
     final = {}
     for o in fins:
-        k = (o["track"], o["race_date"], int(o["race_no"]))
+        k = rk(o)
         if k not in final or o["id"] > final[k]["id"]:
             final[k] = o
-    ex = {"races": set(), "races_noodds": set(), "runs": 0, "runs_noodds": 0, "mark_any": 0}
-    noodds_by = defaultdict(int)
     by_race = defaultdict(list)
-    for r, hk, d, f, j in started:
-        if not (D_FROM <= d <= D_TO):
+    for it in started:
+        if D_FROM <= it[2] <= D_TO:
+            by_race[rk(it[0])].append(it)
+    ex = defaultdict(int)
+    ex_pop_runs = 0
+    used = []
+    for k, items in by_race.items():
+        ex["races"] += 1
+        nopop = [it for it in items if to_int(it[0].get("popularity")) is None]
+        if nopop:
+            ex["races_nopop"] += 1
+            ex_pop_runs += len(nopop)
+            ex["runs_nopop_race"] += len(items)
             continue
-        by_race[(r["track"], r["race_date"], int(r["race_no"]))].append((r, hk, d, f, j))
-    C = {s: {"t": cell(), "p1": cell(), "p4": cell(), "p7": cell(), "h1": cell(), "h2": cell()} for s, _ in SCENES}
-    marks = defaultdict(int)
-    for rk, items in by_race.items():
-        ex["races"].add(rk)
-        fw = (final.get(rk) or {}).get("w") or {}
-        od = {str(h): num(v) for h, v in fw.items() if num(v)}
-        if not od:
-            ex["races_noodds"].add(rk)
-            noodds_by[(rk[1][:7], rk[0])] += 1
-            ex["runs_noodds"] += len(items)
+        w = payk.get(k)
+        if not w:
+            ex["races_nopay"] += 1
+            ex["runs_nopay"] += len(items)
             continue
-        s = sum(1.0 / v for v in od.values())
+        winners = [it for it in items if it[3] == 1]
+        if len(w) != 1 or len(winners) != 1 or num(w[0].get("y")) is None \
+                or str(w[0].get("c")).strip() != str(winners[0][0]["runner_number"]):
+            ex["races_dh"] += 1
+            ex["runs_dh"] += len(items)
+            continue
+        used.append((k, items, num(w[0]["y"])))
+    tab = {"h1": defaultdict(lambda: [0, 0]), "h2": defaultdict(lambda: [0, 0])}
+    for k, items, y in used:
+        hb = "h1" if items[0][2] < HALF2 else "h2"
+        fb = fbin(len(items))
         for r, hk, d, f, j in items:
-            h = str(r["runner_number"])
-            if h not in od:
-                ex["runs_noodds"] += 1
-                continue
+            t = tab[hb][(to_int(r["popularity"]), fb)]
+            t[0] += 1
+            t[1] += 1 if f == 1 else 0
+
+    def rate(hb, p, fb):
+        t = tab[hb].get((p, fb))
+        return (t[1] / t[0]) if t and t[0] else None
+
+    C = {s: {x: cell() for x in ("t", "p1", "p4", "p7", "h1", "h2")} for s, _ in SCENES + EXTRA}
+    chk = {x: cell() for x in ("h1", "h2")}
+    sep = {x: cell() for x in ("all_pop", "all_odd", "tk_pop", "tk_odd")}
+    marks = defaultdict(int)
+    for k, items, y in used:
+        rid = "%s|%s|%d" % k
+        fb = fbin(len(items))
+        fw = (final.get(k) or {}).get("w") or {}
+        od = {str(h): num(v) for h, v in fw.items() if num(v)}
+        osum = sum(1.0 / v for v in od.values()) if od else 0
+        for r, hk, d, f, j in items:
+            pop = to_int(r["popularity"])
+            hb = "h1" if d < HALF2 else "h2"
+            other = "h2" if hb == "h1" else "h1"
+            e = rate(other, pop, fb)
+            if e is None:
+                ex["runs_nocell"] += 1
+                e = 0.0
+            won = 1 if f == 1 else 0
+            ret = y if won else 0.0
             ex["runs"] += 1
-            fo = od[h]
-            rank = 1 + sum(1 for x in od.values() if x < fo)
-            v = {"pf": (1.0 / fo) / s, "fo": fo, "won": 1 if f == 1 else 0, "rid": "%s|%s|%d" % rk}
-            sc = ["all"]
+            add(chk[hb], won, rate(hb, pop, fb) or 0.0, ret, rid)
+            sc, xs = ["all"], []
             hs = hist[hk]
-            i = bisect.bisect_left(hs, (d,)) - 1
+            i = bisect.bisect_left(hdates[hk], d) - 1
             mk = (r.get("weight_mark") or "").strip()
             if mk:
-                ex["mark_any"] += 1
                 marks[mk] += 1
                 sc.append("genryo")
             if i < 0:
                 sc.append("noprev")
             else:
-                pd, pt, pj, ptr = hs[i]
-                flag = False
+                pd, pt, pj, ptr, ppop, pf = hs[i]
+                flag = bool(mk)
                 if pj and j and pj != j:
                     a, b = jrate(j, d), jrate(pj, d)
                     if a is None or b is None:
@@ -212,17 +267,28 @@ def main():
                 elif gap <= 14:
                     sc.append("naka1")
                     flag = True
-                if mk:
-                    flag = True
                 if not flag:
                     sc.append("ctrl")
-            pb = "p1" if rank <= 3 else ("p4" if rank <= 6 else "p7")
-            hb = "h1" if d < HALF2 else "h2"
+                if ppop is not None and ppop - pop >= 5:
+                    xs.append("pop_up")
+                if pf >= 6 and pop <= 3:
+                    xs.append("weak_fav")
+            pb = "p1" if pop <= 3 else ("p4" if pop <= 6 else "p7")
             for x in sc:
-                add(C[x]["t"], v)
-                add(C[x][pb], v)
-                add(C[x][hb], v)
-    write(C, ex, noodds_by, marks, len(runs), len(fins))
+                add(C[x]["t"], won, e, ret, rid)
+                add(C[x][pb], won, e, ret, rid)
+                add(C[x][hb], won, e, ret, rid)
+            for x in xs:
+                add(C[x]["t"], won, e, ret, rid)
+                add(C[x][hb], won, e, ret, rid)
+            h = str(r["runner_number"])
+            if d >= SEP and h in od:
+                fo = od[h]
+                for s_, p_ in (("all", "all"), ("tenkyu", "tk")):
+                    if s_ in sc:
+                        add(sep[p_ + "_pop"], won, e, ret, rid)
+                        add(sep[p_ + "_odd"], won, (1.0 / fo) / osum, won * fo * 100, rid)
+    write(C, chk, sep, ex, ex_pop_runs, marks, len(runs), len(pays), len(fins), tab)
 
 
 def ae(c):
@@ -240,19 +306,28 @@ def row(lab, c):
 HEAD = "| 場面 | 頭数 | 1着数 | 見込み | 実際÷見込み | 単勝回収率 | レース数 |\n|---|---:|---:|---:|---:|---:|---:|"
 
 
-def write(C, ex, noodds_by, marks, n_runs, n_fins):
-    L = ["# 勝負がかりと言われる場面(研究・1 回きり)", "",
-         "期間 %s〜%s・地方全場。作成 %s。道= Actions(手元 nar-stats は Actions 内で毎回作る PG で、手元に常設の表が無いため)。"
+def write(C, chk, sep, ex, ex_pop_runs, marks, n_runs, n_pays, n_fins, tab):
+    L = ["# 勝負がかりと言われる場面(研究・1 回きり・人気と単勝払戻で)", "",
+         "期間 %s〜%s・地方全場。作成 %s。道= Actions(手元 nar-stats は Actions 内で毎回作る PG で常設の表が無い)。"
+         "確定単勝は 2025-10〜2026-08 が無いので、見込みは人気順位×頭数の勝率表(前半⇔後半の交差)。"
          % (D_FROM, D_TO, dt.datetime.now(JST).isoformat(timespec="seconds")), "",
-         "- 取得: 出走 %d 行(履歴 %s〜)・確定単勝 %d 行" % (n_runs, H_FROM, n_fins),
-         "- 対象レース %d・確定単勝なしで除外 %d レース・使えた出走 %d・除外した出走 %d"
-         % (len(ex["races"]), len(ex["races_noodds"]), ex["runs"], ex["runs_noodds"]),
-         "- 減量の印あり %d 頭(印別 %s)" % (ex["mark_any"], "・".join("%s %d" % kv for kv in sorted(marks.items(), key=lambda x: -x[1]))),
+         "- 取得: 出走 %d 行(履歴 %s〜)・払戻 %d 行・確定単勝(9 月)%d 行" % (n_runs, H_FROM, n_pays, n_fins),
+         "- 対象レース %d・使えた出走 %d" % (ex["races"], ex["runs"]),
+         "- 除外: 人気が空 %d レース(空の馬 %d 頭・レース全体 %d 頭)・払戻なし %d レース(%d 頭)・同着/払戻と 1 着が合わない %d レース(%d 頭)"
+         % (ex["races_nopop"], ex_pop_runs, ex["runs_nopop_race"], ex["races_nopay"], ex["runs_nopay"], ex["races_dh"], ex["runs_dh"]),
+         "- 勝率表に該当マスなし(見込み 0 で数えた)%d 頭" % ex["runs_nocell"],
+         "- 減量の印 %s" % "・".join("%s %d" % kv for kv in sorted(marks.items(), key=lambda x: -x[1])),
          "- 騎手勝率は騎乗 %d 未満を判定不能。前走は地方の出走だけ(中央は入らない)。遠征の地区は 北海道/ばんえい/岩手/南関東/金沢/東海/兵庫/高知/佐賀。" % MIN_RIDES,
-         "", "## 場面ごと(1 年)", "", HEAD]
-    for s, lab in SCENES:
+         "", "## 照合= 全馬一律の実際÷見込み", "", "| 半期 | 交差の表で当てた | 同じ半期の表で当てた(参考・1.00 になるはず) |", "|---|---:|---:|"]
+    for hb, lab in (("h1", "前半 2025-10〜2026-03"), ("h2", "後半 2026-04〜2026-09")):
+        L.append("| %s | %s | %s |" % (lab, ae(C["all"][hb]), ae(chk[hb])))
+    L += ["", "## 9 月だけ= 人気版と確定オッズ版の差(同じ馬)", "", HEAD,
+          row("全馬一律・人気版", sep["all_pop"]), row("全馬一律・確定オッズ版", sep["all_odd"]),
+          row("転厩初戦・人気版", sep["tk_pop"]), row("転厩初戦・確定オッズ版", sep["tk_odd"]),
+          "", "## 場面ごと(1 年)", "", HEAD]
+    for s, lab in SCENES + EXTRA:
         L.append(row(lab, C[s]["t"]))
-    L += ["", "## 人気別(確定単勝の順位)", "", "| 場面 | 人気 | 頭数 | 1着数 | 見込み | 実際÷見込み | 単勝回収率 | レース数 |",
+    L += ["", "## 人気別", "", "| 場面 | 人気 | 頭数 | 1着数 | 見込み | 実際÷見込み | 単勝回収率 | レース数 |",
           "|---|---|---:|---:|---:|---:|---:|---:|"]
     for s, lab in SCENES:
         for p, pl in POPS:
@@ -260,13 +335,16 @@ def write(C, ex, noodds_by, marks, n_runs, n_fins):
     L += ["", "## 再現性(前半 2025-10〜2026-03/後半 2026-04〜2026-09)", "",
           "| 場面 | 前半 頭数 | 前半 実際÷見込み | 前半 回収率 | 後半 頭数 | 後半 実際÷見込み | 後半 回収率 |",
           "|---|---:|---:|---:|---:|---:|---:|"]
-    for s, lab in SCENES:
+    for s, lab in SCENES + EXTRA:
         a, b = C[s]["h1"], C[s]["h2"]
         L.append("| %s | %d | %s | %s | %d | %s | %s |" % (lab, a["n"], ae(a), roi(a), b["n"], ae(b), roi(b)))
-    L += ["", "## 確定単勝が無く除外したレース(月・場)", "", "| 月 | 場 | レース数 |", "|---|---|---:|"]
-    for (m, t), n in sorted(noodds_by.items()):
-        L.append("| %s | %s | %d |" % (m, t, n))
-    L += ["", "> 見込み= 確定単勝の正規化確率の和。回収率= 単勝 100 円ずつ・確定倍率。場面は重なる(1 頭が複数行に入る)。", ""]
+    L += ["", "## 勝率表(人気 1〜6・前半/後半)", "", "| 頭数 | 人気 | 前半 頭数 | 前半 勝率 | 後半 頭数 | 後半 勝率 |", "|---|---:|---:|---:|---:|---:|"]
+    for fb in ("〜8", "9〜10", "11〜12", "13〜"):
+        for p in range(1, 7):
+            a, b = tab["h1"].get((p, fb), [0, 0]), tab["h2"].get((p, fb), [0, 0])
+            L.append("| %s | %d | %d | %s | %d | %s |" % (fb, p, a[0], "%.3f" % (a[1] / a[0]) if a[0] else "-",
+                                                       b[0], "%.3f" % (b[1] / b[0]) if b[0] else "-"))
+    L += ["", "> 回収率= 単勝払戻(100 円あたり)の和÷頭数。場面は重なる(1 頭が複数行に入る)。追加区分 2 つは対照の判定に使わない。", ""]
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
     with io.open(OUT, "w", encoding="utf-8") as f:
         f.write("\n".join(L))
