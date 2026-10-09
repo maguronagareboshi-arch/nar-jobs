@@ -8,6 +8,8 @@
   1. JST 10 時以降: 今日の南関のレース(公式の開催一覧 ∪ DB)に、v3-9 の印の無いレースがある
   2. JST 10 時以降: 今日の印はあるのに、当日の便が読む前日の土台(成果物 v3-gap-base-今日)が無い
   3. JST 22 時以降: 明日の南関のレースに、v3-9 の印の無いレースがある
+  4. JST 22 時以降: 今日の南関のレース(取消を除く)に、直前版(timing=last)の印の無いレースがある
+     (10/7 の事故: 当日の便が公式の当日 ZIP を 2 時間取れず 大井 1〜4R の直前版が出なかったのに、2 日後まで誰も気付かなかった)
   (前日の便は DB の時計で 14:40・20:40、当日 09:35 に起動。出馬表を待つと最長 40 分かかる)
 
   python -X utf8 pipeline/ai/v3/v3_watch.py [--now 2026-10-01T22:25]   # --now は手元の試験用
@@ -43,6 +45,16 @@ def db_races(day):
 
 def marks(day):
     return {(r["track"], int(r["race_no"])) for r in rest(f"nar_ai_marks?select=track,race_no&model=eq.v3-9&race_date=eq.{day}")}
+
+
+def last_miss(day):
+    t = urllib.parse.quote("(" + ",".join(NANKAN) + ")")
+    run = {(r["track"], int(r["race_no"])) for r in rest(f"nar_races?select=track,race_no,cancelled&race_date=eq.{day}&track=in.{t}")
+           if not str(r.get("cancelled") or "").strip()}
+    got = {(r["track"], int(r["race_no"])) for r in rest(f"nar_ai_marks?select=track,race_no&model=eq.v3-9&timing=eq.last&race_date=eq.{day}")}
+    print(f"今日 {day}: 南関 {len(run)} R・直前版の印 {len(got & run)} R", flush=True)
+    miss = sorted(run - got)
+    return [f"今日 {day} の直前版が無いレース {len(miss)} R: {miss[:12]}(v3-gap-live の記録で「公式の当日 ZIP: 失敗」「体重が出ないまま」を確かめる)"] if miss else []
 
 
 def official(day):
@@ -96,6 +108,7 @@ def main():
     if now.hour >= 22:
         e, _, _ = check(tomorrow, "明日")
         errs += e
+        errs += last_miss(today)
     for x in errs:
         print("::error::⛔ " + x, flush=True)
     if not errs:
