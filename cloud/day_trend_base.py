@@ -2,7 +2,7 @@
 """今日ここまでの傾向 段 3「ふだんの値」を場×月ごとに作る月 1 回の便(2026-10-09)。
 
 受け渡しの形の正本= nar-site\\SPEC_day_trend_base_20261009.md・仕様の正本= DESIGN_today_trend_20260928.md §0・§1-6。
-数え方の元= nar-site\\research\\today-trend\\mock_v3.py(写した。違うのは「1R あたりの平均・分散」にしたこと= SPEC)。
+数え方の元= nar-site\\research\\today-trend\\mock_v3.py(写した。10/9 訂正= 枠は整数の [頭数, 3着内]・n<30 の枠は書かない・L3 は pre で広げる)。
 
   py -3.12 -X utf8 cloud/day_trend_base.py --month 2026-10 --venue kochi --dry-run --out out/
   python3 cloud/day_trend_base.py --month 2026-09,2026-10 --apply      # nar_meta へ upsert
@@ -194,10 +194,9 @@ def race_record(race, runs):
     top3 = lambda f: f is not None and 1 <= f <= 3  # noqa: E731
     rec = {"d": d, "no": int(race["race_no"]), "dk": dist_key(race),
            "band": band_fix(race.get("race_name"), race.get("condition"), t)}
-    if any(e[3] is not None for e in ent):
-        rec["pop"] = {b: sum(1 for e in ent if pbk(e[3]) == b and top3(e[1])) for b in POP_BANDS}
-    else:
-        rec["pop"] = None
+    # 人気帯ごとの [頭数, 3着内](10/9 訂正= 頭数あたりの率の元・mock_v3.py と同じ)
+    rec["pop"] = [[sum(1 for e in ent if pbk(e[3]) == b), sum(1 for e in ent if pbk(e[3]) == b and top3(e[1]))]
+                  for b in POP_BANDS]
     if t == BANEI:
         rec["going"] = moist_bucket(race.get("going"))
         return rec
@@ -206,10 +205,12 @@ def race_record(race, runs):
     pts = corner_points(race.get("corners"))
     cz = {}
     for c, mp in pts.items():
-        v = [0, 0, 0]
+        v = [[0, 0], [0, 0], [0, 0]]          # 前・中・後ろの [頭数, 3着内]
         for num, f, _, _ in ent:
-            if num in mp and top3(f):
-                v[zone(mp[num])] += 1
+            if num in mp:
+                z = v[zone(mp[num])]
+                z[0] += 1
+                z[1] += top3(f)
         cz[c] = v
     rec["cz"] = cz
     # 上がりの差= 後ろ(4角7番手以下・4角の頭数 8 以下は最後の 3 頭)の平均 − 前(4角1〜3番手)の平均
@@ -234,55 +235,55 @@ def cell_keys(rec):
     return ks[start:]
 
 
-# ─── 枠の集計 ────────────────────────────────────────────────────
-def _mv(s, ss, n):
-    mean = s / n
-    var = (ss - n * mean * mean) / (n - 1) if n > 1 else 0.0
-    return [round(mean, 4), round(max(var, 0.0), 4)]
+# ─── 枠の集計(10/9 訂正= 整数の [頭数, 3着内] を持つ・率は画面で割る)──────────────
+MIN_N = 30          # 枠の R 数がこれ未満は書かない(L3 は例外= pre で広げる)
 
 
-def build_cells(recs, banei=False):
-    acc = {}
+def cell_of(recs, banei=False, pre=False):
+    """レースの束 → 1 枠。角が無いレースはその角に入れない・agari= [R数, 平均, 分散(標本)]"""
+    out = {"n": len(recs), "pre": pre}
+    pop = [[0, 0] for _ in POP_BANDS]
+    cor, ag = {}, []
+    for r in recs:
+        for i, (h, w) in enumerate(r["pop"]):
+            pop[i][0] += h
+            pop[i][1] += w
+        if banei:
+            continue
+        for c, v in r["cz"].items():
+            cc = cor.setdefault(c, [[0, 0], [0, 0], [0, 0]])
+            for zi in range(3):
+                cc[zi][0] += v[zi][0]
+                cc[zi][1] += v[zi][1]
+        if r["ag"] is not None:
+            ag.append(r["ag"])
+    if not banei:
+        out["corners"] = {c: cor[c] for c in sorted(cor)}
+    out["pop"] = pop
+    if not banei and ag:
+        mu = sum(ag) / len(ag)
+        var = sum((a - mu) ** 2 for a in ag) / (len(ag) - 1) if len(ag) > 1 else 0.0
+        out["agari"] = [len(ag), round(mu, 4), round(var, 4)]
+    return out
+
+
+def build_cells(recs, banei=False, before=None):
+    """recs= 期間の中のレース(日付順)。before= 期間より前のレース(L3 の pre 用・日付順)"""
+    groups = {}
     for r in recs:
         for k in cell_keys(r):
-            a = acc.setdefault(k, {"n": 0, "c": {}, "pn": 0, "p": {b: [0, 0] for b in POP_BANDS}, "ag": [0, 0.0, 0.0]})
-            a["n"] += 1
-            if r.get("pop") is not None:
-                a["pn"] += 1
-                for b in POP_BANDS:
-                    v = r["pop"][b]
-                    a["p"][b][0] += v
-                    a["p"][b][1] += v * v
-            if banei:
-                continue
-            for c, v in r["cz"].items():
-                cc = a["c"].setdefault(c, [0, [0, 0], [0, 0], [0, 0]])
-                cc[0] += 1
-                for zi in range(3):
-                    cc[zi + 1][0] += v[zi]
-                    cc[zi + 1][1] += v[zi] * v[zi]
-            if r["ag"] is not None:
-                a["ag"][0] += 1
-                a["ag"][1] += r["ag"]
-                a["ag"][2] += r["ag"] * r["ag"]
+            groups.setdefault(k, []).append(r)
     cells = {}
-    for k in sorted(acc):
-        a = acc[k]
-        out = {"n": a["n"]}
-        if not banei:
-            cor = {}
-            for c in sorted(a["c"]):
-                cc = a["c"][c]
-                if cc[0]:
-                    cor[c] = {"n": cc[0], **{ZONES[zi]: _mv(cc[zi + 1][0], cc[zi + 1][1], cc[0]) for zi in range(3)}}
-            if cor:
-                out["corners"] = cor
-        if a["pn"]:
-            out["pop"] = {"n": a["pn"], **{b: _mv(a["p"][b][0], a["p"][b][1], a["pn"]) for b in POP_BANDS}}
-        if not banei and a["ag"][0]:
-            m, v = _mv(a["ag"][1], a["ag"][2], a["ag"][0])
-            out["agari"] = {"n": a["ag"][0], "mean": m, "var": v}
-        cells[k] = out
+    for k in sorted(groups):
+        if k != "L3" and len(groups[k]) >= MIN_N:
+            cells[k] = cell_of(groups[k], banei)
+    l3 = list(recs)
+    pre = False
+    if len(l3) < MIN_N and before:
+        l3 = (list(before) + l3)[-MIN_N:]        # 区切りの前へ新しい順に広げて 30R
+        pre = True
+    if l3:
+        cells["L3"] = cell_of(l3, banei, pre)
     return cells
 
 
@@ -370,11 +371,13 @@ def build_value(track, month, recs, sand, built_at):
     prior = [r for r in recs if r["d"] < mf]
     w0, cut, note, post = window_of(track, mf, [r["d"] for r in prior], sand)
     use = [r for r in prior if r["d"] >= w0]
+    before = sorted((r for r in prior if r["d"] < w0), key=lambda r: (r["d"], r["no"]))
+    use.sort(key=lambda r: (r["d"], r["no"]))
     to = (dt.date.fromisoformat(mf) - dt.timedelta(days=1)).isoformat()
     banei = track == BANEI
     return {"venue": VKEY[track], "month": month, "built_at": built_at, "banei": banei,
             "window": {"from": w0, "to": to, "post_races": post, "cut": cut, "note": note},
-            "cells": build_cells(use, banei=banei)}
+            "cells": build_cells(use, banei=banei, before=before)}
 
 
 # ─── 取得(REST の単純 select だけ)──────────────────────────────────────

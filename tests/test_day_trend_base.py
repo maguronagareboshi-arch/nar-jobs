@@ -5,7 +5,7 @@
 
 ①クラス帯の直し(「歳以上」でクラス字なし= 上)・baba.band_of は変えない
 ②1 レースの値(3着以内の段・人気の付け直し・上がりの差・取消/中止)
-③枠= 1R あたりの平均と標本分散・角ごとの n・L0→L3 の鍵
+③枠= 整数の [頭数, 3着内]・agari=[R数,平均,分散]・n<30 は書かない・L3 は pre で広げる
 ④期間= 区切りの後 300R 未満なら 1 つ前の区切りへ・名古屋は 2022-04-08 より前を入れない
 """
 import os
@@ -62,8 +62,8 @@ class RaceRecord(unittest.TestCase):
         # 1〜3 着= 馬番 1,2,3。3角は 1〜3番手(前)・4角は 7〜9番手(後ろ)
         l3 = [36.0, 36.0, 36.0, 40, 40, 40, 39.0, 39.0, 39.0]
         rec = m.race_record(_race(), _runs([1, 2, 3, 4, 5, 6, 7, 8, 9], l3=l3))
-        self.assertEqual(rec["cz"], {"3": [3, 0, 0], "4": [0, 0, 3]})
-        self.assertEqual(rec["pop"], {"1": 1, "2-3": 2, "4-6": 0, "7+": 0})
+        self.assertEqual(rec["cz"], {"3": [[3, 3], [3, 0], [3, 0]], "4": [[3, 0], [3, 0], [3, 3]]})
+        self.assertEqual(rec["pop"], [[1, 1], [2, 2], [3, 0], [3, 0]])
         self.assertEqual(rec["dk"], "ダ1400")
         # 4角 9 頭= 後ろ 7〜9番手(馬番 3,2,1= 36.0)− 前 1〜3番手(馬番 9,8,7= 39.0)
         self.assertAlmostEqual(rec["ag"], -3.0)
@@ -71,7 +71,7 @@ class RaceRecord(unittest.TestCase):
     def test_rerank_and_scratch(self):
         # 取消の馬(人気 1)を外して付け直す= 人気 2 が 1 番人気になる
         rec = m.race_record(_race(corners=[]), _runs([None, 1, 2, 3], pop=[1, 2, 3, 4], notes={1: "取消"}))
-        self.assertEqual(rec["pop"], {"1": 1, "2-3": 2, "4-6": 0, "7+": 0})
+        self.assertEqual(rec["pop"], [[1, 1], [2, 2], [0, 0], [0, 0]])
         self.assertEqual(rec["cz"], {})
         self.assertIsNone(rec["ag"])
 
@@ -86,32 +86,41 @@ class RaceRecord(unittest.TestCase):
         self.assertIsNone(rec["ag"])
 
 
+def _rec(d, band="C3", going="良", cz=None, ag=None, pop=None):
+    return {"d": d, "no": 1, "band": band, "going": going, "dk": "ダ1400",
+            "pop": pop or [[1, 1], [2, 1], [3, 1], [3, 0]], "cz": cz if cz is not None else {}, "ag": ag}
+
+
 class Cells(unittest.TestCase):
-    def test_mean_var(self):
-        recs = [{"d": "2026-01-01", "no": 1, "band": "C3", "going": "良", "dk": "ダ1400", "pop": {"1": 1, "2-3": 1, "4-6": 1, "7+": 0},
-                 "cz": {"4": [3, 0, 0]}, "ag": 1.0},
-                {"d": "2026-01-02", "no": 1, "band": "C3", "going": "良", "dk": "ダ1400", "pop": {"1": 0, "2-3": 2, "4-6": 1, "7+": 0},
-                 "cz": {"4": [1, 1, 1], "1": [2, 1, 0]}, "ag": 0.0},
-                {"d": "2026-01-03", "no": 1, "band": None, "going": "重", "dk": "ダ1400", "pop": None,
-                 "cz": {}, "ag": None}]
-        c = m.build_cells(recs)
-        self.assertEqual(sorted(c), ["L0|C3|良|ダ1400", "L1|良|ダ1400", "L1|重|ダ1400", "L2|ダ1400", "L3"])
-        a = c["L0|C3|良|ダ1400"]
-        self.assertEqual(a["n"], 2)
-        self.assertEqual(a["corners"]["4"], {"n": 2, "front": [2.0, 2.0], "mid": [0.5, 0.5], "back": [0.5, 0.5]})
-        self.assertEqual(a["corners"]["1"], {"n": 1, "front": [2.0, 0.0], "mid": [1.0, 0.0], "back": [0.0, 0.0]})
-        self.assertEqual(a["pop"]["n"], 2)
-        self.assertEqual(a["pop"]["1"], [0.5, 0.5])
-        self.assertEqual(a["agari"], {"n": 2, "mean": 0.5, "var": 0.5})
-        z = c["L1|重|ダ1400"]
-        self.assertEqual(z, {"n": 1})          # n が 0 の段(角・人気・上がり)は書かない
-        self.assertEqual(c["L3"]["n"], 3)
+    def test_sums_and_min_n(self):
+        a = [_rec(f"2026-01-{i + 1:02d}", cz={"4": [[3, 2], [3, 1], [3, 0]]}, ag=1.0) for i in range(20)]
+        b = [_rec(f"2026-02-{i + 1:02d}", cz={"4": [[3, 1], [3, 1], [3, 1]], "1": [[3, 3], [3, 0], [3, 0]]}, ag=0.0)
+             for i in range(20)]
+        c = [_rec("2026-03-01", band=None, going="重")]
+        cells = m.build_cells(a + b + c)
+        # L0|C3|良 は 40R= 書く・L1|重 は 1R= 書かない・L3 は必ず書く
+        self.assertEqual(sorted(cells), ["L0|C3|良|ダ1400", "L1|良|ダ1400", "L2|ダ1400", "L3"])
+        x = cells["L0|C3|良|ダ1400"]
+        self.assertEqual((x["n"], x["pre"]), (40, False))
+        self.assertEqual(x["corners"]["4"], [[120, 60], [120, 40], [120, 20]])
+        self.assertEqual(x["corners"]["1"], [[60, 60], [60, 0], [60, 0]])   # 角が無いレースは入れない
+        self.assertEqual(x["pop"], [[40, 40], [80, 40], [120, 40], [120, 0]])
+        self.assertEqual(x["agari"], [40, 0.5, round(10 / 39, 4)])
+        self.assertEqual(cells["L3"]["n"], 41)
+
+    def test_l3_pre(self):
+        before = [_rec(f"2024-01-{i + 1:02d}") for i in range(28)]
+        recs = [_rec("2026-09-10"), _rec("2026-09-11")]
+        cells = m.build_cells(recs, before=before)
+        self.assertEqual(list(cells), ["L3"])
+        self.assertEqual((cells["L3"]["n"], cells["L3"]["pre"]), (30, True))
+        cells = m.build_cells(recs)                       # 前が無ければ広げない
+        self.assertEqual((cells["L3"]["n"], cells["L3"]["pre"]), (2, False))
 
     def test_banei(self):
-        recs = [{"d": "2026-01-01", "no": 1, "band": "B1", "going": "1.0〜1.9", "dk": "ダート200",
-                 "pop": {"1": 1, "2-3": 1, "4-6": 1, "7+": 0}}]
+        recs = [_rec(f"2026-01-{i + 1:02d}", band="B1", going="1.0〜1.9") for i in range(30)]
         c = m.build_cells(recs, banei=True)
-        self.assertEqual(set(c["L0|B1|1.0〜1.9|ダート200"]), {"n", "pop"})
+        self.assertEqual(set(c["L0|B1|1.0〜1.9|ダ1400"]), {"n", "pre", "pop"})
         self.assertEqual(m.moist_bucket("0.9"), "〜0.9")
         self.assertEqual(m.moist_bucket("3.0"), "3.0〜")
 
@@ -148,12 +157,19 @@ class Window(unittest.TestCase):
         self.assertEqual(w0, "2022-04-08")          # 広げても移転の前は入れない
 
     def test_value_excludes_month(self):
-        recs = [{"d": "2026-10-01", "no": 1, "band": None, "going": None, "dk": "ダ1400", "pop": None, "cz": {}, "ag": None},
-                {"d": "2026-09-30", "no": 1, "band": None, "going": None, "dk": "ダ1400", "pop": None, "cz": {}, "ag": None}]
+        recs = [_rec("2026-10-01", band=None, going=None), _rec("2026-09-30", band=None, going=None)]
         v = m.build_value("佐賀", "2026-10", recs, {"venues": {}}, "x")
         self.assertEqual(v["cells"]["L3"]["n"], 1)  # 当月(1 日以降)は入れない
         self.assertEqual(v["window"]["to"], "2026-09-30")
         self.assertEqual(v["venue"], "saga")
+
+    def test_value_pre_before_cut(self):
+        sand = {"venues": {"kochi": [{"raw": "2026-08-03〜09-01", "types": ["下地の工事"], "text": "改修"}]}}
+        recs = [_rec(f"2025-0{1 + i // 28}-{i % 28 + 1:02d}") for i in range(100)] + [_rec("2026-09-10")]
+        v = m.build_value("高知", "2026-10", recs, sand, "x")
+        # 改修後 1R < 300 → 1 つ前の区切りが無い= 5 年(2021-10-01)= 101R
+        self.assertEqual(v["window"]["from"], "2021-10-01")
+        self.assertEqual((v["cells"]["L3"]["n"], v["cells"]["L3"]["pre"]), (101, False))
 
 
 if __name__ == "__main__":
