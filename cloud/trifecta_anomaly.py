@@ -32,12 +32,14 @@ import json  # noqa: E402
 import urllib.parse  # noqa: E402
 from late_money_preclose import fetch, get_combos, amin, norm  # noqa: E402
 from trifecta_group_return import tri_map, pick3_f  # noqa: E402
+import research_period as rp  # noqa: E402
 
-D_FROM, D_TO, D_SPLIT = dt.date(2026, 9, 8), dt.date(2026, 9, 30), dt.date(2026, 9, 20)
+D_FROM, D_TO, SCHED = rp.period(dt.date(2026, 9, 8), dt.date(2026, 9, 30), data_from=dt.date(2026, 9, 8))
+D_SPLIT = dt.date(2026, 9, 20) if (D_FROM, D_TO) == (dt.date(2026, 9, 8), dt.date(2026, 9, 30)) else rp.midpoint(D_FROM, D_TO)
 NANKAN = ("浦和", "船橋", "大井", "川崎")
 SEED = 20260908
 BASE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..")
-OUT = os.path.join(BASE, "docs", "trifecta-anomaly", "result.md")
+OUT = os.path.join(BASE, "docs", "trifecta-anomaly", rp.out_name(SCHED, D_TO))
 OLD = os.path.join(BASE, "docs", "trifecta-anomaly", "old_def.md")
 PRIV = os.path.join(BASE, "trifecta_anomaly_private.csv")
 MS = ("r2", "r3")
@@ -541,8 +543,8 @@ def write(res, ex, WB):
     L.append(t5_row("南関 4 場", res, lambda v, k: v["nankan"]))
     L.append(t5_row("それ以外", res, lambda v, k: not v["nankan"]))
     L += ["", "### 前半/後半", ""] + T5H
-    L.append(t5_row("前半 9/8〜9/19", res, lambda v, k: v["first"]))
-    L.append(t5_row("後半 9/20〜9/30", res, lambda v, k: not v["first"]))
+    L.append(t5_row("前半 %s〜%s" % (rp.md(D_FROM), rp.md(D_SPLIT - dt.timedelta(days=1))), res, lambda v, k: v["first"]))
+    L.append(t5_row("後半 %s〜%s" % (rp.md(D_SPLIT), rp.md(D_TO)), res, lambda v, k: not v["first"]))
     L += spread_section(res)
     L += sales_section(res, WB)
     L += ["", "> 百分位= 当たり組の値が、P での売れ方が近い(1/2〜2 倍)外れ組の中でどこにいるか(0〜1・1 に近いほど上)。"

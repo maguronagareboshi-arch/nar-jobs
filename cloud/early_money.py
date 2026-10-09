@@ -18,15 +18,16 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from late_money import num, rkey, JST, log, hm  # noqa: E402
 from late_money_preclose import fetch, amin, norm, cell, add, row, HEAD  # noqa: E402
+import research_period as rp  # noqa: E402
 
-D_FROM, D_TO = dt.date(2026, 9, 2), dt.date(2026, 9, 30)
-D_HALF = dt.date(2026, 9, 16)
+D_FROM, D_TO, SCHED = rp.period(dt.date(2026, 9, 2), dt.date(2026, 9, 30), data_from=dt.date(2026, 9, 2))
+D_HALF = rp.midpoint(D_FROM, D_TO)  # 既定 9/2〜9/30 では 9/16
 NANKAN = {"大井", "川崎", "船橋", "浦和", "oi", "kawasaki", "funabashi", "urawa", "OI", "KAWASAKI", "FUNABASHI", "URAWA",
           "Oi", "Kawasaki", "Funabashi", "Urawa", "18", "19", "20", "21"}
 BINS = ((None, 0.7, "<0.7"), (0.7, 0.9, "0.7〜0.9"), (0.9, 1.1, "0.9〜1.1"), (1.1, 1.3, "1.1〜1.3"),
         (1.3, 1.6, "1.3〜1.6"), (1.6, None, "1.6 以上"))
 POPS = ((1, 3, "1〜3 番人気"), (4, 6, "4〜6 番人気"), (7, 99, "7 番人気以下"))
-HALVES = ("前半 9/2〜9/15", "後半 9/16〜9/30")
+HALVES = ("前半 %s〜%s" % (rp.md(D_FROM), rp.md(D_HALF - dt.timedelta(days=1))), "後半 %s〜%s" % (rp.md(D_HALF), rp.md(D_TO)))
 AREAS = ("南関 4 場", "南関以外")
 T3 = {}
 
@@ -229,7 +230,7 @@ def write(C, ex, e_lead, n_between, tracks):
         n, t = T3.get(("x", lab), [0, 0])
         L.append("| %s | %d | %d | %s | %s |" % (lab, n, t, "%.1f%%" % (100.0 * t / n) if n else "-", br))
     L += ["", "> 見込み= 確定オッズの正規化確率の和。回収率= 単勝 100 円ずつ・確定単勝倍率。1 か月だけなので結論にしない。", ""]
-    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "early-money", "result.md")
+    out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "early-money", rp.out_name(SCHED, D_TO))
     os.makedirs(os.path.dirname(out), exist_ok=True)
     with io.open(out, "w", encoding="utf-8") as f:
         f.write("\n".join(L))

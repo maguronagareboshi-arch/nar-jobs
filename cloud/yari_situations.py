@@ -25,13 +25,16 @@ from collections import defaultdict
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from late_money import rows_by_id, rows_offset, num, JST, log  # noqa: E402
+import research_period as rp  # noqa: E402
 
-D_FROM, D_TO = dt.date(2025, 10, 1), dt.date(2026, 9, 30)
-H_FROM = dt.date(2024, 10, 1)  # 前走と騎手勝率のための履歴
-HALF2 = dt.date(2026, 4, 1)
+D_FROM, D_TO, SCHED = rp.period(dt.date(2025, 10, 1), dt.date(2026, 9, 30), yearly=True)
+H_FROM = rp.one_year_from(D_FROM - dt.timedelta(days=1))  # 前走と騎手勝率のための履歴(既定 2024-10-01)
+HALF2 = rp.add_months(D_FROM, 6)  # 既定 2026-04-01
+H1_LAB = "前半 %s〜%s" % (rp.ym(D_FROM), rp.ym(HALF2 - dt.timedelta(days=1)))
+H2_LAB = "後半 %s〜%s" % (rp.ym(HALF2), rp.ym(D_TO))
 SEP = dt.date(2026, 9, 1)
 MIN_RIDES = 30
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "yari-situations", "result.md")
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "yari-situations", rp.out_name(SCHED, D_TO))
 
 AREA = {}
 for a, ts_ in (("北海道", "門別 札幌"), ("ばんえい", "帯広"), ("岩手", "盛岡 水沢"), ("南関東", "浦和 船橋 大井 川崎"),
@@ -319,7 +322,7 @@ def write(C, chk, sep, ex, ex_pop_runs, marks, n_runs, n_pays, n_fins, tab):
          "- 減量の印 %s" % "・".join("%s %d" % kv for kv in sorted(marks.items(), key=lambda x: -x[1])),
          "- 騎手勝率は騎乗 %d 未満を判定不能。前走は地方の出走だけ(中央は入らない)。遠征の地区は 北海道/ばんえい/岩手/南関東/金沢/東海/兵庫/高知/佐賀。" % MIN_RIDES,
          "", "## 照合= 全馬一律の実際÷見込み", "", "| 半期 | 交差の表で当てた | 同じ半期の表で当てた(参考・1.00 になるはず) |", "|---|---:|---:|"]
-    for hb, lab in (("h1", "前半 2025-10〜2026-03"), ("h2", "後半 2026-04〜2026-09")):
+    for hb, lab in (("h1", H1_LAB), ("h2", H2_LAB)):
         L.append("| %s | %s | %s |" % (lab, ae(C["all"][hb]), ae(chk[hb])))
     L += ["", "## 9 月だけ= 人気版と確定オッズ版の差(同じ馬)", "", HEAD,
           row("全馬一律・人気版", sep["all_pop"]), row("全馬一律・確定オッズ版", sep["all_odd"]),
@@ -332,7 +335,7 @@ def write(C, chk, sep, ex, ex_pop_runs, marks, n_runs, n_pays, n_fins, tab):
     for s, lab in SCENES:
         for p, pl in POPS:
             L.append("| %s | %s" % (lab, row(pl, C[s][p])[2:]))
-    L += ["", "## 再現性(前半 2025-10〜2026-03/後半 2026-04〜2026-09)", "",
+    L += ["", "## 再現性(%s/%s)" % (H1_LAB, H2_LAB), "",
           "| 場面 | 前半 頭数 | 前半 実際÷見込み | 前半 回収率 | 後半 頭数 | 後半 実際÷見込み | 後半 回収率 |",
           "|---|---:|---:|---:|---:|---:|---:|"]
     for s, lab in SCENES + EXTRA:

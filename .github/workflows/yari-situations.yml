@@ -1,8 +1,11 @@
 # 研究用・1 回きり。勝負がかり場面(cloud/yari_situations.py)を 2025-10〜2026-09 で集計し docs/yari-situations/result.md を書く。
-# ⛔本番 DB では REST の単純 select だけ。集計は全部 Python。書き込みなし。schedule なし。
+# ⛔本番 DB では REST の単純 select だけ。集計は全部 Python。書き込みなし。
+# schedule= 毎年 3/10 08:00 JST に 開始(データ初日 or 1 年前)〜前月末で走り docs/yari-situations/result-<終わり月>.md に書く(手動の result.md は残す)。
 name: yari-situations
 on:
   workflow_dispatch:
+  schedule:
+    - cron: "0 23 9 3 *"
 permissions:
   contents: write
 concurrency:
@@ -25,8 +28,13 @@ jobs:
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add docs/yari-situations
             git commit -m "勝負がかり場面 研究集計 $(TZ=Asia/Tokyo date +%F)"
-            git pull --rebase origin "${GITHUB_REF_NAME}"
-            git push origin "HEAD:${GITHUB_REF_NAME}"
+            for i in 1 2 3; do
+              git fetch origin "${GITHUB_REF_NAME}"
+              git rebase "origin/${GITHUB_REF_NAME}"
+              if git push origin "HEAD:${GITHUB_REF_NAME}"; then break; fi
+              if [ "$i" = 3 ]; then exit 1; fi
+              sleep $((i * 15))
+            done
           else
             echo "差分なし"
           fi
