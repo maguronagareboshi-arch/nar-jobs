@@ -109,6 +109,7 @@ def race_calc(mp, mf, pwF, pwP, hit, rng):
     if len(comp) < 20:
         return "x_comp", None
     out = {"qp": qh, "rank": 1 + sum(1 for k in keys if qp[k] > qh), "ncomp": len(comp), "g": qf[hit] / qh}
+    out.update(spread(keys, qf, {k: e2[k] / z2 for k in keys}, R["r2"], hit))
     for m in MS:
         out["hit_u_" + m] = pct(R[m][hit], [R[m][k] for k in comp])
         out["hit_r_" + m] = R[m][hit]
@@ -132,6 +133,78 @@ def race_calc(mp, mf, pwF, pwP, hit, rng):
             out["%s_r_%s" % (nm, m)] = R[m][fk]
     out["f2_none"] = f2 is None
     return "ok", out
+
+
+GROUPS = (("超過の上位 1 組", 0, 1), ("上位 2〜5 組", 1, 5), ("上位 6〜20 組", 5, 20))
+
+
+def spread(keys, qf, e, r2, hit):
+    """広く撒く買いか一点集中か(r2 の期待 e= 合計 1)。"""
+    ex = {k: qf[k] - e[k] for k in keys}
+    order = sorted(keys, key=lambda k: (-ex[k], k))
+    pos = [k for k in order if ex[k] > 0]
+    tot = sum(ex[k] for k in pos)
+    out = {"k": sum(1 for k in keys if r2[k] >= 2),
+           "delta": sum(max(ex[k], 0.0) for k in keys if r2[k] >= 2),
+           "h1": ex[pos[0]] / tot if tot > 0 else 0.0,
+           "h3": sum(ex[k] for k in pos[:3]) / tot if tot > 0 else 0.0,
+           "n1": len(set(k[0] for k in pos)), "n2": len(set(k[1] for k in pos)),
+           "ex_rank": 1 + order.index(hit)}
+    for i, (_, a, b) in enumerate(GROUPS):
+        g = order[a:b]
+        out["grp%d_hit" % i] = 1 if hit in g else 0
+        out["grp%d_exp" % i] = sum(qf[k] for k in g)
+    return out
+
+
+def quart(xs):
+    s = sorted(xs)
+    if not s:
+        return "-"
+    q = lambda p: s[min(len(s) - 1, int(p * (len(s) - 1) + 0.5))]  # noqa: E731
+    fmt = (lambda x: "%g" % x) if all(float(x).is_integer() for x in s) else (lambda x: "%.3f" % x)
+    return "%s (%s〜%s)" % (fmt(median(s)), fmt(q(0.25)), fmt(q(0.75)))
+
+
+def spread_section(res):
+    top = [v for v in res if v["hit_u_r2"] >= 0.95]
+    oth = [v for v in res if v["hit_u_r2"] < 0.95]
+    L = ["", "## 広く撒く買いか一点集中か(r2 の期待で・追加検証)", "",
+         "上位 5%%= 当たり組の r2 百分位が 0.95 以上のレース(%d)。それ以外 %d。超過= qF − 期待(正の分)。" % (len(top), len(oth)), "",
+         "### (1) 広さと一点度(中央値・四分位)", "",
+         "| 指標 | 上位 5% のレース | それ以外 |", "|---|---:|---:|"]
+    for lab, f in (("k= r2≥2 の組の数", "k"), ("Δ= r2≥2 の組の超過の合計", "delta"),
+                   ("h= 超過のうち上位 1 組の割合", "h1"), ("h= 超過のうち上位 3 組の割合", "h3"),
+                   ("超過のある組の 1 着馬の数", "n1"), ("超過のある組の 2 着馬の数", "n2")):
+        L.append("| %s | %s | %s |" % (lab, quart([v[f] for v in top]), quart([v[f] for v in oth])))
+    a = sum(1 for v in top if v["h1"] >= 0.5)
+    b = sum(1 for v in oth if v["h1"] >= 0.5)
+    L += ["", "### (2) h(上位 1 組)≥0.5 のレース", "",
+          "| 区分 | 件数 | 割合 |", "|---|---:|---:|",
+          "| 上位 5%% のレース | %d / %d | %.1f%% |" % (a, len(top), a / len(top) * 100 if top else 0),
+          "| それ以外 | %d / %d | %.1f%% |" % (b, len(oth), b / len(oth) * 100 if oth else 0), "",
+          "### (3) 上位 5% のレースで当たり組は超過の何番目か", "", "| 順位 | 件数 |", "|---|---:|"]
+    for lab, lo, hi in (("1 番目", 1, 1), ("2〜5 番目", 2, 5), ("6〜20 番目", 6, 20), ("21 番目以降", 21, 10 ** 9)):
+        L.append("| %s | %d |" % (lab, sum(1 for v in top if lo <= v["ex_rank"] <= hi)))
+    L += ["", "### (4) 全レース: 超過の上位の組が当たった数と見込み(確定 qF の和)", "",
+          "| 組 | レース数 | 当たり | 見込み | 実際÷見込み |", "|---|---:|---:|---:|---:|"]
+    for i, (lab, _, _) in enumerate(GROUPS):
+        h = sum(v["grp%d_hit" % i] for v in res)
+        e = sum(v["grp%d_exp" % i] for v in res)
+        L.append("| %s | %d | %d | %.1f | %s |" % (lab, len(res), h, e, ("%.2f" % (h / e)) if e else "-"))
+    L += ["", "### (5) 時刻の偏り(上位 5% のレースと全体)", "", "| 区分 | 上位 5% | 全体 |", "|---|---:|---:|"]
+
+    def cnt(lab, f):
+        x = sum(1 for v in top if f(v))
+        y = sum(1 for v in res if f(v))
+        return "| %s | %d (%.1f%%) | %d (%.1f%%) |" % (lab, x, x / len(top) * 100 if top else 0, y, y / len(res) * 100 if res else 0)
+    for i, w in enumerate("月火水木金土日"):
+        L.append(cnt(w + "曜", lambda v, i=i: v["wday"] == i))
+    L.append(cnt("最終 R", lambda v: v["last"]))
+    L.append(cnt("それ以外の R", lambda v: not v["last"]))
+    L.append(cnt("南関 4 場", lambda v: v["nankan"]))
+    L.append(cnt("それ以外の場", lambda v: not v["nankan"]))
+    return L
 
 
 def ks_p(us):
@@ -175,6 +248,9 @@ def main():
         day = d.isoformat()
         races, runs, win, full = fetch(base, key, day, True)
         post_t = {rkey(r): hm(r.get("post_time")) for r in races}
+        last_r = {}
+        for r in races:
+            last_r[r["track"]] = max(last_r.get(r["track"], 0), int(r["race_no"]))
         fin_of = {}
         for r in runs:
             try:
@@ -239,7 +315,8 @@ def main():
             elif v["f2_u_r2"] is None:
                 ex["x_f2"] += 1
             v.update({"track": rk_[0], "date": str(rk_[1]), "race_no": rk_[2], "hit": "-".join(hit),
-                      "nankan": rk_[0] in NANKAN, "first": d < D_SPLIT, "lead": mins, "pre": pre})
+                      "nankan": rk_[0] in NANKAN, "first": d < D_SPLIT, "lead": mins, "pre": pre,
+                      "wday": d.weekday(), "last": rk_[2] == last_r.get(rk_[0])})
             res.append(v)
         log("%s 3連単 %d 行・使えた %d レース" % (day, len(full), len(res) - n0))
         d += dt.timedelta(days=1)
@@ -337,6 +414,7 @@ def write(res, ex):
     L += ["", "### 前半/後半", ""] + T5H
     L.append(t5_row("前半 9/8〜9/19", res, lambda v, k: v["first"]))
     L.append(t5_row("後半 9/20〜9/30", res, lambda v, k: not v["first"]))
+    L += spread_section(res)
     L += ["", "> 百分位= 当たり組の値が、P での売れ方が近い(1/2〜2 倍)外れ組の中でどこにいるか(0〜1・1 に近いほど上)。"
           "偽= 同じレースの外れ組を無作為に選んで同じ計算(比べ物)。1 か月弱なので結論にしない。", ""]
     if os.path.exists(OLD):
@@ -355,11 +433,12 @@ def private(res):
     with io.open(PRIV, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
         w.writerow(["track", "date", "race_no", "hit", "u_r2", "r2", "u_r3", "r3", "g", "qP", "rank", "ncomp",
-                    "lead_min", "p_before_post"])
+                    "lead_min", "p_before_post", "k_r2ge2", "delta", "h1", "h3", "hit_ex_rank"])
         for v in top:
             w.writerow([v["track"], v["date"], v["race_no"], v["hit"], "%.4f" % v["hit_u_r2"], "%.4f" % v["hit_r_r2"],
                         "%.4f" % v["hit_u_r3"], "%.4f" % v["hit_r_r3"], "%.4f" % v["g"], "%.6f" % v["qp"],
-                        v["rank"], v["ncomp"], "%.1f" % v["lead"], v["pre"]])
+                        v["rank"], v["ncomp"], "%.1f" % v["lead"], v["pre"], v["k"], "%.4f" % v["delta"],
+                        "%.4f" % v["h1"], "%.4f" % v["h3"], v["ex_rank"]])
 
 
 if __name__ == "__main__":
