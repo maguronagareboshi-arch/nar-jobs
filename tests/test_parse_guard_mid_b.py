@@ -189,5 +189,46 @@ class JraRuns(unittest.TestCase):
         self.assertEqual(J.jra_run_bad(dict(ok, surface="障", first3f=None, last3f=41.5)), "")
 
 
+class FakeKb:
+    def __init__(self, html):
+        self.html, self.dropped = html, []
+
+    def nouryoku_path(self, rid):
+        return f"/chihou/nouryoku_html/{rid}"
+
+    def get(self, path, refresh=False, cache=True):
+        return self.html
+
+    def drop_cache(self, path):
+        self.dropped.append(path)
+
+
+class Wiring(unittest.TestCase):
+    """番人で捨てた頁・走があれば、ほかを終えてから終了コード 1(fetch.py / fetch_jra_runs.py)。"""
+
+    def setUp(self):
+        KP.NOURYOKU_GUARD.clear()
+        J.JRA_GUARD.clear()
+
+    def test_fetch_race_skips_guarded_page_and_exits_1(self):
+        import fetch as F
+        self.assertEqual(F.guard_rc(), 0)
+        c = FakeKb(nouryoku_html(shift=True))
+        out = F.fetch_race(c, "2026111904011009", ["nouryoku"])    # 例外で落ちずに続く
+        self.assertNotIn("nouryoku", out)
+        self.assertEqual(len(c.dropped), 1)
+        self.assertEqual(F.guard_rc(), 1)
+
+    def test_fetch_jra_runs_guard_rc(self):
+        import fetch_jra_runs as FJ
+        self.assertEqual(FJ.guard_rc(), 0)
+        J.JRA_GUARD.append("x 2026-01-01 東京 1R last3f 12.3")
+        self.assertEqual(FJ.guard_rc(), 1)
+
+    def test_paper_dropped_counter_exists(self):
+        import paper_first3f as PF
+        self.assertEqual(PF.PAPER_DROPPED, [])
+
+
 if __name__ == "__main__":
     unittest.main()

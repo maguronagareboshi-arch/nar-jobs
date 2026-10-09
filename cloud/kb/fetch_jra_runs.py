@@ -38,6 +38,8 @@ import requests
 sys.path.insert(0, str(Path(__file__).parent))
 
 from jra_runs import parse_kanzen  # noqa: E402
+import jra_runs as _jra_runs  # noqa: E402
+import parsers as _parsers  # noqa: E402
 
 ROOT = Path(__file__).resolve().parent.parent
 DATA = Path(os.environ["KB_DATA_DIR"]) if os.environ.get("KB_DATA_DIR") else ROOT / "data"   # cloud
@@ -738,6 +740,17 @@ def main(argv=None):
     else:
         for p in write_outputs(args.out_dir, runs, horses, targets):
             log(f"dry-run 出力: {p}")
+    return guard_rc()
+
+
+def guard_rc():
+    """番人(10/10 監査 中 #10・#11)で捨てた能力表の頁・中央の走があれば ::error:: と件数を出して 1。
+    ほかは書き終えてから呼ぶ。"""
+    nr, jr = len(_parsers.NOURYOKU_GUARD), len(_jra_runs.JRA_GUARD)
+    if nr or jr:
+        log(f"::error::番人で捨てた 能力表の頁 {nr}・中央の走 {jr}(書いていない): "
+            + " / ".join((_parsers.NOURYOKU_GUARD + _jra_runs.JRA_GUARD)[:3]))
+        return 1
     return 0
 
 

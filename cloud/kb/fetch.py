@@ -24,6 +24,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 from keibabook import KeibabookClient, LoginError
 from parsers import (parse_cyokyo, parse_danwa, parse_nittei, parse_nouryoku, parse_seiseki,
                      parse_syutuba, race_id_parts, seiseki_is_masked)
+import parsers as _parsers
 
 ROOT = Path(__file__).resolve().parent.parent
 # cloud(2026-09-29): 保存先は KB_DATA_DIR(Actions の一時フォルダ)。⛔repo の中に頁・取得物を置かない
@@ -131,8 +132,16 @@ def fetch_race(client, race_id, what, refresh=False, push=False, logged_in=False
         out["cyokyo"] = parsed
     if "nouryoku" in what:
         html = client.get(client.nouryoku_path(race_id), refresh=refresh or is_upcoming)
-        parsed = parse_nouryoku(html, race_id)
-        if not parsed["horses"]:
+        try:
+            parsed = parse_nouryoku(html, race_id)
+        except _parsers.NouryokuGuard as e:
+            # 読み違いの番人(10/10 監査 中 #10)= この頁は書かない。ほかの頁は続ける(最後に終了コード 1)
+            client.drop_cache(client.nouryoku_path(race_id))
+            print(f"::warning::{e}(書かない)", flush=True)
+            parsed = None
+        if parsed is None:
+            pass
+        elif not parsed["horses"]:
             # 能力表は古いレースだと削除されている（2023年以前）。空ページは保存しない
             client.drop_cache(client.nouryoku_path(race_id))
             print(f"  ! nouryoku {race_id}: データなし（掲載期間終了）スキップ")
@@ -215,7 +224,17 @@ def main():
         while d <= end:
             cmd_day(client, d.strftime("%Y%m%d"), args, logged_in=logged_in)
             d += dt.timedelta(days=1)
+    return guard_rc()
+
+
+def guard_rc():
+    """番人で捨てた能力表の頁があれば ::error:: と件数を出して 1(ほかの頁は書き終えてから)。"""
+    n = len(_parsers.NOURYOKU_GUARD)
+    if n:
+        print(f"::error::能力表 番人で捨てた頁 {n}(書いていない): " + " / ".join(_parsers.NOURYOKU_GUARD[:3]), flush=True)
+        return 1
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    sys.exit(main())

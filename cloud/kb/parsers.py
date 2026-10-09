@@ -590,6 +590,9 @@ class NouryokuGuard(ValueError):
     """能力表の頁の様式が想定と違う(列のずれ・値の外れ)。"""
 
 
+NOURYOKU_GUARD = []      # 番人が捨てた頁(呼び側が最後に数えて終了コード 1)
+
+
 def nouryoku_run_bad(run):
     """過去 1 走の外れ → 理由(空= 通す)。"""
     k = run.get("kin")
@@ -674,10 +677,14 @@ def parse_nouryoku(html, race_id=None):
                             "chuo": packs[2] if len(packs) > 2 else None},
                 "runs": runs,   # 5走前→前走（他場・中央・能力試験含む、テン/上がり付き）
             })
+    why = ""
     if shifted:
-        raise NouryokuGuard(f"能力表 {race_id} 列のずれ(馬名が5列目に無い) {len(shifted)} 頭: {shifted[:5]}")
-    if len(bad_runs) >= NR_GUARD_N:
-        raise NouryokuGuard(f"能力表 {race_id} 値の外れ {len(bad_runs)} 走: " + " / ".join(bad_runs[:5]))
+        why = f"能力表 {race_id} 列のずれ(馬名が5列目に無い) {len(shifted)} 頭: {shifted[:5]}"
+    elif len(bad_runs) >= NR_GUARD_N:
+        why = f"能力表 {race_id} 値の外れ {len(bad_runs)} 走: " + " / ".join(bad_runs[:5])
+    if why:
+        NOURYOKU_GUARD.append(why)
+        raise NouryokuGuard(why)
     for b in bad_runs:
         print(f"::warning::能力表 {race_id} 書かない走 {b}", flush=True)
     return {"race_id": race_id, "race": race, "horses": horses}
