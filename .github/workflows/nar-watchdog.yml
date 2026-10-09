@@ -195,7 +195,12 @@ jobs:
                      f'&race_date=gte.{lo}&race_date=lte.{hi}&order=race_date.desc&limit=50')
           days = sorted({r['race_date'] for r in rows}, reverse=True)
           gaps = []
+          # ラップ未出力のバグ・ユーザー決定で空のまま 2026-10-09
+          SKIP = {'2026-10-03', '2026-10-04'}
           for d in days[:12]:
+              if d in SKIP:
+                  print('SKIP', d)
+                  continue
               # §157: 前半3F は本体の nar_own_runs(高知の自前計測)。行は測れた馬ぶんだけ立つ
               rs = get(NAR, NKEY, f'nar_runs?select=runner_number&track=eq.%E9%AB%98%E7%9F%A5&race_date=eq.{d}&limit=300')
               if not rs:

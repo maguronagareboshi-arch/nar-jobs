@@ -716,6 +716,14 @@ def parse_page(page, page_no, section, where, drop):
             if t:
                 parts.append(t)
         title = " ".join(parts[-2:])[:80] or None
+        # ⛔「前走馬体重」の欄を持つ枠(2歳の「〇〇カップ出走可能馬 前走馬体重４２０㎏以下」)は
+        #   馬名の右の数字が**馬体重(kg)**で番組賞金ではない(2026-10-09 第14回: 386〜420 を
+        #   万円と読み 31頭に 約400万 を付けた)。この枠の数字は賞金として採らない。
+        if any("馬体重" in norm(t) for ln in lines.values() for _, t in ln):
+            n_wt = sum(1 for _, _, r in horses if r.pop("prize", None) is not None)
+            if n_wt:
+                drop.append(f"{where} 枠x{a:.0f}-{b:.0f}: 前走馬体重の欄= 数字は賞金でない"
+                            f"({n_wt}頭の数字を捨てた・枠の題= {title!r})")
         if label is None and horses:
             drop.append(f"{where} 枠x{a:.0f}-{b:.0f}: 級の見出しが刷られていない"
                         f"({len(horses)}頭・枠の題= {title!r})→ cls は null にした")
@@ -840,10 +848,22 @@ def put_horse(horses, row, block, drop):
     if old is None:
         horses[key] = new
         return
-    if old.get("prize") != new.get("prize"):
-        drop.append(f"{key}: 番組賞金が紙面で食い違う {old.get('prize')} と {new.get('prize')}"
-                    f"(先に読んだ方を残す)")
     olds, news = old.get("cls"), new["cls"]
+    op, np_ = old.get("prize"), new.get("prize")
+    if op is not None and np_ is not None and op != np_:
+        # ⛔先に読んだ方を黙って残さない(2026-10-09 第14回 31頭)。級の見出しと矛盾しない方を採り、
+        #   決められなければ賞金は None(推定しない)。
+        labels = [c for c in (olds, news) if c]
+        ok = [v for v in (op, np_)
+              if any(in_label(kaku_of(v), c) for c in labels)
+              and not any(in_label(kaku_of(v), c) is False for c in labels)]
+        if len(ok) == 1:
+            old["prize"] = ok[0]
+            how = f"見出し {'/'.join(labels)} に合う {ok[0]} を採る"
+        else:
+            old["prize"] = None
+            how = "見出しで決められない= 賞金は None"
+        drop.append(f"{key}: 番組賞金が紙面で食い違う {op} と {np_}({how})")
     if olds != news:
         if olds is None:
             old["cls"] = news
