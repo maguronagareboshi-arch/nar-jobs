@@ -27,7 +27,9 @@ import random
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from late_money import hm, num, rkey, ts, JST, log  # noqa: E402
+from late_money import hm, num, rkey, ts, JST, log, rows_offset  # noqa: E402
+import json  # noqa: E402
+import urllib.parse  # noqa: E402
 from late_money_preclose import fetch, get_combos, amin, norm  # noqa: E402
 from trifecta_group_return import tri_map, pick3_f  # noqa: E402
 
@@ -132,6 +134,12 @@ def race_calc(mp, mf, pwF, pwP, hit, rng):
             out["%s_u_%s" % (nm, m)] = pct(R[m][fk], [R[m][k] for k in fc])
             out["%s_r_%s" % (nm, m)] = R[m][fk]
     out["f2_none"] = f2 is None
+    d3 = {k: qf[k] - e3[k] / z3 for k in keys}
+    out["hit_d3"] = d3[hit]
+    out["hit_d3_rank"] = 1 + sum(1 for k in keys if d3[k] > d3[hit])
+    out["max_d3_other"] = max(d3[k] for k in keys if k != hit)
+    out["f2_d3"] = d3[f2] if f2 is not None else None
+    out["f2_max_other"] = max(d3[k] for k in keys if k != f2) if f2 is not None else None
     return "ok", out
 
 
@@ -207,6 +215,112 @@ def spread_section(res):
     return L
 
 
+DWB_FROM = dt.date(2026, 9, 2)
+X_MIN = 50000
+
+
+def caseb(wins, fin_of, post_t, sales, WB):
+    """案 B(単勝)を初回と同じ定義で数え直し、売上を付けて WB に積む。"""
+    for rk_, rows in sorted(wins.items()):
+        fins = [r for r in rows if r.get("f")]
+        if not fins or rk_ not in fin_of:
+            continue
+        fin = max(fins, key=lambda r: r["id"])
+        fm, pm = hm(fin.get("t")), post_t.get(rk_)
+        if fm is None or pm is None or abs(fm - pm) > 10:
+            continue
+        fw = fin.get("w") or {}
+        fo = fin_of[rk_]
+        vs = [r for r in rows if not r.get("f") and amin(r) is not None and amin(r) <= fm - 2]
+        if not vs:
+            continue
+        V = max(vs, key=lambda r: (amin(r), r["id"]))
+        vw = V.get("w") or {}
+        hs = [h for h in fw if num(fw[h]) and num(vw.get(h))]
+        if not hs:
+            continue
+        pf, pv = norm(fw, hs), norm(vw, hs)
+        fav = min(hs, key=lambda h: (num(vw[h]), h))
+        if fav not in fo:
+            continue
+        WB.append({"ratio": pf[fav] / pv[fav], "won": 1 if fo[fav] == 1 else 0, "pf": pf[fav], "sales": sales.get(rk_)})
+
+
+def xyen(sales, d3):
+    return sales * d3 * 100.0
+
+
+def cand(sales, d3, mx):
+    return bool(sales) and d3 is not None and d3 > mx and xyen(sales, d3) >= X_MIN
+
+
+def qv(s, p):
+    s = sorted(s)
+    return s[min(len(s) - 1, int(p * (len(s) - 1) + 0.5))] if s else float("nan")
+
+
+def sales_section(res, WB):
+    rs = [v for v in res if v["sales"]]
+    ss = sorted(v["sales"] for v in rs)
+    cuts = (qv(ss, 0.25), qv(ss, 0.5), qv(ss, 0.75))
+
+    def qi(x):
+        return sum(1 for c in cuts if x > c)
+    Q = [[v for v in rs if qi(v["sales"]) == i] for i in range(4)]
+    names = ("第 1 区(少)", "第 2 区", "第 3 区", "第 4 区(多)")
+    L = ["", "## 売上(3連単の票数)で分ける(追加検証)", "",
+         "- 売上のあるレース %d・売上なしで除外 %d。区切り(票数)%.0f / %.0f / %.0f"
+         % (len(rs), len(res) - len(rs), cuts[0], cuts[1], cuts[2]), "",
+         "### (1) 売上の 4 分位ごとの集中(r2 の百分位)", "",
+         "| 区 | レース数 | 票数の範囲 | 当たり 上位5% (期待) | 当たり 上位1% (期待) | 偽(ii) 上位5% (期待) | 偽(ii) 上位1% (期待) | h1 中央値 | k 中央値 | h1≥0.5 |",
+         "|---|---:|---|---:|---:|---:|---:|---:|---:|---:|"]
+    for i, g in enumerate(Q):
+        hu = [v["hit_u_r2"] for v in g]
+        fu = [v["f2_u_r2"] for v in g if v["f2_u_r2"] is not None]
+        L.append("| %s | %d | %s | %d (%.1f) | %d (%.1f) | %d (%.1f) | %d (%.1f) | %.3f | %g | %d |" % (
+            names[i], len(g), ("%.0f〜%.0f" % (min(v["sales"] for v in g), max(v["sales"] for v in g))) if g else "-",
+            sum(1 for x in hu if x >= 0.95), len(hu) * 0.05, sum(1 for x in hu if x >= 0.99), len(hu) * 0.01,
+            sum(1 for x in fu if x >= 0.95), len(fu) * 0.05, sum(1 for x in fu if x >= 0.99), len(fu) * 0.01,
+            median([v["h1"] for v in g]), median([v["k"] for v in g]), sum(1 for v in g if v["h1"] >= 0.5)))
+    L += ["", "### 場ごとの売上(3連単の票数)の中央値", "", "| 場 | レース数 | 中央値 |", "|---|---:|---:|"]
+    tr = {}
+    for v in rs:
+        tr.setdefault(v["track"], []).append(v["sales"])
+    for t in sorted(tr, key=lambda t: -median(tr[t])):
+        L.append("| %s | %d | %.0f |" % (t, len(tr[t]), median(tr[t])))
+    L += ["", "### (2) 金額で見る超過額 X= (確定の票数 − r3 の期待の票数)×100 円", "",
+          "| 区 | 当たり X 中央値 | 90% | 99% | 最大 | 当たりが超過 1 番目 | 当たりの超過順位 中央値 | 偽(ii) 件数 | 偽(ii) X 中央値 | 90% | 99% | 最大 |",
+          "|---|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|---:|"]
+    for i, g in enumerate(Q):
+        hx = [xyen(v["sales"], v["hit_d3"]) for v in g]
+        fx = [xyen(v["sales"], v["f2_d3"]) for v in g if v["f2_d3"] is not None]
+        L.append("| %s | %.0f | %.0f | %.0f | %.0f | %d | %g | %d | %.0f | %.0f | %.0f | %.0f |" % (
+            names[i], median(hx), qv(hx, 0.9), qv(hx, 0.99), max(hx) if hx else float("nan"),
+            sum(1 for v in g if v["hit_d3_rank"] == 1), median([v["hit_d3_rank"] for v in g]),
+            len(fx), median(fx), qv(fx, 0.9), qv(fx, 0.99), max(fx) if fx else float("nan")))
+    L += ["", "### (3) 一点買いの候補(その組の X が同じレースの他の組の X の最大を上回り、かつ X≥5 万円)", "",
+          "| 区 | 当たり組が候補 | レース数 | 偽(ii) が候補 | 偽(ii) のレース数 |", "|---|---:|---:|---:|---:|"]
+    for i, g in enumerate(Q):
+        g2 = [v for v in g if v["f2_d3"] is not None]
+        L.append("| %s | %d | %d | %d | %d |" % (
+            names[i], sum(1 for v in g if cand(v["sales"], v["hit_d3"], v["max_d3_other"])), len(g),
+            sum(1 for v in g2 if cand(v["sales"], v["f2_d3"], v["f2_max_other"])), len(g2)))
+    ws = [w for w in WB if w["sales"]]
+    med = median([w["sales"] for w in ws])
+    lo = [w for w in WB if w["ratio"] <= 0.8]
+    L += ["", "### (4) 案 B: 1 番人気が最後に 2 割以上売れなくなった(pF/pV≤0.8)レースを売上で分ける", "",
+          "- 案 B の対象 %d レース・pF/pV≤0.8 は %d。区切り= 売上のある案 B 対象レース全体の 3連単票数の中央値 %.0f。売上なし %d"
+          % (len(WB), len(lo), med, sum(1 for w in lo if not w["sales"])), "",
+          "| 売上 | レース数 | 1着数 | 見込み | 実際÷見込み |", "|---|---:|---:|---:|---:|"]
+    for lab, f in (("下半分", lambda w: w["sales"] and w["sales"] <= med),
+                   ("上半分", lambda w: w["sales"] and w["sales"] > med)):
+        g = [w for w in lo if f(w)]
+        e = sum(w["pf"] for w in g)
+        wn = sum(w["won"] for w in g)
+        L.append("| %s | %d | %d | %.1f | %s |" % (lab, len(g), wn, e, ("%.2f" % (wn / e)) if e else "-"))
+    return L
+
+
 def ks_p(us):
     n = len(us)
     if n == 0:
@@ -243,10 +357,23 @@ def main():
     res = []
     ex = {"races": 0, "x_fin": 0, "x_nof": 0, "x_nop": 0, "x_win": 0, "x_hit": 0, "x_comp": 0,
           "x_f1": 0, "x_f2none": 0, "x_f2": 0}
-    d = D_FROM
+    WB = []
+    d = DWB_FROM
     while d <= D_TO:
         day = d.isoformat()
-        races, runs, win, full = fetch(base, key, day, True)
+        races, runs, win, full = fetch(base, key, day, d >= D_FROM)
+        sales = {}
+        for r in rows_offset(base, key, "/rest/v1/nar_race_votes?select=track,race_date,race_no,votes"
+                             "&race_date=eq.%s&order=track.asc,race_no.asc" % urllib.parse.quote(day)):
+            vv = r.get("votes")
+            if isinstance(vv, str):
+                try:
+                    vv = json.loads(vv)
+                except ValueError:
+                    vv = None
+            t3 = num(vv.get("trifecta")) if isinstance(vv, dict) else None
+            if t3 and t3 > 0:
+                sales[rkey(r)] = t3
         post_t = {rkey(r): hm(r.get("post_time")) for r in races}
         last_r = {}
         for r in races:
@@ -262,6 +389,7 @@ def main():
             wins.setdefault(rkey(r), []).append(r)
         for r in full:
             f3.setdefault(rkey(r), []).append(r)
+        caseb(wins, fin_of, post_t, sales, WB)
         todo = []
         for rk_, rows in sorted(f3.items()):
             if rk_ not in fin_of:
@@ -316,11 +444,12 @@ def main():
                 ex["x_f2"] += 1
             v.update({"track": rk_[0], "date": str(rk_[1]), "race_no": rk_[2], "hit": "-".join(hit),
                       "nankan": rk_[0] in NANKAN, "first": d < D_SPLIT, "lead": mins, "pre": pre,
-                      "wday": d.weekday(), "last": rk_[2] == last_r.get(rk_[0])})
+                      "wday": d.weekday(), "last": rk_[2] == last_r.get(rk_[0]),
+                      "sales": sales.get(rk_)})
             res.append(v)
         log("%s 3連単 %d 行・使えた %d レース" % (day, len(full), len(res) - n0))
         d += dt.timedelta(days=1)
-    write(res, ex)
+    write(res, ex, WB)
     private(res)
 
 
@@ -375,7 +504,7 @@ def t5_row(lab, res, cond):
     return "| %s | %s |" % (lab, " | ".join(cells))
 
 
-def write(res, ex):
+def write(res, ex, WB):
     npre = sum(1 for v in res if v["pre"] is True)
     npost = sum(1 for v in res if v["pre"] is False)
     nunk = sum(1 for v in res if v["pre"] is None)
@@ -415,6 +544,7 @@ def write(res, ex):
     L.append(t5_row("前半 9/8〜9/19", res, lambda v, k: v["first"]))
     L.append(t5_row("後半 9/20〜9/30", res, lambda v, k: not v["first"]))
     L += spread_section(res)
+    L += sales_section(res, WB)
     L += ["", "> 百分位= 当たり組の値が、P での売れ方が近い(1/2〜2 倍)外れ組の中でどこにいるか(0〜1・1 に近いほど上)。"
           "偽= 同じレースの外れ組を無作為に選んで同じ計算(比べ物)。1 か月弱なので結論にしない。", ""]
     if os.path.exists(OLD):
@@ -433,12 +563,14 @@ def private(res):
     with io.open(PRIV, "w", encoding="utf-8-sig", newline="") as f:
         w = csv.writer(f)
         w.writerow(["track", "date", "race_no", "hit", "u_r2", "r2", "u_r3", "r3", "g", "qP", "rank", "ncomp",
-                    "lead_min", "p_before_post", "k_r2ge2", "delta", "h1", "h3", "hit_ex_rank"])
+                    "lead_min", "p_before_post", "k_r2ge2", "delta", "h1", "h3", "hit_ex_rank", "sales_votes", "X_yen", "one_point_cand"])
         for v in top:
             w.writerow([v["track"], v["date"], v["race_no"], v["hit"], "%.4f" % v["hit_u_r2"], "%.4f" % v["hit_r_r2"],
                         "%.4f" % v["hit_u_r3"], "%.4f" % v["hit_r_r3"], "%.4f" % v["g"], "%.6f" % v["qp"],
                         v["rank"], v["ncomp"], "%.1f" % v["lead"], v["pre"], v["k"], "%.4f" % v["delta"],
-                        "%.4f" % v["h1"], "%.4f" % v["h3"], v["ex_rank"]])
+                        "%.4f" % v["h1"], "%.4f" % v["h3"], v["ex_rank"], v["sales"] if v["sales"] else "",
+                        ("%.0f" % xyen(v["sales"], v["hit_d3"])) if v["sales"] else "",
+                        1 if cand(v["sales"], v["hit_d3"], v["max_d3_other"]) else 0])
 
 
 if __name__ == "__main__":
