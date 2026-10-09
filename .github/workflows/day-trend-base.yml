@@ -1,0 +1,64 @@
+# 今日ここまでの傾向 段 3「ふだんの値」を場×月ごとに作り、nar_meta `day_trend_base:<場>:<YYYY-MM>` に入れる月 1 回の便。
+# 台本 cloud/day_trend_base.py。形の正本= nar-site SPEC_day_trend_base_20261009.md。
+# ⛔本番 DB では REST の単純 select だけ(場×月ごと)。集計は全部 Python(この中)。
+# 既定= 毎月 1 日 JST 06:20(= UTC 前月末日 21:20)。cron は UTC 28〜31 日 21:20 に起き、JST で 1 日のときだけ走る。
+# 初回は workflow_dispatch で month=2026-09,2026-10 を流す。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: day-trend-base
+on:
+  schedule:
+    - cron: '20 21 28-31 * *'
+  workflow_dispatch:
+    inputs:
+      month:
+        description: 'month (YYYY-MM, comma separated / empty = JST this month)'
+        required: false
+        default: ''
+      venue:
+        description: 'venue url name (comma separated / empty = all)'
+        required: false
+        default: ''
+      dry_run:
+        description: 'dry run (no write)'
+        required: false
+        default: false
+        type: boolean
+permissions:
+  contents: read
+concurrency:
+  group: day-trend-base
+  cancel-in-progress: false
+jobs:
+  base:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - name: unit tests
+        run: python3 -m unittest discover -s tests -p "test_day_trend_base.py"
+      - name: day trend base
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          MONTH_IN: ${{ github.event.inputs.month }}
+          VENUE_IN: ${{ github.event.inputs.venue }}
+          DRY: ${{ github.event.inputs.dry_run }}
+          EVENT: ${{ github.event_name }}
+        run: |
+          # 定時は UTC の月末日 21:20(= JST の 1 日 06:20)だけ走る。28〜31 日のうち、翌日が 1 日でない日は何もしない
+          if [ "$EVENT" = "schedule" ] && [ "$(TZ=Asia/Tokyo date +%d)" != "01" ]; then echo "JST 1 日ではない"; exit 0; fi
+          set --
+          if [ -n "$MONTH_IN" ]; then set -- "$@" --month "$MONTH_IN"; fi
+          if [ -n "$VENUE_IN" ]; then set -- "$@" --venue "$VENUE_IN"; fi
+          if [ "$DRY" = "true" ]; then set -- "$@" --dry-run --out "$RUNNER_TEMP/dtb"; else set -- "$@" --apply; fi
+          python3 cloud/day_trend_base.py "$@"
+          # 最終成功時刻(表 nar_job_heartbeat)。⛔表が無くても落ちない
+          if [ "$DRY" != "true" ]; then python3 cloud/beat.py day_trend_base ok; fi
+
+      # 失敗の印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py day_trend_base fail 失敗
