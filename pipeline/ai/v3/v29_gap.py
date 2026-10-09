@@ -604,6 +604,9 @@ REC_KEY = 'record'
 # 払戻の券種名(nar_race_payouts の t)。組は記録に全部残すので、ここを変えれば数え直せる。
 TRI_PICK = {'tri': (50, 500, 10, 'trifecta'), 'trio': (30, 300, 10, 'trio')}
 TRI_LINES = (1.1, 1.2, 1.3)
+# 公開の 3 連単 丙(2026-10-04 から公開の予想に出している形): 期待値 ≥ 1.0・50 ≤ オッズ < 500・1R 期待値の大きい順に 3 点
+HEI = (1.0, 50, 500, 3)
+HEI_FROM = '2026-10-04'
 
 
 def record(days):
@@ -614,6 +617,8 @@ def record(days):
     except Exception:  # noqa: BLE001
         cur = {}
     dd = dict(cur.get('days') or {})
+    # 丙の数えが無い日(足す前に作った日)も作り直す = 公開を始めた 10/4 からの通算を出す
+    days = sorted(set(days) | {d for d, v in dd.items() if d >= HEI_FROM and 'hei' not in (v or {})})
     for day in days:
         rows = _get(f"{GAP}?race_date=eq.{day}&select=key,value")
         if not rows:
@@ -624,10 +629,22 @@ def record(days):
         n = hit = ret = races = pend = 0
         cb = {k: {'bets': 0, 'hits': 0, 'return': 0} for k in ('wide', 'umaren')}
         tc = {k: {str(L): {'bets': 0, 'hits': 0, 'return': 0} for L in TRI_LINES} for k in TRI_PICK}
+        hei = {'bets': 0, 'hits': 0, 'return': 0}
         for r in rows:
             _, tr, rno = r['key'].split(':')
             v = r.get('value') or {}
             p = pay.get((tr, int(rno)))
+            if p and v.get('tri'):
+                L, lo, hi, N = HEI
+                yt = {}
+                for x in p:
+                    if x.get('t') == 'trifecta':
+                        yt[str(x.get('c'))] = yt.get(str(x.get('c')), 0) + int(x.get('y') or 0)
+                for g in sorted([g for g in v['tri'] if g[2] >= L and lo <= g[1] < hi], key=lambda g: -g[2])[:N]:
+                    y = yt.get(g[0], 0)
+                    hei['bets'] += 1
+                    hei['hits'] += y > 0
+                    hei['return'] += y
             if p and any(v.get(k) for k in TRI_PICK):
                 for k, (lo, hi, N, t) in TRI_PICK.items():
                     yp = {}
@@ -670,10 +687,11 @@ def record(days):
                 y = win.get(str(b['num']), 0)
                 hit += y > 0
                 ret += y
-        dd[day] = {'races': races, 'bets': n, 'hits': hit, 'return': ret, 'pending': pend, **cb, **tc}
+        dd[day] = {'races': races, 'bets': n, 'hits': hit, 'return': ret, 'pending': pend, **cb, **tc,
+                   **({'hei': hei} if day >= HEI_FROM else {})}
     tot = {k: sum(v.get(k, 0) for v in dd.values()) for k in ('races', 'bets', 'hits', 'return')}
     tot['roi'] = round(100 * tot['return'] / (100 * tot['bets']), 1) if tot['bets'] else None
-    for kk in ('wide', 'umaren'):
+    for kk in ('wide', 'umaren', 'hei'):
         t = {k: sum((v.get(kk) or {}).get(k, 0) for v in dd.values()) for k in ('bets', 'hits', 'return')}
         t['roi'] = round(t['return'] / t['bets'], 1) if t['bets'] else None
         tot[kk] = t
