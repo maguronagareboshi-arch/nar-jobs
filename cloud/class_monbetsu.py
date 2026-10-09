@@ -1148,7 +1148,14 @@ def max_add(r, races, runners):
         race = races.get(k3)
         if race is None:
             return CAP_MAN
-        tab, k = C.t2_key(runners.get(k3, []), race, C.fy_of(C.D(r["race_date"])))
+        fy = C.fy_of(C.D(r["race_date"]))
+        tab, k = C.t2_key(runners.get(k3, []), race, fy)
+        if "歳" not in (race.get("race_name") or ""):
+            # 名前に「歳」が無い= 3歳限定か 3歳以上かを出走馬の年齢で決める。表に載らない出走馬(他場へ移った等)が
+            # 欠けると 3歳以上と取り違える= 番人は上限を見るだけなので 3歳の表と 3歳以上の表の大きい方を取る
+            vals = [t[kk][0] for t, kk in (C.t2_key([{"age": 3}] * 3, race, fy), C.t2_key([{"age": 4}], race, fy))
+                    if t is not None]
+            return max(vals) if vals else CAP_MAN
         return CAP_MAN if tab is None else tab[k][0]
     v, why = C.tb_run(r, races)
     return CAP_MAN if why else v

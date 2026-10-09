@@ -161,6 +161,13 @@ class RiseBounds(unittest.TestCase):
         self.assertEqual(C.race_group(runners[self.RACE], self.races[self.RACE]), "3u")
         self.assertEqual(C.race_group(C.runners_of(self.nar)[self.RACE], self.races[self.RACE]), "3")
 
+    def test_partial_runners_still_50(self):
+        # 名前に「歳」が無い競走で出走馬が欠けても(表に載るのが 1頭だけ)3歳の表の 50万で見る
+        r = self.nar[0]
+        self.assertEqual(CM.max_add(r, self.races, C.runners_of([r])), 50)
+        why, over = CM.guard_rise(self.new, self.old, {self.horses[0]: CM.max_add(r, self.races, C.runners_of([r]))})
+        self.assertEqual(over, [])
+
     def test_no_runs_in_period_uses_cap(self):
         bound = CM.rise_bounds("b", "k", self.new, self.old)
         self.assertEqual(bound["スハッチェ"], C.CAP)
