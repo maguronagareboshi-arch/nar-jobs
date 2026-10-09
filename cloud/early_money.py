@@ -28,6 +28,7 @@ BINS = ((None, 0.7, "<0.7"), (0.7, 0.9, "0.7〜0.9"), (0.9, 1.1, "0.9〜1.1"), (
 POPS = ((1, 3, "1〜3 番人気"), (4, 6, "4〜6 番人気"), (7, 99, "7 番人気以下"))
 HALVES = ("前半 9/2〜9/15", "後半 9/16〜9/30")
 AREAS = ("南関 4 場", "南関以外")
+T3 = {}
 
 
 def qs(xs):
@@ -148,6 +149,24 @@ def main():
                 if r_ve >= 1.3:
                     for k in (("big", half), ("big", nk)):
                         add(g(k), v, rid)
+                # ---- 追加確認= 4〜6 番人気の「売れ続けなかった」
+                if 4 <= rk <= 6:
+                    ks = [("x", "4〜6 番人気 全体")]
+                    if r_me <= 0.91 and r_vm <= 0.91:
+                        ks += [("x", "売れ続けなかった"), ("x", "売れ続けなかった・" + half), ("x", "売れ続けなかった・" + nk)]
+                    elif r_me >= 1.1 and r_vm >= 1.1:
+                        ks.append(("x", "売れ続けた(買われ続けた)"))
+                    else:
+                        ks.append(("x", "どちらでもない"))
+                    if r_me <= 0.95 and r_vm <= 0.95:
+                        ks.append(("x", "売れ続けなかった・閾値 0.95"))
+                    if r_me <= 0.85 and r_vm <= 0.85:
+                        ks.append(("x", "売れ続けなかった・閾値 0.85"))
+                    for k in ks:
+                        add(g(k), v, rid)
+                        t = T3.setdefault(k, [0, 0])
+                        t[0] += 1
+                        t[1] += 1 if fo[h] <= 3 else 0
             if used:
                 ex["used"] += 1
                 e_lead.append(fm - ea)
@@ -195,6 +214,20 @@ def write(C, ex, e_lead, n_between, tracks):
     for nk in AREAS:
         L.append(row("pV/pE>=1.3・" + nk, c(("big", nk))))
         L.append(row("買われ続けた・" + nk, c(("cont", nk))))
+    X = ("売れ続けなかった", "売れ続けなかった・" + HALVES[0], "売れ続けなかった・" + HALVES[1],
+         "売れ続けなかった・" + AREAS[0], "売れ続けなかった・" + AREAS[1],
+         "売れ続けなかった・閾値 0.95", "売れ続けなかった・閾値 0.85",
+         "売れ続けた(買われ続けた)", "どちらでもない", "4〜6 番人気 全体")
+    L += ["", "## 追加確認= 4〜6 番人気(V の順位)の「売れ続けなかった」(閾値は指定なしなら 0.91)", "", HEAD]
+    for lab in X:
+        L.append(row(lab, c(("x", lab))))
+    base_t = T3.get(("x", "4〜6 番人気 全体"), [0, 0])
+    br = "%.1f%%" % (100.0 * base_t[1] / base_t[0]) if base_t[0] else "-"
+    L += ["", "### 3 着内(見込みとの比較なし)", "",
+          "| 区分 | 頭数 | 3着内 | 3着内率 | 4〜6 番人気全体の率 |", "|---|---:|---:|---:|---:|"]
+    for lab in X:
+        n, t = T3.get(("x", lab), [0, 0])
+        L.append("| %s | %d | %d | %s | %s |" % (lab, n, t, "%.1f%%" % (100.0 * t / n) if n else "-", br))
     L += ["", "> 見込み= 確定オッズの正規化確率の和。回収率= 単勝 100 円ずつ・確定単勝倍率。1 か月だけなので結論にしない。", ""]
     out = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "early-money", "result.md")
     os.makedirs(os.path.dirname(out), exist_ok=True)
