@@ -2702,21 +2702,86 @@ def monbetsu_head_for(heads, bbox):
     return best
 
 
+# ---- 読み違いの番人(2026-10-10 監査 高 #2)。門別の PDF は列を位置で読んでいた= 見出し(table[0])の語から列を引く。
+#   必要な見出しが無い・2 つある・データ行の列数が見出しと違う→ MonbetsuGuard(その日は書かない)。
+#   タイムは形(TIME_RE)と距離に見合う秒数(100m あたり 5.5〜9.5 秒)・馬体重は 300〜650kg を見る。
+#   タイムの欄が「重量」(斤量)の欄と同じ値の馬が半分以上なら列の取り違えとして止める。
+#   外れの馬が MB_GUARD_N 頭に達した日は書かない(1〜2 頭は ::warning:: だけ)。
+#   根拠= 2026-10-10 に取った 2024-05-07・2025-06-17・2026-10-05 の全R PDF(見出し 13/14 列・計 56 頭)で外れ 0。
+MB_COLS = {"umaban": lambda h: h == "番", "name": lambda h: "馬名" in h, "sexage": lambda h: h == "年性",
+           "ped": lambda h: h == "血統", "cw": lambda h: h == "重量", "jockey": lambda h: h == "騎手",
+           "time": lambda h: h == "タイム", "trainer": lambda h: h == "調教師", "weight": lambda h: h == "馬体重",
+           "note": lambda h: h == "備考"}
+MB_SEC_PER_100M = (5.5, 9.5)
+MB_WEIGHT = (300, 650)
+MB_GUARD_N = 3
+MONBETSU_GUARD = []      # 番人が止めた日の理由(main が終了コードを 1 にする)
+
+
+class MonbetsuGuard(Exception):
+    """門別の能検 PDF の表の様式が想定と違う(見出しの語・列数)。"""
+
+
+def monbetsu_cols(head):
+    """見出しの行 → {キー: 列の位置}。足りない・重なる見出しは MonbetsuGuard。"""
+    labels = [re.sub(r"\s+", "", norm(x or "")) for x in head]
+    out = {}
+    for key, f in MB_COLS.items():
+        hit = [i for i, h in enumerate(labels) if f(h)]
+        if len(hit) != 1:
+            raise MonbetsuGuard(f"見出し「{key}」が {len(hit)} 個: {'|'.join(labels)[:160]}")
+        out[key] = hit[0]
+    return out
+
+
+def time_sec(t):
+    """'50.6' / '1:02.3' / '1.02.3' → 秒。読めなければ None。"""
+    if not t or not TIME_RE.match(t):
+        return None
+    parts = re.split(r"[.:]", t)
+    try:
+        if len(parts) == 3:
+            return int(parts[0]) * 60 + int(parts[1]) + int(parts[2]) / 10
+        return int(parts[0]) + int(parts[1]) / 10
+    except ValueError:
+        return None
+
+
+def monbetsu_row_bad(row, dist):
+    """1 頭の値の外れ → 理由(空= 通す)。タイムの無い馬(取消・中止)は見ない。"""
+    t = row.get("time")
+    if t:
+        sec = time_sec(t)
+        if sec is None:
+            return f"タイムの形 {t!r}"
+        if dist and not (dist / 100 * MB_SEC_PER_100M[0] <= sec <= dist / 100 * MB_SEC_PER_100M[1]):
+            return f"タイム {t}({dist}m)"
+    w = row.get("weight")
+    if w and not (re.fullmatch(r"\d{3}", w) and MB_WEIGHT[0] <= int(w) <= MB_WEIGHT[1]):
+        return f"馬体重 {w!r}"
+    return ""
+
+
 def monbetsu_rows(table, order):
-    """表の1レース分。馬は2行(2行目は母の血統だけ)。⛔空の枠(使っていない行)は落とす。"""
-    rows, cur = [], None
+    """表の1レース分。馬は2行(2行目は母の血統だけ)。⛔空の枠(使っていない行)は落とす。
+    列は見出し(table[0])の語で引く。見出しが違う・列数が違えば MonbetsuGuard。"""
+    if not table:
+        return []
+    col = monbetsu_cols(table[0])
+    width = len(table[0])
+    rows, cur, same = [], None, 0
     for cells in table[1:]:
         c = [norm(x or "").strip() for x in cells]
-        if len(c) < 11:
-            continue
-        ped = c[5]
-        if re.fullmatch(r"\d+", c[0]):
-            parts = [p for p in (x.strip() for x in c[1].split("\n")) if p]
+        if len(c) != width:
+            raise MonbetsuGuard(f"データ行が {len(c)} 列(見出しは {width} 列): {'|'.join(c)[:120]}")
+        ped = c[col["ped"]]
+        if re.fullmatch(r"\d+", c[col["umaban"]]):
+            parts = [p for p in (x.strip() for x in c[col["name"]].split("\n")) if p]
             name = parts[1] if len(parts) >= 3 else (parts[0] if parts else "")
             if not name:
                 continue
-            row = {"umaban": c[0], "name": name}
-            age_sex = [p for p in (x.strip() for x in c[3].split("\n")) if p]
+            row = {"umaban": c[col["umaban"]], "name": name}
+            age_sex = [p for p in (x.strip() for x in c[col["sexage"]].split("\n")) if p]
             if len(age_sex) >= 2:
                 row["sexage"] = age_sex[1] + age_sex[0]
             elif age_sex:
@@ -2724,17 +2789,20 @@ def monbetsu_rows(table, order):
             sire = ped.split(" ")[-1].strip() if ped else ""
             if sire:
                 row["sire"] = sire
-            for key, i in (("jockey", 7), ("time", 8), ("trainer", 9), ("weight", 10)):
-                v = cell(c[i]) if i < len(c) else ""
+            for key in ("jockey", "time", "trainer", "weight"):
+                v = cell(c[col[key]])
                 if v:
                     row[key] = fix_time(v) if key == "time" else v
             if not row.get("jockey") and not row.get("trainer"):
                 continue           # 表の下の「制限タイム ◯◯秒」= 馬ではない(実測 2026-07-27)
-            note = cell(c[12]) if len(c) > 12 else ""
+            cw = cell(c[col["cw"]])
+            if row.get("time") and cw and fix_time(cw) == row["time"]:
+                same += 1
+            note = cell(c[col["note"]])
             if note:
                 row["note"] = note
             try:
-                row["fin"] = str(order.index(int(c[0])) + 1)
+                row["fin"] = str(order.index(int(c[col["umaban"]])) + 1)
             except ValueError:
                 pass                       # 着順の並びに無い馬(取消など)は fin を付けない
             rows.append(row)
@@ -2743,7 +2811,29 @@ def monbetsu_rows(table, order):
             dam = ped.split(" ")[-1].strip()
             if dam:
                 cur["dam"] = dam
+    timed = sum(1 for r in rows if r.get("time"))
+    if timed and same * 2 >= timed:
+        raise MonbetsuGuard(f"タイムの欄が重量の欄と同じ値の馬 {same}/{timed} 頭= 列の取り違えの疑い")
     return rows
+
+
+def monbetsu_check(races, date):
+    """日の番人(値の範囲)。外れが MB_GUARD_N 頭以上なら MonbetsuGuard。少なければ ::warning:: だけ。"""
+    bad = []
+    for race in races:
+        for row in race["rows"]:
+            b = monbetsu_row_bad(row, race.get("dist"))
+            if b:
+                bad.append(f"{race['no']}R {row.get('name')} {b}")
+    if len(bad) >= MB_GUARD_N:
+        raise MonbetsuGuard(f"値の外れ {len(bad)} 頭: " + " / ".join(bad[:5]))
+    for b in bad:
+        print(f"::warning::門別の能検 {date} {b}", flush=True)
+
+
+def monbetsu_guard_hit(date, e):
+    print(f"::error::門別の能検 {date} 表の読み違いの疑いで書かない {e}", flush=True)
+    MONBETSU_GUARD.append(f"{date} {e}")
 
 
 def monbetsu_pdf(data, date, files, drop):
@@ -2787,6 +2877,7 @@ def monbetsu_pdf(data, date, files, drop):
                     race["pdf"] = got["pdf"]
                 races.append(race)
     races.sort(key=lambda r: r["no"])
+    monbetsu_check(races, date)
     monbetsu_ok(races, npass, marks, date, drop)
     return races
 
@@ -2837,6 +2928,10 @@ def collect_monbetsu(existing, backfill):
             continue
         try:
             races = monbetsu_pdf(data, date, files, drop)
+        except MonbetsuGuard as e:
+            miss += 1
+            monbetsu_guard_hit(date, e)
+            continue
         except Exception as e:
             miss += 1
             log(f"  門別 {date} PDF が読めない {type(e).__name__}: {str(e)[:100]}")
@@ -2970,6 +3065,10 @@ def monbetsu_backfill(d_from, d_to, dates_arg, base, key, dry_run=False):
         for n in range(MONBETSU_BF_TRIES):
             try:
                 day = monbetsu_bf_day(date, drop)
+                break
+            except MonbetsuGuard as e:
+                failed.append(date)
+                monbetsu_guard_hit(date, e)
                 break
             except Exception as e:
                 if n == MONBETSU_BF_TRIES - 1:
@@ -3658,6 +3757,9 @@ def main():
                 rc = 1
             else:
                 log(f"{name}: nar_meta/{meta_key}_offsets 更新")
+    if MONBETSU_GUARD:
+        log(f"門別: 番人が止めた日 {len(MONBETSU_GUARD)}(書いていない)= 終了コード 1")
+        rc = rc or 1
     return rc
 
 

@@ -13,7 +13,7 @@
   python cloud/sale_results.py --env pipeline/.env.nar                      # ドライラン(今年ぶん)
   python cloud/sale_results.py --apply --years 2025,2026                    # 日次(月次便): 直近 2 年ぶんを取り直して upsert
   python cloud/sale_results.py --apply --from-json jrha_all.json hba_all.json --ped nar_ped.csv   # 手元の全量 JSON から(初回)
-終了コード: 0 正常 / 1 投入失敗 / 2 読み取り失敗
+終了コード: 0 正常 / 1 投入失敗 / 2 読み取り失敗・番人が止めた
 """
 import argparse
 import csv
@@ -76,16 +76,81 @@ def http(url, data=None, headers=None):
 
 # ---------------------------------------------------------------- 出典
 
+# ---- 読み違いの番人(2026-10-10 監査 高 #3)。JRHA は位置で 14 列を zip する= 見出しを colspan を開いて照合する。
+#   見出しが違う・データ行が 14 列でない→ ParseGuard(この便は書かない)。価格は 1〜100,000 万円の範囲。
+#   前回との比較= DB に価格がある馬が空になる行は書かない。外れ(範囲・空になる)が GUARD_N 行に達したら便を止める。
+#   根拠= 2026-10-10 に取った 2025 年度 453 行で外れ 0(全行 14 列・価格 800〜58,000 万円)。
+JRHA_HEAD = ["上場年度", "せり区分", "上場番号", "父", "母", "母の父", "性", "競走馬名", "所属厩舎", "所属厩舎",
+             "販売者", "購買価格(万円)", "購買者", "総獲得賞金(円)"]
+JRHA_KEYS = ["year", "kubun", "lot", "sire", "dam", "damsire", "sex", "name", "area", "trainer", "seller", "price_man", "buyer", "prize"]
+PRICE_MAN = (1, 100000)
+GUARD_N = 5
+
+
+class ParseGuard(Exception):
+    """出典の表の様式が想定と違う(列の増減・見出しの語の変化)。"""
+
+
+def jrha_head(h):
+    """JRHA の結果表の見出し(tr class="title")→ 語の list(colspan を開く・空白と改行を除く)。無ければ []。"""
+    m = re.search(r'<tr class="title">(.*?)</tr>', h, re.S)
+    out = []
+    for attrs, txt in re.findall(r"<t[dh]([^>]*)>(.*?)</t[dh]>", m.group(1) if m else "", re.S):
+        c = re.search(r'colspan="?(\d+)', attrs)
+        out += [re.sub(r"\s+", "", _txt(txt))] * (int(c.group(1)) if c else 1)
+    return out
+
+
+def parse_jrha(h):
+    """JRHA の検索結果 HTML → [dict]。見出し・列数が想定と違えば ParseGuard。"""
+    got = jrha_head(h)
+    if got != JRHA_HEAD:
+        raise ParseGuard(f"JRHA の見出しが違う({len(got)} 列): {'|'.join(got)[:200]}")
+    tabs = [_rows(t) for t in re.findall(r"<table.*?</table>", h, re.S)]
+    big = max(tabs, key=len) if tabs else []
+    body = big[1:]
+    odd = [r for r in body if len(r) != len(JRHA_KEYS)]
+    if odd:
+        raise ParseGuard(f"JRHA のデータ行が {len(JRHA_KEYS)} 列でない {len(odd)} 行: {'|'.join(odd[0])[:120]}")
+    return [dict(zip(JRHA_KEYS, r)) for r in body]
+
+
 def fetch_jrha(year):
     h = http(JRHA_URL, {"bamei": "", "bmpos": "0", "titi": "", "tpos": "0", "haha": "", "hpos": "0", "hahatiti": "", "htpos": "0",
                         "hanbai": "", "hbpos": "0", "kounyu": "", "knpos": "0", "nendo": str(year), "kubun": "", "seibetu": "",
                         "kakaku1": "", "kakaku2": "", "hyoji": "0"})
-    tabs = [_rows(t) for t in re.findall(r"<table.*?</table>", h, re.S)]
-    big = max(tabs, key=len) if tabs else []
     # 列= 上場年度 | せり区分 | 上場番号 | 父 | 母 | 母の父 | 性 | 競走馬名 | 所属(美浦/栗東/地方) | 調教師 | 販売者 | 購買価格(万円) | 購買者 | 総獲得賞金
-    #   ⚠見出しは「所属厩舎」1 語だが中身は 2 列(所属・調教師)= 2026-09-04 実測(13 列で読むと販売者と価格がずれる)
-    keys = ["year", "kubun", "lot", "sire", "dam", "damsire", "sex", "name", "area", "trainer", "seller", "price_man", "buyer", "prize"]
-    return [dict(zip(keys, r)) for r in big[1:] if len(r) >= 14]
+    #   ⚠見出しは「所属厩舎」1 語(colspan=2)で中身は 2 列(所属・調教師)= 2026-09-04 実測(13 列で読むと販売者と価格がずれる)
+    return parse_jrha(h)
+
+
+def jrha_bad(r):
+    """1 行の価格の外れ → 理由(空= 通す)。価格の欄が空なら不成立として通す。"""
+    s = (r.get("price_man") or "").strip()
+    if not s or s in ("-", "－"):
+        return ""
+    if not re.fullmatch(r"[\d,]+", s):
+        return f"購買価格が数字でない {s[:20]!r}"
+    v = int(s.replace(",", ""))
+    if not (PRICE_MAN[0] <= v <= PRICE_MAN[1]):
+        return f"購買価格 {v} 万円"
+    return ""
+
+
+def jrha_guard(raw, old_price=None):
+    """JRHA の生の行(dict)→ (書いてよい行, 外れの理由 list)。old_price= {item_id: 前の price} (読めなければ None)。"""
+    keep, why = [], []
+    for r in raw:
+        b = jrha_bad(r)
+        if not b and old_price is not None:
+            pm = _int(r.get("price_man"))
+            if old_price.get(jrha_item_id(r)) and not pm:
+                b = f"価格 {old_price[jrha_item_id(r)]:,}円 が空になる"
+        if b:
+            why.append(f"{r.get('year')} {r.get('lot')} {r.get('dam')}: {b}")
+        else:
+            keep.append(r)
+    return keep, why
 
 
 def fetch_hba_pages(max_pages, stop_when_known=None):
@@ -185,6 +250,24 @@ def load_ped(path):
     return ped
 
 
+def jrha_old_prices(url, key):
+    """DB の JRHA の価格 {item_id: price}。読めなければ None(前回との比較を飛ばす)。"""
+    try:
+        out, lo = {}, 0
+        while True:
+            req = urllib.request.Request(f"{url}/rest/v1/{TABLE}?select=item_id,price&source=eq.jrha&order=item_id.asc",
+                                         headers={"apikey": key, "Authorization": f"Bearer {key}", "Range": f"{lo}-{lo + 999}", "User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=60) as r:
+                got = json.loads(r.read().decode("utf-8"))
+            out.update({int(x["item_id"]): x["price"] for x in got})
+            if len(got) < 1000:
+                return out
+            lo += 1000
+    except Exception as e:                                 # noqa: BLE001
+        log(f"JRHA の前の価格が読めない= 前回との比較を飛ばす {type(e).__name__}: {str(e)[:120]}")
+        return None
+
+
 def push(url, key, rows):
     for i in range(0, len(rows), 500):
         st, msg = upsert(url, key, TABLE, "source,item_id", rows[i:i + 500])
@@ -243,14 +326,24 @@ def main():
                 rows += [hba_row(r, ped) for r in data]
     else:
         years = [int(y) for y in args.years.split(",")] if args.years else [now.year - 1, now.year]
+        old_price = jrha_old_prices(url, key) if (url and key) else None
         for y in years:
             try:
                 got = fetch_jrha(y)
+            except ParseGuard as e:
+                print(f"::error::JRHA {y} 表の様式が変わった疑いで止める(書かない) {e}", flush=True)
+                return 2
             except Exception as e:
                 log(f"JRHA {y}: 失敗 {type(e).__name__}: {str(e)[:120]}")
                 return 2
+            got, why = jrha_guard(got, old_price)
+            for w in why:
+                print(f"::warning::JRHA {y} 番人で書かない行 {w}", flush=True)
+            if len(why) >= GUARD_N:
+                print(f"::error::JRHA {y} 番人の外れが {len(why)} 行= 読み違いの疑いで止める(書かない)", flush=True)
+                return 2
             rows += [jrha_row(r) for r in got]
-            log(f"JRHA {y}: {len(got)} 行")
+            log(f"JRHA {y}: {len(got)} 行(番人で保留 {len(why)})")
             time.sleep(SLEEP)
         try:
             got = fetch_hba_pages(args.hba_pages)
