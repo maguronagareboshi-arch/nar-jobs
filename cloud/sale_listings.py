@@ -150,6 +150,47 @@ def fetch_year(year, raw: Path, force=False, only_recent_days=None, today=None):
 
 LEAF = re.compile(r"<div(?: class=\"[^\"]*\")?>((?:(?!<div|</div>).)*?)</div>", re.S)
 
+# ---- 読み違いの番人(2026-10-10 監査 中 #12)。葉の div を位置で読む= 見出しの語の並びを丸ごと照合する。
+#   違えば SaleGuard(その市場は書かない)。価格は「数字+円」か「-」だけ・PRICE_YEN の範囲。
+#   外れの行は書かない(::warning::)・SALE_GUARD_N 行に達した市場は丸ごと書かない。止めた市場があれば終了コード 1。
+#   根拠= 2026-10-10 に取った 2026 セプテンバー(724 行)・サマー(1,406 行)・セレクト当歳(252 行)・
+#   冬季繁殖(41 行)・2025 ノーザン繁殖(69 行)で外れ 0(価格 44 万〜4 億 5,100 万円)。
+HEAD_FOAL = ["上場番号", "父馬", "母馬", "性別", "毛色", "価格", "購買者", "販売申込者"]
+HEAD_MARE = ["上場番号", "繁殖牝馬名", "生年", "父馬", "母馬", "配合馬", "価格", "購買者", "販売申込者"]
+PRICE_YEN = (100_000, 3_000_000_000)
+SALE_GUARD_N = 5
+
+
+class SaleGuard(Exception):
+    """市場のページの様式が想定と違う(見出しの語の並び・価格の外れ)。"""
+
+
+def price_bad(price_txt):
+    """価格の文字 → 外れの理由(空= 通す)。"-"・空は不成立として通す。"""
+    t = re.sub(r"\s", "", unicodedata.normalize("NFKC", price_txt or ""))
+    if t in ("", "-", "ー", "―"):
+        return ""
+    if not re.fullmatch(r"[\d,]+円", t):
+        return f"価格の形 {t[:20]!r}"
+    v = int(re.sub(r"[^\d]", "", t))
+    if not (PRICE_YEN[0] <= v <= PRICE_YEN[1]):
+        return f"価格 {v:,}円"
+    return ""
+
+
+def sale_guard(recs):
+    """1 市場の行 → (書いてよい行, 外れの理由 list)。外れが SALE_GUARD_N 行以上なら SaleGuard。"""
+    keep, why = [], []
+    for x in recs:
+        b = price_bad(x.get("price_txt"))
+        if b:
+            why.append(f"{x.get('hip')} {b}")
+        else:
+            keep.append(x)
+    if len(why) >= SALE_GUARD_N:
+        raise SaleGuard(f"価格の外れ {len(why)} 行: " + " / ".join(why[:5]))
+    return keep, why
+
 
 def parse_sale(h):
     """市場のページ → [{hip, jbis_id, name, birth_year, sire, dam, sex, color, price_txt, buyer_txt, seller}]。葉の div を列数ずつ読む。
@@ -164,6 +205,9 @@ def parse_sale(h):
         return [], 0
     mare = "繁殖牝馬名" in _txt(leaves[k + 1]) if k + 1 < len(leaves) else False
     w = 9 if mare else 8
+    head = [re.sub(r"\s+", "", _txt(x) or "") for x in leaves[k:k + w]]
+    if head != (HEAD_MARE if mare else HEAD_FOAL):
+        raise SaleGuard(f"見出しが違う: {'|'.join(head)[:160]}")
     rows, bad = [], 0
     n = k + w
     while n + w <= len(leaves):
@@ -273,7 +317,16 @@ def parse_all(raw: Path, years, cdir=None):
                 stats["missing_page"] += 1
                 continue
             name, breed, age = split_title(r["title"], y)
-            recs, bad = parse_sale(gzip.decompress(p.read_bytes()).decode("utf-8"))
+            try:
+                recs, bad = parse_sale(gzip.decompress(p.read_bytes()).decode("utf-8"))
+                recs, why = sale_guard(recs)
+            except SaleGuard as e:
+                stats["guard"] += 1
+                print(f"::error::JBIS {y} {r['code']} {r['title']} 表の読み違いの疑いで書かない {e}", flush=True)
+                continue
+            for w_ in why:
+                print(f"::warning::JBIS {y} {r['code']} 番人で書かない行 {w_}", flush=True)
+            stats["guard_rows"] += len(why)
             stats["bad_leaf"] += bad
             if not recs:
                 stats["empty_sale"] += 1
@@ -522,7 +575,7 @@ def main(argv=None):
         rows, st = parse_all(raw, years, a.catalog_dir)
         write_csv(rows, a.out)
         log(f"行 {len(rows)} → {a.out}  {dict(st)}")
-        return 0
+        return 1 if st["guard"] else 0
     if a.cmd == "link":
         rows = read_csv(a.rows)
         with open(a.profiles, encoding="utf-8") as f:
@@ -556,6 +609,7 @@ def main(argv=None):
         for y in years:
             idx, got = fetch_year(y, raw, force=True)
             rows, st = parse_all(raw, [y], a.catalog_dir)
+            bad += st["guard"]
             have = {tuple(x[k] for k in KEY) for x in rest_get(base, rkey, f"{TABLE}?select={','.join(KEY)}&sale_year=eq.{y}&result=eq.{urllib.parse.quote('落札')}"
                                                                           "&order=market_code.asc,hip_no.asc,jbis_horse_id.asc")}
             put = [{k: x[k] for k in KEY + ("market_name", "buyer")} for x in rows if x["buyer"] and tuple(x[k] for k in KEY) in have]
@@ -602,11 +656,14 @@ def main(argv=None):
         c = link(rows, prof, auc)
         log(f"今年の対象市場 {len(keep)}・行 {len(rows)}・ひも付け {dict(c)}")
         old, newly = relink_stored(base, rkey, prof, auc, today, exclude={(today.year, k) for k in keep})
+        if st["guard"]:
+            log(f"番人が止めた市場 {st['guard']}(書いていない)= 終了コード 1")
         if not a.apply:
-            log("ドライラン= 書かない"); return 0
+            log("ドライラン= 書かない"); return 1 if st["guard"] else 0
         bad = upsert_rows(base, wkey, rows + newly)
-        B.beat(BEAT_JOB, bad == 0, f"市場{len(keep)} 行{len(rows)} 再結{len(newly)}")
-        return 1 if bad else 0
+        B.beat(BEAT_JOB, bad == 0 and not st["guard"], f"市場{len(keep)} 行{len(rows)} 再結{len(newly)}"
+               + (f" 番人{st['guard']}" if st["guard"] else ""))
+        return 1 if (bad or st["guard"]) else 0
     except Exception as e:  # noqa: BLE001
         log(f"失敗: {type(e).__name__}: {e}")
         if a.apply:

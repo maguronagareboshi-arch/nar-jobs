@@ -175,6 +175,60 @@ TR = r"([一-鿿々][一-鿿々ケヶ]*)"
 HN = re.compile(r"(?:^|\s|\))(?:○|希\s*)*○?" + NAME + r"\s+(牡|牝|セ)\s*(\d+)\s+(?:[ABC]\s+)?([\d,]+|未出走)\s*" + TR)
 HK = re.compile(r"(?:([ABC]\d+|\d+R希望)\s+)?" + NAME + r"\s+(?:(\d+)R\s+)?(?:#\s*)?(\d{1,5})\s*" + TR + r"(?:\s+(\d{2})(?!\d))?")
 
+# ---- 読み違いの番人(2026-10-10 監査 中 #8)。合わない行を黙って落としていた= 数えて閾値で止める。
+#   馬らしい並び(NG= 性+齢+数・KS= カナの名+数)の数(cand)と、正規表現で読めた数(hit)を一覧ごとに数え、
+#   落とした数が TK_DROP_N 頭以上かつ TK_DROP_RATE 以上の一覧は ::warning::(⚠止めない= 10/10 の dry-run で
+#   名古屋 9/52・笠松 1/11 の一覧が 19〜30% 落ちていた。馬名が性齢と別の行に割れる既存の読み方の欠け= 直すのは別件)。
+#   P は 0〜TK_P_MAX(未出走= -1)。前の一覧と比べて P が半分未満に減った馬(前の P が TK_JUMP_FROM 以上)が
+#   TK_JUMP_N 頭以上かつ比べた馬の TK_JUMP_RATE 以上なら止める(見直しは 0.75 倍なので半分未満にはならない)。
+#   止めた= 表を書かない・heartbeat fail・終了コード 2。
+CAND_NG = re.compile(r"(?:牡|牝|セ)\s*\d+\s+(?:[ABC]\s+)?(?:[\d,]+|未出走)")
+CAND_KS = re.compile(NAME + r"\s+(?:(?:\d+R|#)\s*)*\d{1,5}(?!\d)")
+TK_DROP_N, TK_DROP_RATE = 10, 0.05
+TK_P_MAX = 50000
+TK_P_BAD_N = 3
+TK_JUMP_FROM, TK_JUMP_N, TK_JUMP_RATE = 1000, 5, 0.02
+
+
+def _stat_add(stat, s, cand_re, hit_re):
+    if stat is not None:
+        stat["cand"] = stat.get("cand", 0) + len(cand_re.findall(s))
+        stat["hit"] = stat.get("hit", 0) + len(hit_re.findall(s))
+
+
+def tokai_drops(stats):
+    """一覧ごとの数 → 落とした行が多い一覧の list(::warning:: 用)。stats= [(名前, {cand, hit})]。"""
+    out = []
+    for nm, st in stats:
+        drop = max(0, st.get("cand", 0) - st.get("hit", 0))
+        if drop >= TK_DROP_N and drop >= TK_DROP_RATE * max(st.get("cand", 0), 1):
+            out.append(f"{nm} 読めずに落とした行 {drop}/{st.get('cand', 0)}")
+    return out
+
+
+def tokai_guard(rows):
+    """一覧の行 → 止める理由の list(空= 通す)。P の範囲と前の一覧からの急な減り。"""
+    why = []
+    badp = [r for r in rows if not (-1 <= r["P"] <= TK_P_MAX)]
+    if len(badp) >= TK_P_BAD_N:
+        why.append(f"P の範囲外 {len(badp)} 頭: " + " / ".join(f"{r['trk']} {r['date']} {r['name']} {r['P']}" for r in badp[:5]))
+    for trk in sorted({r["trk"] for r in rows}):
+        by = collections.defaultdict(dict)
+        for r in rows:
+            if r["trk"] == trk:
+                by[r["name"]].setdefault(r["date"], r["P"])
+        pairs, jumps = 0, []
+        for name, dp in by.items():
+            ds = sorted(dp)
+            for a, b in zip(ds, ds[1:]):
+                if dp[a] >= TK_JUMP_FROM:
+                    pairs += 1
+                    if 0 <= dp[b] < dp[a] * 0.5:
+                        jumps.append(f"{name} {a} {dp[a]}→{b} {dp[b]}")
+        if len(jumps) >= TK_JUMP_N and len(jumps) >= TK_JUMP_RATE * max(pairs, 1):
+            why.append(f"{trk} 前の一覧から P が半分未満 {len(jumps)}/{pairs} 頭: " + " / ".join(jumps[:5]))
+    return why
+
 
 def rows_of(words, tol=3):
     rows = []
@@ -186,7 +240,7 @@ def rows_of(words, tol=3):
     return [(t, sorted(ws, key=lambda w: w["x0"])) for t, ws in rows]
 
 
-def parse_ng(data, fy, k):
+def parse_ng(data, fy, k, stat=None):
     import pdfplumber
     out = []
     for pg in pdfplumber.open(io.BytesIO(data)).pages:
@@ -213,6 +267,7 @@ def parse_ng(data, fy, k):
                 for g in re.findall(r"(3歳|2歳|[ABC])(\d*)[a-z]?組", s) + ([("3歳", "")] if re.search(r"\s3歳\s+\d\d:\d\d", s) else []):
                     if block is not None:
                         block.append(g[0] + g[1])
+                _stat_add(stat, s, CAND_NG, HN)
                 for h in HN.finditer(s):
                     name, sex, age, P, tr = h.groups()
                     bl = "/".join(block) if block else ""
@@ -223,7 +278,7 @@ def parse_ng(data, fy, k):
     return out
 
 
-def parse_ks(data, today):
+def parse_ks(data, today, stat=None):
     import pdfplumber
     pdf = pdfplumber.open(io.BytesIO(data))
     full0 = N(pdf.pages[0].extract_text() or "")
@@ -271,6 +326,7 @@ def parse_ks(data, today):
                     continue
                 if s.startswith("J ") or "補欠" in s:
                     continue
+                _stat_add(stat, s, CAND_KS, HK)
                 for h in HK.finditer(s):
                     pre, name, rr, P, tr, wt = h.groups()
                     c = rcls
@@ -636,17 +692,30 @@ def main():
         log("前日に笠松・名古屋の開催なし= 何もしない")
         return 0
     try:
-        ks_rows = []
+        ks_rows, stats = [], []
         for d, u in ks_links(today):
-            ks_rows += parse_ks(http(u), today)
+            st = {}
+            ks_rows += parse_ks(http(u), today, st)
+            stats.append((f"笠松 {d}", st))
         ng_rows = []
         for y, k, d, u in ng_urls(today):
-            ng_rows += parse_ng(http(u), y, k)
+            st = {}
+            ng_rows += parse_ng(http(u), y, k, st)
+            stats.append((f"名古屋 {y}-{k}-{d}", st))
         if not ks_rows or not ng_rows:
             raise ValueError(f"一覧の行が 0(笠松 {len(ks_rows)}・名古屋 {len(ng_rows)})")
     except Exception as e:
         log(f"::error::一覧を取得・解析できない: {e}")
         say(False, f"取得失敗 {str(e)[:80]}")
+        return 2
+    log("一覧ごとの 読めた/馬らしい行= " + " ".join(f"{nm}:{st.get('hit', 0)}/{st.get('cand', 0)}" for nm, st in stats))
+    for w in tokai_drops(stats):
+        log(f"::warning::{w}")
+    why = tokai_guard(ks_rows + ng_rows)
+    if why:
+        for w in why:
+            log(f"::error::一覧の読み違いの疑いで止める(書かない) {w}")
+        say(False, f"番人 {why[0][:70]}")
         return 2
     log(f"一覧の行= 笠松 {len(ks_rows)}・名古屋 {len(ng_rows)}")
     # §290 所属= nar_runs.trainer_area の一番新しい走。記録が無い馬だけ両場の一覧に出た回数の多い方(dm/a2.py)

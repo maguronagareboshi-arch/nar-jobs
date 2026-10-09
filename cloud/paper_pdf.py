@@ -133,6 +133,32 @@ def gear_from_band(band):
     return gear_marks(" ".join(str(d.get("text") or "") for d in band)), False
 
 
+# ---- 読み違いの番人(2026-10-10 監査 中 #9)。前半/上がりは帯の中の左右の位置で決めている= 入れ替わりを見ていなかった。
+#   紙面の上がりを公式(nar_runs.last3f)と照合し、合わない走の前半は捨てる(走ごと・便は止めない)。
+#   紙面の上がりが読めず値が 1 つだけのときは、それが公式の上がりと同じなら前半ではない(位置の取り違え)として捨てる。
+#   公式の上がりが無い走は照合できないのでそのまま通す。
+LAST3F_TOL = 0.05
+PAPER_GUARD = []         # 捨てた走の理由(paper_first3f がログに出す)
+
+
+def last3f_mismatch(run, d):
+    """紙面の 1 走と公式の 1 行 → 合わない理由(空= 通す)。"""
+    try:
+        off = float(d.get("last3f")) if d.get("last3f") is not None else None
+    except (TypeError, ValueError):
+        off = None
+    if off is None:
+        return ""
+    last, first = run.get("last3f"), run.get("first3f")
+    if last is not None:
+        if abs(float(last) - off) > LAST3F_TOL:
+            return "上がり 紙面 %.1f / 公式 %.1f" % (float(last), off)
+        return ""
+    if first is not None and abs(float(first) - off) <= LAST3F_TOL:
+        return "前半 %.1f が公式の上がりと同じ" % float(first)
+    return ""
+
+
 def rows_to_write(name, runs, hits, distances, src):
     """特定できた馬の、紙面に前半の値がある走だけ → nar_paper_runs の行。
     distances= {(track, date, race_no): distance_m}・src= {ref(ファイル名だけ), page, col}。
@@ -142,6 +168,10 @@ def rows_to_write(name, runs, hits, distances, src):
     for i, run in enumerate(runs or []):
         d = hits.get(i)
         if d is None or run.get("first3f") is None:
+            continue
+        bad = last3f_mismatch(run, d)
+        if bad:                                              # 読み違いの番人(10/10 監査 中 #9)= この走の前半は捨てる
+            PAPER_GUARD.append("%s %s %sR %s" % (d["track"], d["race_date"], d["race_no"], bad))
             continue
         dist = distances.get((d["track"], str(d["race_date"]), int(d["race_no"])))
         if dist is None:

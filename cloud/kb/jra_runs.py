@@ -168,14 +168,53 @@ def _parse_block(block, kb_horse_id):
     return row
 
 
+# ---- 読み違いの番人(2026-10-10 監査 中 #11)。ラベル付きの正規表現で読むが範囲を見ていなかった
+#   (9/29 に last3f と race_last3f が逆だった実例)。外れの走は runs に入れない(書かない)。
+#   前後 3F は 30〜50 秒(障害は後 3F だけ 30〜60 秒)・レースの上り 4F と 3F の差は 1 ハロン(9〜16 秒)・
+#   馬体重 300〜650kg・斤量 40〜70kg。
+JR_3F = (30.0, 50.0)
+JR_3F_JUMP = (30.0, 60.0)
+JR_4F_MINUS_3F = (9.0, 16.0)
+JR_BODY = (300, 650)
+JR_CARRIED = (40.0, 70.0)
+JRA_GUARD = []           # 外した走の理由(呼び側が数える)
+
+
+def jra_run_bad(r):
+    """中央の 1 走の外れ → 理由(空= 通す)。"""
+    jump = r.get("surface") == "障"
+    for key in ("first3f", "last3f"):
+        v = r.get(key)
+        if v is None or (jump and key == "first3f"):
+            continue
+        lo, hi = JR_3F_JUMP if jump else JR_3F
+        if not (lo <= v <= hi):
+            return f"{key} {v}"
+    a, b = r.get("last4f"), r.get("race_last3f")
+    if a is not None and b is not None and not (JR_4F_MINUS_3F[0] <= a - b <= JR_4F_MINUS_3F[1]):
+        return f"レースの上り 4F {a}・3F {b}"
+    w = r.get("body_weight")
+    if w is not None and not (JR_BODY[0] <= w <= JR_BODY[1]):
+        return f"馬体重 {w}"
+    c = r.get("carried_weight")
+    if c is not None and not (JR_CARRIED[0] <= c <= JR_CARRIED[1]):
+        return f"斤量 {c}"
+    return ""
+
+
 def parse_kanzen(html, kb_horse_id):
-    """馬の頁 → {'horse': {...}, 'runs': [中央の走だけ], 'n_blocks': 頁の全走}"""
+    """馬の頁 → {'horse': {...}, 'runs': [中央の走だけ], 'n_blocks': 頁の全走}。値の外れの走は runs に入れない。"""
     soup = BeautifulSoup(html, "lxml")
     blocks = soup.select("div.kanzendata_race")
     runs = []
     for b in blocks:
         r = _parse_block(b, kb_horse_id)
         if r is not None:
+            bad = jra_run_bad(r)
+            if bad:
+                JRA_GUARD.append(f"{kb_horse_id} {r.get('race_date')} {r.get('place')} {r.get('race_no')}R {bad}")
+                print(f"::warning::中央の走 書かない {JRA_GUARD[-1]}", flush=True)
+                continue
             runs.append(r)
     horse = parse_horse_header(soup)
     horse["kb_horse_id"] = kb_horse_id

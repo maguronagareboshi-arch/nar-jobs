@@ -577,12 +577,39 @@ def _parse_nouryoku_run(text):
     return run
 
 
+# ---- 読み違いの番人(2026-10-10 監査 中 #10)。能力表は列を位置(cells[0..11])で読む。
+#   ① 列のずれ= 馬名の印(span.kbamei の馬リンク)が 5 列目(cells[4])に無く、ほかの列にある行
+#   ② 過去走の値の範囲= 斤量 40〜70kg・前後 3F 30〜60 秒(外れの走は runs に入れない)
+#   ①が 1 行でもある・②の外れが NR_GUARD_N 走以上の頁は NouryokuGuard(呼び側が頁ごとに捨てる= 書かない)。
+NR_KIN = (40.0, 70.0)
+NR_3F = (30.0, 60.0)
+NR_GUARD_N = 3
+
+
+class NouryokuGuard(ValueError):
+    """能力表の頁の様式が想定と違う(列のずれ・値の外れ)。"""
+
+
+def nouryoku_run_bad(run):
+    """過去 1 走の外れ → 理由(空= 通す)。"""
+    k = run.get("kin")
+    if k is not None and not (NR_KIN[0] <= k <= NR_KIN[1]):
+        return f"斤量 {k}"
+    for key in ("f3", "l3"):
+        v = run.get(key)
+        if v is not None and not (NR_3F[0] <= v <= NR_3F[1]):
+            return f"{'前' if key == 'f3' else '後'}3F {v}"
+    return ""
+
+
 def parse_nouryoku(html, race_id=None):
     """能力表ページ → {race, horses: [{umaban, name, pedigree, stable, seiseki, runs}]}
-    ※RT/CPU/展開予想列は現状 display:none で空（取れる時に備えて拾う）"""
+    ※RT/CPU/展開予想列は現状 display:none で空（取れる時に備えて拾う）
+    列のずれ・値の外れが多い頁は NouryokuGuard。"""
     soup = BeautifulSoup(html, "lxml")
     race = _parse_race_header(soup, race_id)
     horses = []
+    shifted, bad_runs = [], []
     table = soup.select_one("table.nouryoku_html_table")
     if table:
         for tr in table.find_all("tr"):
@@ -596,6 +623,8 @@ def parse_nouryoku(html, race_id=None):
             ped = cells[4].split(" ")
             ped_cell = tds[4]
             horse_anchor = ped_cell.select_one("span.kbamei a[href*='/db/uma/']")
+            if horse_anchor is None and any(td.select_one("span.kbamei a[href*='/db/uma/']") for td in tds):
+                shifted.append(umaban)
             horse_name = _clean(_text(horse_anchor))
             horse_id = None
             if horse_anchor is not None:
@@ -613,6 +642,10 @@ def parse_nouryoku(html, race_id=None):
             runs = []
             for slot, cell_index in enumerate(range(7, 12)):
                 run = _parse_nouryoku_run(cells[cell_index])
+                bad = nouryoku_run_bad(run) if run else ""
+                if bad:
+                    bad_runs.append(f"{umaban}番 {slot + 1}列目 {bad}")
+                    continue
                 if run:
                     # Preserve the physical five-run display slot, including
                     # gaps; it is never used to invent a calendar year.
@@ -641,6 +674,12 @@ def parse_nouryoku(html, race_id=None):
                             "chuo": packs[2] if len(packs) > 2 else None},
                 "runs": runs,   # 5走前→前走（他場・中央・能力試験含む、テン/上がり付き）
             })
+    if shifted:
+        raise NouryokuGuard(f"能力表 {race_id} 列のずれ(馬名が5列目に無い) {len(shifted)} 頭: {shifted[:5]}")
+    if len(bad_runs) >= NR_GUARD_N:
+        raise NouryokuGuard(f"能力表 {race_id} 値の外れ {len(bad_runs)} 走: " + " / ".join(bad_runs[:5]))
+    for b in bad_runs:
+        print(f"::warning::能力表 {race_id} 書かない走 {b}", flush=True)
     return {"race_id": race_id, "race": race, "horses": horses}
 
 

@@ -244,6 +244,10 @@ def row_of(cells, keys, join=None):
             row[key] += join[key] + v
             continue
         row[key] = fix_time(v) if key == "time" else v
+    if row and len(cells) != len(keys):
+        # 読み違いの番人(10/10 監査 中 #2')。見出しとデータ行のセル数が違う= 列がずれて読めている疑い。
+        # ここでは印だけ付け、日の番人(noken_day_guard)が数えて外す(書く前に印は消す)
+        row[GUARD_MARK] = f"セル数 {len(cells)}(見出し {len(keys)})"
     return row
 
 
@@ -1175,6 +1179,94 @@ def pdf_body(table, hi, keys, extra=None, join=None, expand=None):
 
 
 TIME_RE = re.compile(r"^\d+[.:]\d+(?:[.:]\d+)?$")
+
+
+# ---- 読み違いの番人(2026-10-10 監査 中 #2')。門別以外の 12 場(門別は MonbetsuGuard)。
+#   ① 見出しとデータ行のセル数が違う行(row_of が GUARD_MARK の印を付ける)
+#   ② 値の範囲: 馬体重 300〜650kg(ばんえい 600〜1,400kg)・タイムは距離に見合う秒数(100m あたり 5.5〜9.5 秒・
+#      距離が無ければ 20〜300 秒。ばんえいは 30〜600 秒)・負担重量 40〜70kg(ばんえいの「重量」はソリなので見ない)
+#   ③ タイムが馬体重・負担重量と同じ値(列の取り違え。高知で馬体重が負担重量の欄に入った実例 §10 #89)
+#   数字として読めない値(「タイムオーバー」等)は見ない= 正しい資料を止めない。
+#   外れの馬が NK_GUARD_N 頭に達した日は書かない(1〜2 頭は ::warning:: だけ)。止めた日があれば終了コード 1。
+GUARD_MARK = "_guard"
+NK_WEIGHT = (300, 650)
+NK_WEIGHT_BANEI = (600, 1400)
+NK_SEC_PER_100M = (5.5, 9.5)
+NK_SEC_NODIST = (20, 300)
+NK_SEC_BANEI = (30, 600)
+NK_KIN = (40, 70)
+NK_GUARD_N = 3
+NOKEN_GUARD = []         # 番人が止めた日(main が終了コードを 1 にする)
+
+
+def _num_head(v, pat=r"(\d{2,4}(?:\.\d)?)"):
+    m = re.match(pat, norm(str(v or "")).strip())
+    return float(m.group(1)) if m else None
+
+
+def noken_row_bad(row, dist, banei=False):
+    """1 頭の外れ → 理由(空= 通す)。"""
+    if row.get(GUARD_MARK):
+        return row[GUARD_MARK]
+    lo, hi = NK_WEIGHT_BANEI if banei else NK_WEIGHT
+    w = _num_head(row.get("weight"), r"(\d{2,4})(?!\d)")
+    if w is not None and not (lo <= w <= hi):
+        return f"馬体重 {row.get('weight')!r}"
+    if not banei:
+        k = _num_head(row.get("kin"))
+        if k is not None and not (NK_KIN[0] <= k <= NK_KIN[1]):
+            return f"負担重量 {row.get('kin')!r}"
+    t = row.get("time")
+    sec = time_sec(norm(str(t)).strip()) if t else None
+    if sec is not None:
+        if banei:
+            rng = NK_SEC_BANEI
+        elif dist:
+            rng = (dist / 100 * NK_SEC_PER_100M[0], dist / 100 * NK_SEC_PER_100M[1])
+        else:
+            rng = NK_SEC_NODIST
+        if not (rng[0] <= sec <= rng[1]):
+            return f"タイム {t}" + (f"({dist}m)" if dist and not banei else "")
+        for other in ("weight", "kin"):
+            if row.get(other) and norm(str(row[other])).strip() == norm(str(t)).strip():
+                return f"タイム {t} が{other}の欄と同じ"
+    return ""
+
+
+def _dist_int(v):
+    m = re.search(r"\d{3,4}", str(v or ""))
+    return int(m.group(0)) if m else None
+
+
+def noken_day_bad(day, banei=False):
+    """1 日の外れの一覧 [理由]。"""
+    bad = []
+    for race in day.get("races") or []:
+        dist = _dist_int(race.get("dist") or race.get("_dist"))
+        for row in race.get("rows") or []:
+            b = noken_row_bad(row, dist, banei)
+            if b:
+                bad.append(f"{race.get('no')}R {row.get('name')} {b}")
+    return bad
+
+
+def noken_day_guard(name, days):
+    """取れた日 → 書いてよい日。外れが NK_GUARD_N 頭以上の日は外して ::error::。印(GUARD_MARK)は消す。"""
+    keep = []
+    for day in days:
+        bad = noken_day_bad(day, banei=(name == "banei"))
+        for race in day.get("races") or []:
+            for row in race.get("rows") or []:
+                row.pop(GUARD_MARK, None)
+        if len(bad) >= NK_GUARD_N:
+            print(f"::error::能検 {name} {day.get('date')} 表の読み違いの疑いで書かない 外れ {len(bad)} 頭: "
+                  + " / ".join(bad[:5]), flush=True)
+            NOKEN_GUARD.append(f"{name} {day.get('date')}")
+            continue
+        for b in bad:
+            print(f"::warning::能検 {name} {day.get('date')} {b}", flush=True)
+        keep.append(day)
+    return keep
 
 
 def take_status(row):
@@ -2594,6 +2686,8 @@ def nankan_backfill(prefix, d_from, d_to, base, key, dry_run=False):
                     log(f"  {name} {date} 取得失敗(3回) {type(e).__name__}: {str(e)[:100]}")
                 else:
                     time.sleep(3.0 * (n + 1))
+        if day and not noken_day_guard(prefix, [day]):
+            day = None                             # 番人が止めた日(書かない・終了コード 1)
         if day:
             hit += 1
             pending.append(day)
@@ -2605,7 +2699,7 @@ def nankan_backfill(prefix, d_from, d_to, base, key, dry_run=False):
         log("  " + line)
     log(f"{name}: 叩いた日 {len(todo)} / 試験のあった日 {hit} / 書いた日 {written} / 取得失敗 {len(failed)}"
         + (f" {failed}" if failed else ""))
-    return 1 if (failed or rc) else 0
+    return 1 if (failed or rc or NOKEN_GUARD) else 0
 
 
 def nankan_collector(prefix):
@@ -3675,6 +3769,8 @@ def main():
             got = collect(existing, args.backfill)
             # §117b 南関の一部は (days, offsets) を返す。offsets は **別の鍵**へ書く
             new_days, new_offsets = got if isinstance(got, tuple) else (got, None)
+            if name != "monbetsu":                  # 門別は MonbetsuGuard(collect_monbetsu の中)
+                new_days = noken_day_guard(name, new_days)
         except Exception as e:
             log(f"{name}: 索引の取得に失敗 {type(e).__name__}: {str(e)[:150]}")
             rc = 2
@@ -3759,6 +3855,9 @@ def main():
                 log(f"{name}: nar_meta/{meta_key}_offsets 更新")
     if MONBETSU_GUARD:
         log(f"門別: 番人が止めた日 {len(MONBETSU_GUARD)}(書いていない)= 終了コード 1")
+        rc = rc or 1
+    if NOKEN_GUARD:
+        log(f"能検: 番人が止めた日 {len(NOKEN_GUARD)}(書いていない) {NOKEN_GUARD[:10]}= 終了コード 1")
         rc = rc or 1
     return rc
 

@@ -104,7 +104,7 @@ def official_runs(runs):
     times = sorted({"%.1f" % r["time_sec"] for r in runs})
     if not (tracks and dates and times):
         return []
-    base = ("nar_runs?select=track,race_date,race_no,runner_number,horse_name,finish,time_sec"
+    base = ("nar_runs?select=track,race_date,race_no,runner_number,horse_name,finish,time_sec,last3f"
             "&track=" + q_in(tracks) + "&race_date=in.(" + ",".join(dates) + ")&time_sec=in.(" + ",".join(times) + ")"
             "&order=track,race_date,race_no,runner_number&limit=1000")
     out, offset = [], 0
@@ -328,6 +328,8 @@ def main(argv=None):
             log("%s 失敗 %s" % (label, q)); fails += 1; continue
         except Exception as e:  # ⛔例外の文には URL やパスが入りうる= 種類名だけ
             log("%s 失敗(%s)" % (label, type(e).__name__)); fails += 1; continue
+        while pp.PAPER_GUARD:                          # 読み違いの番人(10/10 監査 中 #9)= 走ごとに捨てて続行
+            log("::warning::%s 上がりが公式と合わない走の前半を捨てた %s" % (label, pp.PAPER_GUARD.pop(0)))
         n3 = sum(1 for r in rows if r["first3f"] is not None)
         log("%s 馬の列 %d・特定 %d・保留 %d・公式の行 %d・書く行 %d(first3f %d・first2f %d・馬具 %d 走)" % (
             label, ncol, ncol - len(held), len(held), ndb, len(rows), n3, len(rows) - n3, sum(1 for r in rows if r.get("gear"))))
