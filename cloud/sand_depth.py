@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""cloud: 高知・名古屋・笠松の**走路の砂厚**を写して溜める(§146)。
+"""cloud: 高知・名古屋・笠松・金沢の**走路の砂厚**を写して溜める(§146)。
 
 なぜ集めるか= 3 場とも「この日に内柵から何 cm だったか」の表を出すが、**古い表は消える**
   (名古屋= 一覧に 1〜3 本・笠松= 最新 1 本だけ・旧記事は 404)。毎回写して溜めたものが、そのまま履歴になる。
@@ -772,6 +772,103 @@ def read_kasamatsu_pdf(raw, url, title, posted):
     return out
 
 
+# ---------------------------------------------------------------- 金沢(お知らせ+作業簡略図の PDF)
+# 公式= 「金沢競馬場コース情報（馬場砂厚調整）」のお知らせ+添付 PDF(作業簡略図)。1m おきではなく
+#   ならし作業の**列(内から 6 列)**ごとの値で、幅のある値(13~14㎝)がある= vals(下限)と vals_hi(上限)。
+#   幅の無い値(11㎝)は下限=上限。offsets= 列の番号(1=内)。⛔m ではない(器の注記)
+KZ_LANES = 6
+KZ_VAL_RE = re.compile(r"(\d{1,2})(?:~(\d{1,2}))?(?:㎝|cm)")
+
+
+def kanazawa_news_items(html):
+    """お知らせ一覧 → [(記事の url, 掲載日, 見出し)]。⛔「砂厚調整」だけ(砂の補充は別)"""
+    out = []
+    for m in re.finditer(r'href="(https://www\.kanazawakeiba\.com/(?:news|race)/info-\d+/)"\s*>(.*?)'
+                         r'<span class="date">(\d{4})\.(\d{2})\.(\d{2})</span>', html or "", re.S):
+        title = clean(m.group(2))
+        if "砂厚調整" not in title:
+            continue
+        url = m.group(1)
+        if any(u == url for u, _, _ in out):
+            continue
+        out.append((url, "%s-%s-%s" % m.group(3, 4, 5), title))
+    return out
+
+
+def kanazawa_body_pdf(html):
+    """記事の本文(<div class="paper">)の中の最初の PDF。⛔横の固定リンク(年間日程など)は拾わない"""
+    m = re.search(r'<div class="paper">(.*?)</div>', html or "", re.S)
+    if not m:
+        return None
+    p = re.search(r'href="([^"]+\.pdf)"', m.group(1))
+    return p.group(1) if p else None
+
+
+def kanazawa_lanes(words, posted):
+    """PDF の語(上から順に並べ直す)→ (測定日, [[下限, 上限] × 6])。読めなければ (None, None)。
+    ⛔値は**縦に並んだ順= 内→外**。6 列でなければ捨てる(推測で埋めない)"""
+    ws = sorted(words, key=lambda w: (w.get("top") or 0, w.get("x0") or 0))
+    lanes = []
+    for w in ws:
+        m = KZ_VAL_RE.fullmatch(zen2han(w["text"]).replace(" ", ""))
+        if m:
+            lo = float(m.group(1))
+            hi = float(m.group(2)) if m.group(2) else lo
+            lanes.append([lo, hi])
+    if len(lanes) != KZ_LANES or any(not (1 <= lo <= hi <= 30) for lo, hi in lanes):
+        return None, None
+    text = zen2han("".join(w["text"] for w in ws))
+    md = re.search(r"(\d{1,2})月(\d{1,2})日現在", text) or re.search(r"調整[)）](\d{1,2})月(\d{1,2})日", text)
+    if not md:
+        return None, None
+    py = dt.date.fromisoformat(posted)
+    try:
+        d = dt.date(py.year, int(md.group(1)), int(md.group(2)))
+    except ValueError:
+        return None, None
+    if d > py + dt.timedelta(days=7):                  # 年またぎ(12 月の図を 1 月に出した)
+        d = d.replace(year=py.year - 1)
+    return d.isoformat(), lanes
+
+
+def take_kanazawa(cfg, known):
+    rows, skipped, ng = [], 0, 0
+    items = kanazawa_news_items(fetch("https://www.kanazawakeiba.com/news/"))
+    print("  お知らせ一覧 → 砂厚調整の記事 %d 本" % len(items))
+    for url, posted, title in items:
+        if cfg["limit"] <= 0:
+            break
+        if url in known or posted < cfg["since"]:
+            skipped += 1
+            continue
+        time.sleep(SLEEP)
+        try:
+            pdf_url = kanazawa_body_pdf(fetch(url))
+            if not pdf_url:
+                skipped += 1
+                print("   ⚠本文に PDF が無い %s" % url)
+                continue
+            time.sleep(SLEEP)
+            raw = fetch(pdf_url, binary=True)
+            with pdf_page(raw) as pdf:
+                words = page_words(pdf.pages[0])
+            d, lanes = kanazawa_lanes(words, posted)
+        except Exception as e:                         # noqa: BLE001
+            ng += 1
+            print("   ⚠読めない %s (%s: %s)" % (url, type(e).__name__, str(e)[:60]))
+            continue
+        if not lanes:
+            ng += 1
+            print("   ⚠列の値が 6 つ読めない= 入れません %s" % url)
+            continue
+        rows.append(row("金沢", d, "measure", section="全周",
+                        offsets=[float(i + 1) for i in range(len(lanes))],
+                        vals=[lo for lo, _ in lanes], vals_hi=[hi for _, hi in lanes],
+                        title=title, src=url))
+        cfg["limit"] -= 1
+    return rows, skipped, ng
+
+
 # ================================================================ 投入
 
 def load_env(path):
@@ -845,7 +942,7 @@ def insert_rows(base, key, rows):
 # ================================================================ main
 
 SITES = {"kochi": ("高知", take_kochi), "nagoya": ("名古屋", take_nagoya),
-         "kasamatsu": ("笠松", take_kasamatsu)}
+         "kasamatsu": ("笠松", take_kasamatsu), "kanazawa": ("金沢", take_kanazawa)}
 
 
 def main():
@@ -886,7 +983,9 @@ def main():
     print("== 合わせて %d 行 ==" % len(rows))
     for r in rows[:12]:
         vals = r["vals"]
-        body = ("%s %s" % (r["section"], " ".join("%g" % v for v in vals))) if vals else (r["note"] or "")
+        hi = r.get("vals_hi") or vals or []
+        body = ("%s %s" % (r["section"], " ".join(("%g~%g" % (v, h)) if h != v else ("%g" % v)
+                                                   for v, h in zip(vals, hi)))) if vals else (r["note"] or "")
         print("  %s %s %-11s %s%s" % (r["track"], r["d"], r["kind"], body[:72],
                                       ("  平均 %g" % r["avg"]) if r["avg"] is not None else ""))
     if len(rows) > 12:
@@ -900,8 +999,15 @@ def main():
     if not base or not key:
         print("SUPABASE_URL / SUPABASE_SERVICE_KEY がありません")
         return 1
+    # ⛔PostgREST はまとめて入れる行の列名がそろっていないと断る= 列の組ごとに分けて入れる(金沢だけ vals_hi)
+    groups = {}
+    for r in rows:
+        groups.setdefault(tuple(sorted(r)), []).append(r)
+    ok = dup = 0
     try:
-        ok, dup = insert_rows(base, key, rows)
+        for g in groups.values():
+            a_ok, a_dup = insert_rows(base, key, g)
+            ok, dup = ok + a_ok, dup + a_dup
     except Exception as e:                             # noqa: BLE001
         print("投入に失敗: %s" % e)
         return 1
