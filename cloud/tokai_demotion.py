@@ -173,7 +173,12 @@ KANA = r"[゠-ヿA-Za-z]"
 NAME = r"(%s[゠-ヿA-Za-z0-9・\.\']*)" % KANA
 TR = r"([一-鿿々][一-鿿々ケヶ]*)"
 HN = re.compile(r"(?:^|\s|\))(?:○|◎|希\s*)*[○◎]?" + NAME + r"\s+(牡|牝|セ)\s*(\d+)\s+(?:[ABC]\s+)?([\d,]+|未出走)\s*" + TR)
-HK = re.compile(r"(?:([ABC]\d+|\d+R希望)\s+)?" + NAME + r"\s+(?:(\d+)R\s+)?(?:#\s*)?(\d{1,5})\s*" + TR + r"(?:\s+(\d{2})(?!\d))?")
+# 笠松の P の前の印(2026-10-10)= 「×」「補欠」「#」「9R」など。意味は一覧に記載なし= 読み飛ばして数字を P に採り、
+#   印の文字(× 補欠 #)だけ行の mark に持たせる(計算には使わない)。馬名と P の間の級の 1 字(「ヨサリ B 4456」)も読み飛ばす。馬名は数字・カナの直後から始めない(「9R」の R を馬名にしない)。
+KS_NAME0 = r"(?<![0-9゠-ヿA-Za-z])"
+KS_MARK = r"((?:(?:\d+R|×|補欠|#)\s*)*)"
+HK = re.compile(r"(?:([ABC]\d+|\d+R希望)\s+)?" + KS_NAME0 + NAME + r"\s+(?:[ABC]\s+)?(?:(\d+)R\s*)?" + KS_MARK
+                + r"(\d{1,5})\s*" + TR + r"(?:\s+(\d{2})(?!\d))?")
 
 # ---- 読み違いの番人(2026-10-10 監査 中 #8)。合わない行を黙って落としていた= 数えて閾値で止める。
 #   馬らしい並び(NG= 性+齢+数・KS= カナの名+数)の数(cand)と、正規表現で読めた数(hit)を一覧ごとに数え、
@@ -183,7 +188,7 @@ HK = re.compile(r"(?:([ABC]\d+|\d+R希望)\s+)?" + NAME + r"\s+(?:(\d+)R\s+)?(?:
 #   TK_JUMP_N 頭以上かつ比べた馬の TK_JUMP_RATE 以上なら止める(見直しは 0.75 倍なので半分未満にはならない)。
 #   止めた= 表を書かない・heartbeat fail・終了コード 2。
 CAND_NG = re.compile(r"(?:牡|牝|セ)\s*\d+\s+(?:[ABC]\s+)?(?:[\d,]+|未出走)")
-CAND_KS = re.compile(NAME + r"\s+(?:(?:\d+R|#)\s*)*\d{1,5}(?!\d)")
+CAND_KS = re.compile(KS_NAME0 + r"(?![ABC]\d)" + NAME + r"\s+(?:[ABC]\s+)?(?:(?:\d+R|×|補欠|#)\s*)*\d{1,5}(?![\dR])")
 TK_DROP_N, TK_DROP_RATE = 10, 0.05
 TK_P_MAX = 50000
 TK_P_BAD_N = 3
@@ -347,18 +352,19 @@ def parse_ks(data, today, stat=None):
                     rcls = ("3歳" if m.group(1) == "3歳" else "2歳" if m.group(1) == "2歳" else g[0])
                     sub = None
                     continue
-                if s.startswith("J ") or "補欠" in s:
+                if s.startswith("J ") or "サラ系" in s:   # J= 中央の馬(P なし)・サラ系= 読めなかった番組の見出し
                     continue
                 _stat_add(stat, s, CAND_KS, HK)
                 for h in HK.finditer(s):
-                    pre, name, rr, P, tr, wt = h.groups()
+                    pre, name, rr, marks, P, tr, wt = h.groups()
                     c = rcls
                     if pre and re.match(r"[ABC]\d+", pre):
                         sub = pre[0]
                     if sub and rcls not in ("3歳", "2歳"):
                         c = sub
                     out.append(dict(trk="KS", meet=("R%d" % reiwa, int(mk.group(2))), name=name, P=int(P),
-                                    rc=(c if c in ("3歳", "2歳") else "G"), date=DATE))
+                                    rc=(c if c in ("3歳", "2歳") else "G"), date=DATE,
+                                    mark="".join(re.findall(r"×|補欠|#", marks or ""))))
     return out
 
 
