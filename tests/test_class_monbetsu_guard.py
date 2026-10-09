@@ -117,6 +117,57 @@ class Guard(unittest.TestCase):
         self.assertTrue(CM.guard_check("", "", self.misread(), self.old))
 
 
+class RiseBounds(unittest.TestCase):
+    """rise_bounds は新しい表の全馬の走を読む(上がった馬だけだと 3 歳限定戦の出走馬が欠ける)。
+    期間内に走が無い馬は上限 C.CAP で見る(止める数に入れない)。"""
+    RACE = ("門別", "2026-10-01", 5)
+
+    def setUp(self):
+        # 前の回 9/25 締め→新しい回 10/9 締め。フェルカド特別Ｃ１(名前に「３歳」なし)に 3歳 8頭
+        self.horses = [f"サンサイ{i}" for i in range(8)]
+        old_h = {nm: {"prize": 100 * M, "age": 3} for nm in self.horses}
+        old_h["スハッチェ"] = {"prize": 100 * M, "age": 3}
+        new_h = json.loads(json.dumps(old_h))
+        new_h[self.horses[0]]["prize"] = 150 * M      # 1着 +50万
+        new_h["スハッチェ"]["prize"] = 152 * M          # 期間内の走が DB に無い
+        self.old = table(13, old_h, asof="2026-09-26")
+        self.new = table(14, new_h, asof="2026-10-10")
+        tr, d, no = self.RACE
+        self.nar = [{"track": tr, "race_date": d, "race_no": no, "horse_name": nm, "birth_date": None,
+                     "age": 3, "finish": i + 1, "finish_note": None} for i, nm in enumerate(self.horses)]
+        self.races = {self.RACE: {"track": tr, "race_date": d, "race_no": no, "race_name": "フェルカド特別Ｃ１",
+                                  "race_kind": "一般", "prize_yen": [500000]}}
+        self.asked = None
+        self._fetch = C.fetch
+
+        def fake(base, key, names, since, cut_min):
+            self.asked = set(names)
+            return [r for r in self.nar if r["horse_name"] in names], self.races, {}
+        C.fetch = fake
+
+    def tearDown(self):
+        C.fetch = self._fetch
+
+    def test_all_runners_make_3yo_race(self):
+        bound = CM.rise_bounds("b", "k", self.new, self.old)
+        self.assertEqual(self.asked, set(self.new["horses"]))   # 全馬を読む
+        self.assertEqual(bound[self.horses[0]], 50)               # 3歳 K13= 50万(3歳以上と見ると 40万)
+        why, over = CM.guard_rise(self.new, self.old, bound)
+        self.assertEqual(over, [])
+
+    def test_partial_runners_would_misjudge(self):
+        # 上がった馬 1頭だけの出走馬では 3歳以上(40万)と取り違える= 直した理由
+        runners = C.runners_of([self.nar[0]])
+        self.assertEqual(C.race_group(runners[self.RACE], self.races[self.RACE]), "3u")
+        self.assertEqual(C.race_group(C.runners_of(self.nar)[self.RACE], self.races[self.RACE]), "3")
+
+    def test_no_runs_in_period_uses_cap(self):
+        bound = CM.rise_bounds("b", "k", self.new, self.old)
+        self.assertEqual(bound["スハッチェ"], C.CAP)
+        why, over = CM.guard_rise(self.new, self.old, bound)
+        self.assertNotIn("スハッチェ", [x[0] for x in over])
+
+
 class RedoCheck(unittest.TestCase):
     """自前の加算: 同じ回(第14回)が取り直されたら、その回の照合を第13回までの公式からやり直す。"""
 

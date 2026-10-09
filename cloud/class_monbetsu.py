@@ -1156,7 +1156,9 @@ def max_add(r, races, runners):
 
 def rise_bounds(base, key, new, old):
     """上がった馬について、前の回の締めより後〜新しい回の締めまでの走で取りうる最大加算(万)。
-    PostgREST で対象馬だけ読む(class_monbetsu_calc.fetch)。走が 1 本も無い馬は入れない。"""
+    走は新しい表の全馬ぶん読む(計算本体 class_monbetsu_calc.run と同じ集め方)。上がった馬だけで読むと
+    出走馬が欠け、名前に「３歳」の無い 3 歳限定戦を 3歳以上と取り違える(上限 50→40万)。
+    期間内の走が 1 本も無い馬は上限(C.CAP= 4,000万)で見る。"""
     import class_monbetsu_calc as C
     fy = new["fy"]
     names = sorted(nm for nm, h in new["horses"].items()
@@ -1164,9 +1166,10 @@ def rise_bounds(base, key, new, old):
                    and h["prize"] > old["horses"][nm]["prize"])
     if not names:
         return {}
+    every = sorted(nm for nm, h in new["horses"].items() if h.get("prize") is not None)
     cut_o = C.ipan_cut(fy, old["kai"], old["asof"], old.get("asof_by"))
     cut_n = C.ipan_cut(fy, new["kai"], new["asof"], new.get("asof_by"))
-    nar, races, jra = C.fetch(base, key, names, f"{fy}-04-01", cut_o)
+    nar, races, jra = C.fetch(base, key, every, f"{fy}-04-01", cut_o)
     by_name = defaultdict(list)
     for r in nar:
         by_name[r["horse_name"]].append(r)
@@ -1175,11 +1178,9 @@ def rise_bounds(base, key, new, old):
     out = {}
     for nm in names:
         age = new["horses"][nm].get("age") or 2
-        runs = C.horse_runs(nm, year - age, by_name, jra)
-        if not runs:
-            continue
-        out[nm] = sum(max_add(r, races, runners) for r in runs
-                      if cut_o < r["race_date"] <= cut_n and C.started(r))
+        runs = [r for r in C.horse_runs(nm, year - age, by_name, jra)
+                if cut_o < r["race_date"] <= cut_n and C.started(r)]
+        out[nm] = sum(max_add(r, races, runners) for r in runs) if runs else C.CAP
     return out
 
 
