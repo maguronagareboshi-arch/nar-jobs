@@ -295,6 +295,7 @@ jobs:
   #   ② JST 09:30〜22:00 に refresh の last_ok が 70 分より古い(daily 便は 30 分おき)
   #   ③ JST 09:30 以降に ai_feat・stats の last_ok が今日でない
   #   ④ JST 10:30 以降に votes の last_ok が今日でない
+  #   ⑥ JST 08:00 以降に k43_daily の last_ok が今日でない(馬柱の指標・便は毎朝 06:47)
   #   表がまだ無い/読めないときは警告だけで緑(本番 DB に表を当てる前でも赤にしない)。
   heartbeat:
     if: github.event.schedule != '40 23 * * *'
@@ -350,6 +351,10 @@ jobs:
               t = last_ok('votes')
               if t is None or t.date() != today:
                   bad.append(f"votes が今日まだ成功していない(最終 {t})")
+          if hm >= 800:
+              t = last_ok('k43_daily')
+              if t is None or t.date() != today:
+                  bad.append(f"k43_daily が今日まだ成功していない(最終 {t})")
           import re
           m = re.search(r'見込み=(\d{4}-\d{2}-\d{2})', str((got.get('monbetsu_class') or {}).get('note') or ''))
           if m:

@@ -44,6 +44,8 @@ class Collect(unittest.TestCase):
     def test_numbers_removed_and_job_fallback(self):
         self.assertEqual(wd.summarize("refresh の最終成功が 70 分より古い(2026-10-03 10:00)"),
                          wd.summarize("refresh の最終成功が 70 分より古い(2026-10-04 11:30)"))
+        self.assertEqual(wd.summarize("k43_daily が今日まだ成功していない(最終 2026-10-09 06:52)"),
+                         wd.summarize("k43_daily が今日まだ成功していない(最終 2026-10-10 06:50)"))
         needs = {
             "freshness": {"result": "success", "outputs": {"red": "true", "reasons": ""}},
             "heartbeat": {"result": "success", "outputs": {"red": "true", "reasons": json.dumps(["x の last_status= fail(note=n 3)"])}},
