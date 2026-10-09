@@ -2,7 +2,7 @@
 # 台本 cloud/day_trend_base.py。形の正本= nar-site SPEC_day_trend_base_20261009.md。
 # ⛔本番 DB では REST の単純 select だけ(場×月ごと)。集計は全部 Python(この中)。
 # 既定= 毎月 1 日 JST 06:20(= UTC 前月末日 21:20)。cron は UTC 28〜31 日 21:20 に起き、JST で 1 日のときだけ走る。
-# 初回は workflow_dispatch で month=2026-09,2026-10 を流す。
+# 初回(10/9)は workflow_dispatch で 2023-10〜2026-10 の 37 か月を流す(ユーザー決定= 3 年分)。
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
 name: day-trend-base
 on:
@@ -31,7 +31,7 @@ concurrency:
 jobs:
   base:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 150
     steps:
       - uses: actions/checkout@v7
       - name: unit tests

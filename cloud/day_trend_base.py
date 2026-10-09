@@ -500,6 +500,16 @@ def main(argv=None):
     d1 = (dt.date.fromisoformat(f"{months[-1]}-01") - dt.timedelta(days=1)).isoformat()
     log(f"月 {months} / 場 {len(tracks)} / 読む期間 {d0}〜{d1}")
     recs = fetch(base, key, d0, d1, tracks)
+    # 4角が読めた割合(場×年)。古い月を作り足す時の確かめ用(10/9 3 年分の作成)
+    for t in tracks:
+        if t == BANEI:
+            continue
+        yr = {}
+        for r in recs[t]:
+            y = yr.setdefault(r["d"][:4], [0, 0])
+            y[0] += 1
+            y[1] += "4" in (r.get("cz") or {})
+        log(f"{t} 4角が読めた割合: " + " ".join(f"{y} {k}/{n}={100 * k / n:.1f}%" for y, (n, k) in sorted(yr.items())))
     built_at = now.replace(microsecond=0).isoformat()
     rows = []
     for t in tracks:
@@ -518,11 +528,15 @@ def main(argv=None):
         log(f"ドライラン= {len(rows)} 本を {a.out} に出した(本番に書かない)")
         return 0
     up = dt.datetime.now(dt.timezone.utc).isoformat()
-    st, _ = req(base, key, "/rest/v1/nar_meta?on_conflict=key", "POST",
-                json.dumps([{"key": k, "value": v, "updated_at": up} for k, v, _ in rows],
-                           ensure_ascii=False).encode("utf-8"))
-    log(f"nar_meta {len(rows)} 本 upsert {st}")
-    return 0 if st in (200, 201, 204) else 1
+    bad = 0
+    for i in range(0, len(rows), 20):   # 3 年分(555 本)を 1 回で送らない
+        part = rows[i:i + 20]
+        st, _ = req(base, key, "/rest/v1/nar_meta?on_conflict=key", "POST",
+                    json.dumps([{"key": k, "value": v, "updated_at": up} for k, v, _ in part],
+                               ensure_ascii=False).encode("utf-8"))
+        log(f"nar_meta {i + 1}〜{i + len(part)} 本目 upsert {st}")
+        bad += st not in (200, 201, 204)
+    return 0 if bad == 0 else 1
 
 
 if __name__ == "__main__":
