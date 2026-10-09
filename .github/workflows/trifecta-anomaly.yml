@@ -1,0 +1,41 @@
+# 研究用・1 回きり。(cloud/trifecta_anomaly.py)= 締め切り間際に特定の3連単の組へ馬単位で説明できない票が入りその組が当たる形を 9/8〜9/30 で数え docs/trifecta-anomaly/result.md を書く。
+# 上位レースの一覧は成果物 trifecta-anomaly-private だけ(commit しない)。
+# ⛔本番 DB では REST の単純 select だけ。集計は全部 Python。書き込みなし。schedule なし。
+name: trifecta-anomaly
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: trifecta-anomaly
+  cancel-in-progress: false
+jobs:
+  trianom:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - name: trifecta anomaly
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          python3 cloud/trifecta_anomaly.py
+          if [ -n "$(git status --porcelain docs/trifecta-anomaly)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/trifecta-anomaly
+            git commit -m "3連単 組への集中と的中 研究集計 $(TZ=Asia/Tokyo date +%F)"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          else
+            echo "差分なし"
+          fi
+      - name: upload private race list
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: trifecta-anomaly-private
+          path: trifecta_anomaly_private.csv
+          if-no-files-found: ignore
+          retention-days: 3
