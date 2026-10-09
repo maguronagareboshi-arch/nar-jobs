@@ -3,6 +3,9 @@
 #   見込み日の前日より前/今季終わり(見込み日から 10 日以内に門別の開催なし)= 通信せず緑。
 #   取れなければ ::warning:: だけで緑(前回の表を残す)。見込み日を過ぎても取れないときは外の見張り nar-watchdog が赤にする。
 #   heartbeat 'monbetsu_class' を毎回書く(note に「見込み=YYYY-MM-DD」)。
+#   読み違いの番人(2026-10-09 事故の再発防止・class_monbetsu.py guard_check)が止めたら nar_meta に書かず heartbeat を fail
+#   (終了コード 4)。force でも同じ。外の見張り nar-watchdog ① が赤にする。
+#   新しい回・force・差し替え(recheck)のどれでも、次の手順で 自前の加算(照合のやり直しを含む)と過去レースの昇級ラインを作り直す。
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
 name: monbetsu-class
 on:
@@ -35,21 +38,54 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           if [ "${{ inputs.force }}" = "true" ]; then
-            python cloud/class_monbetsu.py --apply && echo "new_kai=force" >> "$GITHUB_OUTPUT"
+            rc=0
+            python cloud/class_monbetsu.py --apply || rc=$?
+            if [ "$rc" = "4" ]; then
+              echo "::error::門別の級別表 読み違いの疑いで取り込まなかった(前の表を残す・heartbeat は fail)"
+              exit 0
+            fi
+            [ "$rc" = "0" ] || exit "$rc"
+            echo "new_kai=force" >> "$GITHUB_OUTPUT"
           else
             python cloud/class_monbetsu.py --timed --apply
           fi
 
-      # §285-F 新しい回を取った時だけ= 過去レースの昇級ライン(表 nar_monbetsu_level_hist)を今年度ぶん upsert で作り直す。
-      #   kais= 公式 PDF の第1回〜最新回を取り直す(nar_meta は書かない)。⛔失敗しても便は落とさない(::warning:: だけ)
-      - name: monbetsu level hist
+      # 新しい回・force・差し替えの時だけ= 公式 PDF の第1回〜最新回を取り直す(nar_meta は書かない)。
+      #   ⛔失敗しても便は落とさない(::warning:: だけ)
+      - name: monbetsu kais
+        id: kais
         if: steps.timed.outputs.new_kai != ''
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
-          python cloud/class_monbetsu.py --backfill --out "$RUNNER_TEMP/kais" \
-            && python cloud/class_monbetsu_level_hist.py --kais "$RUNNER_TEMP/kais" --out "$RUNNER_TEMP/lvh" --apply \
+          python cloud/class_monbetsu.py --backfill --out "$RUNNER_TEMP/kais" && echo "ok=1" >> "$GITHUB_OUTPUT" \
+            || echo "::warning::門別の級別表 第1回〜最新回を取り直せなかった(前の行を残す)"
+
+      # 2026-10-09 事故の再発防止= force や差し替えでも自前の加算(nar_meta 'monbetsu_class_calc')を作り直す。
+      #   同じ回が取り直されて起点が変わっていれば、その回の照合を kais から作り直して上書きする(古い照合を残さない)
+      - name: monbetsu calc
+        if: steps.timed.outputs.new_kai != ''
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          if [ "${{ steps.kais.outputs.ok }}" = "1" ]; then
+            python cloud/class_monbetsu_calc.py --apply --kais "$RUNNER_TEMP/kais" \
+              || echo "::warning::門別の番組賞金(自前の加算)が作れない(前の表を残す)"
+          else
+            python cloud/class_monbetsu_calc.py --apply \
+              || echo "::warning::門別の番組賞金(自前の加算)が作れない(前の表を残す)"
+          fi
+
+      # §285-F 過去レースの昇級ライン(表 nar_monbetsu_level_hist)を今年度ぶん upsert で作り直す。
+      - name: monbetsu level hist
+        if: steps.kais.outputs.ok == '1'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          python cloud/class_monbetsu_level_hist.py --kais "$RUNNER_TEMP/kais" --out "$RUNNER_TEMP/lvh" --apply \
             || echo "::warning::門別の過去レースの昇級ラインを作り直せなかった(前の行を残す)"
 
       # 想定外で落ちたときの印(表 nar_job_heartbeat)。⛔表が無くても落ちない

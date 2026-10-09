@@ -670,6 +670,15 @@ def head_label(lines):
     return None, None
 
 
+def drop_weight_prizes(lines, rows):
+    """枠の見出し・題の行(lines= {y: [(x, 語)]})に「馬体重」があれば、その枠の馬の数字は馬体重(kg)。
+    rows の "prize" を消して、消した頭数を返す。⚠parse_cell は見出しを見ない(数字の語は全部賞金と読む)ので、
+    列の意味はここ(枠の見出し)で決める。試験 tests/test_class_monbetsu_guard.py で固定。"""
+    if not any("馬体重" in norm(t) for ln in lines.values() for _, t in ln):
+        return 0
+    return sum(1 for r in rows if r.pop("prize", None) is not None)
+
+
 def parse_page(page, page_no, section, where, drop):
     """1ページ → 組の並び。組ごとに 見出し・馬・頭数。"""
     words, rws = rows_of(page)
@@ -719,11 +728,10 @@ def parse_page(page, page_no, section, where, drop):
         # ⛔「前走馬体重」の欄を持つ枠(2歳の「〇〇カップ出走可能馬 前走馬体重４２０㎏以下」)は
         #   馬名の右の数字が**馬体重(kg)**で番組賞金ではない(2026-10-09 第14回: 386〜420 を
         #   万円と読み 31頭に 約400万 を付けた)。この枠の数字は賞金として採らない。
-        if any("馬体重" in norm(t) for ln in lines.values() for _, t in ln):
-            n_wt = sum(1 for _, _, r in horses if r.pop("prize", None) is not None)
-            if n_wt:
-                drop.append(f"{where} 枠x{a:.0f}-{b:.0f}: 前走馬体重の欄= 数字は賞金でない"
-                            f"({n_wt}頭の数字を捨てた・枠の題= {title!r})")
+        n_wt = drop_weight_prizes(lines, [r for _, _, r in horses])
+        if n_wt:
+            drop.append(f"{where} 枠x{a:.0f}-{b:.0f}: 前走馬体重の欄= 数字は賞金でない"
+                        f"({n_wt}頭の数字を捨てた・枠の題= {title!r})")
         if label is None and horses:
             drop.append(f"{where} 枠x{a:.0f}-{b:.0f}: 級の見出しが刷られていない"
                         f"({len(horses)}頭・枠の題= {title!r})→ cls は null にした")
@@ -1052,6 +1060,157 @@ def verify(kai_data, drop):
             print(f"     …ほか {len(drop) - 40} 件")
 
 
+# ---------------------------------------------------------------- 読み違いの番人(2026-10-09 事故の再発防止)
+# 第14回の 2歳 PDF で「前走馬体重」(386〜420)を番組賞金(万)と読み、31頭に約400万を付けた。
+# 取り込み(nar_meta へ書く)の前に、前に入っている表と比べて 3 つを見る。外れたら書かずに heartbeat を fail。
+# しきい値の根拠(令和8年度 第1〜14回の正しい表= 第N-1回→第N回の 13 組と、202e2ee 前の読み方の第14回):
+#   2歳未勝利で賞金あり の割合: 正しい表の増えは最大 +4.4pt(第9→10回)・事故は +9.9pt(68.2→78.1%)→ 7pt
+#   2歳未勝利で 40万超 の割合: 正しい表は第1〜14回とも 0 頭・事故は 31/187= 16.6% → 3pt
+#   中央値(2歳/3歳以上 別): 正しい表の比は最大 1.29 倍(2歳 第12→13回 7→9万)・事故は 2歳 9→15万= 1.67 倍
+#     → 1.5 倍かつ 5万以上の増え(小さい値の揺れで止めない)。⚠増える向きだけ見る(読み違いの直しは減る向き)
+#   上がり幅: 前の回→新しい回で増えた馬の増えが、その間の走で取りうる最大加算(門別= 表2 のその区分の 1着の額・
+#     他場= 表3・分からない走= 上限 4,000万)を超える馬が GUARD_RISE_N 頭以上。DB に走が無い馬は 4,000万を上限に見る。
+#     最大加算は 1着の額で見るので、同着の端数(第13回 2頭)や ※1/※2 の上限では外れない。
+GUARD_MI_POS_PT = 7.0
+GUARD_MI_OVER40_PT = 3.0
+GUARD_MED_RATIO = 1.5
+GUARD_MED_MIN = 5              # 万
+GUARD_RISE_N = 3               # 1〜2 頭は警告だけ(走の取り込み遅れで止めない)
+CAP_MAN = 4000
+
+
+def _nisai(h):
+    return h.get("age") in (None, 2)
+
+
+def _median(xs):
+    xs = sorted(xs)
+    if not xs:
+        return None
+    m = len(xs) // 2
+    return xs[m] if len(xs) % 2 else (xs[m - 1] + xs[m]) / 2
+
+
+def _mi_rates(horses):
+    xs = [v for v in horses.values() if _nisai(v) and "未勝利" in (v.get("cls") or "")]
+    if not xs:
+        return None, None
+    return (100 * sum(1 for v in xs if v.get("prize")) / len(xs),
+            100 * sum(1 for v in xs if (v.get("prize") or 0) > 40 * MAN) / len(xs))
+
+
+def guard_shape(new, old):
+    """値の形だけで見る 2 つ(2歳未勝利の割合・中央値)。→ 外れの理由の list(空= 通す)。
+    new/old= {"fy","kai","horses"}。年度が違えば見ない。"""
+    if not old or old.get("fy") != new.get("fy") or not old.get("horses"):
+        return []
+    why = []
+    (np_, n40), (op_, o40) = _mi_rates(new["horses"]), _mi_rates(old["horses"])
+    if np_ is not None and op_ is not None:
+        if np_ - op_ > GUARD_MI_POS_PT:
+            why.append(f"2歳未勝利で賞金ありが {op_:.1f}→{np_:.1f}%")
+        if n40 - o40 > GUARD_MI_OVER40_PT:
+            why.append(f"2歳未勝利で40万超が {o40:.1f}→{n40:.1f}%")
+    for label, f in (("2歳", _nisai), ("3歳以上", lambda h: not _nisai(h))):
+        a = _median([v["prize"] / MAN for v in old["horses"].values() if f(v) and v.get("prize") is not None])
+        b = _median([v["prize"] / MAN for v in new["horses"].values() if f(v) and v.get("prize") is not None])
+        if a is not None and b is not None and b - a >= GUARD_MED_MIN and b > a * GUARD_MED_RATIO:
+            why.append(f"{label}の中央値が {a:g}→{b:g}万")
+    return why
+
+
+def guard_rise(new, old, bound):
+    """上がり幅。bound= {馬名: その間の最大加算(万)}(DB に走が無い馬は入れない= 4,000万で見る)。
+    → (外れの理由の list, 超えた馬 [(馬名, 前の万, 新しい万, 上限の万)])。同じ回の取り直しは見ない(間の走が無い)。"""
+    if not old or old.get("fy") != new.get("fy") or int(old.get("kai") or 0) >= int(new.get("kai") or 0):
+        return [], []
+    over = []
+    for nm, h in sorted(new["horses"].items()):
+        o = (old["horses"].get(nm) or {}).get("prize")
+        n = h.get("prize")
+        if o is None or n is None or n <= o:
+            continue
+        lim = bound.get(nm)
+        lim = CAP_MAN - o // MAN if lim is None else min(lim, CAP_MAN - o // MAN)
+        if (n - o) // MAN > lim:
+            over.append((nm, o // MAN, n // MAN, lim))
+    why = ([f"上がり幅が最大加算を超える馬 {len(over)}頭("
+            + "・".join(f"{x[0]} {x[1]}→{x[2]}万" for x in over[:3]) + ")"]
+           if len(over) >= GUARD_RISE_N else [])
+    return why, over
+
+
+def max_add(r, races, runners):
+    """1 走で取りうる最大の加算(万)。門別= その区分の 1着の額・他場= 表3・分からなければ上限。"""
+    import class_monbetsu_calc as C
+    if r["track"] == "門別":
+        k3 = (r["track"], r["race_date"], r["race_no"])
+        race = races.get(k3)
+        if race is None:
+            return CAP_MAN
+        tab, k = C.t2_key(runners.get(k3, []), race, C.fy_of(C.D(r["race_date"])))
+        return CAP_MAN if tab is None else tab[k][0]
+    v, why = C.tb_run(r, races)
+    return CAP_MAN if why else v
+
+
+def rise_bounds(base, key, new, old):
+    """上がった馬について、前の回の締めより後〜新しい回の締めまでの走で取りうる最大加算(万)。
+    PostgREST で対象馬だけ読む(class_monbetsu_calc.fetch)。走が 1 本も無い馬は入れない。"""
+    import class_monbetsu_calc as C
+    fy = new["fy"]
+    names = sorted(nm for nm, h in new["horses"].items()
+                   if h.get("prize") is not None and (old["horses"].get(nm) or {}).get("prize") is not None
+                   and h["prize"] > old["horses"][nm]["prize"])
+    if not names:
+        return {}
+    cut_o = C.ipan_cut(fy, old["kai"], old["asof"], old.get("asof_by"))
+    cut_n = C.ipan_cut(fy, new["kai"], new["asof"], new.get("asof_by"))
+    nar, races, jra = C.fetch(base, key, names, f"{fy}-04-01", cut_o)
+    by_name = defaultdict(list)
+    for r in nar:
+        by_name[r["horse_name"]].append(r)
+    runners = C.runners_of(nar)
+    year = int(new["asof"][:4])
+    out = {}
+    for nm in names:
+        age = new["horses"][nm].get("age") or 2
+        runs = C.horse_runs(nm, year - age, by_name, jra)
+        if not runs:
+            continue
+        out[nm] = sum(max_add(r, races, runners) for r in runs
+                      if cut_o < r["race_date"] <= cut_n and C.started(r))
+    return out
+
+
+def guard_check(base, key, new, old):
+    """取り込み前の番人。→ 外れの理由の list(空= 通す)。DB が読めなければ上がり幅は飛ばす(形の 2 つは見る)。"""
+    why = guard_shape(new, old)
+    if old and old.get("fy") == new.get("fy") and int(old.get("kai") or 0) < int(new.get("kai") or 0):
+        try:
+            w, over = guard_rise(new, old, rise_bounds(base, key, new, old) if (base and key) else {})
+            why += w
+            if over and not w:
+                print(f"::warning::門別の級別表 上がり幅が最大加算を超える馬 {len(over)}頭(止めるのは"
+                      f"{GUARD_RISE_N}頭から) " + "・".join(x[0] for x in over), flush=True)
+        except Exception as e:                         # noqa: BLE001(走が読めない= 形の 2 つだけで判断)
+            log(f"  番人 上がり幅を見られない {type(e).__name__}: {str(e)[:120]}")
+    return why
+
+
+GUARD = {}             # recheck で番人が止めたとき {"fail": True}(timed_main が heartbeat を fail にする)
+
+
+def guard_beat(note):
+    """番人が止めた印。heartbeat 'monbetsu_class' を fail に(外の見張り nar-watchdog ① が赤にする)。"""
+    print(f"::error::門別の級別表 読み違いの疑いで取り込まない(前の表を残す) {note}", flush=True)
+    try:
+        import beat as B
+        B.beat(BEAT_JOB, False, f"読み違いの疑い {note}"[:300])
+    except Exception as e:                             # noqa: BLE001
+        log(f"  heartbeat を書けない {type(e).__name__}: {str(e)[:80]}")
+
+
 # ---------------------------------------------------------------- まとめ
 
 def sb_get_meta(base, key, meta_key):
@@ -1200,6 +1359,10 @@ def run(args):
     if (stored or {}).get("fy") == fy and newest < (stored or {}).get("kai", 0):
         log(f"入っているのは第{stored['kai']}回・今回取れたのは第{newest}回まで=古いので入れない")
         return 0
+    why = guard_check(base, key, value, stored)
+    if why:
+        guard_beat(f"第{newest}回: " + " / ".join(why))
+        return 4
     now = dt.datetime.now(dt.timezone.utc).isoformat()
     rows = [{"key": META_KEY, "value": value, "updated_at": now}]
     if args.archive:
@@ -1250,6 +1413,14 @@ def recheck(stored, base, key, apply):
             print(f"::warning::門別の級別表 第{kai}回 の取り直しに失敗(前回の表を残す)", flush=True)
             again = []
         else:
+            why = guard_check(base, key, {"fy": fy, "kai": kai, "asof": got["asof"],
+                                          "asof_by": got.get("asof_by") or {}, "horses": got["horses"]},
+                              stored) if apply else []
+            if why:                                     # 何も書かない(lm も記録しない= 次の便でまた見る)
+                GUARD["fail"] = True
+                note = f" 第{kai}回 差し替えを番人が止めた(" + " / ".join(why) + ")"
+                print(f"::error::門別の級別表 読み違いの疑いで差し替えない(前の表を残す){note}", flush=True)
+                return note
             value["horses"] = got["horses"]
             value["asof"], value["asof_by"] = got["asof"], got.get("asof_by") or {}
             value["kakuzuke"] = kakuzuke_meta()
@@ -1267,6 +1438,12 @@ def recheck(stored, base, key, apply):
     if status not in (200, 201):
         print(f"::warning::門別の級別表 差し替えの投入失敗 {status} {str(msg)[:120]}", flush=True)
         return ""
+    if again:
+        # 取り直した= 便の次の手順で 自前の加算(照合のやり直し)と過去レースの昇級ラインを作り直す
+        gho = os.environ.get("GITHUB_OUTPUT")
+        if gho:
+            with open(gho, "a", encoding="utf-8") as f:
+                f.write("new_kai=recheck\n")
     return note
 
 
@@ -1298,6 +1475,8 @@ def timed_main(args):
             extra = recheck(stored, base, key, args.apply)
         except Exception as e:                         # noqa: BLE001(⛔便を落とさない)
             print(f"::warning::門別の級別表 差し替えの確認に失敗 {type(e).__name__}: {str(e)[:120]}", flush=True)
+    if GUARD.get("fail"):
+        return say(False, f"見込み={exp}{extra}")
     if state == "season_end":
         return say(True, f"今季終わり(最終 第{k0}回・{exp} から 10 日以内に門別の開催なし){extra}")
     if state == "before":
@@ -1328,6 +1507,8 @@ def timed_main(args):
                 with open(gho, "a", encoding="utf-8") as f:
                     f.write(f"new_kai={got}\n")
         return say(True, f"第{got}回 取込(asof {RESULT.get('asof')}) 次の見込み={nxt}")
+    if rc == 4:
+        return 0                                       # 番人が止めた= heartbeat は guard_beat が fail で書いた
     if rc == 1:
         print("::warning::門別の級別表 投入失敗(前回の表を残す)", flush=True)
     else:

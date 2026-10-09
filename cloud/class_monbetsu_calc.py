@@ -14,6 +14,9 @@
   答え合わせ= 公式の新しい回が入った直後に、前の起点+加算(新しい回の締めまで)と新しい公式を全頭照合し
         check に書く。外れがあれば heartbeat 'monbetsu_calc' を ok=False(件数と馬名 3 頭まで)。
         外れた馬も含め、起点は常に最新回の公式に置き直す。
+  照合のやり直し(2026-10-09 事故の再発防止): 前の check と同じ回の公式が**取り直されて**起点が変わったら
+        (stale_check)、前の回までの公式(--kais の kaiNN.json か nar_meta 'monbetsu_class_hist')から起点を作り直して
+        その回の照合をやり直し、check を上書きする(古い照合を残さない)。前の回までの表が揃わなければ ::warning::。
   検算(2026-09-25・scratchpad stage2.py/stage3_*.json): 起点が公式と合った馬は第1〜13回まで加算だけで全頭一致
         (S2 291/291・S3 176/176・2歳 328/328)。第12回起点→第13回 813/815(外れ 2 は同着の端数の揺れ)。
 
@@ -25,6 +28,7 @@
 
   python cloud/class_monbetsu_calc.py --env pipeline/.env.nar            # ドライラン(読むだけ・--out へ書く)
   python cloud/class_monbetsu_calc.py --apply                            # nar_meta へ upsert+heartbeat
+  python cloud/class_monbetsu_calc.py --apply --kais <dir>               # 照合のやり直しに backfill の kaiNN.json を使う
   (class_monbetsu.py --timed が新しい回を入れた後と、nar-refresh の朝の便から呼ばれる)
 環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY。終了コード: 0 正常 / 1 投入失敗 / 2 読めない。
 ⛔本番 DB は対象馬に絞った PostgREST だけ(今年度の走・order は一意)。重い SQL は使わない。
@@ -376,8 +380,35 @@ def plan(official, hist, prev):
     return bases, cuts, bool(bases) and kai > last
 
 
-def build(official, hist, prev, nar_rows, jra_by_name, races, upto):
-    """通信なしの本体。→ value(nar_meta 'monbetsu_class_calc')"""
+def stale_check(official, prev):
+    """前の check と同じ回の公式が取り直されて起点が変わった(= その回の照合は古い表で取った)→ True。"""
+    c = (prev or {}).get("check")
+    kai = int(official["kai"])
+    if not c or prev.get("fy") != official["fy"] or int(c.get("kai") or 0) != kai:
+        return False
+    oh = official.get("horses") or {}
+    for nm, h in (prev.get("horses") or {}).items():
+        if int(h.get("base_kai") or 0) != kai:
+            continue
+        p = (oh.get(nm) or {}).get("prize")
+        if p is None or int(p) != int(h["base"]):
+            return True
+    return False
+
+
+def redo_plan(official, hist):
+    """照合のやり直し用= 前の回までの公式(hist)だけで起点を作る。→ (bases, cuts) か None(前の回が揃わない)。"""
+    kai = int(official["kai"])
+    ks = {int(x) for x in ((hist or {}).get("kais") or {})} if (hist or {}).get("fy") == official["fy"] else set()
+    if kai - 1 not in ks:
+        return None
+    bases, cuts, need = plan(official, hist, None)
+    return (bases, cuts) if need else None
+
+
+def build(official, hist, prev, nar_rows, jra_by_name, races, upto, redo=None):
+    """通信なしの本体。→ value(nar_meta 'monbetsu_class_calc')。
+    redo= redo_plan の (bases, cuts)= 同じ回の照合を前の回までの公式からやり直す。"""
     fy = official["fy"]
     kai = int(official["kai"])
     bases, cuts, need = plan(official, hist, prev)
@@ -388,6 +419,9 @@ def build(official, hist, prev, nar_rows, jra_by_name, races, upto):
     check = (prev or {}).get("check") if (prev or {}).get("fy") == fy else None
     if need:
         check = check_round(bases, cuts, official, nar_by_name, jra_by_name, races, runners, fy)
+        check["new"] = True
+    elif redo:
+        check = check_round(redo[0], redo[1], official, nar_by_name, jra_by_name, races, runners, fy)
         check["new"] = True
     elif check:
         check = dict(check, new=False)
@@ -483,7 +517,17 @@ def note_of(value):
     return ok, s, (n_add, n_k, n_j)
 
 
-def run(apply=False, out=None, upto=None):
+def load_kais(d):
+    """class_monbetsu.py --backfill --out の kaiNN.json → hist の形 {"fy","kais":{回:{asof,asof_by,horses}}}"""
+    kais, fy = {}, None
+    for f in sorted(Path(d).glob("kai[0-9][0-9].json")):
+        v = json.loads(f.read_text(encoding="utf-8"))
+        fy = v["fy"]
+        kais[str(v["kai"])] = {"asof": v["asof"], "asof_by": v.get("asof_by") or {}, "horses": v["horses"]}
+    return {"fy": fy, "kais": kais}
+
+
+def run(apply=False, out=None, upto=None, kais=None):
     base = os.environ.get("SUPABASE_URL", "").rstrip("/")
     key = os.environ.get("SUPABASE_SERVICE_KEY", "")
     if not base or not key:
@@ -498,6 +542,17 @@ def run(apply=False, out=None, upto=None):
     bases, cuts, _ = plan(official, hist, prev)
     names = set(bases) | {n for n, h in official["horses"].items() if h.get("prize") is not None}
     cut_all = list(cuts.values()) + [ipan_cut(official["fy"], official["kai"], official["asof"], official.get("asof_by"))]
+    redo = None
+    if stale_check(official, prev):
+        h2 = load_kais(kais) if kais else CM.sb_get_meta(base, key, CM.HIST_KEY)
+        redo = redo_plan(official, h2)
+        if redo is None:
+            print(f"::warning::門別の番組賞金 第{official['kai']}回が取り直されたが、前の回までの公式が揃わず"
+                  "照合をやり直せない(--kais を渡す)", flush=True)
+        else:
+            CM.log(f"第{official['kai']}回が取り直された= 照合をやり直す(起点 {len(redo[0])}頭)")
+            names |= set(redo[0])
+            cut_all += list(redo[1].values())
     since = f"{official['fy']}-04-01"
     try:
         nar, races, jra = fetch(base, key, names, since, min(cut_all))
@@ -505,7 +560,7 @@ def run(apply=False, out=None, upto=None):
         CM.log(f"走歴が読めない {type(e).__name__}: {str(e)[:150]}")
         return 2, None
     upto = upto or f"{dt.datetime.now(JST):%Y-%m-%d}"
-    value = build(official, hist, prev, nar, jra, races, upto)
+    value = build(official, hist, prev, nar, jra, races, upto, redo)
     ok, note, _ = note_of(value)
     CM.log(f"走 {len(nar)} / 競走 {len(races)} / 中央の馬 {len(jra)} → {note}")
     if out:
@@ -532,10 +587,12 @@ def main():
     ap.add_argument("--env")
     ap.add_argument("--out", help="value を JSON で書き出す先")
     ap.add_argument("--upto", help="加算の最終日(既定= JST の今日)")
+    ap.add_argument("--kais", help="照合のやり直しに使う過去回の JSON(class_monbetsu.py --backfill --out の"
+                    f"kaiNN.json)。無ければ nar_meta/{CM.HIST_KEY}")
     args = ap.parse_args()
     if args.env:
         CM.load_env(args.env)
-    rc, _ = run(args.apply, args.out, args.upto)
+    rc, _ = run(args.apply, args.out, args.upto, args.kais)
     return rc
 
 
