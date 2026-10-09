@@ -172,13 +172,13 @@ def ng_urls(today):
 KANA = r"[゠-ヿA-Za-z]"
 NAME = r"(%s[゠-ヿA-Za-z0-9・\.\']*)" % KANA
 TR = r"([一-鿿々][一-鿿々ケヶ]*)"
-HN = re.compile(r"(?:^|\s|\))(?:○|希\s*)*○?" + NAME + r"\s+(牡|牝|セ)\s*(\d+)\s+(?:[ABC]\s+)?([\d,]+|未出走)\s*" + TR)
+HN = re.compile(r"(?:^|\s|\))(?:○|◎|希\s*)*[○◎]?" + NAME + r"\s+(牡|牝|セ)\s*(\d+)\s+(?:[ABC]\s+)?([\d,]+|未出走)\s*" + TR)
 HK = re.compile(r"(?:([ABC]\d+|\d+R希望)\s+)?" + NAME + r"\s+(?:(\d+)R\s+)?(?:#\s*)?(\d{1,5})\s*" + TR + r"(?:\s+(\d{2})(?!\d))?")
 
 # ---- 読み違いの番人(2026-10-10 監査 中 #8)。合わない行を黙って落としていた= 数えて閾値で止める。
 #   馬らしい並び(NG= 性+齢+数・KS= カナの名+数)の数(cand)と、正規表現で読めた数(hit)を一覧ごとに数え、
 #   落とした数が TK_DROP_N 頭以上かつ TK_DROP_RATE 以上の一覧は ::warning::(⚠止めない= 10/10 の dry-run で
-#   名古屋 9/52・笠松 1/11 の一覧が 19〜30% 落ちていた。馬名が性齢と別の行に割れる既存の読み方の欠け= 直すのは別件)。
+#   名古屋 9/52・笠松 1/11 の一覧が 19〜30% 落ちていた。名古屋は馬名が性齢と別の帯に割れていた= ng_bounds で直した)。
 #   P は 0〜TK_P_MAX(未出走= -1)。前の一覧と比べて P が半分未満に減った馬(前の P が TK_JUMP_FROM 以上)が
 #   TK_JUMP_N 頭以上かつ比べた馬の TK_JUMP_RATE 以上なら止める(見直しは 0.75 倍なので半分未満にはならない)。
 #   止めた= 表を書かない・heartbeat fail・終了コード 2。
@@ -240,6 +240,29 @@ def rows_of(words, tol=3):
     return [(t, sorted(ws, key=lambda w: w["x0"])) for t, ws in rows]
 
 
+NG_SEX = ("牡", "牝", "セ")
+NG_NAME_SLACK = 40
+
+
+def ng_bounds(ws, W):
+    """名古屋の 4 列の境目(x)。既定= 58 + 列幅の等分。⚠馬名の列の左端が境目のすぐ左(〜40pt)にある版
+    (2026-10-10= 第 3 回 3 日目・第 9〜11 回など)で、馬名だけ前の列に入り性齢と別の帯に割れて読み落としていた。
+    同じ行で性の語の直前の語= 馬名の左端を集め、境目の左 NG_NAME_SLACK 以内にあれば境目をその左端へ寄せる
+    (馬名・性齢・P・調教師がそろわない行は HN が読まないので、別の馬をつなぐことはない)。"""
+    bw = (W - 120) / 4
+    bounds = [58 + bw * i for i in (1, 2, 3)]
+    starts = []
+    for _, rw in rows_of(ws):
+        for i, w in enumerate(rw):
+            if i and w["text"] in NG_SEX:
+                starts.append(rw[i - 1]["x0"])
+    out = []
+    for b in bounds:
+        near = [x for x in starts if b - NG_NAME_SLACK <= x < b]
+        out.append(min(near) - 1 if near else b)
+    return out
+
+
 def parse_ng(data, fy, k, stat=None):
     import pdfplumber
     out = []
@@ -253,10 +276,10 @@ def parse_ng(data, fy, k, stat=None):
         if not m:
             continue
         DATE = "%s-%02d-%02d" % (m.group(1), int(m.group(2)), int(m.group(3)))
-        bw = (W - 120) / 4
+        bounds = ng_bounds(ws, W)
         bands = [[] for _ in range(4)]
         for w in ws:
-            bands[min(3, max(0, int((w["x0"] - 58) // bw)))].append(w)
+            bands[sum(1 for x in bounds if w["x0"] >= x)].append(w)
         block = None
         for b in range(4):
             for _, rw in rows_of(bands[b]):
