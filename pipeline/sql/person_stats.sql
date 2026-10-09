@@ -109,8 +109,9 @@ select g.kind, g.name, 'all', p.period,
             from tmp_pp x where x.kind = g.kind and x.name = g.name and x.yr between p.y_from and p.y_to and distance_m is not null group by distance_m having count(*) >= 5) d),
     'recent', case when p.period = 'all' then (
       -- §62 B7-2 直近30走も didRun と同じ規則(中止・失格も出す)。⛔`note` を渡して画面が理由を書けるように
+      -- 2026-10-10 順番表16: 'h'= 馬番(画面のレースへのリンクに ?h= を付けて結果札でその馬を開く)
       select coalesce(jsonb_agg(jsonb_build_object('d', race_date, 'track', track, 'no', race_no,
-               'horse', horse_name, 'fin', finish, 'note', finish_note, 'pop', popularity,
+               'horse', horse_name, 'h', runner_number, 'fin', finish, 'note', finish_note, 'pop', popularity,
                'dist', distance_m, 'race', race_name) order by race_date desc, race_no desc, track, runner_number), '[]'::jsonb)
       from (select * from tmp_pp x where x.kind = g.kind and x.name = g.name
             order by race_date desc, race_no desc, track, runner_number limit 30) r) else null end,
