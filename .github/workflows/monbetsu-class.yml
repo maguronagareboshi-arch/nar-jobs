@@ -10,6 +10,11 @@ on:
     - cron: '30 3 * * *'    # JST 12:30
     - cron: '30 6 * * *'    # JST 15:30
   workflow_dispatch:
+    inputs:
+      force:
+        description: '最新回を見込み日に関係なく取り直す(読み取りを直した後の上書き用)'
+        type: boolean
+        default: false
 concurrency:
   group: monbetsu-class
   cancel-in-progress: false
@@ -28,7 +33,12 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: python cloud/class_monbetsu.py --timed --apply
+        run: |
+          if [ "${{ inputs.force }}" = "true" ]; then
+            python cloud/class_monbetsu.py --apply && echo "new_kai=force" >> "$GITHUB_OUTPUT"
+          else
+            python cloud/class_monbetsu.py --timed --apply
+          fi
 
       # §285-F 新しい回を取った時だけ= 過去レースの昇級ライン(表 nar_monbetsu_level_hist)を今年度ぶん upsert で作り直す。
       #   kais= 公式 PDF の第1回〜最新回を取り直す(nar_meta は書かない)。⛔失敗しても便は落とさない(::warning:: だけ)
