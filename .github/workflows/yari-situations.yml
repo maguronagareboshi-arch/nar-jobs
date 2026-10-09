@@ -1,0 +1,32 @@
+# 研究用・1 回きり。勝負がかり場面(cloud/yari_situations.py)を 2025-10〜2026-09 で集計し docs/yari-situations/result.md を書く。
+# ⛔本番 DB では REST の単純 select だけ。集計は全部 Python。書き込みなし。schedule なし。
+name: yari-situations
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: yari-situations
+  cancel-in-progress: false
+jobs:
+  preclose:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - name: yari situations
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          python3 cloud/yari_situations.py
+          if [ -n "$(git status --porcelain docs/yari-situations)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/yari-situations
+            git commit -m "勝負がかり場面 研究集計 $(TZ=Asia/Tokyo date +%F)"
+            git pull --rebase origin "${GITHUB_REF_NAME}"
+            git push origin "HEAD:${GITHUB_REF_NAME}"
+          else
+            echo "差分なし"
+          fi
