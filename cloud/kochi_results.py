@@ -127,6 +127,35 @@ _COLS = {"着順": "chakujun", "枠": "waku_ban", "馬番": "uma_ban", "馬名":
          "タイム": "time", "着差": "diff", "上がり": "agari3f", "コーナー": "corner", "人気": "ninki", "単勝": "odds"}
 
 
+# ---- 読み違いの番人(2026-10-10 監査 #5)。見出しの語の前方一致だけで列を引いていた= colspan や列の増減でずれても気づけない。
+#   ① 結果表のデータ行(馬番が数字の行)のセル数が見出し行のセル数と違えば KochiGuard(その日は書かない)。
+#   ② 馬体重は「452(+2)」型の 300〜650kg・タイムは「1:28.5」/「58.3」型。空(取消・除外・中止)は見ない。
+#      形の外れが KOCHI_GUARD_N 頭に達したレースは KochiGuard。1〜2 頭は ::warning:: だけ(手本= noken_public 門別)。
+KOCHI_WEIGHT_RE = re.compile(r"(\d{3})\s*(?:[(（][^)）]*[)）])?")
+KOCHI_TIME_RE = re.compile(r"(?:\d{1,2}:)?\d{1,2}\.\d")
+KOCHI_WEIGHT = (300, 650)
+KOCHI_GUARD_N = 3
+KOCHI_DASH = {"-", "－", "−", "―", "—"}
+KOCHI_GUARD = []         # 番人が止めた日の理由(fails に足して終了コード 1)
+
+
+class KochiGuard(Exception):
+    """高知の成績表の様式が想定と違う(セル数・馬体重/タイムの形)。"""
+
+
+def kochi_row_bad(h):
+    """1 頭の値の外れ → 理由(空= 通す)。"""
+    w = (h.get("weight") or "").strip()
+    if w and w not in KOCHI_DASH:          # 「－」= 計量なし(取消・除外。実測 2026-10-03)
+        m = KOCHI_WEIGHT_RE.fullmatch(w)
+        if not m or not (KOCHI_WEIGHT[0] <= int(m.group(1)) <= KOCHI_WEIGHT[1]):
+            return f"馬体重 {w!r}"
+    t = (h.get("time") or "").strip()
+    if t and t not in KOCHI_DASH and not KOCHI_TIME_RE.fullmatch(t):
+        return f"タイム {t!r}"
+    return ""
+
+
 def parse_mark_table(html):
     """成績ページ → {'horses': [dict…], 'track_cond', 'agari4f', 'agari3f_race', 'lineage': {馬名: コード}}。
     結果表が無ければ None(未確定・非開催)"""
@@ -156,12 +185,23 @@ def parse_mark_table(html):
             best, head_map = t, hm
     if best is None:
         return None
+    width = len(best[0])
+    bad = []
     for row in best[1:]:
         h = {v: (row[i] if i < len(row) else "") for i, v in head_map.items()}
         if not re.fullmatch(r"\d{1,2}", h.get("uma_ban", "")):
             continue
+        if len(row) != width:
+            raise KochiGuard(f"データ行が {len(row)} 列(見出しは {width} 列): {'|'.join(row)[:120]}")
+        b = kochi_row_bad(h)
+        if b:
+            bad.append(f"馬番{h.get('uma_ban')} {b}")
         # ⛔全角→半角はしない(手動保存の実物が半角で入っている列は公式も半角。形は公式のまま)
         out["horses"].append(h)
+    if len(bad) >= KOCHI_GUARD_N:
+        raise KochiGuard(f"値の外れ {len(bad)} 頭: " + " / ".join(bad[:5]))
+    for b in bad:
+        print(f"::warning::高知の成績 {b}", flush=True)
     # 上がりタイム表(ヘッダー [ ,4F,3F] / データ [上がりタイム,51.1,38.9])
     for t in p.tables:
         if len(t) >= 2 and any("4F" in c for c in t[0]) and any("3F" in c for c in t[0]):
@@ -558,8 +598,23 @@ def main():
         by_no_h, by_no_r = {}, {r["race_no"]: r for r in ex_r}
         for h in ex_h:
             by_no_h.setdefault(h["race_no"], []).append(h)
+        # 監査 #5 番人: 先にこの日の全レースを読み、1 レースでも KochiGuard ならこの日は 1 行も書かない
+        parsed_by, guard = {}, None
+        for i, no in enumerate(race_nos):
+            if i:
+                time.sleep(1.2)
+            try:
+                parsed_by[no] = fetch_race(d, no)
+            except KochiGuard as e:
+                guard = f"{no}R {e}"
+                break
+        if guard:
+            log(f"::error::高知の成績 {d} 表の読み違いの疑いで書かない {guard}")
+            KOCHI_GUARD.append(f"{d} {guard}")
+            fails += 1
+            continue
         for no in race_nos:
-            parsed = fetch_race(d, no)
+            parsed = parsed_by.get(no)
             if not parsed:
                 log(f"⚠ {d} {no}R: 結果表なし(未確定/中止?)→この日は残す"); fails += 1; continue
             b = build_bundle(d, no, parsed, by_no_r.get(no), by_no_h.get(no, []))

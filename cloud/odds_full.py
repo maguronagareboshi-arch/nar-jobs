@@ -8,7 +8,7 @@
   python cloud/odds_full.py --dry-run --save-fixtures tests/fixtures/odds   # 生HTMLを保存(W0)
   python cloud/odds_full.py --env pipeline/.env.nar                          # ローカル試験(人間が実行)
 環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY(GitHub Secrets)。読むだけの試験は --url/--key で anon も可
-終了コード: 0 正常(対象なし・一部の取得失敗も 0=次の実行に任せる)/ 1 投入失敗 / 2 前提の読み取りに失敗
+終了コード: 0 正常(対象なし・一部の取得失敗も 0=次の実行に任せる)/ 1 投入失敗・番人が止めたレースあり / 2 前提の読み取りに失敗
 
 ⛔cloud/odds.py は**変更しない**(§76 が history の粒度に依存している)。ここは読むだけで再利用する。
 """
@@ -196,6 +196,27 @@ def parse_waku(page):
     return out
 
 
+FULL_GUARD = []          # 番人が止めた券種の理由(main が終了コードを 1 にする)
+
+
+def ranking_bad(rows):
+    """2026-10-10 監査 #7: 人気順の表の読み違い(オッズ列と人気列の入れ替わり・列ずれ)の検査 → 理由(空= 通す)。
+    ① 人気は 1 から始まり組の数を超えない ② 人気が増える順にオッズが減らない(単調性・同オッズ同順位は可)。
+    入れ替わると人気の欄にオッズ(数百〜数万)が入る= ① で落ちる。
+    ⚠オッズ 0.0 の組(票なし。3連単で実在= 2026-10-09 大井 5R に 41 組)は単調性から外す。"""
+    if not rows:
+        return ""
+    ranks = [r[2] for r in rows]
+    if min(ranks) != 1 or max(ranks) > len(rows):
+        return f"人気の範囲 {min(ranks)}〜{max(ranks)}(組 {len(rows)})"
+    srt = sorted((r for r in rows if r[1] > 0), key=lambda r: (r[2], r[1]))
+    for a, b in zip(srt, srt[1:]):
+        if b[1] < a[1]:
+            return (f"人気 {a[2]}→{b[2]} でオッズが減る {a[1]}→{b[1]}"
+                    f"({list(a[0])}→{list(b[0])})")
+    return ""
+
+
 def combos_json(kind, rows):
     """保存形(設計書 §4.1)。2連系 [[a,b,odds,rank]] / 3連系 [[a,b,c,odds,rank]] / 枠連 [[i,j,odds]]。"""
     if kind in ("wakuren", "wakutan"):
@@ -265,6 +286,13 @@ def fetch_race(date, target, save_dir=None):
         if not got:
             st["empty"] += 1
             log(f"    発売前/表なし {KIND_LABEL[kind]}")
+            continue
+        bad = ranking_bad(got)
+        if bad:
+            st["reject"] += 1
+            log(f"::error::全券種オッズ {target['track']} {target['race_no']}R {KIND_LABEL[kind]} "
+                f"表の読み違いの疑いで書かない {bad}")
+            FULL_GUARD.append(f"{target['track']} {target['race_no']}R {KIND_LABEL[kind]} {bad}")
             continue
         m = runners_for_count(kind, len(got), head)
         if m is None:
@@ -354,17 +382,20 @@ def main():
 
     log(f"取得 成功 {tot['ok']} / 失敗 {tot['ng']} / 発売前 {tot['empty']} / その場に無い {tot['absent']} / "
         f"検算落ち {tot['reject']} / 最終 {tot['final']}(行 {len(rows)})")
+    rc_guard = 1 if FULL_GUARD else 0       # 番人が止めた券種があれば、他を入れたうえで終了コード 1(見張りが拾う)
+    if FULL_GUARD:
+        log(f"番人が止めた券種 {len(FULL_GUARD)}: " + " / ".join(FULL_GUARD[:5]))
     if args.dry_run:
         log("dry-run: 投入しない")
-        return 0
+        return rc_guard
     if not rows:
-        return 0
+        return rc_guard
     status, msg = upsert(url, key, TABLE, CONFLICT, rows)
     if status >= 300 or status == 0:
         log(f"投入失敗 status={status} {msg}")
         return 1
     log(f"投入 {len(rows)} 行 -> {TABLE}")
-    return 0
+    return rc_guard
 
 
 if __name__ == "__main__":

@@ -90,6 +90,28 @@ def norm_section(t):
     return m.group(1) if m else t
 
 
+# ---- 読み違いの番人(2026-10-10 監査 #13)。列は位置(td[:8])で読む= 見出し行の語を照合する。
+#   区分の見出し(th)ごとに見出し行「※|馬名|性|齢|賞金or ポイント|格|調教師|備考」が要る(2 歳= 賞金・他= ポイント)。
+#   見出し行が無い・語が違う → HyogoGuard(その週は書かない)。
+#   値の範囲: ポイント 0〜2,000 点・賞金 0〜5 億円。字があるのに読めない値も外れ。
+#   外れが HY_GUARD_N 頭に達したら HyogoGuard。1〜2 頭は ::warning:: だけ(手本= noken_public 門別)。
+#   根拠= 2026-10-10 に取った 令和8年度の名簿ページ(全区分)で外れ 0。
+HY_HEAD = ["馬名", "性", "齢", None, "格", "調教師", "備考"]     # td[1:8]。None= 区分で変わる欄
+HY_RANGE = {"points": (0, 2000), "prize_yen": (0, 500_000_000)}
+HY_GUARD_N = 3
+
+
+class HyogoGuard(ValueError):
+    """兵庫の名簿の表の様式が想定と違う(見出し行・値の範囲)。"""
+
+
+def hy_head_ok(td, section):
+    want = list(HY_HEAD)
+    want[3] = "賞金" if section == "2歳" else "ポイント"
+    got = [re.sub(r"\s+", "", x) for x in td[1:8]]
+    return got == want, got, want
+
+
 def parse(h):
     m = re.search(r"令和\s*(\d+)\s*年度[^<]*?(\d+)\s*月\s*(\d+)\s*週", h.translate(Z2H))
     if not m:
@@ -97,27 +119,44 @@ def parse(h):
     fy, mo, nth = (int(x) for x in m.groups())
     label = f"R{fy} {mo}月{nth}週"
     ws = week_start(fy, mo, nth)
-    rows, section, seen = [], None, set()
+    rows, section, seen, headed, bad = [], None, set(), False, []
     for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", h, flags=re.S):
         th = re.findall(r"<th[^>]*>(.*?)</th>", tr, flags=re.S)
         if th:
             section = norm_section(_txt(th[0]))
+            headed = False
             continue
         td = [_txt(x) for x in re.findall(r"<td[^>]*>(.*?)</td>", tr, flags=re.S)]
-        if len(td) < 8 or td[1] == "馬名" or not td[1] or section is None:
+        if len(td) >= 2 and td[1] == "馬名" and section is not None:
+            ok, got, want = hy_head_ok(td, section)
+            if not ok:
+                raise HyogoGuard(f"区分 {section} の見出し行が違う: {'|'.join(got)}(想定 {'|'.join(want)})")
+            headed = True
             continue
+        if len(td) < 8 or not td[1] or section is None:
+            continue
+        if not headed:
+            raise HyogoGuard(f"区分 {section} に見出し行が無いまま馬の行がある: {'|'.join(td[:8])[:120]}")
         mark, name, sex, age, val, cls, trainer, note = td[:8]
         k = (section, name, trainer)
         if k in seen:
             continue
         seen.add(k)
         v = _int(val)
+        col = "prize_yen" if section == "2歳" else "points"
+        lo, hi = HY_RANGE[col]
+        if (v is None and val.strip()) or (v is not None and not lo <= v <= hi):
+            bad.append(f"{section} {name} {col} {val!r}")
         rows.append({"week_label": label, "week_start": ws.isoformat(), "section": section,
                      "horse_name": name, "code": None, "sex": sex or None, "age": _int(age),
                      "points": None if section == "2歳" else v, "prize_yen": v if section == "2歳" else None,
                      "cls": cls or None, "trainer": trainer, "note": note or None, "home_mark": mark == "※"})
     if not rows:
         raise ValueError("名簿の行が 0")
+    if len(bad) >= HY_GUARD_N:
+        raise HyogoGuard(f"値の外れ {len(bad)} 頭: " + " / ".join(bad[:5]))
+    for b in bad:
+        print(f"::warning::兵庫の名簿 {b}", flush=True)
     return label, ws, rows
 
 

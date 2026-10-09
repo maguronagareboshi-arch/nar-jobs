@@ -25,6 +25,7 @@ keiba.go.jp `MonthlyConveneInfo/MonthlyConveneInfoTop?k_year=Y&k_month=M` に先
 """
 
 import argparse
+import calendar
 import datetime as dt
 import io
 import json
@@ -73,8 +74,20 @@ def req(base, key, path, method="GET", body=None):
         return x.status, x.read().decode("utf-8")
 
 
+class ConveneGuard(RuntimeError):
+    """月別日程の表の列の数がその月の日数と合わない(列がずれると日にちがずれる)。その月は書かない。"""
+
+
+CONVENE_GUARD = []       # 番人が止めた月の理由(main が終了コードを 1 にする)
+
+
 def fetch_month(year, month):
-    """{day: [(prefix, mark)]}, others(場名→開催セル数)。ページが読めなければ例外。"""
+    """{day: [(prefix, mark)]}, others(場名→開催セル数)。ページが読めなければ例外。
+    2026-10-10 監査 #14: 列の番号を日にちとして使う= 列がずれると日にちがずれる。番人は次の 3 つ(外れたら ConveneGuard):
+      ① 日にちの見出し行(1 列目が空・2 列目が「1」)が「1〜その月の日数」+ 残りは空、であること
+         (⚠表は 30 日の月も日の列が 31 ある= 実測 2026-09。監査の「td の数= 日数+2」は 31 日の月にしか当たらない)
+      ② 場の行の td の数が見出し行と同じ ③ その月に無い日(31 日の月以外の末尾)に記号が無い。
+    対応表に無い行(札幌など・件数だけ数える)は、数が合わない行を採らずに飛ばす。"""
     url = f"{SRC}?k_year={year}&k_month={month}"
     r = urllib.request.Request(url, headers={"User-Agent": UA})
     with urllib.request.urlopen(r, timeout=40) as x:
@@ -84,17 +97,31 @@ def fetch_month(year, month):
         raise RuntimeError("monthlySchedule が無い(ページ構造が変わった?)")
     # ⛔窓で切らない(200000字で切ったら最終行の佐賀が月によって落ちた=行が巨大)
     seg = re.sub(r"<script.*?</script>", "", h[i:], flags=re.S)
-    days, others = {}, {}
+    ndays = calendar.monthrange(year, month)[1]
+    days, others, width = {}, {}, None
     for tr in re.findall(r"<tr[^>]*>(.*?)</tr>", seg, flags=re.S):
         cells = [re.sub(r"<[^>]+>", "", c).strip()
                  for c in re.findall(r"<t[dh][^>]*>(.*?)</t[dh]>", tr, flags=re.S)]
         if len(cells) < 10:
             continue
         name = cells[0]
+        if width is None and not name and cells[1] == "1":         # 日にちの見出し行
+            want = [str(d) for d in range(1, ndays + 1)]
+            got = cells[1:-1]
+            if got[:ndays] != want or any(got[ndays:]):
+                raise ConveneGuard(f"{year}-{month:02d} 日にちの見出しが 1〜{ndays} でない: {'|'.join(got)}")
+            width = len(cells)
+            continue
         marks = [(d + 1, m) for d, m in enumerate(cells[1:-1]) if m]
         if not name or name in ("月", "火", "水", "木", "金", "土", "日"):
             continue
         p = VENUE.get(name)
+        if width is None or len(cells) != width:
+            if p is not None:
+                raise ConveneGuard(f"{year}-{month:02d} {name} の行が {len(cells)} 列(見出しは {width} 列)")
+            continue
+        if p is not None and any(day > ndays for day, _ in marks):
+            raise ConveneGuard(f"{year}-{month:02d} {name} に {ndays} 日より後の記号がある")
         if p is None:
             if marks:
                 others[name] = others.get(name, 0) + len(marks)
@@ -149,6 +176,11 @@ def main():
     for y, m in month_list(today):
         try:
             days, others = fetch_month(y, m)
+        except ConveneGuard as e:
+            log(f"::error::月別日程 表の読み違いの疑いで書かない {e}")
+            CONVENE_GUARD.append(str(e))
+            failed.append(f"{y}-{m:02d}")
+            continue
         except Exception as e:
             log(f"{y}-{m:02d}: 読めない {type(e).__name__}: {str(e)[:120]}")
             failed.append(f"{y}-{m:02d}")
@@ -211,7 +243,7 @@ def main():
         log(f"ドライラン(--apply なし): {json.dumps(out, ensure_ascii=False)}")
         sample = dict(list(value["days"].items())[:3])
         log(f"days 例: {json.dumps(sample, ensure_ascii=False)}")
-        return 0
+        return 1 if CONVENE_GUARD else 0
 
     if failed:
         # 監査 #22 読めなかった月を空にしない= 前回の中身を残す(前回が読めなければ書かない)
@@ -231,7 +263,9 @@ def main():
                 json.dumps([{"key": META_KEY, "value": value,
                              "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()}]).encode("utf-8"))
     log(f"nar_meta/{META_KEY} 更新 {st}(開催日{len(value['days'])}日ぶん)")
-    return 0 if st in (200, 201) else 1
+    if CONVENE_GUARD:
+        log(f"番人が止めた月 {len(CONVENE_GUARD)}(前回の中身を残した): " + " / ".join(CONVENE_GUARD))
+    return 0 if st in (200, 201) and not CONVENE_GUARD else 1
 
 
 if __name__ == "__main__":

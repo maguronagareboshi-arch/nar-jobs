@@ -192,6 +192,23 @@ def read_archive(payload: bytes, *, max_uncompressed: int = 750_000_000) -> dict
     return files
 
 
+_PRIZE_EMPTY = {"", "-", "--", "---"}     # 賞金の欄が空= その着の賞金なし(今まで通り 0)
+
+
+def _prize(row: dict[str, str], place: int) -> int:
+    """着賞金(円)。空は 0(賞金なし)。⛔字が入っているのに数字として読めない値を 0 にしない
+    (2026-10-10 監査 #4: 0 は「賞金なし」という正しい値に見えて気づけない)= ArchiveColumnsError で止める。"""
+    text = str(row.get(f"{place}着賞金(円)") or "").strip()
+    if text in _PRIZE_EMPTY:
+        return 0
+    value = _number(text, integer=True)
+    if value is None:
+        raise ArchiveColumnsError(
+            f"{place}着賞金(円) が数字として読めない {text!r}"
+            f"({row.get('競馬場')} {row.get('競走年月日')} {row.get('レース番号')}R)")
+    return int(value)
+
+
 def normalize_races(rows: Iterable[dict[str, str]]) -> list[dict[str, Any]]:
     output = []
     for row in rows:
@@ -218,7 +235,7 @@ def normalize_races(rows: Iterable[dict[str, str]]) -> list[dict[str, Any]]:
             "going": str(row.get("馬場") or "").strip(),
             "field_size": int(_number(row.get("頭数"), integer=True) or 0),
             "condition": str(row.get("条件") or "").strip(),
-            "prize_yen": [int(_number(row.get(f"{i}着賞金(円)"), integer=True) or 0) for i in range(1, 6)],
+            "prize_yen": [_prize(row, i) for i in range(1, 6)],
             "race_last4f": _number(row.get("上がり4F")),
             "race_last3f": _number(row.get("上がり3F")),
             "furlongs": [float(value) for value in laps if value is not None],
@@ -413,8 +430,11 @@ class ArchiveColumnsError(RuntimeError):
 
 # 監査 #19: これが無いと結果・出馬表が黙って空(None)になる列。⛔行が 0 のファイルは見ない(見出しが読めない)
 REQUIRED_COLUMNS = {
-    "_racelist.csv": ("競馬場", "競走年月日", "レース番号", "発走時刻", "距離"),
-    "_horselist.csv": ("競馬場", "競走年月日", "レース番号", "馬番", "馬名", "着順", "人気", "生年月日"),
+    # 2026-10-10 監査 #4: 1〜5着賞金(円)・馬体重・負担重量・タイムも足す(列名が変わると黙って None/0 になっていた)
+    "_racelist.csv": ("競馬場", "競走年月日", "レース番号", "発走時刻", "距離",
+                      "1着賞金(円)", "2着賞金(円)", "3着賞金(円)", "4着賞金(円)", "5着賞金(円)"),
+    "_horselist.csv": ("競馬場", "競走年月日", "レース番号", "馬番", "馬名", "着順", "人気", "生年月日",
+                       "馬体重", "負担重量", "タイム"),
     "_payback.csv": ("単勝組番", "単勝払戻金（円）"),
 }
 

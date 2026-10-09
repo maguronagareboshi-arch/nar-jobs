@@ -7,7 +7,7 @@
   python cloud/odds.py --dry-run        # 取得と解析だけ(投入しない)
   python cloud/odds.py --env pipeline/.env.nar          # ローカル試験(人間が実行)
 環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY(GitHub Secrets)。読み取りだけの試験は --url/--key で anon も可
-終了コード: 0 正常(対象なし・一部の取得失敗も 0=次の実行に任せる)/ 1 投入失敗 / 2 前提の読み取りに失敗
+終了コード: 0 正常(対象なし・一部の取得失敗も 0=次の実行に任せる)/ 1 投入失敗・番人が止めたレースあり / 2 前提の読み取りに失敗
 """
 import argparse
 import datetime as dt
@@ -84,8 +84,28 @@ def _num(text):
     return float(m.group(0))
 
 
+class OddsGuard(Exception):
+    """単複の表の読み違いの疑い(見出しが読めない・値の範囲外)。そのレースは書かない。"""
+
+
+ODDS_GUARD = []          # 番人が止めたレースの理由(main が終了コードを 1 にする)
+
+
+def odds_bad(runners):
+    """2026-10-10 監査 #6: 単勝 ≥ 1.0・複勝の下限 ≤ 上限(複勝も ≥ 1.0)。外れ → 理由の一覧。数値でない(None)は見ない。"""
+    bad = []
+    for x in runners:
+        w, pl, ph = x["w"], x["pl"], x["ph"]
+        if w is not None and w < 1.0:
+            bad.append(f"{x['n']}番 単勝 {w}")
+        if (pl is not None and pl < 1.0) or (ph is not None and ph < 1.0) or                 (pl is not None and ph is not None and pl > ph):
+            bad.append(f"{x['n']}番 複勝 {pl}-{ph}")
+    return bad
+
+
 def header_cols(thead):
-    """見出しから列位置を決める(colspan を数える)。取れない見出しは既定値。"""
+    """見出しから列位置を決める(colspan を数える)。
+    ⛔馬番・単勝の見出しが読めなければ None(2026-10-10 監査 #6: 前は黙って固定位置 1/3/4 に戻っていた= 列がずれても入った)。"""
     cols = {"umaban": None, "win": None, "place": None, "place_span": 1}
     idx = 0
     for m in re.finditer(r"<th([^>]*)>(.*?)</th>", thead, re.S):
@@ -99,8 +119,8 @@ def header_cols(thead):
         elif "複勝" in label and cols["place"] is None:
             cols["place"], cols["place_span"] = idx, span
         idx += span
-    if cols["umaban"] is None or cols["win"] is None:      # 見出しが変わったときの保険(2026-08-23 の並び)
-        cols = {"umaban": 1, "win": 3, "place": 4, "place_span": 2}
+    if cols["umaban"] is None or cols["win"] is None:
+        return None
     if cols["place"] is None:
         cols["place"], cols["place_span"] = cols["win"] + 1, 2
     return cols
@@ -119,6 +139,8 @@ def parse_odds(page):
     is_final = "最終" in _text(title.group(1)) if title else False
     thead = re.search(r"<thead[^>]*>(.*?)</thead>", table, re.S)
     cols = header_cols(thead.group(1) if thead else "")
+    if cols is None:
+        raise OddsGuard("見出し(馬番・単勝)が読めない= 固定位置では読まない")
     body = re.search(r"<tbody[^>]*>(.*?)</tbody>", table, re.S)
     need = max(cols["umaban"], cols["win"], cols["place"] + cols["place_span"] - 1)
     runners = []
@@ -143,6 +165,9 @@ def parse_odds(page):
     nums = [x["n"] for x in runners]
     if nums != sorted(nums) or nums != list(range(1, len(nums) + 1)):
         return None, is_final
+    bad = odds_bad(runners)
+    if bad:
+        raise OddsGuard(f"値の外れ {len(bad)} 件: " + " / ".join(bad[:5]))
     return (runners or None), is_final
 
 
@@ -225,7 +250,12 @@ def main():
             ng += 1
             log(f"  取得失敗 {t['track']} {t['race_no']}R: {type(e).__name__}: {str(e)[:120]}")
             continue
-        runners, is_final = parse_odds(page)
+        try:
+            runners, is_final = parse_odds(page)
+        except OddsGuard as e:
+            log(f"::error::単複オッズ {t['track']} {t['race_no']}R 表の読み違いの疑いで書かない {e}")
+            ODDS_GUARD.append(f"{t['track']} {t['race_no']}R {e}")
+            continue
         if not runners or all(x["w"] is None for x in runners):
             empty += 1
             log(f"  発売前/表なし {t['track']} {t['race_no']}R(発走まで {t['delta']} 分)")
@@ -252,17 +282,20 @@ def main():
 
     finalized = sum(1 for r in rows if r["is_final"])
     log(f"取得 成功 {ok} / 失敗 {ng} / 発売前 {empty} / 最終化 {finalized}")
+    rc_guard = 1 if ODDS_GUARD else 0       # 番人が止めたレースがあれば、他を入れたうえで終了コード 1(見張りが拾う)
+    if ODDS_GUARD:
+        log(f"番人が止めたレース {len(ODDS_GUARD)}: " + " / ".join(ODDS_GUARD[:5]))
     if args.dry_run:
         log("dry-run: 投入しない")
-        return 0
+        return rc_guard
     if not rows:
-        return 0
+        return rc_guard
     status, msg = upsert(url, key, TABLE, CONFLICT, rows)
     if status >= 300 or status == 0:
         log(f"投入失敗 status={status} {msg}")
         return 1
     log(f"投入 {len(rows)} 行 -> {TABLE}")
-    return 0
+    return rc_guard
 
 
 if __name__ == "__main__":
