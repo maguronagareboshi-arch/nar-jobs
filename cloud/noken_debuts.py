@@ -23,6 +23,7 @@ import json
 import os
 import re
 import sys
+import unicodedata
 import urllib.parse
 import urllib.request
 
@@ -57,6 +58,16 @@ def req(base, key, path, method="GET", body=None):
 def rows(base, key, path):
     _, body = req(base, key, path)
     return json.loads(body)
+
+
+def int_of(v):
+    """整数(能検の距離)。800 と '800'(全角も)が混ざるので同じ値にする(noken_index.int_of と同じ扱い)。読めなければ None"""
+    if v is None or isinstance(v, bool):
+        return None
+    try:
+        return int(float(unicodedata.normalize("NFKC", str(v)).strip()))
+    except ValueError:
+        return None
 
 
 def enc(s):
@@ -152,11 +163,14 @@ def main():
                            **({"ht": ht[(d, track, no)]} if (d, track, no) in ht else {}),
                            # a/ar/t1(上がり・順位・テン1F)も持たせる=画面が A-1 の統一様式で全部出せる(#150)。
                            # v/s(映像)は入れない=▶は押した1頭だけ索引を引く画面側の設計(§45)のまま
-                           "noken": {k: latest.get(k) for k in ("d", "p", "date", "time", "ok", "r", "n", "tr", "a", "ar", "t1")
-                                     if latest.get(k) is not None}})
-    log(f"初出走(履歴なし) {len(debuts)}頭")
+                           # dm(能検の距離 m)= 索引の値をそのまま写す(発表なしの日の埋めは索引側 §50 #188 の決まりだけ・
+                           # ここでは推定しない)。800 と '800' が混ざるので int に揃え、読めなければ欄を作らない
+                           "noken": {**{k: latest.get(k) for k in ("d", "p", "date", "time", "ok", "r", "n", "tr", "a", "ar", "t1")
+                                        if latest.get(k) is not None},
+                                     **({"dm": dm} if (dm := int_of(latest.get("dm"))) is not None else {})}})
+    log(f"初出走(履歴なし) {len(debuts)}頭(能検の距離あり {sum(1 for x in debuts if 'dm' in x['noken'])}頭 / なし {sum(1 for x in debuts if 'dm' not in x['noken'])}頭)")
     for x in debuts[:20]:
-        log(f"  {x['date']} {x['track']} {x['no']}R {x['name']} 能検 {x['noken'].get('date','-')} {x['noken'].get('time','-')}")
+        log(f"  {x['date']} {x['track']} {x['no']}R {x['name']} 能検 {x['noken'].get('date','-')} {x['noken'].get('time','-')} 距離 {x['noken'].get('dm','-')}")
 
     value = {"built": dt.datetime.now(JST).isoformat(timespec="seconds"),
              "dates": dates, "debuts": debuts}
