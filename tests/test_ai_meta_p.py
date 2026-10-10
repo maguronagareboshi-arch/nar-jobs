@@ -6,7 +6,7 @@
 確かめるのは=
   ①meta.p の頭数= 走る馬(取消・除外を外した)の頭数・鍵は馬番の文字
   ②合計 1.000±0.001
-  ③meta.p の上位 4 頭の並び(同点は馬番の小さい方)= marks の並び・marks の形は今までどおり
+  ③meta.p の上位 5 頭の並び(同点は馬番の小さい方)= marks の並び・marks の形は今までどおり
 """
 import sys
 import unittest
@@ -23,10 +23,10 @@ class MetaP(unittest.TestCase):
     def setUp(self):
         day = '2026-09-14'
         rows = []
-        # 大井 5R= 7 頭(うち 6 番は取消)・同点あり(2 番と 4 番)
+        # 高知 5R= 7 頭(うち 6 番は取消)・同点あり(2 番と 4 番)
         for u, p, note in ((1, 0.30, ''), (2, 0.55, ''), (3, 0.12, ''), (4, 0.55, ''),
                            (5, 0.41, ''), (6, 0.90, '取消'), (7, 0.07, '')):
-            rows.append(dict(rid=f'大井|{day}|5', track='大井', race_no=5, runner_number=u,
+            rows.append(dict(rid=f'高知|{day}|5', track='高知', race_no=5, runner_number=u,
                              race_date=pd.Timestamp(day), finish=None, finish_note=note, _p=p))
         self.df = pd.DataFrame(rows)
         self.day = day
@@ -45,9 +45,12 @@ class MetaP(unittest.TestCase):
         self.assertEqual(sorted(p, key=int), ['1', '2', '3', '4', '5', '7'], '取消の 6 番が入っている/頭数が違う')
         self.assertEqual(r['meta']['n'], len(p))
         self.assertAlmostEqual(sum(p.values()), 1.0, delta=0.001)
-        top = sorted(p, key=lambda k: (-p[k], int(k)))[:4]
-        self.assertEqual([str(x['num']) for x in r['marks']], top, 'marks の並びと meta.p の上位 4 頭が違う')
+        top = sorted(p, key=lambda k: (-p[k], int(k)))[:5]
+        self.assertEqual([str(x['num']) for x in r['marks']], top, 'marks の並びと meta.p の上位 5 頭が違う')
         self.assertEqual([x['mark'] for x in r['marks']], base_v1.MARKS)
+        # 2026-10-10 南関 4 場は base-v1 を書かない
+        nk = self.df.assign(rid=self.df['rid'].str.replace('高知', '大井'), track='大井')
+        self.assertEqual(base_v1.build_marks(nk, self.day, m, None, None, 'morning'), [], '南関 4 場を書いている')
         self.assertEqual(set(r['marks'][0]), {'num', 'mark', 'score'}, 'marks の形が変わった')
         self.assertAlmostEqual(r['marks'][0]['score'], round(p['2'] * 100, 1), delta=0.05)
 

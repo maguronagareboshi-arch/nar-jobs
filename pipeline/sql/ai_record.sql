@@ -18,23 +18,44 @@ with tj as (
   where t.model = 'v3n-1' and t.timing = 'morning'
     and t.track in ('門別', '盛岡', '水沢', '金沢', '笠松', '名古屋', '園田', '姫路', '高知', '佐賀')
 )
-select m.model, m.track, m.race_date, m.race_no, m.timing, m.marks, m.computed_at
+select m.model, m.track, m.race_date, m.race_no, m.timing, m.marks, m.meta, m.computed_at
 from public.nar_ai_marks m
 where not (m.model = 'base-v1'
            and exists (select 1 from tj where (tj.track, tj.race_date, tj.race_no) = (m.track, m.race_date, m.race_no)))
-  -- 南関 4 場は 2026-10-10 から base-v1 の印を画面に出さない(南関特化 AI だけ)= 画面の成績にも数えない
-  and not (m.model = 'base-v1' and m.track in ('浦和', '船橋', '大井', '川崎') and m.race_date >= date '2026-10-10')
+  -- 南関 4 場は base-v1 の印を画面に出さない(南関特化 AI だけ)= 画面の成績にも全期間数えない(2026-10-10 ユーザー決定 A)
+  and not (m.model = 'base-v1' and m.track in ('浦和', '船橋', '大井', '川崎'))
 union all
-select 'base-v1', tj.track, tj.race_date, tj.race_no, w.timing, tj.marks, tj.computed_at
+select 'base-v1', tj.track, tj.race_date, tj.race_no, w.timing, tj.marks, tj.meta, tj.computed_at
 from tj cross join (values ('morning'), ('last')) as w(timing);
+
+-- 印は ◎○▲△△ の 5 頭(2026-10-10 ユーザー決定 B)。pos = 印の順(1〜5)= 配列の並び(書き手は常に ◎○▲△△ の順で保存)。
+-- 4 頭のまま保存された過去の試験運用(base-v1・v3n-1)の行は、2026-09-14 以降に限り、発走前に同じ行へ保存した meta.p から
+-- 5 頭目(印に無い馬で p 最大・同点は馬番の小さい方)を △(pos 5)として足す。⛔DB へは書き戻さない(nar_ai_marks_guard が捨てる)。
+-- 9/8〜9/13 は meta.p が無い= 5 頭目なし。
+drop table if exists tmp_ai_mk0;
+create temp table tmp_ai_mk0 as
+select m.model, m.track, m.race_date, m.race_no, m.timing, m.computed_at,
+       (e.v->>'num')::int as num, e.v->>'mark' as mark, e.o::int as pos
+from tmp_ai_src m
+cross join lateral jsonb_array_elements(m.marks) with ordinality as e(v, o)
+union all
+select f.model, f.track, f.race_date, f.race_no, f.timing, f.computed_at, f.num, '△', 5
+from (
+  select m.model, m.track, m.race_date, m.race_no, m.timing, m.computed_at,
+         (select e.key::int from jsonb_each_text(m.meta->'p') e
+          where not exists (select 1 from jsonb_array_elements(m.marks) x where (x->>'num')::int = e.key::int)
+          order by e.value::numeric desc, e.key::int limit 1) as num
+  from tmp_ai_src m
+  where m.model in ('base-v1', 'v3n-1') and m.race_date >= date '2026-09-14'
+    and jsonb_array_length(m.marks) = 4 and jsonb_typeof(m.meta->'p') = 'object'
+) f
+where f.num is not null;
 
 drop table if exists tmp_ai_mk;
 create temp table tmp_ai_mk as
-select m.model, m.track, m.race_date, m.race_no, m.timing,
-       (e.v->>'num')::int as num, e.v->>'mark' as mark
-from tmp_ai_src m
+select m.model, m.track, m.race_date, m.race_no, m.timing, m.num, m.mark, m.pos
+from tmp_ai_mk0 m
 join public.nar_races r on (r.track, r.race_date, r.race_no) = (m.track, m.race_date, m.race_no)
-cross join lateral jsonb_array_elements(m.marks) as e(v)
 where r.post_time ~ '^[0-9]{4}$'
   and m.computed_at < ((r.race_date::text || ' ' || substr(r.post_time, 1, 2) || ':' || substr(r.post_time, 3, 2))::timestamp
                        at time zone 'Asia/Tokyo');
@@ -42,7 +63,7 @@ where r.post_time ~ '^[0-9]{4}$'
 -- 結果と払戻を付ける(決着済みレースのみ・取消/除外は落とす)
 drop table if exists tmp_ai_res;
 create temp table tmp_ai_res as
-select k.model, k.track, k.race_date, k.race_no, k.timing, k.num, k.mark,
+select k.model, k.track, k.race_date, k.race_no, k.timing, k.num, k.mark, k.pos,
        u.finish, u.popularity,
        case when u.finish = 1 then coalesce((
          select (p->>'y')::int from jsonb_array_elements(rp.payouts) p
@@ -58,7 +79,7 @@ where coalesce(u.finish_note, '') !~ '取消|除外'
               where w.track = k.track and w.race_date = k.race_date and w.race_no = k.race_no and w.finish = 1);
 
 -- ◎から○▲△へ流した馬券(馬連・馬単・三連単)の成績(2026-09-10 追加)。
--- 買い方はこれだけ= ◎を軸に相手3頭へ流す・1組100円。⛔点数は規則で3点/6点に固定せず、
+-- 買い方はこれだけ= ◎を軸に相手全部(5 頭なら ○▲△△ の 4 頭= 馬連 4・馬単 4・三連単 12 点)へ流す・1組100円。⛔点数は規則で3点/6点に固定せず、
 -- **実際に買えた組の数**で持つ(印が少ないレースはその分だけ減る)。
 -- ⛔取消・除外は tmp_ai_res の時点で落ちているので、その馬を含む組は自動的に買わない。
 -- ⛔◎が取消・除外ならそのレースは1点も買わない(hon が無い= 行ごと落とす)。
@@ -119,7 +140,7 @@ drop table if exists tmp_ai_u;
 create temp table tmp_ai_u as
 select * from tmp_ai_res
 union all
-select model, 'all', race_date, race_no, timing, num, mark, finish, popularity, tan_pay, fuku_pay from tmp_ai_res;
+select model, 'all', race_date, race_no, timing, num, mark, pos, finish, popularity, tan_pay, fuku_pay from tmp_ai_res;
 create index on tmp_ai_u (model, track, timing);
 
 drop table if exists tmp_ai_exu;
@@ -131,7 +152,8 @@ select model, 'all', race_date, race_no, timing,
 create index on tmp_ai_exu (model, track, timing);
 
 -- 印グループの基本形
-create or replace function pg_temp.ai_basic(p_model text, p_track text, p_timing text, p_mark text)
+-- p_pos = 印の順(1=◎ … 4=△(4番手)・5=△(5番手))
+create or replace function pg_temp.ai_basic(p_model text, p_track text, p_timing text, p_pos int)
 returns jsonb language sql as $$
   select jsonb_build_object(
     'n', count(*), 'w1', count(*) filter (where finish = 1),
@@ -140,7 +162,7 @@ returns jsonb language sql as $$
     'fuku', round(100.0 * count(*) filter (where finish <= 3) / nullif(count(*), 0), 1),
     'tanRet',  round(1.0 * sum(tan_pay)  / nullif(count(*), 0), 0),
     'fukuRet', round(1.0 * sum(fuku_pay) / nullif(count(*), 0), 0))
-  from tmp_ai_u where model = p_model and track = p_track and timing = p_timing and (p_mark = '*' or mark = p_mark)
+  from tmp_ai_u where model = p_model and track = p_track and timing = p_timing and pos = p_pos
 $$;
 
 -- 流し馬券の3券種をまとめて1つの JSON に。
@@ -175,10 +197,11 @@ select g.model, g.track, g.timing,
     'n', (select count(*) from tmp_ai_u x where x.model = g.model and x.track = g.track and x.timing = g.timing and x.mark = '◎'),
     'from', (select min(race_date) from tmp_ai_u x where x.model = g.model and x.track = g.track and x.timing = g.timing),
     'to',   (select max(race_date) from tmp_ai_u x where x.model = g.model and x.track = g.track and x.timing = g.timing),
-    'top', pg_temp.ai_basic(g.model, g.track, g.timing, '◎'),
+    'top', pg_temp.ai_basic(g.model, g.track, g.timing, 1),
     'byMark', (
-      select jsonb_agg(pg_temp.ai_basic(g.model, g.track, g.timing, mk) || jsonb_build_object('mark', mk))
-      from unnest(array['◎', '○', '▲', '△']) as mk),
+      -- 印の順に 5 行(◎○▲△(4番手)△(5番手))。viewer は行の順で描く= 順番を変えない
+      select jsonb_agg(pg_temp.ai_basic(g.model, g.track, g.timing, mk.o) || jsonb_build_object('mark', mk.m, 'pos', mk.o) order by mk.o)
+      from (values ('◎', 1), ('○', 2), ('▲', 3), ('△', 4), ('△', 5)) as mk(m, o)),
     'popBands', (
       select coalesce(jsonb_agg(jsonb_build_object('band', band, 'n', n, 'w1', w1,
                'win', round(100.0 * w1 / n, 1), 'fuku', round(100.0 * f / n, 1), 'tanRet', round(1.0 * tp / n, 0))

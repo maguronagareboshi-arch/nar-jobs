@@ -10,7 +10,7 @@ import base_v1  # noqa: E402
 class PWin(unittest.TestCase):
     def test_p_win(self):
         day = '2026-09-14'
-        df = pd.DataFrame([dict(rid=f'大井|{day}|5', track='大井', race_no=5, runner_number=u, race_date=pd.Timestamp(day), finish=None,
+        df = pd.DataFrame([dict(rid=f'高知|{day}|5', track='高知', race_no=5, runner_number=u, race_date=pd.Timestamp(day), finish=None,
                                 finish_note=n, _p=p, _w=w) for u, p, w, n in ((1, .3, .1, ''), (2, .55, .4, ''), (3, .12, .02, ''),
                                                                              (4, .5, .3, ''), (5, .41, .2, ''), (6, .9, .9, '取消'))])
         cal = base_v1.cal_table(np.array([.003, .007, .03, .03, .1, .2, .3, .5, .7]), np.array([0, 0, 0, 1, 0, 0, 1, 1, 1]))

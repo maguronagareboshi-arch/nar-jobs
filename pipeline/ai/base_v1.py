@@ -44,7 +44,8 @@ from load_nar_official import load_env, upsert  # noqa: E402
 MODEL_ID = 'base-v1'
 TABLE = 'nar_ai_marks'
 CONFLICT = 'model,track,race_date,race_no,timing'
-MARKS = ['◎', '○', '▲', '△']
+MARKS = ['◎', '○', '▲', '△', '△']   # 2026-10-10 ユーザー決定: 印は 5 頭(◎○▲△△)
+NANKAN = {'浦和', '船橋', '大井', '川崎'}   # 2026-10-10 ユーザー決定: 南関 4 場は南関特化 AI だけ= base-v1 は書かない
 JST = dt.timezone(dt.timedelta(hours=9))
 
 KEY = ['track', 'race_date', 'race_no', 'runner_number', 'horse_key']
@@ -324,6 +325,8 @@ def build_marks(df, day, m, bst_b, bst_r, timing, bst_w=None):
     need = baba_tracks(df) if timing == 'last' else set()          # §143b 馬場が普段から入る場(1 回だけ数える)
     rows, skipped = [], {}
     for rid, g in d.groupby('rid', sort=False):
+        if rid.split('|')[0] in NANKAN:                          # ⛔write_marks は v3 系と共用= 絞り込みはここだけ
+            continue
         runnable = g[g['finish_note'].fillna('') == '']            # 発走前に分かる取消・除外は外す
         if len(runnable) < 4:
             continue
@@ -338,7 +341,7 @@ def build_marks(df, day, m, bst_b, bst_r, timing, bst_w=None):
             meta['timing'] = 'last'
             meta['bw_n'] = int(runnable['bataiju_now'].notna().sum())
         s = runnable['p'] / runnable['p'].sum()
-        # §170 B 全頭の s(= p/Σp)を残す= 期待値の検証用。⛔marks(上位 4 頭)の形は変えない
+        # §170 B 全頭の s(= p/Σp)を残す= 期待値の検証用。⛔marks(上位 5 頭)の形は変えない
         meta['p'] = {str(int(u)): round(float(v), 4) for u, v in zip(runnable['runner_number'], s)}
         if bst_w is not None:
             # §224a 走る馬の中で合計 1 → 帯の実績へ置き換え → もう一度合計 1。⛔meta.p・marks は触らない
@@ -348,7 +351,7 @@ def build_marks(df, day, m, bst_b, bst_r, timing, bst_w=None):
             meta['p_win'] = {str(int(u)): round(float(v), 4) for u, v in zip(runnable['runner_number'], wc)}
             meta['cal'] = CAL_ID
             pw_all.extend(wc)
-        order = runnable.assign(s=s).sort_values(['s', 'runner_number'], ascending=[False, True]).head(4)
+        order = runnable.assign(s=s).sort_values(['s', 'runner_number'], ascending=[False, True]).head(5)
         marks = [{'num': int(r.runner_number), 'mark': MARKS[i], 'score': round(float(r.s) * 100, 1)}
                  for i, r in enumerate(order.itertuples())]
         track, _, no = rid.split('|')
