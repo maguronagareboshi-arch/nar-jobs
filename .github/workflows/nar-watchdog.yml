@@ -252,8 +252,18 @@ jobs:
           NAR_SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           python - <<'PY'
-          import os, json, urllib.request, datetime as dt
+          import os, json, urllib.request, urllib.error, datetime as dt
           BASE, KEY = os.environ['NAR_SUPABASE_URL'], os.environ['NAR_SUPABASE_SERVICE_KEY']
+          # 2026-10-10 先方の障害(サイト全体が 503 の障害ページ)の間は黄= メールしない。403(ランナー IP の拒否・9/8 の型)は赤のまま
+          def tck_down():
+              try:
+                  urllib.request.urlopen(urllib.request.Request('https://www.tokyocitykeiba.com/',
+                      headers={'User-Agent': 'nar-jobs-health/1.0'}), timeout=20)
+                  return False
+              except urllib.error.HTTPError as e:
+                  return e.code == 503
+              except Exception:
+                  return False
           def get(path):
               req = urllib.request.Request(BASE + '/rest/v1/' + path,
                   headers={'apikey': KEY, 'Authorization': 'Bearer ' + KEY})
@@ -281,6 +291,9 @@ jobs:
           gap = (dt.date.fromisoformat(last_race) - dt.date.fromisoformat(last_ev)).days
           behind = [d for d in days if d > last_ev]
           print(f'遅れ {gap} 日 / 取れていない開催日 {len(behind)} 日 {behind[:5]}')
+          if gap >= 2 and tck_down():
+              print('::warning::大井公式サイトが 503(先方の障害)= 取れなくて当然なので黄。復旧後に horse-health を手押しで遅れを埋める')
+              raise SystemExit(0)
           if gap >= 2:
               print('MISSING 大井公式の出来事が 2 日以上入っていない')
               print('修理= nar_fetch_raw の fetched_at が今朝 06:00 か見る(§195d pg_cron)'
@@ -335,8 +348,25 @@ jobs:
               print(f"{job:24s} ok={r.get('last_ok')} try={r.get('last_try')} status={r.get('last_status')} note={r.get('note')}")
           bad = []
           # 2026-10-03 監査 A-1: fail は全行を見る(古さの検査は下の対象のまま)
+          import urllib.request, urllib.error
+          # 2026-10-10 先方の障害(サイト全体が 503 の障害ページ)の間は黄= メールしない。403(ランナー IP の拒否・9/8 の型)は赤のまま
+          def tck_down():
+              try:
+                  urllib.request.urlopen(urllib.request.Request('https://www.tokyocitykeiba.com/',
+                      headers={'User-Agent': 'nar-jobs-health/1.0'}), timeout=20)
+                  return False
+              except urllib.error.HTTPError as e:
+                  return e.code == 503
+              except Exception:
+                  return False
+          down = None
           for job in sorted(got):
               if (got.get(job) or {}).get('last_status') == 'fail':
+                  if job == 'ooi_feed':
+                      down = tck_down() if down is None else down
+                      if down:
+                          print('::warning::ooi_feed は fail だが大井公式サイトが 503(先方の障害)= 黄')
+                          continue
                   bad.append(f"{job} の last_status= fail(note={(got.get(job) or {}).get('note')})")
           if 930 <= hm < 2200:
               t = last_ok('refresh')
