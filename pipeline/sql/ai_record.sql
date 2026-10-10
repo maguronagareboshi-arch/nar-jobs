@@ -25,8 +25,17 @@ where not (m.model = 'base-v1'
   -- 南関 4 場は base-v1 の印を画面に出さない(南関特化 AI だけ)= 画面の成績にも全期間数えない(2026-10-10 ユーザー決定 A)
   and not (m.model = 'base-v1' and m.track in ('浦和', '船橋', '大井', '川崎'))
 union all
-select 'base-v1', tj.track, tj.race_date, tj.race_no, w.timing, tj.marks, tj.meta, tj.computed_at
-from tj cross join (values ('morning'), ('last')) as w(timing);
+select 'base-v1', tj.track, tj.race_date, tj.race_no, 'morning', tj.marks, tj.meta, tj.computed_at
+from tj
+union all
+-- 2026-10-11 直前の欄 = 取消・除外の馬を外した v3n-1 の直前の行(meta.scratched が空でない)があればそれ・無ければ朝の写し
+--   (nar-jobs pipeline/ai/kochi/v3n_last.py・サイトの js/data.js tajoLastUsed と同じ決まり)
+select 'base-v1', tj.track, tj.race_date, tj.race_no, 'last',
+       coalesce(tl.marks, tj.marks), coalesce(tl.meta, tj.meta), coalesce(tl.computed_at, tj.computed_at)
+from tj
+left join public.nar_ai_marks tl
+  on tl.model = 'v3n-1' and tl.timing = 'last' and (tl.track, tl.race_date, tl.race_no) = (tj.track, tj.race_date, tj.race_no)
+ and jsonb_array_length(coalesce(tl.meta->'scratched', '[]'::jsonb)) > 0;
 
 -- 印は ◎○▲△△ の 5 頭(2026-10-10 ユーザー決定 B)。pos = 印の順(1〜5)= 配列の並び(書き手は常に ◎○▲△△ の順で保存)。
 -- 4 頭のまま保存された過去の試験運用(base-v1・v3n-1)の行は、2026-09-14 以降に限り、発走前に同じ行へ保存した meta.p から
