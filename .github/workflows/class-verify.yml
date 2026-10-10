@@ -1,0 +1,40 @@
+# 監査 表C #5(AUDIT-class-systems-20260925)= 番組賞金の計算の検算を、線を決めた後の期間だけで流す(書かない・手押しだけ)。
+#   9/3 の検算は同じ期間で線を合わせた率= 上限の見積もり。2026-09-04 以降に限ると期間外の率になる。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY(読むだけ)
+name: class-verify
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: この日以降の走で検算する(YYYY-MM-DD)
+        required: true
+        default: '2026-09-04'
+concurrency:
+  group: class-verify
+  cancel-in-progress: false
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      max-parallel: 1
+      matrix:
+        prefix: [kochi, obihiro, saga, tokai, hyogo]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install -r cloud/requirements.txt
+
+      - name: class calc verify
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          PREFIX: ${{ matrix.prefix }}
+          SINCE: ${{ inputs.since }}
+        run: |
+          set -o pipefail
+          python -X utf8 cloud/class_calc.py --verify --since "$SINCE" --prefix "$PREFIX" | tee verify.md
+          { echo "# $PREFIX 検算 $SINCE 以降"; cat verify.md; } >> "$GITHUB_STEP_SUMMARY"
