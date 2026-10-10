@@ -23,6 +23,10 @@ on:
         description: 'ペースの記録をさかのぼる開始日(YYYY-MM-DD・空なら前日ぶんだけ)'
         required: false
         default: ''
+      kochi_since:
+        description: '高知のレース後コメントをさかのぼる開始日(YYYY-MM-DD・空なら既定の窓)'
+        required: false
+        default: ''
 
 concurrency:
   group: nar-refresh
@@ -333,9 +337,12 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          KOCHI_SINCE: ${{ github.event.inputs.kochi_since }}
         # 公式の掲載が 14 日より遅れることがある(2024-03〜で 20 レース取りこぼし・2026-10-10)= 月曜の昼だけ 90 日さかのぼる
         run: |
-          if [ "$(TZ=Asia/Tokyo date +%u%H)" = "112" ]; then
+          if [ -n "$KOCHI_SINCE" ]; then
+            python cloud/kochi_comments.py --apply --since "$KOCHI_SINCE"
+          elif [ "$(TZ=Asia/Tokyo date +%u%H)" = "112" ]; then
             python cloud/kochi_comments.py --apply --since "$(TZ=Asia/Tokyo date -d '-90 days' +%F)"
           else
             python cloud/kochi_comments.py --apply
