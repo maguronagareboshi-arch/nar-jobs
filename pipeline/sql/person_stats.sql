@@ -85,7 +85,7 @@ $$;
 begin;
 delete from public.nar_person_stats;
 
--- (a) 場別の行(出走 10 以上の組だけ)。種牡馬・母父は場別を作らない(§27.3/§105: 'all' だけ)
+-- (a) 場別の行(出走 10 以上の組だけ)。種牡馬・母父の場別は下の (d) で作る(10/10・閾値 30・距離別/馬場別つき)
 insert into public.nar_person_stats (kind, name, track, period, stats, updated_at)
 select g.kind, g.name, g.track, p.period, pg_temp.basic(g.kind, g.name, g.track, p.y_from, p.y_to), now()
 from (select kind, name, track, yr from tmp_pp where kind not in ('sire', 'bms') group by 1, 2, 3, 4) g
@@ -146,8 +146,35 @@ from (select kind, name from tmp_pp where kind in ('sire', 'bms') group by 1, 2)
 cross join tmp_periods p
 where (select count(*) from tmp_pp x where x.kind = g.kind and x.name = g.name and x.yr between p.y_from and p.y_to) >= 30;
 
+-- (d) 2026-10-10 父・母父 × 競馬場(ユーザー了承 10/10・下調べ nar-site\research\sire-bms-by-venue-20261010.md)
+--     track=公式場名('帯広ば' も (c) の by_track と同じく 1 場として持つ)・期間は (c) と同じ 3 つ。
+--     stats= (c) と同じ基本形+by_distance+by_going を**その場の中だけ**で数える。by_track は付けない。
+--     その場で産駒出走 30 以上の組だけ(30 未満の場は画面が track='all' の by_track の n・w1 を使う)。
+--     ⛔(a) は sire/bms を除いたまま(閾値 10・基本形だけ の行を作らないため)。場の行はこの (d) だけが作る
+insert into public.nar_person_stats (kind, name, track, period, stats, updated_at)
+select g.kind, g.name, g.track, g.period,
+  pg_temp.basic(g.kind, g.name, g.track, g.y_from, g.y_to)
+  || jsonb_build_object(
+    'by_distance', (
+      select coalesce(jsonb_agg(jsonb_build_object('distance', distance_m, 'n', n, 'w1', w1, 'win', round(100.0 * w1 / n, 1), 'top3', round(100.0 * t3 / n, 1)) order by distance_m), '[]'::jsonb)
+      from (select distance_m, count(*) n, count(*) filter (where finish = 1) w1, count(*) filter (where finish <= 3) t3
+            from tmp_pp x where x.kind = g.kind and x.name = g.name and x.track = g.track and x.yr between g.y_from and g.y_to and distance_m is not null group by distance_m having count(*) >= 5) d),
+    'by_going', (
+      select coalesce(jsonb_agg(jsonb_build_object('going', going, 'n', n, 'w1', w1, 'win', round(100.0 * w1 / n, 1), 'top3', round(100.0 * t3 / n, 1)) order by array_position(array['良','稍重','重','不良'], going)), '[]'::jsonb)
+      from (select going, count(*) n, count(*) filter (where finish = 1) w1, count(*) filter (where finish <= 3) t3
+            from tmp_pp x where x.kind = g.kind and x.name = g.name and x.track = g.track and x.yr between g.y_from and g.y_to and going in ('良','稍重','重','不良') group by going having count(*) >= 5) gg)
+  ), now()
+from (select x.kind, x.name, x.track, p.period, p.y_from, p.y_to
+        from tmp_pp x join tmp_periods p on x.yr between p.y_from and p.y_to
+       where x.kind in ('sire', 'bms')
+       group by x.kind, x.name, x.track, p.period, p.y_from, p.y_to
+      having count(*) >= 30) g;
+
 commit;
 select kind, count(*) as rows, pg_size_pretty(sum(octet_length(stats::text))::bigint) as json_size from public.nar_person_stats group by kind;
+-- (d) の見張り= 父・母父の場の行の数と JSON の大きさ(kind×period)
+select kind, period, count(*) as venue_rows, pg_size_pretty(sum(octet_length(stats::text))::bigint) as json_size
+  from public.nar_person_stats where kind in ('sire', 'bms') and track <> 'all' group by kind, period order by kind, period;
 select pg_size_pretty(pg_total_relation_size('public.nar_person_stats')) as table_size;
 
 -- ---------------------------------------------------------------- §156 F2 組み合わせ(騎手×調教師/馬主/父)
