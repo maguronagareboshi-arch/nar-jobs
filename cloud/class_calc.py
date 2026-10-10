@@ -2475,7 +2475,7 @@ def hist_stage(a, kind, ctx, rows, births):
 KOCHI_LAG = 0   # 検算(--verify)で決める。docs/s79_p3_verify_20260903.md 参照
 OBI_LAG = 0     # 検算(--verify --prefix obihiro)で決める
 SAGA_LAG = 0    # 検算(--verify --prefix saga)で決める
-TOKAI_LAG = 3   # 検算(--verify --prefix tokai): lag 3〜8 で 97.66% の台地・0 は 97.47%
+TOKAI_LAG = 7   # 検算(class-verify 便 10/10): 4/1〜 lag3 95.96%→lag7 97.43%・期間外 9/4〜 87.30%→94.69%(差は 3 歳の一般編入 139→2)
 HYOGO_LAG = 0   # 検算(--verify --prefix hyogo): 0 が最良(7 で 93.1%)。表示方針つき精度 99.0%
 
 if __name__ == "__main__":
