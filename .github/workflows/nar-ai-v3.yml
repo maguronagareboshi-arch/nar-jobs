@@ -50,6 +50,7 @@ jobs:
       V3_MODELS: ${{ github.workspace }}/v3/models
       V3_CYOKYO_CSV: ${{ github.workspace }}/v3/cyokyo_csv
       V3_KD: ${{ github.workspace }}/v3/kd
+      V3_T14: ${{ github.workspace }}/v3/t14
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -113,6 +114,31 @@ jobs:
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_t10_up.tar.gz.enc | tar -C v3/models -xzf -
           rm -f in/v3_t10_up.tar.gz.enc
           ls -l v3/models | grep t10_up
+
+      # 第11版 = 束 t14(37 列の木・談話の 7 項目の係数・談話の集計 8/31 締め・調教欄 2018〜20)。無ければ第10版 + 談話の印のまま
+      - name: download t14 bundle files
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-t14-20261010 -p 'v3_t14.tar.gz.enc' -D in
+          mkdir -p v3/t14
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_t14.tar.gz.enc | tar -C v3/t14 -xzf -
+          rm -f in/v3_t14.tar.gz.enc
+          ls -l v3/t14 v3/t14/cyokyo_old | head -30
+
+      # 束 t14 の談話 14 列: 本文 → intfloat/multilingual-e5-small(手元と同じ版・CPU)。失敗しても第10版 + 談話の印のまま進む
+      - name: install text model (t14 danwa)
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          pip install -q "torch==2.14.1" --index-url https://download.pytorch.org/whl/cpu
+          pip install -q "sentence-transformers==6.1.0" "transformers==5.18.0"
+          python -c "from sentence_transformers import SentenceTransformer as S; m = S('intfloat/multilingual-e5-small', device='cpu', revision='614241f622f53c4eeff9890bdc4f31cfecc418b3'); print('e5-small', m.encode(['query: 調子は良い'], normalize_embeddings=True).shape)"
 
       # ---------------------------------------------------------------- 毎日変わる材料(読むだけ)
       - name: fetch forward copy (db_*_forward_t3)

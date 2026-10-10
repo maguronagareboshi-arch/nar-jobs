@@ -6,6 +6,7 @@
 1. 追い切りの毎日の分: 鍵(SUPABASE_URL・SUPABASE_SERVICE_KEY)があれば nar_kb_works から(kb_works.install)、
    無ければ(または V3_WORKS_SRC=json)手元の JSON(V3_CYOKYO_JSON)から = 従来の道。
 2. t9_forecast.table(DATE, 'pre', OUTDIR) → OUTDIR/DATE_第9版_前日版.csv・.md(追い切り・材料の差し替えは t8 の関数に入れる = t9 が呼ぶ)
+2b. 談話の印 3 定数(danwa_marks)→ 束 t14(t14_bundle・第11版・2026-10)を前日の表に足す(どちらも失敗したら前のまま)。
 3. --write のときだけ nar_ai_marks に model='v3-9'・timing='morning' で書く(base_v1.write_marks = 朝の行は凍結・読み直し)。
    marks = 印の付いた馬(◎○▲△・順位の順)・score = 3 着以内の確率 p3′ × 100。
    meta = n・model・stamp・works の元・runners(全馬の num・p1 = 勝つ確率・p3 = 3 着以内の確率 p3′(表の値)・p3_raw = 上乗せ後の p3)。
@@ -31,6 +32,7 @@ if sys.platform != 'win32':
 MODEL_ID = 'v3-9'
 TIMING = 'morning'
 STAMP = 't9_Y1/Y3(182 列・j7_last_pop なし)+t9_s2(2022-01〜2026-08)+t10 上乗せ+談話の印 3 定数(v13y)'
+STAMP11 = STAMP + '+束 t14(37 列の木・学び 2023-01〜2026-08)'  # 第11版(束を足せた日だけ)
 MK = ['◎', '○', '▲', '△']
 
 
@@ -38,7 +40,7 @@ def log(*a):
     print('[v3]', *a, flush=True)
 
 
-def build_rows(csv_path, day, src):
+def build_rows(csv_path, day, src, stamp=STAMP):
     x = pd.read_csv(csv_path, encoding='utf-8-sig')
     rows = []
     for (tr, rd, rno), g in x.groupby(['track', 'race_date', 'race_no'], sort=False):
@@ -47,7 +49,7 @@ def build_rows(csv_path, day, src):
                  for r in g.itertuples() if r.mark in MK]
         runners = [{'num': int(r.umaban), 'p1': round(float(r.p1), 4), 'p3': round(float(r.p3p), 4),
                     'p3_raw': round(float(r.p3), 4)} for r in g.sort_values('umaban').itertuples()]
-        meta = {'n': int(len(g)), 'model': MODEL_ID, 'stamp': STAMP, 'works_src': src, 'runners': runners}
+        meta = {'n': int(len(g)), 'model': MODEL_ID, 'stamp': stamp, 'works_src': src, 'runners': runners}
         rows.append({'track': tr, 'race_date': str(day), 'race_no': int(rno), 'marks': marks, 'meta': meta})
     return rows
 
@@ -107,6 +109,11 @@ def main():
         return
     day, out = a[0], Path(a[1])
     write = '--write' in a
+    try:  # 束 t14 のために土台 U と nar_kb_works の行を控える(計算は変えない)
+        import t14_bundle
+        t14_bundle.install()
+    except Exception as e:  # noqa: BLE001
+        log('束 t14 の控え 失敗', type(e).__name__, str(e)[:200])
     if kb_works.enabled():
         kb_works.install(t8, hi=day)
         src = 'nar_kb_works'
@@ -142,6 +149,12 @@ def main():
         danwa_marks.apply_csv(csv_path, day, base_csv=out / f'{day}_v29_base.csv', log=log)
     except Exception as e:  # noqa: BLE001
         log('談話の印 失敗(第10版のまま)', type(e).__name__, str(e)[:200])
+    bundle = False
+    try:  # 束 t14(第11版・Glicko 18・事実 5・談話 14 の木・研究 nankan-ai-v3 t14・ユーザー承認 2026-10-10)。v29 の土台は第10版のまま
+        import t14_bundle
+        bundle = t14_bundle.run(day, cap['h'], cap['races'], cap['T'], csv_path, log=log)
+    except Exception as e:  # noqa: BLE001
+        log('束 t14 失敗(第10版 + 談話の印のまま)', type(e).__name__, str(e)[:200])
     notes = {}
     try:  # ひとこと(表示だけ・予想の計算には使わない・失敗しても予想の表と書き込みは止めない)
         import v3_notes
@@ -149,7 +162,7 @@ def main():
     except Exception as e:  # noqa: BLE001
         log('ひとこと 失敗', type(e).__name__, str(e)[:200])
     del cap
-    rows = build_rows(csv_path, day, src)
+    rows = build_rows(csv_path, day, src, STAMP11 if bundle else STAMP)
     if notes:
         log('ひとこと 付けた', v3_notes.attach(rows, notes), '頭')
     log('races', len(rows), '◎', ' '.join(f"{r['track']}{r['race_no']}R:{r['marks'][0]['num']}" for r in rows[:12] if r['marks']))

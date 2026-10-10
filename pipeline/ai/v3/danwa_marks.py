@@ -23,6 +23,8 @@ import pandas as pd
 HERE = Path(__file__).resolve().parent
 TRACKS = ['大井', '川崎', '船橋', '浦和']
 Q4 = ['track', 'race_date', 'race_no', 'umaban']
+TX = ['raw', 'headline', 'trainer', 'comment']  # 束 t14 の談話 14 列が本文と話し手を使う(印の 3 定数は raw だけ)
+LAST = {}  # load が読んだ日の全列(日付 → 表)。t14_bundle が使い回す(競馬ブックの頁を 2 度読まない)
 CONST = {'◎': 0.2006, '○': 0.0219, '〇': 0.0219, '△': -0.2308}  # v13y_res.json の const(学び 2018-05〜19・2022・n/(n+200) で縮めた値)
 STAMP = '談話の印 3 定数(v13y)'
 
@@ -31,18 +33,18 @@ def _db(day):
     base = os.environ.get('SUPABASE_URL') or os.environ.get('NAR_SUPABASE_URL')
     key = os.environ.get('SUPABASE_SERVICE_KEY') or os.environ.get('NAR_SUPABASE_SERVICE_KEY')
     if not (base and key):
-        return pd.DataFrame(columns=Q4 + ['raw'])
-    q = urllib.parse.urlencode([('select', 'track,race_date,race_no,umaban,raw'), ('race_date', f'eq.{day}'),
+        return pd.DataFrame(columns=Q4 + TX)
+    q = urllib.parse.urlencode([('select', ','.join(Q4 + TX)), ('race_date', f'eq.{day}'),
                                 ('track', 'in.(' + ','.join(TRACKS) + ')'), ('limit', '2000')])
     req = urllib.request.Request(f"{base.rstrip('/')}/rest/v1/nar_kb_danwa?{q}", headers={'apikey': key, 'Authorization': f'Bearer {key}'})
     with urllib.request.urlopen(req, timeout=60) as r:
-        return pd.DataFrame(json.loads(r.read().decode('utf-8')), columns=Q4 + ['raw'])
+        return pd.DataFrame(json.loads(r.read().decode('utf-8')), columns=Q4 + TX)
 
 
 def _kb(day, have, log):
     """競馬ブックの頁から、have(場, R)に無い南関のレースの談話を読む。"""
     if not os.environ.get('KEIBABOOK_LOGIN_ID'):
-        return pd.DataFrame(columns=Q4 + ['raw'])
+        return pd.DataFrame(columns=Q4 + TX)
     sys.path.insert(0, str(HERE.parents[2] / 'cloud' / 'kb'))
     from keibabook import KeibabookClient
     from parsers import parse_danwa, parse_nittei
@@ -65,24 +67,25 @@ def _kb(day, have, log):
             except Exception as e:  # noqa: BLE001
                 log('談話 頁 失敗', tr, r['race_no'], type(e).__name__)
                 continue
-            rows += [{'track': tr, 'race_date': day, 'race_no': int(r['race_no']), 'umaban': int(h['umaban']), 'raw': h.get('raw') or ''}
+            rows += [{'track': tr, 'race_date': day, 'race_no': int(r['race_no']), 'umaban': int(h['umaban']), 'raw': h.get('raw') or '',
+                      'headline': h.get('headline'), 'trainer': h.get('trainer'), 'comment': h.get('comment')}
                      for h in p['horses'] if h.get('umaban')]
-    return pd.DataFrame(rows, columns=Q4 + ['raw'])
+    return pd.DataFrame(rows, columns=Q4 + TX)
 
 
 def load(day, log=print):
-    """→ 1 馬 1 行: Q4・dw_mk(◎○△ か空)・dw_u(足す定数・談話が無ければ欠け)。"""
+    """→ 1 馬 1 行: Q4・dw_mk(◎○△ か空)・dw_u(足す定数・談話が無ければ欠け)。全列(本文・話し手つき)は LAST[day] に控える。"""
     try:
         a = _db(day)
     except Exception as e:  # noqa: BLE001
         log('談話 表 失敗', type(e).__name__, str(e)[:200])
-        a = pd.DataFrame(columns=Q4 + ['raw'])
+        a = pd.DataFrame(columns=Q4 + TX)
     have = {(t, int(r)) for t, r in zip(a.track, a.race_no)}
     try:
         b = _kb(day, have, log)
     except Exception as e:  # noqa: BLE001
         log('談話 競馬ブック 失敗', type(e).__name__, str(e)[:200])
-        b = pd.DataFrame(columns=Q4 + ['raw'])
+        b = pd.DataFrame(columns=Q4 + TX)
     log('談話 表', a[['track', 'race_no']].drop_duplicates().shape[0], 'R', len(a), '頭・頁', b[['track', 'race_no']].drop_duplicates().shape[0], 'R', len(b), '頭')
     x = pd.concat([a, b], ignore_index=True)
     x['race_date'] = day
@@ -90,6 +93,7 @@ def load(day, log=print):
     x = x.drop_duplicates(Q4, keep='first')
     x['dw_mk'] = x.raw.fillna('').astype(str).str.strip().str[:1].where(lambda s: s.isin(list(CONST)), '')
     x['dw_u'] = x.dw_mk.map(CONST)
+    LAST[day] = x.copy()
     return x[Q4 + ['dw_mk', 'dw_u']]
 
 
