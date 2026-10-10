@@ -117,6 +117,17 @@ def jra_in_insert(has_career):
             + jra_in_sql(has_career) + f"\non conflict {CONFLICT} do nothing")
 
 
+# 10/10(うやむや #25 ②A): 同じ馬・同じ日に jra_in があれば transfer_in は消す(1 回だけ並べる)。
+#   KDSCOPE の仮の馬(kd)は中央の走が nar_runs に無いので、DETECT_SQL の p_area='JRA' 除外が効かず
+#   「前の地方の場→今の場」の transfer_in も出る= 中央から来た移籍が 2 回並ぶ。10/10 に遡りで 115 件消した。
+DEDUPE_TRANSFER_SQL = """
+delete from nar_horse_changes t
+where t.kind = 'transfer_in' and t.race_date >= :since
+  and exists (select 1 from nar_horse_changes j
+              where j.kind = 'jra_in' and j.horse_name = t.horse_name
+                and j.birth_date is not distinct from t.birth_date and j.race_date = t.race_date)
+"""
+
 HAS_CAREER_SQL = ("select count(*) from information_schema.columns where table_schema = 'public' "
                   "and table_name = 'nar_jra_horses' and column_name = 'jra_career_runs'")
 
@@ -190,6 +201,7 @@ def main():
             return 0
         con.run(INSERT_SQL, since=since)
         con.run(jra_in_insert(has_career), since=since)
+        con.run(DEDUPE_TRANSFER_SQL, since=since)
         n1 = con.run("select count(*) from nar_horse_changes where kind <> 'owner_change'")[0][0]
 
         seeded_before = con.run("select count(*) from nar_owner_state")[0][0]
