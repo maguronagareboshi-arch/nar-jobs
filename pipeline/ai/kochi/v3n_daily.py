@@ -28,7 +28,9 @@ MODEL_ID = 'v3n-1'
 W = {30: 0.75, 35: 0.75, 36: 0.5, 46: 0.5, 47: 0.75, 48: 0.5, 50: 0.75, 51: 0.5, 54: 0.75, 55: 0.5}  # 盛岡・姫路は 2026-10-10 ユーザーの判断で足した
 MARKS = ['◎', '○', '▲', '△', '△']  # 2026-10-10 ユーザー決定: 印は 5 頭(◎○▲△△)
 NO_MORNING = ['e_baba', 'e_tenko']  # 当日の馬場・天気 = 公式の表は前の日まで空欄 = 朝の模型に入れない(入れて空で当てると確率がずれる)
-FORM = 'v3n-2: glicko18 + no-going'  # meta に残す作りの名前(model の名前は v3n-1 のまま = サイト・成績の読み口を変えない)
+FORM = 'v3n-3: glicko18 + no-going + blood9 + sharpen'  # meta に残す作りの名前(model の名前は v3n-1 のまま = サイト・成績の読み口を変えない)
+# 2026-10-11 第 3 版(v3 の out/v3n_next.md): 混ぜた割合 s を頭数の帯ごとに s^γ ÷ Σ s^γ(順位は変わらない)。γ は選ぶ期間 2024-09〜2025-08 で決めた
+GAMMA = [(8, 0.89), (10, 0.95), (12, 1.01), (99, 1.15)]  # (この頭数まで, γ)
 
 
 def arg(name, default=None):
@@ -61,6 +63,7 @@ def main():
     import k3_eval as k3
     import k10_offeval as k10
     import k20_lg
+    import k25_blood
     rows, show = [], []
     for j in tracks:
         d = k9.ALT / f't{j}'
@@ -72,6 +75,8 @@ def main():
         k8.main()
     # 2026-10-10 第 2 版: 南関の Glicko など 18 列(全場で 1 回)+ 朝に分からない馬場・天気の列を抜いて学ぶ(v3 の out/v3n_glicko.md)
     LG = k20_lg.build(k9.ALT / 'kd_se.parquet', k9.ALT / f't{tracks[0]}' / 'si_all.parquet', log=lambda *a: print(*a, flush=True))
+    # 2026-10-11 第 3 版: 血統の相性 b9_ 9 列(全場で 1 回・公式の runs・races・profiles から・前の走りだけ)
+    BL = k25_blood.build(off, log=lambda *a: print(*a, flush=True))
     for j in tracks:
         d = k9.ALT / f't{j}'
         T, cols = k10.load(d)
@@ -79,7 +84,11 @@ def main():
         x = pd.DataFrame({'date': pd.to_datetime(x.race_date), 'race': x.race_no.astype(T.race.dtype),
                           'umaban': x.umaban.astype(T.umaban.dtype), **{c: x[c] for c in k20_lg.LGC}})
         T = T.merge(x, on=['date', 'race', 'umaban'], how='left', validate='1:1')
-        cols = [c for c in cols if c not in NO_MORNING] + k20_lg.LGC
+        b = BL[BL.track == name[j]]
+        b = pd.DataFrame({'date': pd.to_datetime(b.race_date), 'race': b.race_no.astype(T.race.dtype),
+                          'umaban': b.umaban.astype(T.umaban.dtype), **{c: b[c] for c in k25_blood.B9}})
+        T = T.merge(b, on=['date', 'race', 'umaban'], how='left', validate='1:1')
+        cols = [c for c in cols if c not in NO_MORNING] + k20_lg.LGC + k25_blood.B9
         te = T[T.date == D].copy()
         tr = T[(T.date >= '2015-01-01') & (T.date < D)]
         if te.empty:
@@ -108,6 +117,9 @@ def main():
             s3 = g.p3.to_numpy() / g.p3.sum()
             sb3 = np.array([p_b[n] for n in nums]); sb3 = sb3 / sb3.sum()
             c = w * s3 + (1 - w) * sb3
+            gm = next(v for k_, v in GAMMA if len(g) <= k_)
+            c = np.power(np.clip(c, 1e-9, 1), gm)
+            c = c / c.sum()
             s1 = g.p1.to_numpy() / g.p1.sum()
             if w_b and all(n in w_b for n in nums):
                 sb1 = np.array([w_b[n] for n in nums]); sb1 = sb1 / sb1.sum()
@@ -117,7 +129,7 @@ def main():
             p3 = np.clip(3 * c, 0.001, 0.999)
             order = np.argsort(-c, kind='stable')
             marks = [{'num': int(nums[i]), 'mark': MARKS[k_], 'score': round(float(c[i]) * 100, 1)} for k_, i in enumerate(order[:5])]
-            meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM, 'w': w, 'trained_to': trained_to,
+            meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM, 'w': w, 'gamma': gm, 'trained_to': trained_to,
                     'runners': [{'num': int(n), 'p1': round(float(a), 4), 'p3': round(float(b_), 4)} for n, a, b_ in zip(nums, c1, p3)],
                     'p': {str(int(n)): round(float(x), 4) for n, x in zip(nums, c)},
                     'own': {str(int(n)): [round(float(a), 4), round(float(b_), 4)] for n, a, b_ in zip(nums, g.p1, g.p3)}}
