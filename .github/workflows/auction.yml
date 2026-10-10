@@ -164,14 +164,6 @@ jobs:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: python cloud/horse_health.py --source auction --apply --report-json auction-health-report.json
-      - name: upload auction health audit report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: auction-health-report-${{ github.run_id }}-${{ github.run_attempt }}
-          path: auction-health-report.json
-          if-no-files-found: ignore
-          retention-days: 30
       # §54.5-c オークション後の出走数(runs_after/first_after)。nar-refresh の集計SQLと同じ流し方(psql・セッションプーラー)
       - name: runs_after (psql)
         if: always()

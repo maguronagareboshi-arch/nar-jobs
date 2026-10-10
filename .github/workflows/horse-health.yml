@@ -144,14 +144,6 @@ jobs:
           if [ "$INPUT_ALLOW_FEWER" = "true" ]; then args+=(--allow-fewer); fi
           if [ "$INPUT_DRY_RUN" != "true" ]; then args+=(--apply); fi
           python cloud/horse_health.py "${args[@]}" --report-json horse-health-report.json
-      - name: upload source audit report
-        if: always()
-        uses: actions/upload-artifact@v7
-        with:
-          name: horse-health-report-${{ github.run_id }}-${{ github.run_attempt }}
-          path: horse-health-report.json
-          if-no-files-found: ignore
-          retention-days: 30
 
       # §109 主催者公式の「出来事」。⛔上の段(NAR/オークション)とは独立=落ちても走る。
       #   既定の窓は直近14日・冪等(event_id が同じなら上書き)。読めない文書は数えるだけで止めない。
