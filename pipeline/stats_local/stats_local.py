@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""監査 A7(2026-09-24) 集計 6 本(venue_stats / person_stats / ai_record / race_level / graded / big_payouts)を
+"""監査 A7(2026-09-24) 集計 6 本(10/10 §18 sire_course を足して 7 本)(venue_stats / person_stats / ai_record / race_level / graded / big_payouts)を
 Actions 内の Postgres で計算し、本番との差分だけを戻す台本。便は .github/workflows/nar-stats.yml。
 
   python3 pipeline/stats_local/stats_local.py dump [--asof ISO]   ①④ 本番から入力表・出力表・推定行数を写す(⛔読むだけ)
@@ -86,6 +86,9 @@ OUTPUTS = {
     "nar_ob_horses": (["kind", "name", "horse_name", "birth_date"],
                       ["sex", "sire", "first_date", "last_date", "n", "w1", "w2", "w3", "last_track"]),
     "nar_ob_graded": (["kind", "name", "race_date", "track", "race_no", "horse_name"], ["race_name", "finish"]),
+    # 10/10 §18 父の成績= この場×この距離×同じ馬場・そのレースの前日まで 10 年(sire_course.sql)
+    "nar_sire_course": (["track", "race_date", "race_no", "umaban", "going"],
+                        ["sire", "n", "w1", "w2", "w3", "roi", "roi3"]),
 }
 OUT_COLS = {
     "nar_venue_stats": "track, period, stats, updated_at",
@@ -104,9 +107,10 @@ OUT_COLS = {
     "nar_ob_horses": ("kind, name, horse_name, birth_date, sex, sire, first_date, last_date, n, w1, w2, w3, "
                       "last_track, updated_at"),
     "nar_ob_graded": "kind, name, race_date, track, race_no, horse_name, race_name, finish, updated_at",
+    "nar_sire_course": "track, race_date, race_no, umaban, going, sire, n, w1, w2, w3, roi, roi3, updated_at",
 }
 OUT_WHERE = {"nar_meta": "where key = 'big_payouts'"}
-SQLS = ["venue_stats", "person_stats", "ai_record", "race_level", "graded", "big_payouts"]
+SQLS = ["venue_stats", "person_stats", "ai_record", "race_level", "graded", "big_payouts", "sire_course"]
 
 INPUT_MIN_RATIO = 0.99   # 入力が本番の推定行数のこれ未満なら apply しない
 CHANGE_MAX_RATIO = 0.30  # 1 表で(変わった+消す)が本番行数のこれを超えたら apply しない(--allow-large で許す)
@@ -143,6 +147,9 @@ def cmd_dump(asof):
     if asof and not re.fullmatch(r"[0-9T:.+\- Z]{10,40}", asof):
         raise SystemExit("asof の形がおかしい: ISO 時刻だけ")
     os.makedirs(DUMP, exist_ok=True)
+    env = dict(os.environ, PGPASSWORD=os.environ["PROD_PGPASSWORD"], PGSSLMODE="require")
+    for k in ("PGHOST", "PGPORT", "PGUSER", "PGDATABASE"):
+        env.pop(k, None)
     lines = ["set default_transaction_read_only = on;", "set statement_timeout = '10min';", "begin read only;"]
     for t, (cols, _) in INPUTS.items():
         # 時刻合わせ= asof の後に入った行を外す(5 表とも updated_at あり・created_at は無い)。
@@ -157,7 +164,15 @@ def cmd_dump(asof):
                  f" or race_date < ('{asof}'::timestamptz at time zone 'Asia/Tokyo')::date")
         lines.append(f"\\copy (select {cols} from public.{t}{w}) to '{DUMP}/in_{t}.tsv'")
     lines.append(f"\\copy ({NOKEN_COPY}) to '{DUMP}/in_noken_meta.tsv'")
+    missing = _prod_missing_outputs(env)
+    with open(os.path.join(DUMP, "missing_out.txt"), "w", encoding="utf-8") as f:
+        f.write("\n".join(missing))
     for t, cols in OUT_COLS.items():
+        if t in missing:
+            # 10/10 §18 新しい出力表を本番に作る前の check= 本番 0 行として照合する(apply は cmd_apply が止める)
+            open(os.path.join(DUMP, f"out_{t}.tsv"), "w").close()
+            log(f"  ⚠本番に {t} が無い= 0 行として照合する(apply はしない)")
+            continue
         lines.append(f"\\copy (select {cols} from public.{t} {OUT_WHERE.get(t, '')}) to '{DUMP}/out_{t}.tsv'")
     names = ",".join(f"'{t}'" for t in list(INPUTS) + list(OUTPUTS))
     lines.append(
@@ -167,9 +182,6 @@ def cmd_dump(asof):
         f"where n.nspname = 'public' and c.relname in ({names})) to '{DUMP}/prod_est.tsv'")
     lines.append("commit;")
     script = "\n".join(lines) + "\n"
-    env = dict(os.environ, PGPASSWORD=os.environ["PROD_PGPASSWORD"], PGSSLMODE="require")
-    for k in ("PGHOST", "PGPORT", "PGUSER", "PGDATABASE"):
-        env.pop(k, None)
     t0 = time.time()
     subprocess.run(["psql", "-h", PROD["host"], "-p", PROD["port"], "-U", PROD["user"], "-d", PROD["db"],
                     "-v", "ON_ERROR_STOP=1", "-X", "-q"], input=script, text=True, encoding="utf-8",
@@ -177,6 +189,19 @@ def cmd_dump(asof):
     log(f"dump 済み {time.time() - t0:.0f} 秒 asof={asof or '(なし)'}")
     for f in sorted(os.listdir(DUMP)):
         log(f"  {f}  {os.path.getsize(os.path.join(DUMP, f)) / 1e6:.1f} MB")
+
+
+def _prod_missing_outputs(env):
+    """本番にまだ無い出力表の名前(⛔読むだけ)。新しい表を足した直後の check が dump で落ちないように"""
+    names = ",".join(f"'{t}'" for t in OUT_COLS)
+    r = subprocess.run(["psql", "-h", PROD["host"], "-p", PROD["port"], "-U", PROD["user"], "-d", PROD["db"],
+                        "-v", "ON_ERROR_STOP=1", "-X", "-q", "-At", "-c",
+                        "set default_transaction_read_only = on; "
+                        f"select relname from pg_class c join pg_namespace n on n.oid = c.relnamespace "
+                        f"where n.nspname = 'public' and c.relname in ({names})"],
+                       capture_output=True, text=True, encoding="utf-8", env=env, check=True)
+    have = set(ln.strip() for ln in r.stdout.splitlines() if ln.strip())
+    return [t for t in OUT_COLS if t not in have]
 
 
 # ------------------------------------------------------------------ ② 手元に入れる
@@ -463,6 +488,9 @@ def cmd_apply(allow_large):
     est = dict((a, int(b)) for a, b in (ln.split("\t") for ln in open(os.path.join(DUMP, "prod_est.tsv"), encoding="utf-8")
                                          if ln.strip()))
     stop = []
+    mp = os.path.join(DUMP, "missing_out.txt")
+    for t in (open(mp, encoding="utf-8").read().split() if os.path.exists(mp) else []):
+        stop.append(f"本番に {t} が無い= 先に器を作る(pipeline/sql/ の *_table_*.sql)")
     for t in INPUTS:
         n = int(rows(f"select count(*) from public.{t}")[0][0])
         if n < INPUT_MIN_RATIO * est.get(t, 0):
