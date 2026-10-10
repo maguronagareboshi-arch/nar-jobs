@@ -57,6 +57,9 @@ select m.model, m.track, m.race_date, m.race_no, m.timing, m.num, m.mark, m.pos
 from tmp_ai_mk0 m
 join public.nar_races r on (r.track, r.race_date, r.race_no) = (m.track, m.race_date, m.race_no)
 where r.post_time ~ '^[0-9]{4}$'
+  -- 画面は「前日分まで集計」= 当日(JST)のレースは数えない(2026-10-10 S03)。
+  -- 後続の tmp_ai_res / hd / ex / u / exu はすべてここから作るので、通算・印別・人気帯・月別・日別・流し・from/to が一度にそろう
+  and m.race_date < (now() at time zone 'Asia/Tokyo')::date
   and m.computed_at < ((r.race_date::text || ' ' || substr(r.post_time, 1, 2) || ':' || substr(r.post_time, 3, 2))::timestamp
                        at time zone 'Asia/Tokyo');
 
