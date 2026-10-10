@@ -49,7 +49,7 @@ class BmsCourseTest(unittest.TestCase):
         self.assertNotRegex(sql, r"c\.race_date <= t\.race_date")
         self.assertIn("date '2025-10-10'", sql)            # 埋め戻し 1 年
         self.assertIn("track not like '帯広%'", sql)       # ばんえい除外
-        self.assertIn("('競走中止', '失格')", sql)          # 「走った」の定義
+        self.assertIn("('競走中止', '中止', '失格')", sql)          # 「走った」の定義
 
     def test_joins_broodmare_sire_not_sire(self):
         sql = _read("pipeline/sql/bms_course.sql")

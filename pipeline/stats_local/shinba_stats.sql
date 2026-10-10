@@ -81,7 +81,7 @@ select u.track, u.race_date, u.race_no, u.runner_number, u.horse_name, u.birth_d
 from public.nar_runs u
 join public.nar_races r on r.track = u.track and r.race_date = u.race_date and r.race_no = u.race_no
 left join public.nar_race_payouts rp on rp.track = u.track and rp.race_date = u.race_date and rp.race_no = u.race_no
-where (u.finish > 0 or u.finish_note in ('競走中止', '失格')) and u.race_date < current_date
+where (u.finish > 0 or u.finish_note in ('競走中止', '中止', '失格')) and u.race_date < current_date
   and u.horse_name is not null and u.horse_name <> '';
 
 -- D= 2 歳の地方初戦(馬=(馬名, 生年月日)の最初の「走った」行・その行が 2 歳・窓の中)

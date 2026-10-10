@@ -19,7 +19,7 @@ create temp table tmp_bc_race as
 select r.track, r.race_date, r.race_no, r.distance_m, r.going,
        (r.race_date < current_date or exists (
           select 1 from public.nar_runs u where u.track = r.track and u.race_date = r.race_date and u.race_no = r.race_no
-            and (u.finish > 0 or u.finish_note in ('競走中止', '失格')))) as done
+            and (u.finish > 0 or u.finish_note in ('競走中止', '中止', '失格')))) as done
 from public.nar_races r
 where r.race_date >= date '2025-10-10' and r.track not like '帯広%' and r.distance_m > 0;
 
@@ -37,7 +37,7 @@ from public.nar_runs u
 join public.nar_races r on r.track = u.track and r.race_date = u.race_date and r.race_no = u.race_no
 left join public.nar_race_payouts rp on rp.track = u.track and rp.race_date = u.race_date and rp.race_no = u.race_no
 left join public.nar_horses h on h.horse_name = u.horse_name and h.broodmare_sire <> ''
-where (u.finish > 0 or u.finish_note in ('競走中止', '失格'))
+where (u.finish > 0 or u.finish_note in ('競走中止', '中止', '失格'))
   and r.race_date >= (date '2025-10-10' - interval '10 years')::date and r.track not like '帯広%' and r.distance_m > 0;
 
 -- 日別合計(父 '*'= 全馬・馬場 '*'= 馬場問わず)

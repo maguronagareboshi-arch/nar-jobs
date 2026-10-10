@@ -39,9 +39,10 @@ from public.nar_runs u
 join public.nar_races r on r.track = u.track and r.race_date = u.race_date and r.race_no = u.race_no
 left join public.nar_race_payouts rp on rp.track = u.track and rp.race_date = u.race_date and rp.race_no = u.race_no
 -- §62 B7-1 「走った」= 着順あり or 競走中止・失格(js/data.js の didRun / RAN_NOTES と同じ規則)。
+-- 「中止」= 2022-10 以前の旧表記(3,819 走)。10/10 まで数え漏れていた(loose-ends #18 の #5)
 -- ⛔定義はサイト全体で1つ(#262 と同じ病気を3つ目に残さない)。
 -- ⛔「競走取止め」(レース不成立)は**走っていない**ので入れない= それは margin 列にあり finish_note には無い(#267)
-where (u.finish > 0 or u.finish_note in ('競走中止', '失格')) and r.race_date <= current_date;
+where (u.finish > 0 or u.finish_note in ('競走中止', '中止', '失格')) and r.race_date <= current_date;
 create index on tmp_pr (jockey, yr);
 create index on tmp_pr (trainer, yr);
 
