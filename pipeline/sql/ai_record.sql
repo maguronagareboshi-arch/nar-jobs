@@ -7,11 +7,32 @@
 set statement_timeout = '10min';
 
 -- 印を1行1頭に展開(発走前に計算された行だけ)
+-- 2026-10-10 他場版 AI(v3n-1): サイトは 10 場(門別・盛岡・水沢・金沢・笠松・名古屋・園田・姫路・高知・佐賀)の印を v3n-1 で出す
+--   (nar-viewer js/data.js の AI_TAJO_*・10 場 = 盛岡・姫路を足した)。画面の成績(model='base-v1' の欄)も画面に出した印で数える =
+--   その 10 場で v3n-1 の朝の行があるレースは、base-v1 の行の代わりに v3n-1 の印を base-v1 の朝・直前の両方として数える。
+--   v3n-1 そのものの成績(model='v3n-1')も別に残る。⛔サイトの AI_TAJO_PUBLIC を false に戻すときは、ここも一緒に戻す
+drop table if exists tmp_ai_src;
+create temp table tmp_ai_src as
+with tj as (
+  select t.* from public.nar_ai_marks t
+  where t.model = 'v3n-1' and t.timing = 'morning'
+    and t.track in ('門別', '盛岡', '水沢', '金沢', '笠松', '名古屋', '園田', '姫路', '高知', '佐賀')
+)
+select m.model, m.track, m.race_date, m.race_no, m.timing, m.marks, m.computed_at
+from public.nar_ai_marks m
+where not (m.model = 'base-v1'
+           and exists (select 1 from tj where (tj.track, tj.race_date, tj.race_no) = (m.track, m.race_date, m.race_no)))
+  -- 南関 4 場は 2026-10-10 から base-v1 の印を画面に出さない(南関特化 AI だけ)= 画面の成績にも数えない
+  and not (m.model = 'base-v1' and m.track in ('浦和', '船橋', '大井', '川崎') and m.race_date >= date '2026-10-10')
+union all
+select 'base-v1', tj.track, tj.race_date, tj.race_no, w.timing, tj.marks, tj.computed_at
+from tj cross join (values ('morning'), ('last')) as w(timing);
+
 drop table if exists tmp_ai_mk;
 create temp table tmp_ai_mk as
 select m.model, m.track, m.race_date, m.race_no, m.timing,
        (e.v->>'num')::int as num, e.v->>'mark' as mark
-from public.nar_ai_marks m
+from tmp_ai_src m
 join public.nar_races r on (r.track, r.race_date, r.race_no) = (m.track, m.race_date, m.race_no)
 cross join lateral jsonb_array_elements(m.marks) as e(v)
 where r.post_time ~ '^[0-9]{4}$'
