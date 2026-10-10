@@ -583,6 +583,7 @@ def _parse_nouryoku_run(text):
 #   ①が 1 行でもある・②の外れが NR_GUARD_N 走以上で、かつ NR_GUARD_HORSES 頭以上にまたがるか走の NR_GUARD_SHARE 以上の頁は
 #   NouryokuGuard(呼び側が頁ごとに捨てる= 書かない)。1〜2 頭に固まる外れはその走だけ捨てる
 #   (10/10 13:17 便= 1 頭の 1000m 戦の前半 22〜25 秒で 10/11 の 4 頁を丸ごと捨て、ほかの馬の過去走まで落とした)。
+#   前3F の範囲は前半の距離(距離 − 600m)が 600m に満たないとき割合で縮める(1000m 戦の前半は 400m)。
 NR_KIN = (40.0, 70.0)
 NR_3F = (30.0, 60.0)
 NR_GUARD_N = 3
@@ -604,7 +605,14 @@ def nouryoku_run_bad(run):
         return f"斤量 {k}"
     for key in ("f3", "l3"):
         v = run.get(key)
-        if v is not None and not (NR_3F[0] <= v <= NR_3F[1]):
+        lo, hi = NR_3F
+        if key == "f3" and run.get("dist"):
+            front = run["dist"] - 600          # 前半= 距離 − 600m(1000m 戦は 400m= 22〜25 秒が正しい値)
+            if front <= 0:
+                continue
+            k = min(front / 600, 1.0)
+            lo, hi = lo * k, hi * k
+        if v is not None and not (lo <= v <= hi):
             return f"{'前' if key == 'f3' else '後'}3F {v}"
     return ""
 

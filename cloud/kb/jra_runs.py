@@ -180,6 +180,18 @@ JR_CARRIED = (40.0, 70.0)
 JRA_GUARD = []           # 外した走の理由(呼び側が数える)
 
 
+def front_range(lo, hi, dist):
+    """前半の範囲。前半= 距離 − 600m(上がり)なので、1000m 戦の前半は 400m(本番 2,743 走が 21.7〜28.2 秒)。
+    前半が 600m に満たない距離は範囲をその割合で縮める・600m 以下は見ない(None)。"""
+    if not dist:
+        return lo, hi
+    front = dist - 600
+    if front <= 0:
+        return None
+    k = min(front / 600, 1.0)
+    return lo * k, hi * k
+
+
 def jra_run_bad(r):
     """中央の 1 走の外れ → 理由(空= 通す)。"""
     jump = r.get("surface") == "障"
@@ -188,6 +200,11 @@ def jra_run_bad(r):
         if v is None or (jump and key == "first3f"):
             continue
         lo, hi = JR_3F_JUMP if jump else JR_3F
+        if key == "first3f":
+            rg = front_range(lo, hi, r.get("distance"))
+            if rg is None:
+                continue
+            lo, hi = rg
         if not (lo <= v <= hi):
             return f"{key} {v}"
     a, b = r.get("last4f"), r.get("race_last3f")

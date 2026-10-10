@@ -178,6 +178,11 @@ class Nouryoku(unittest.TestCase):
         with self.assertRaises(KP.NouryokuGuard):
             KP.parse_nouryoku(nouryoku_html(kin="99"))
 
+    def test_front_of_1000m(self):
+        self.assertEqual(KP.nouryoku_run_bad({"dist": 1000, "f3": 22.4, "l3": 37.0}), "")
+        self.assertTrue(KP.nouryoku_run_bad({"dist": 1000, "f3": 12.0, "l3": 37.0}))
+        self.assertTrue(KP.nouryoku_run_bad({"dist": 1400, "f3": 23.0, "l3": 37.0}))
+
     def test_bad_runs_of_one_horse_drop_runs_only(self):
         # 10/10 13:17 便= 1 頭の過去 4 走だけ前3F 22〜25 秒= 頁は捨てず、その走だけ落とす
         before = len(KP.NOURYOKU_GUARD)
@@ -198,6 +203,11 @@ class JraRuns(unittest.TestCase):
         self.assertTrue(J.jra_run_bad(dict(ok, last4f=35.0, race_last3f=46.9)))     # 4F と 3F の入れ替わり
         self.assertTrue(J.jra_run_bad(dict(ok, body_weight=57)))
         self.assertEqual(J.jra_run_bad(dict(ok, surface="障", first3f=None, last3f=41.5)), "")
+        # 1000m 戦の前半は 400m(新潟 6R 2026-05-10 の 22.2)= 通す・400m で 15 秒は外れ
+        self.assertEqual(J.jra_run_bad(dict(ok, distance=1000, first3f=22.2)), "")
+        self.assertTrue(J.jra_run_bad(dict(ok, distance=1000, first3f=15.0)))
+        self.assertEqual(J.jra_run_bad(dict(ok, distance=1200, first3f=35.1)), "")
+        self.assertTrue(J.jra_run_bad(dict(ok, distance=1200, first3f=23.0)))
 
 
 class FakeKb:
