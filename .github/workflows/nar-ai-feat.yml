@@ -98,7 +98,7 @@ jobs:
       # ⛔`services:` だと設定を渡せないので docker run で立てる(work_mem が既定の 4MB のままだと本番と同じ目に遭う)
       - name: start local postgres
         run: |
-          docker run -d --name feat -e POSTGRES_PASSWORD=feat -p 127.0.0.1:5432:5432 postgres:16 \
+          docker run -d --name feat -e POSTGRES_PASSWORD=feat -p 127.0.0.1:5432:5432 mirror.gcr.io/library/postgres:16 \
             -c work_mem=256MB -c maintenance_work_mem=512MB -c shared_buffers=1GB \
             -c max_wal_size=4GB -c fsync=off -c synchronous_commit=off -c full_page_writes=off
           for i in $(seq 1 60); do

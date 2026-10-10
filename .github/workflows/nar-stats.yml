@@ -62,7 +62,7 @@ jobs:
             TZ_PG=$(python3 -c 'import sys,datetime as d; u=d.timezone.utc; t=d.datetime.fromisoformat(sys.argv[1].replace("Z","+00:00")); t=t if t.tzinfo else t.replace(tzinfo=u); D=t.astimezone(u).date(); n=d.datetime.now(u); o=[h for h in list(range(0,-13,-1))+list(range(1,15)) if (n+d.timedelta(hours=h)).date()==D]; o.sort(key=lambda h: abs((n+d.timedelta(hours=h)).hour-12)); print("UTC" if not o or o[0]==0 else "Etc/GMT%+d" % (-o[0]))' "$ASOF")
             echo "current_date を asof の日にそろえる TimeZone= $TZ_PG"
           fi
-          docker run -d --name st -e POSTGRES_PASSWORD=stats             -e POSTGRES_INITDB_ARGS="--locale-provider=icu --icu-locale=en-US --locale=en_US.UTF-8"             -p 127.0.0.1:5432:5432 postgres:17             -c work_mem=256MB -c maintenance_work_mem=512MB -c shared_buffers=1GB -c max_wal_size=4GB             -c fsync=off -c synchronous_commit=off -c full_page_writes=off -c timezone=$TZ_PG >/dev/null
+          docker run -d --name st -e POSTGRES_PASSWORD=stats             -e POSTGRES_INITDB_ARGS="--locale-provider=icu --icu-locale=en-US --locale=en_US.UTF-8"             -p 127.0.0.1:5432:5432 mirror.gcr.io/library/postgres:17             -c work_mem=256MB -c maintenance_work_mem=512MB -c shared_buffers=1GB -c max_wal_size=4GB             -c fsync=off -c synchronous_commit=off -c full_page_writes=off -c timezone=$TZ_PG >/dev/null
           for i in $(seq 1 60); do
             if pg_isready -h localhost -p 5432 -U postgres -q; then echo "ready ($i)"; break; fi
             sleep 2
