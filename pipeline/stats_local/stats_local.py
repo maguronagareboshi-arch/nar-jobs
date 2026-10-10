@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""監査 A7(2026-09-24) 集計 6 本(10/10 §18 sire_course を足して 7 本)(venue_stats / person_stats / ai_record / race_level / graded / big_payouts)を
+"""監査 A7(2026-09-24) 集計 6 本(10/10 §18 sire_course・§18b bms_course を足して 8 本)(venue_stats / person_stats / ai_record / race_level / graded / big_payouts)を
 Actions 内の Postgres で計算し、本番との差分だけを戻す台本。便は .github/workflows/nar-stats.yml。
 
   python3 pipeline/stats_local/stats_local.py dump [--asof ISO]   ①④ 本番から入力表・出力表・推定行数を写す(⛔読むだけ)
@@ -89,6 +89,9 @@ OUTPUTS = {
     # 10/10 §18 父の成績= この場×この距離×同じ馬場・そのレースの前日まで 10 年(sire_course.sql)
     "nar_sire_course": (["track", "race_date", "race_no", "umaban", "going"],
                         ["sire", "n", "w1", "w2", "w3", "roi", "roi3"]),
+    # 10/10 §18b 母の父の成績(同じ定義・bms_course.sql)
+    "nar_bms_course": (["track", "race_date", "race_no", "umaban", "going"],
+                       ["bms", "n", "w1", "w2", "w3", "roi", "roi3"]),
 }
 OUT_COLS = {
     "nar_venue_stats": "track, period, stats, updated_at",
@@ -108,9 +111,10 @@ OUT_COLS = {
                       "last_track, updated_at"),
     "nar_ob_graded": "kind, name, race_date, track, race_no, horse_name, race_name, finish, updated_at",
     "nar_sire_course": "track, race_date, race_no, umaban, going, sire, n, w1, w2, w3, roi, roi3, updated_at",
+    "nar_bms_course": "track, race_date, race_no, umaban, going, bms, n, w1, w2, w3, roi, roi3, updated_at",
 }
 OUT_WHERE = {"nar_meta": "where key = 'big_payouts'"}
-SQLS = ["venue_stats", "person_stats", "ai_record", "race_level", "graded", "big_payouts", "sire_course"]
+SQLS = ["venue_stats", "person_stats", "ai_record", "race_level", "graded", "big_payouts", "sire_course", "bms_course"]
 
 INPUT_MIN_RATIO = 0.99   # 入力が本番の推定行数のこれ未満なら apply しない
 CHANGE_MAX_RATIO = 0.30  # 1 表で(変わった+消す)が本番行数のこれを超えたら apply しない(--allow-large で許す)
