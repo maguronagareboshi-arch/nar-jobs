@@ -100,6 +100,14 @@ analyze public.nar_sire_course;
 
 -- 検査(ログの末尾に出る): ① 抜き取り 300 行を走から直に数え直して違う行数(窓= 前日まで 10 年)
 --   ② 同じ 300 行で「当日以降の走」を窓に入れたら数が変わる行数(参考・0 でなくてよい)③ 行数 ④ 見本 高知 2026-10-10 8R
+select '行数 ' || count(*) || '  レース ' || count(distinct (track, race_date, race_no))
+       || '  馬場5つのレース ' || (select count(*) from (select 1 from public.nar_sire_course where umaban = 0 group by track, race_date, race_no having count(*) = 5) q)
+       || '  n=0 の行 ' || count(*) filter (where n = 0) || '  窓の最古 ' || min(race_date)
+from public.nar_sire_course c;
+select '見本 高知 2026-10-10 8R ' || going || ': ' || string_agg(umaban || ' ' || sire || ' ' || n || '/' || w1 || '/' || w2 || '/' || w3 || '/' || coalesce(roi, -1) || '/' || coalesce(roi3, -1), '  ' order by umaban)
+from public.nar_sire_course where track = '高知' and race_date = date '2026-10-10' and race_no = 8 and going in ('良', '*')
+group by going;
+-- ⚠検査はログの末尾 12 行に入るよう最後に置く(10/10 1 本目の check では行数・見本の後ろに隠れた)
 select '検査 ① 直に数え直して違う行 ' || count(*) filter (where s.n <> d.n or s.w1 <> d.w1 or s.w3 <> d.w3)
        || ' / ' || count(*) || '  ② 当日以降を入れたら変わる行 ' || count(*) filter (where d.n <> d.n_incl)
 from (select * from public.nar_sire_course order by md5(track || race_date || race_no || umaban || going) limit 300) s
@@ -113,10 +121,3 @@ cross join lateral (
   where u.track = s.track and u.distance_m = t.distance_m
     and u.race_date >= (s.race_date - interval '10 years')::date
     and (s.sire = '*' or u.sire = s.sire) and (s.going = '*' or u.going = s.going)) d;
-select '行数 ' || count(*) || '  レース ' || count(distinct (track, race_date, race_no))
-       || '  馬場5つのレース ' || (select count(*) from (select 1 from public.nar_sire_course where umaban = 0 group by track, race_date, race_no having count(*) = 5) q)
-       || '  n=0 の行 ' || count(*) filter (where n = 0) || '  窓の最古 ' || min(race_date)
-from public.nar_sire_course c;
-select '見本 高知 2026-10-10 8R ' || going || ': ' || string_agg(umaban || ' ' || sire || ' ' || n || '/' || w1 || '/' || w2 || '/' || w3 || '/' || coalesce(roi, -1) || '/' || coalesce(roi3, -1), '  ' order by umaban)
-from public.nar_sire_course where track = '高知' and race_date = date '2026-10-10' and race_no = 8 and going in ('良', '*')
-group by going;
