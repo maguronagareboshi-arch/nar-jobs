@@ -18,9 +18,9 @@ on:
         description: '本番 nar_ai_marks(v3n-1・morning)に書く(yes/no)'
         required: false
         default: 'no'
-  # schedule:
-  #   - cron: '15 22 * * *'   # 07:15 JST(base-v1 の朝 06:30 の後)。手で 1〜2 日試してから付ける
-  #   - cron: '15 0 * * *'    # 09:15 JST(1 回目に base-v1 の行が無くて書かなかったレースを埋める)
+  schedule:
+    - cron: '15 22 * * *'   # 07:15 JST(base-v1 の朝 06:30 の後)。2026-10-10 に手で 2 回(書かない・書く)通してから付けた
+    - cron: '15 0 * * *'    # 09:15 JST(1 回目に base-v1 の行が無くて書かなかったレースを埋める)
 
 concurrency:
   group: nar-ai-v3n
