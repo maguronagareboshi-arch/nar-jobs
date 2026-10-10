@@ -580,10 +580,14 @@ def _parse_nouryoku_run(text):
 # ---- 読み違いの番人(2026-10-10 監査 中 #10)。能力表は列を位置(cells[0..11])で読む。
 #   ① 列のずれ= 馬名の印(span.kbamei の馬リンク)が 5 列目(cells[4])に無く、ほかの列にある行
 #   ② 過去走の値の範囲= 斤量 40〜70kg・前後 3F 30〜60 秒(外れの走は runs に入れない)
-#   ①が 1 行でもある・②の外れが NR_GUARD_N 走以上の頁は NouryokuGuard(呼び側が頁ごとに捨てる= 書かない)。
+#   ①が 1 行でもある・②の外れが NR_GUARD_N 走以上で、かつ NR_GUARD_HORSES 頭以上にまたがるか走の NR_GUARD_SHARE 以上の頁は
+#   NouryokuGuard(呼び側が頁ごとに捨てる= 書かない)。1〜2 頭に固まる外れはその走だけ捨てる
+#   (10/10 13:17 便= 1 頭の 1000m 戦の前半 22〜25 秒で 10/11 の 4 頁を丸ごと捨て、ほかの馬の過去走まで落とした)。
 NR_KIN = (40.0, 70.0)
 NR_3F = (30.0, 60.0)
 NR_GUARD_N = 3
+NR_GUARD_HORSES = 3
+NR_GUARD_SHARE = 0.3
 
 
 class NouryokuGuard(ValueError):
@@ -612,7 +616,7 @@ def parse_nouryoku(html, race_id=None):
     soup = BeautifulSoup(html, "lxml")
     race = _parse_race_header(soup, race_id)
     horses = []
-    shifted, bad_runs = [], []
+    shifted, bad_runs, bad_horses, n_runs = [], [], set(), 0
     table = soup.select_one("table.nouryoku_html_table")
     if table:
         for tr in table.find_all("tr"):
@@ -646,8 +650,10 @@ def parse_nouryoku(html, race_id=None):
             for slot, cell_index in enumerate(range(7, 12)):
                 run = _parse_nouryoku_run(cells[cell_index])
                 bad = nouryoku_run_bad(run) if run else ""
+                n_runs += 1 if run else 0
                 if bad:
                     bad_runs.append(f"{umaban}番 {slot + 1}列目 {bad}")
+                    bad_horses.add(umaban)
                     continue
                 if run:
                     # Preserve the physical five-run display slot, including
@@ -680,7 +686,8 @@ def parse_nouryoku(html, race_id=None):
     why = ""
     if shifted:
         why = f"能力表 {race_id} 列のずれ(馬名が5列目に無い) {len(shifted)} 頭: {shifted[:5]}"
-    elif len(bad_runs) >= NR_GUARD_N:
+    elif len(bad_runs) >= NR_GUARD_N and (len(bad_horses) >= NR_GUARD_HORSES
+                                          or len(bad_runs) >= NR_GUARD_SHARE * max(n_runs, 1)):
         why = f"能力表 {race_id} 値の外れ {len(bad_runs)} 走: " + " / ".join(bad_runs[:5])
     if why:
         NOURYOKU_GUARD.append(why)

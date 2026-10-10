@@ -150,11 +150,12 @@ class Paper(unittest.TestCase):
         self.assertEqual(len(PP.PAPER_GUARD), 1)
 
 
-def nouryoku_html(shift=False, kin="54"):
-    run = f"1福① 4.11 未勝 16頭 1 1400ダ1.30.5 騎手 {kin} M 36.1-38.2 8 8 8 11 アイテ 3.5 486 1枠1人"
+def nouryoku_html(shift=False, kin="54", horses=2, f3_first_horse=None):
     rows = ""
-    for u in (1, 2):
-        ped = f'<td><span class="kbamei"><a href="/db/uma/00{u}/">ウマ{u}</a></span></td>'
+    for u in range(1, horses + 1):
+        f3 = f3_first_horse if (f3_first_horse and u == 1) else "36.1"
+        run = f"1福① 4.11 未勝 16頭 1 1400ダ1.30.5 騎手 {kin} M {f3}-38.2 8 8 8 11 アイテ 3.5 486 1枠1人"
+        ped = f'<td><span class="kbamei"><a href="/db/uma/{u:03d}/">ウマ{u}</a></span></td>'
         tds = ["<td>1</td>", f"<td>{u}</td>", "<td></td>", "<td>1.2.3.4</td>", ped, "<td>厩舎</td>", "<td>1 2 3</td>"]
         tds += [f"<td>{run}</td>"] * 5
         if shift:
@@ -176,6 +177,16 @@ class Nouryoku(unittest.TestCase):
     def test_kin_out_of_range(self):
         with self.assertRaises(KP.NouryokuGuard):
             KP.parse_nouryoku(nouryoku_html(kin="99"))
+
+    def test_bad_runs_of_one_horse_drop_runs_only(self):
+        # 10/10 13:17 便= 1 頭の過去 4 走だけ前3F 22〜25 秒= 頁は捨てず、その走だけ落とす
+        before = len(KP.NOURYOKU_GUARD)
+        html = nouryoku_html(f3_first_horse="23.4", horses=12)
+        got = KP.parse_nouryoku(html)
+        self.assertEqual(len(got["horses"]), 12)
+        self.assertEqual(len(got["horses"][0]["runs"]), 0)
+        self.assertEqual(len(got["horses"][1]["runs"]), 5)
+        self.assertEqual(len(KP.NOURYOKU_GUARD), before)
 
 
 class JraRuns(unittest.TestCase):
