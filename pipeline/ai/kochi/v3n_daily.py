@@ -10,7 +10,7 @@
    (W は out/nation.md の選ぶ期間で決めた値)。base-v1 の行が無い・馬番がそろわないレースは書かない(後の便で書く)。
 5. --write のときだけ nar_ai_marks に model='v3n-1'・timing='morning' で書く(base_v1.write_marks = 朝の行は凍結・読み直し)。
    meta.runners = [{num, p1, p3}](南関 v3 と同じ形)。画面に出すかはサイト側の旗で決める(出すまでは見えない)。
-対象 = out/nation.md で「入れ替えてよい」の場から南関を除いた 8 場(南関は v3 本体が出ている)。
+対象 = out/nation.md で「入れ替えてよい」の場から南関を除いた 8 場 + 盛岡・姫路(2026-10-10 ユーザー・線は通っていない)= 10 場。
 環境変数: SUPABASE_URL・SUPABASE_ANON_KEY か SUPABASE_SERVICE_KEY・NAR_JOBS_AI(base_v1.py の場所・既定 pipeline/ai)。
 """
 import json
@@ -25,7 +25,7 @@ import pandas as pd
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 MODEL_ID = 'v3n-1'
-W = {30: 0.75, 36: 0.5, 46: 0.5, 47: 0.75, 48: 0.5, 50: 0.75, 54: 0.75, 55: 0.5}
+W = {30: 0.75, 35: 0.75, 36: 0.5, 46: 0.5, 47: 0.75, 48: 0.5, 50: 0.75, 51: 0.5, 54: 0.75, 55: 0.5}  # 盛岡・姫路は 2026-10-10 ユーザーの判断で足した
 MARKS = ['◎', '○', '▲', '△']
 
 
