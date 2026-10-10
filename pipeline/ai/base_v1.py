@@ -343,6 +343,9 @@ def build_marks(df, day, m, bst_b, bst_r, timing, bst_w=None):
         s = runnable['p'] / runnable['p'].sum()
         # §170 B 全頭の s(= p/Σp)を残す= 期待値の検証用。⛔marks(上位 5 頭)の形は変えない
         meta['p'] = {str(int(u)): round(float(v), 4) for u, v in zip(runnable['runner_number'], s)}
+        # 2026-10-11 配り直す前の 3 着内の見込み(predict_df の値そのまま)= 画面の「3着内」。南関特化の p3 と同じ読み方。
+        #   ⛔meta.p(合計 1)・marks は変えない
+        meta['p3'] = {str(int(u)): round(float(v), 4) for u, v in zip(runnable['runner_number'], runnable['p'])}
         if bst_w is not None:
             # §224a 走る馬の中で合計 1 → 帯の実績へ置き換え → もう一度合計 1。⛔meta.p・marks は触らない
             w = race_norm(runnable['pw'].values, runnable['rid'])

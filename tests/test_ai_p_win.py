@@ -25,6 +25,8 @@ class PWin(unittest.TestCase):
         self.assertEqual((a['meta']['p'], a['marks']), (b['meta']['p'], b['marks']), 'meta.p / marks が変わった')
         self.assertEqual(('p_win' in a['meta'], set(b['meta']['p_win']), b['meta']['cal']), (False, set(b['meta']['p']), 'win-v1'))
         self.assertAlmostEqual(sum(b['meta']['p_win'].values()), 1.0, delta=0.001)
+        # 10/11 meta.p3= predict_df の値そのまま(配り直さない)・走る馬だけ
+        self.assertEqual(b['meta']['p3'], {'1': .3, '2': .55, '3': .12, '4': .5, '5': .41})
 
 if __name__ == '__main__':
     unittest.main()
