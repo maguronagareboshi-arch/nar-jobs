@@ -1,0 +1,32 @@
+# 高知のレース後コメント(公式)の取りこぼしを、さかのぼって入れ直す手動便(2026-10-10)。
+# nar-refresh は 20 分おきの dispatch で順番待ちが押し出されるので、こちらは concurrency を分ける。
+# 1 レース 1 GET(0.7 秒あけ)・既に行のある(日,R)は開かない= 何度流しても同じ結果。
+name: kochi-comments-catchup
+
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: 'さかのぼる開始日(YYYY-MM-DD)'
+        required: true
+        default: '2024-03-01'
+
+concurrency:
+  group: kochi-comments-catchup
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  catchup:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: kochi comments catchup
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          SINCE: ${{ github.event.inputs.since }}
+        run: python3 cloud/kochi_comments.py --apply --since "$SINCE"
