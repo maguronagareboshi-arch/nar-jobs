@@ -10,7 +10,7 @@
 #   ⛔30 分おきに材料を全部写すと 1 日 6GB(月 180GB)になるので、全量の写しは便の頭で 1 回だけ。
 #   以後の回は「今日の nar_runs / nar_races」だけ写し直し(小さい)、地元で今日の行を作り直して予想する。
 #   全列の模型は朝便(schedule)の最新の成果物から取る(学習はしない)。
-#   ⛔本番への書き込みは nar_ai_marks(model='base-v1', timing='last')の REST upsert だけ。SQL は流さない。
+#   ⛔本番への書き込みは nar_ai_marks(model='base-v1' と 'v3n-1', timing='last')の REST upsert だけ。SQL は流さない。
 # 監査 A3(2026-09-24) 公開 repo なので成果物は暗号化して置く(*.tar.gz.enc・鍵= SUPABASE_SERVICE_KEY の sha256)。手元で戻す 1 行:
 #   ARTIFACT_KEY=$(printf '%s' "$SUPABASE_SERVICE_KEY" | sha256sum | cut -c1-64) openssl enc -d -aes-256-cbc -pbkdf2 -pass env:ARTIFACT_KEY -in X.tar.gz.enc | tar -xzf -
 name: nar-ai-last
@@ -187,6 +187,8 @@ jobs:
             psql -v ON_ERROR_STOP=1 -X \
               -c "\copy (select * from public.nar_ai_feat_run where race_date = '$DAY') to 'today/feat.csv' with (format csv, header)"
             python -X utf8 pipeline/ai/base_v1.py predict --feat today/feat.csv --model base_v1.model.json --date "$DAY" --timing last $W
+            # 2026-10-11 他場版 v3n の直前 = 朝の行から取消・除外の馬を外して割り直すだけ(模型なし・REST だけ)。⛔失敗しても周は続ける
+            python -X utf8 pipeline/ai/kochi/v3n_last.py "$DAY" $W || echo "v3n last: 失敗(周は続ける)"
             # 監査 A8(2026-09-24) 各周の成功= heartbeat 'ai_last'(書く便だけ)。⛔表が無くても落ちない
             if [ "$WRITE" = "yes" ]; then python3 cloud/beat.py ai_last ok "round $n${MODEL_NOTE:+・$MODEL_NOTE}"; fi
             echo "round $n took $(( $(date +%s) - T0 )) s"
