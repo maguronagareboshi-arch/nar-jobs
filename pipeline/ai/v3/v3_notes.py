@@ -13,7 +13,14 @@
       (3 回以上は勝ち 0.85 倍。今日も出遅れる率 0 回 8%・2 回 25%・3 回以上 39%)。
   不利(競馬ブックの寸評 nar_kb_runs.comment・列があるときだけ): 前走の寸評が不利の組 →「前走 直線で不利」など
       (勝ち 1.09〜1.18 倍)。
-出力 = {(track, race_no, umaban): {'note': [...], 'note_kb': [...]}}(札の無い馬は入れない)。
+  厩舎談話(競馬ブックの談話 = danwa_marks.LAST[day] の本文)= 研究 nankan-ai-v3 src/dw_tmpl.py(この場所の dw_tmpl.py と同じ)で
+  欄(状態・上積み・事情・前走・条件・展開・気性・馬体・病気・結論)ごとの型に分ける(談話の 98% に型が付く・out/danwa_tmpl.md)。
+  画面に出すかはサイトの旗で別に決める(公開はユーザーの承認後):
+      dw_sum  = 定型の要約 1 行(全部の型)「状態: 維持・変わりなし / 展開: 展開待ち・流れひとつ / 結論: 控えめ(入着・掲示板)」
+      note_dw = 目立つ札(今の AI に対しても差が大きい型だけ):
+          「陣営の話: 熱発の後で調整不足」(病気 + 調整不足の言葉・0.53 倍)/「陣営の話: 熱発は回復と明言」(1.12 倍)/
+          「陣営の話: きっかけ待ち」(1.19 倍)/「陣営の話: 馬体が細い・減った」(0.72 倍)
+出力 = {(track, race_no, umaban): {'note': [...], 'note_kb': [...], 'note_dw': [...], 'dw_sum': '...'}}(札も要約も無い馬は入れない)。
 ⛔読むだけ(GET)。書かない。鍵は印字しない。失敗は呼ぶ側(v3_daily)で受けて、予想の表と書き込みは止めない。
 """
 import json
@@ -29,6 +36,26 @@ import kb_works
 import t4_day3 as d3
 
 KEY = ['track', 'race_date', 'race_no']
+# 厩舎談話の定型(研究 nankan-ai-v3 src/dw_tmpl.py と同じファイル = この場所の dw_tmpl.py)
+import dw_tmpl  # noqa: E402
+
+# 目立つ札にする型(今の AI = 第11版の前日版に対しても差が大きい型だけ・out/danwa_tmpl.md・2023-01〜2026-08)
+DW_HI = {('状態', '停滞・きっかけ待ち'): '陣営の話: きっかけ待ち',      # 1.19 ± 0.08(3,203 頭)
+         ('馬体', '細い・減った'): '陣営の話: 馬体が細い・減った'}      # 0.72 ± 0.08(886 頭)
+
+
+def dw_note(t):
+    """談話の本文 → (目立つ札のリスト, 定型の要約 1 行)。病気の札 = 病名 + 結び(調整不足 0.53 倍 / 回復と明言 1.12 倍)。"""
+    tg = dw_tmpl.tags(t)
+    s = set(tg)
+    hi = []
+    ill = next((b for a, b in tg if a == '病気' and not b.startswith('→') and b != '治療(笹針など)'), None)
+    if ill and ('病気', '→ その後 調整不足') in s:
+        hi.append(f'陣営の話: {ill}の後で調整不足')
+    elif ill and ('病気', '→ 回復と明言') in s:
+        hi.append(f'陣営の話: {ill}は回復と明言')
+    hi += [txt for k, txt in DW_HI.items() if k in s]
+    return hi, dw_tmpl.summary(t)
 SMALL = ('ハナ', 'アタマ', 'クビ')
 SLOW = re.compile('出遅|アオ|立ち遅|ダッシュ付かず')
 # 寸評 → 札(先に当たった方)。調べの組(src/f5_scripts/sunpyo/cls.py)のうち、字にしてよいものだけ。
@@ -88,16 +115,16 @@ def _exc(cm):
     return None
 
 
-def make(day, h, T, kb_rows=None, log=print):
+def make(day, h, T, kb_rows=None, log=print, dw_rows=None):
     """day = 'YYYY-MM-DD'・h = 走り(d3.sources_from の形・今日の出走表を含む)・T = 今日の材料(f_nige5・f_nige_n)。
-    kb_rows = nar_kb_runs の行(None なら REST で読む・手元の確かめでは渡す)。"""
+    kb_rows = nar_kb_runs の行(None なら REST で読む・手元の確かめでは渡す)。dw_rows = 今日の談話(None なら danwa_marks.LAST[day])。"""
     day = str(day)[:10]
     today = h[h.race_date.astype(str).str[:10] == day]
     today = today[today.track.isin(d3.NANKAN) & ~today.finish_note.isin(d3.CANCEL)][KEY + ['umaban', 'hid', 'horse_name']]
     notes = {}
 
     def add(k, field, txt):
-        notes.setdefault(k, {'note': [], 'note_kb': []})[field].append(txt)
+        notes.setdefault(k, {'note': [], 'note_kb': [], 'note_dw': []})[field].append(txt)
 
     # 勝ち方: 前走 = 今日より前の最後の走り(取消・除外を除く)
     past = h[(h.race_date.astype(str).str[:10] < day) & ~h.finish_note.isin(d3.CANCEL)]
@@ -160,7 +187,30 @@ def make(day, h, T, kb_rows=None, log=print):
                     if txt:
                         add(k, 'note_kb', txt)
                         nkb += 1
-    log('ひとこと', len(notes), '頭', '出遅れ', nslow, '不利', nkb, '競馬ブックの行', len(kb))
+    # 厩舎談話(danwa_marks.load が控えた今日の本文)
+    ndw = nsum = 0
+    if dw_rows is None:
+        try:
+            import danwa_marks
+            dw_rows = danwa_marks.LAST.get(day)
+        except Exception:  # noqa: BLE001
+            dw_rows = None
+    if dw_rows is not None and len(dw_rows):
+        keep = {(r.track, int(r.race_no), int(r.umaban)) for r in today.itertuples()}  # 取消・除外を除いた今日の出走馬
+        for r in pd.DataFrame(dw_rows).itertuples():
+            k = (r.track, int(r.race_no), int(r.umaban))
+            if k not in keep:
+                continue
+            body = r.comment if isinstance(getattr(r, 'comment', None), str) and r.comment else getattr(r, 'raw', '')
+            hi, sm = dw_note(body)
+            for txt in hi:
+                add(k, 'note_dw', txt)
+            if hi:
+                ndw += 1
+            if sm:
+                notes.setdefault(k, {'note': [], 'note_kb': [], 'note_dw': []})['dw_sum'] = sm
+                nsum += 1
+    log('ひとこと', len(notes), '頭', '出遅れ', nslow, '不利', nkb, '競馬ブックの行', len(kb), '談話の札', ndw, '談話の要約', nsum)
     return notes
 
 
@@ -176,5 +226,9 @@ def attach(rows, notes):
                 x['note'] = v['note']
             if v['note_kb']:
                 x['note_kb'] = v['note_kb']
+            if v.get('note_dw'):
+                x['note_dw'] = v['note_dw']
+            if v.get('dw_sum'):
+                x['dw_sum'] = v['dw_sum']
             n += 1
     return n
