@@ -39,5 +39,27 @@ class JudgeTest(unittest.TestCase):
         self.assertEqual(k.judge('05610', set(), True), '本人コード無し')
 
 
+class MultiOwnerTest(unittest.TestCase):
+    """村上慎= 名簿に地方 2 人(ばんえい 慎一/北海道 慎康)。KD に慎一のコードだけ(10/10)。"""
+    BY2 = dict(BY, **{'村上慎一': {'00777'}})
+
+    def test_one_with_code_one_without(self):
+        cs = k.multi_owner_codes([('村上慎一', '1971-06-24'), ('村上慎康', '1986-08-08')], self.BY2, BIRTH)
+        self.assertEqual(cs, {'00777'})
+        self.assertEqual(k.judge('00777', cs, True), 'keep')
+        self.assertEqual(k.judge('09999', cs, True), '別人')
+
+    def test_nobody_has_code(self):
+        self.assertEqual(k.multi_owner_codes([('甲野太郎', None), ('乙野次郎', None)], self.BY2, BIRTH), set())
+
+    def test_same_name_unresolved_blocks(self):
+        # 加藤和宏の生年月日が合わない(コードは有るが本人が決まらない)なら混ざる恐れ→決めない
+        self.assertEqual(k.multi_owner_codes([('村上慎一', None), ('加藤和宏', '1960-01-01')], self.BY2, BIRTH), set())
+
+    def test_overlap_blocks(self):
+        by = {'甲': {'1'}, '乙': {'1'}}
+        self.assertEqual(k.multi_owner_codes([('甲', None), ('乙', None)], by, {}), set())
+
+
 if __name__ == '__main__':
     unittest.main()

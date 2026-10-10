@@ -32,6 +32,26 @@ def owner_codes(owner_name, owner_birth, codes_by_name, birth_of):
     return {c for c in cs if b and birth_of.get(c) == b}
 
 
+def multi_owner_codes(people, codes_by_name, birth_of):
+    """略称の本人が名簿に 2 人以上(地方)いるとき。people= [(氏名, 生年月日)]。
+    各人のコード集合(owner_codes)を出し、どれか 1 人でも空・または 2 人で重なるなら決めない(空集合)。
+    そうでなければ和集合= 走りのコードが名簿の 1 人だけに当たるときだけ keep になる。
+    名簿にまだ走りの無い人(例 村上慎康)は KD にコードが無く空になるので、空の人は飛ばして
+    コードのある人が 1 人以上なら、その人たちのコードを使う(コードのある人どうしが重なれば決めない)。"""
+    sets = [owner_codes(n, b, codes_by_name, birth_of) for n, b in people]
+    got = [s for s in sets if s]
+    if not got:
+        return set()
+    allc = [c for s in got for c in s]
+    if len(allc) != len(set(allc)):
+        return set()
+    # 空の人の同名コードが別にあれば(=同姓同名で生年月日が合わない)混ざる恐れ→決めない
+    for (n, _b), s in zip(people, sets):
+        if not s and codes_by_name.get(nrm(n)):
+            return set()
+    return set(allc)
+
+
 def judge(code, codes, has_owner):
     """1 走の判定。code= KD の調教師コード(None= KD に無い)。"""
     if code is None:
@@ -142,7 +162,15 @@ def main():
             owner[a], oarea[a], obirth[a] = nrm(loc[0]['name_full']), loc[0]['area'], loc[0]['birth']
             onote[a] = loc[0]['area'] + f'(他 {len(ps) - 1} 人 JRA)'
         elif len(loc) > 1:
-            owner[a] = None; onote[a] = '地方が複数: ' + '/'.join(nrm(p['name_full']) + '(' + p['area'] + ')' for p in loc)
+            # 10/10 村上慎(ばんえい 慎一/北海道 慎康): 名簿の各人のコードが KD で分かれるなら、
+            # 走りの KD コードが名簿の 1 人だけに当たる走りを keep にする(どれにも当たらなければ 別人)
+            cs = multi_owner_codes([(nrm(p['name_full']), p['birth']) for p in loc], code_by, birth_of)
+            note = '地方が複数: ' + '/'.join(nrm(p['name_full']) + '(' + p['area'] + ')' for p in loc)
+            if cs:
+                owner[a] = '/'.join(nrm(p['name_full']) for p in loc); oarea[a] = '/'.join(p['area'] for p in loc)
+                onote[a] = note + '(KD コードで 1 人に決まる走りだけ)'; ocodes[a] = cs
+                continue
+            owner[a] = None; onote[a] = note
         elif len(ps) == 0:
             owner[a] = None; onote[a] = '名簿に無し'
         else:
