@@ -13,6 +13,13 @@ def it(d, mend, pts, kaku=None, remote=False, no=1):
 
 
 class T(unittest.TestCase):
+    def test_race_classes(self):
+        # 「ＪＢＣ２０２５」の C2 は級でない(2025-11-03 船橋 1R)・英字の直後の級(Japan Ｂ３)は読む・混合は 2 つ
+        self.assertEqual(H.race_classes("船橋・門別ＪＢＣ２０２５開幕２歳三"), [])
+        self.assertEqual(H.race_classes("ＢＡＹＦＭ　Ｓｏｎｇ　ｏｆ　ＪａｐａｎＢ３選抜馬イ"), ["B3"])
+        self.assertEqual(H.race_classes("Ｃ１三Ｃ２二"), ["C1", "C2"])
+        self.assertEqual(H.race_classes("０．８７５マイルでも私が最強！賞Ｃ１三"), ["C1"])
+
     def test_meetings(self):
         # 休みの日を挟んでも 1 開催(間 4 日以内)・次の開催は別・4 月で回を数え直す
         idx = H.meetings({"川崎": {"2025-08-21", "2025-08-22", "2025-08-25", "2025-08-26", "2025-09-08",

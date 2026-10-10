@@ -72,7 +72,8 @@ def half(d):
 
 def race_classes(name):
     s = str(name or "").translate(Z2H)
-    return sorted(set(re.findall(r"([ABC][123])", s)), key=CLASSES.index)
+    # 級の直後に数字が続くものは級でない(「ＪＢＣ２０２５」の C2・2025-11-03 船橋 1R)
+    return sorted(set(re.findall(r"([ABC][123])(?![0-9])", s)), key=CLASSES.index)
 
 
 def ages_of(name, cond):
