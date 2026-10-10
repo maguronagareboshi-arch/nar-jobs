@@ -57,13 +57,15 @@ def relabel(meta, gone):
     run = {int(r['num']): r for r in (meta.get('runners') or [])}
     s1 = sum(float(run[n]['p1']) for n in keep if n in run) or 1.0
     order = sorted(keep, key=lambda n: (-c[n], keep.index(n)))
+    import k26_cal  # 朝(v3n_daily)と同じ 3 着内の率の曲線
+    q3 = dict(zip(keep, k26_cal.p3([c[n] for n in keep], len(keep))))
     marks = [{'num': n, 'mark': MARKS[i], 'score': round(c[n] * 100, 1)} for i, n in enumerate(order[:5])]
     new = dict(meta)
     new.update({
         'n': len(keep),
         'p': {str(n): round(c[n], 4) for n in keep},
         'runners': [{'num': n, 'p1': round(float(run[n]['p1']) / s1, 4) if n in run else None,
-                     'p3': round(min(max(3 * c[n], 0.001), 0.999), 4)} for n in keep],
+                     'p3': round(float(q3[n]), 4)} for n in keep],
         'own': {k: v for k, v in (meta.get('own') or {}).items() if int(k) not in gone},
         'scratched': sorted(gone),
         'from': 'morning',
