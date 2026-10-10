@@ -27,6 +27,8 @@ sys.path.insert(0, str(HERE))
 MODEL_ID = 'v3n-1'
 W = {30: 0.75, 35: 0.75, 36: 0.5, 46: 0.5, 47: 0.75, 48: 0.5, 50: 0.75, 51: 0.5, 54: 0.75, 55: 0.5}  # 盛岡・姫路は 2026-10-10 ユーザーの判断で足した
 MARKS = ['◎', '○', '▲', '△']
+NO_MORNING = ['e_baba', 'e_tenko']  # 当日の馬場・天気 = 公式の表は前の日まで空欄 = 朝の模型に入れない(入れて空で当てると確率がずれる)
+FORM = 'v3n-2: glicko18 + no-going'  # meta に残す作りの名前(model の名前は v3n-1 のまま = サイト・成績の読み口を変えない)
 
 
 def arg(name, default=None):
@@ -58,6 +60,7 @@ def main():
     k1, k4, k8 = k9.patch()
     import k3_eval as k3
     import k10_offeval as k10
+    import k20_lg
     rows, show = [], []
     for j in tracks:
         d = k9.ALT / f't{j}'
@@ -67,7 +70,16 @@ def main():
         k1.main()
         k4.main()
         k8.main()
+    # 2026-10-10 第 2 版: 南関の Glicko など 18 列(全場で 1 回)+ 朝に分からない馬場・天気の列を抜いて学ぶ(v3 の out/v3n_glicko.md)
+    LG = k20_lg.build(k9.ALT / 'kd_se.parquet', k9.ALT / f't{tracks[0]}' / 'si_all.parquet', log=lambda *a: print(*a, flush=True))
+    for j in tracks:
+        d = k9.ALT / f't{j}'
         T, cols = k10.load(d)
+        x = LG[LG.track == j]
+        x = pd.DataFrame({'date': pd.to_datetime(x.race_date), 'race': x.race_no.astype(T.race.dtype),
+                          'umaban': x.umaban.astype(T.umaban.dtype), **{c: x[c] for c in k20_lg.LGC}})
+        T = T.merge(x, on=['date', 'race', 'umaban'], how='left', validate='1:1')
+        cols = [c for c in cols if c not in NO_MORNING] + k20_lg.LGC
         te = T[T.date == D].copy()
         tr = T[(T.date >= '2015-01-01') & (T.date < D)]
         if te.empty:
@@ -105,7 +117,7 @@ def main():
             p3 = np.clip(3 * c, 0.001, 0.999)
             order = np.argsort(-c, kind='stable')
             marks = [{'num': int(nums[i]), 'mark': MARKS[k_], 'score': round(float(c[i]) * 100, 1)} for k_, i in enumerate(order[:4])]
-            meta = {'n': int(len(g)), 'model': MODEL_ID, 'w': w, 'trained_to': trained_to,
+            meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM, 'w': w, 'trained_to': trained_to,
                     'runners': [{'num': int(n), 'p1': round(float(a), 4), 'p3': round(float(b_), 4)} for n, a, b_ in zip(nums, c1, p3)],
                     'p': {str(int(n)): round(float(x), 4) for n, x in zip(nums, c)},
                     'own': {str(int(n)): [round(float(a), 4), round(float(b_), 4)] for n, a, b_ in zip(nums, g.p1, g.p3)}}
