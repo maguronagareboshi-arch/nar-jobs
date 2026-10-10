@@ -32,5 +32,22 @@ class KochiRaceNo(unittest.TestCase):
         self.assertEqual(kochi_comments.race_no_of("<html></html>", 5), 5)
 
 
+class KochiMatchRaces(unittest.TestCase):
+    """2026-09-26: 6R の記事が 7R の URL に載り、本文に「第N競走」が無い= 出走馬の組で載せ先を決める。"""
+    BY = {6: {2: "ブロードグリン", 3: "サンブル"}, 7: {2: "クラウンクーロン", 3: "ツウキンカイソク"}}
+
+    def _p(self, *pairs):
+        return [{"umaban": u, "horse_name": n} for u, n in pairs]
+
+    def test_all_match_other_race(self):
+        self.assertEqual(kochi_comments.matching_races(self._p((2, "ブロードグリン"), (3, "サンブル")), self.BY), [6])
+
+    def test_partial_match_is_none(self):
+        self.assertEqual(kochi_comments.matching_races(self._p((2, "ブロードグリン"), (3, "ツウキンカイソク")), self.BY), [])
+
+    def test_empty(self):
+        self.assertEqual(kochi_comments.matching_races([], self.BY), [])
+
+
 if __name__ == "__main__":
     unittest.main()

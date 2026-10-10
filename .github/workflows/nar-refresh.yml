@@ -333,7 +333,13 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: python cloud/kochi_comments.py --apply
+        # 公式の掲載が 14 日より遅れることがある(2024-03〜で 20 レース取りこぼし・2026-10-10)= 月曜の昼だけ 90 日さかのぼる
+        run: |
+          if [ "$(TZ=Asia/Tokyo date +%u%H)" = "112" ]; then
+            python cloud/kochi_comments.py --apply --since "$(TZ=Asia/Tokyo date -d '-90 days' +%F)"
+          else
+            python cloud/kochi_comments.py --apply
+          fi
 
       # §54.3-bc 移籍・在籍変化(転入・転厩=直近7日窓の自己修復 / 馬主変更=日次スナップショット差分)。
       # 毎朝1回で足りるので monthly 便(05:33 JST=このリポジトリの日次集計の置き場)に置く。

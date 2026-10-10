@@ -230,6 +230,16 @@ def day_runs(base, key, date):
     return by, done
 
 
+def matching_races(parsed, by_race):
+    """記事の全頭(馬番・馬名)が**全部**そろって一致するその日のレース番号の一覧。
+    ⚠公式は記事を別の R の URL に載せることがある(2026-09-26 7R の URL に 6R・2024-07-20/08-04 も)。
+    本文に「第N競走」が無い記事が多いので、出走馬の組で載せ先を確かめる(推定はしない= 全頭一致だけ)。"""
+    if not parsed:
+        return []
+    return sorted(no for no, runs in by_race.items()
+                  if all(runs.get(c["umaban"]) == c["horse_name"] for c in parsed))
+
+
 def rows_of(date, no, parsed, runs, url, stats, show):
     """記事の行 → 表の行。⛔馬番と馬名が nar_runs と**両方**一致した行だけ返す(推定しない)。"""
     now = dt.datetime.now(dt.timezone.utc).isoformat()
@@ -333,6 +343,13 @@ def main(argv=None):
             rno = race_no_of(page, no)                    # 本文の「第N競走」を正とする(URL の番号ずれ対策)
             if rno != no:
                 log(f"  ⚠ {date} {no}R の URL の記事は本文が第{rno}競走= {rno}R として扱う")
+            hits = matching_races(parsed, by_race)
+            if rno not in hits and len(hits) == 1:       # 別の R の記事が載っていた= 全頭一致の 1 レースへ
+                if have.get((date, hits[0]), 0) and not a.redo:
+                    log(f"  {date} {no}R の URL の記事は {hits[0]}R のもの(既に行あり= 入れない)")
+                    continue
+                log(f"  ⚠ {date} {no}R の URL の記事は出走馬が全頭 {hits[0]}R と一致= {hits[0]}R として扱う")
+                rno = hits[0]
             got = rows_of(date, rno, parsed, by_race.get(rno, {}), url, stats, a.show)
             stats["rows"] += len(got)
             all_rows += got
