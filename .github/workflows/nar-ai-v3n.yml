@@ -1,0 +1,68 @@
+# 他場版 v3n(公式の元だけ・場ごとの AI を base-v1 と混ぜる・8 場)を書く便(2026-10-10・v3 の out/kochi_deploy_steps.md)。
+# 場 = 門別・水沢・金沢・笠松・名古屋・園田・高知・佐賀(v3 の out/nation.md で「入れ替えてよい」から南関を除く)。
+# ⛔本番への書き込みは nar_ai_marks(model='v3n-1', timing='morning')の REST upsert だけ。SQL は流さない。
+#   画面に出すかはサイト(nar-viewer)の AI_TAJO_PUBLIC で決める(v3 の out/v3n_site_spec.md)。それまでは見えない。
+#   base-v1 の朝の行が無いレースは書かない= 2 回目の便(09:15)で埋まる。朝の行は凍結(上書きしない)。
+# 読むのは nar-official の公開の表(nar_runs・nar_races・nar_run_facts・nar_horse_profiles・nar_jra_runs・nar_jra_horses)と
+# その日の base-v1 の朝の行だけ。固定ファイルは無い(毎日その日の前までで学び直す・場の数 × 約 4 分)。
+name: nar-ai-v3n
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: '予想する日(空= JST 今日)。例 2026-10-11'
+        required: false
+        default: ''
+      write:
+        description: '本番 nar_ai_marks(v3n-1・morning)に書く(yes/no)'
+        required: false
+        default: 'no'
+  # schedule:
+  #   - cron: '15 22 * * *'   # 07:15 JST(base-v1 の朝 06:30 の後)。手で 1〜2 日試してから付ける
+  #   - cron: '15 0 * * *'    # 09:15 JST(1 回目に base-v1 の行が無くて書かなかったレースを埋める)
+
+concurrency:
+  group: nar-ai-v3n
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  predict:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install python packages (手元と同じ版)
+        run: pip install -q "pandas==2.2.3" "numpy==1.26.4" "pyarrow==25.0.1" "lightgbm==4.7.0" requests
+
+      - name: day
+        id: d
+        env:
+          IN_DATE: ${{ github.event.inputs.date }}
+        run: |
+          if [ -n "$IN_DATE" ]; then
+            echo "$IN_DATE" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || { echo "date は YYYY-MM-DD で"; exit 1; }
+            DAY="$IN_DATE"
+          else
+            DAY=$(TZ=Asia/Tokyo date +%F)
+          fi
+          echo "day=$DAY" >> "$GITHUB_OUTPUT"; echo "day=$DAY"
+
+      - name: v3n 8 tracks (fetch → features → train → blend → write)
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          WRITE: ${{ github.event_name == 'schedule' && 'yes' || github.event.inputs.write }}
+          NAR_JOBS_AI: pipeline/ai
+        run: |
+          set -o pipefail
+          if [ "$WRITE" = "yes" ]; then W=--write; else W=; fi
+          echo "day=${{ steps.d.outputs.day }} write=$WRITE"
+          python -X utf8 -W ignore pipeline/ai/kochi/v3n_daily.py "${{ steps.d.outputs.day }}" work $W 2>&1 | tee out_log.txt
+          df -h / | tail -n 1
