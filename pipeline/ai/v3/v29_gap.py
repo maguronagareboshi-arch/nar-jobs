@@ -203,13 +203,23 @@ def day_marks(Bk, odds, w, going, dm, day):
     p1 = r['p1'] / r['p1'].sum()
     p3 = np.maximum(r['p3'], p1)
     p3p = _sum3(p3) if len(b) > 3 else np.minimum(p3, 1.0)
+    # 第12版の束(前日の便が土台に書いた足し分・研究 nankan-ai-v3 own_day.py・2026-10-12): t14 → f10k の順に足し、そのたび p3 = max(·, p1)・合計 3
+    used = []
+    for c in ('b14_u', 'b19_u'):
+        if c not in b.columns or b[c].isna().all() or (c == 'b19_u' and 'b14_u' not in used):
+            break
+        p3 = np.maximum(1 / (1 + np.exp(-(lg(p3p) + b[c].fillna(0.0).to_numpy(float)))), p1)
+        p3p = _sum3(p3) if len(b) > 3 else np.minimum(p3, 1.0)
+        used.append(c)
+    stamp = 'v3-9 当日版(第10版 + 当日の体重 15 本・t11 + 談話の印 3 定数)' if not used else \
+        'v3-9 当日版(第12版 = 当日の体重 15 本と馬場・t11 + 談話の印 + 束 ' + '・'.join({'b14_u': 't14', 'b19_u': 'f10k'}[c] for c in used) + ')'
     d = pd.DataFrame({'num': b.umaban.astype(int).to_numpy(), 'p1': p1, 'p3': p3p, 'p3_raw': p3})
     d = d.sort_values(['p3', 'p1', 'num'], ascending=[False, False, True], kind='mergesort').reset_index(drop=True)
     marks = [{'num': int(x.num), 'mark': MARKS[i], 'score': round(float(x.p3) * 100, 1)} for i, x in enumerate(d.itertuples()) if i < 5]
     runners = [{'num': int(x.num), 'p1': round(float(x.p1), 4), 'p3': round(float(x.p3), 4), 'p3_raw': round(float(x.p3_raw), 4)}
                for x in d.sort_values('num').itertuples()]
     tr, rno = Bk.track.iloc[0], int(Bk.race_no.iloc[0])
-    meta = {'n': int(len(d)), 'model': 'v3-9', 'timing': 'last', 'stamp': 'v3-9 当日版(第10版 + 当日の体重 15 本・t11 + 談話の印 3 定数)',
+    meta = {'n': int(len(d)), 'model': 'v3-9', 'timing': 'last', 'stamp': stamp,
             'weights': int(b.bw.notna().sum()), 'going': going, 'runners': runners}
     return {'track': tr, 'race_date': day, 'race_no': rno, 'marks': marks, 'meta': meta}
 

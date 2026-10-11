@@ -164,6 +164,20 @@ def main():
             b12 = f10k_bundle.run(day, cap['h'], cap['races'], csv_path, log=log)
         except Exception as e:  # noqa: BLE001
             log('束 f10k 失敗(第11版のまま)', type(e).__name__, str(e)[:200])
+    if bundle:  # 当日版も第12版に(研究 nankan-ai-v3 own_day.py・2026-10-12): 束の足し分 b14_u・b19_u を土台へ。当日の便が当日の木の後に足す
+        try:
+            bp = out / f'{day}_v29_base.csv'
+            tb = pd.read_csv(csv_path, encoding='utf-8-sig')
+            vb = pd.read_csv(bp, encoding='utf-8-sig').drop(columns=['b14_u', 'b19_u'], errors='ignore')
+            k4 = ['track', 'race_date', 'race_no', 'umaban']
+            for d_ in (tb, vb):
+                d_['race_date'] = d_.race_date.astype(str).str[:10]
+            add = tb[k4 + [c for c in ('b14_u', 'b19_u') if c in tb.columns and (c == 'b14_u' or b12)]]
+            vb = vb.merge(add, on=k4, how='left', validate='1:1')
+            vb.to_csv(bp, index=False, encoding='utf-8-sig')
+            log('当日版へ束の足し分', [c for c in ('b14_u', 'b19_u') if c in vb.columns], 'あり率', round(float(vb['b14_u'].notna().mean()), 3))
+        except Exception as e:  # noqa: BLE001
+            log('当日版へ束の足し分 失敗(当日版は第10版 + 体重のまま)', type(e).__name__, str(e)[:200])
     notes = {}
     try:  # ひとこと(表示だけ・予想の計算には使わない・失敗しても予想の表と書き込みは止めない)
         import v3_notes
