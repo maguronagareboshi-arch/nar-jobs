@@ -114,7 +114,7 @@ def main():
                 kruns[k].append(x)
         if b >= D_FROM:
             kr = rows_all(base, key, "/rest/v1/nar_races?select=track,race_date,race_no,distance_m,corners,cancelled"
-                          f"&track=eq.{q(TRACK)}" + f"&race_date=gte.{max(a, D_FROM)}" + "&order=race_date.asc,race_no.asc")
+                          f"&track=eq.{q(TRACK)}" + f"&race_date=gte.{max(a, D_FROM)}&race_date=lte.{b}" + "&order=race_date.asc,race_no.asc")
             kraces.extend(kr)
         log(f"{a[:7]} レース {len(rs)}・出走 {len(ru)}")
     for v in hist.values():
