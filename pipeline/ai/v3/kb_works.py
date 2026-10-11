@@ -9,11 +9,17 @@ nar_kb_works の 1 行 = 1 頭(他場/scraper/supabase_push.push_race が書く�
 
 鍵(SUPABASE_URL・SUPABASE_SERVICE_KEY)が無いとき・V3_WORKS_SRC=json のときは install しない = 従来の JSON の道。
 ⛔読むだけ(GET)。書かない。鍵は印字しない。
+
+2026-10-11: その日(hi)のレースが表に無ければ、競馬ブックの調教の頁から読んで足す(KEIBABOOK_LOGIN_ID があるときだけ・
+  DB には書かない・談話の印 danwa_marks._kb と同じ形)。表に入れていたのが PC のタスクだけで、PC が眠った 10/05〜08 は
+  前日版が調教なし(束 t14 は見張りで止まり f10k も足さない)になったため。頁の形は PC の supabase_push.push_race が書く行と同じ。
 """
 import json
 import os
+import sys
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 import pandas as pd
 
@@ -48,8 +54,46 @@ def fetch_rows(lo=FROM, hi=None):
             got = json.loads(r.read().decode('utf-8'))
         rows += got
         if len(got) < PAGE:
-            return rows
+            break
         off += PAGE
+    if hi:
+        have = {str(r.get('race_id')) for r in rows if str(r.get('race_date'))[:10] == hi}
+        try:
+            add = kb_day(hi, have)
+        except Exception as e:  # noqa: BLE001  頁が読めなくても表の分で進む(従来どおり)
+            print('[kb_works] 調教 頁 失敗', type(e).__name__, str(e)[:200], flush=True)
+            add = []
+        print('[kb_works] 調教', hi, '表', len(have), 'R・頁から足した', len({r['race_id'] for r in add}), 'R', len(add), '頭', flush=True)
+        rows += add
+    return rows
+
+
+def kb_day(day, have):
+    """競馬ブックの調教の頁から、have(race_id)に無い南関の day のレースを読む → nar_kb_works の行の形(DB には書かない)。"""
+    if not os.environ.get('KEIBABOOK_LOGIN_ID'):
+        return []
+    sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'cloud' / 'kb'))
+    from keibabook import KeibabookClient
+    from parsers import parse_cyokyo, parse_nittei
+    c = KeibabookClient(login_id=os.environ.get('KEIBABOOK_LOGIN_ID'), password=os.environ.get('KEIBABOOK_PASSWORD'),
+                        data_dir=Path(os.environ.get('KB_DATA_DIR', '/tmp/kbdata_v3')),
+                        wait_seconds=float(os.environ.get('FETCH_WAIT_SECONDS', '2.5')))
+    c.ensure_login()
+    ymd = day.replace('-', '')
+    rows = []
+    for m in parse_nittei(c.get(c.nittei_path(ymd), refresh=True)):
+        tr = next((t for t in TRACKS if t in m['track']), None)
+        if tr is None:
+            continue
+        for r in m['races']:
+            rid = str(r['race_id'])
+            if rid[12:16] != ymd[4:8] or rid in have:
+                continue
+            p = parse_cyokyo(c.get(c.cyokyo_path(rid), refresh=True), rid)
+            rows += [{'race_id': rid, 'track': tr, 'race_date': day, 'race_no': int(r['race_no']), 'umaban': int(h['umaban']),
+                      'horse_name': h.get('horse_name'), 'tanpyo': h.get('tanpyo'), 'arrow': h.get('arrow'), 'works': h.get('works') or []}
+                     for h in p['horses'] if h.get('umaban') not in (None, '')]
+    return rows
 
 
 def rows_to_parsed(rows):
