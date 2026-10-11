@@ -7,6 +7,7 @@
    無ければ(または V3_WORKS_SRC=json)手元の JSON(V3_CYOKYO_JSON)から = 従来の道。
 2. t9_forecast.table(DATE, 'pre', OUTDIR) → OUTDIR/DATE_第9版_前日版.csv・.md(追い切り・材料の差し替えは t8 の関数に入れる = t9 が呼ぶ)
 2b. 談話の印 3 定数(danwa_marks)→ 束 t14(t14_bundle・第11版・2026-10)を前日の表に足す(どちらも失敗したら前のまま)。
+2c. 束 t14 を足せた日だけ、束 f10k(f10k_bundle・第12版・材料 1 万個のふるいの 60 列の木・2026-10)を足す(失敗・見張りで止まったら第11版のまま)。
 3. --write のときだけ nar_ai_marks に model='v3-9'・timing='morning' で書く(base_v1.write_marks = 朝の行は凍結・読み直し)。
    marks = 印の付いた馬(◎○▲△・順位の順)・score = 3 着以内の確率 p3′ × 100。
    meta = n・model・stamp・works の元・runners(全馬の num・p1 = 勝つ確率・p3 = 3 着以内の確率 p3′(表の値)・p3_raw = 上乗せ後の p3)。
@@ -33,6 +34,7 @@ MODEL_ID = 'v3-9'
 TIMING = 'morning'
 STAMP = 't9_Y1/Y3(182 列・j7_last_pop なし)+t9_s2(2022-01〜2026-08)+t10 上乗せ+談話の印 3 定数(v13y)'
 STAMP11 = STAMP + '+束 t14(37 列の木・学び 2023-01〜2026-08)'  # 第11版(束を足せた日だけ)
+STAMP12 = STAMP11 + '+束 f10k(60 列の木・学び 2023-01〜2026-08)'  # 第12版(束 t14 と f10k を両方足せた日だけ)
 MK = ['◎', '○', '▲', '△']
 
 
@@ -155,6 +157,13 @@ def main():
         bundle = t14_bundle.run(day, cap['h'], cap['races'], cap['T'], csv_path, log=log)
     except Exception as e:  # noqa: BLE001
         log('束 t14 失敗(第10版 + 談話の印のまま)', type(e).__name__, str(e)[:200])
+    b12 = False
+    if bundle:
+        try:  # 束 f10k(第12版・研究 nankan-ai-v3 f10k・ユーザー承認 2026-10-11)。第11版の上で学んだ木なので束 t14 を足せた日だけ
+            import f10k_bundle
+            b12 = f10k_bundle.run(day, cap['h'], cap['races'], csv_path, log=log)
+        except Exception as e:  # noqa: BLE001
+            log('束 f10k 失敗(第11版のまま)', type(e).__name__, str(e)[:200])
     notes = {}
     try:  # ひとこと(表示だけ・予想の計算には使わない・失敗しても予想の表と書き込みは止めない)
         import v3_notes
@@ -162,7 +171,7 @@ def main():
     except Exception as e:  # noqa: BLE001
         log('ひとこと 失敗', type(e).__name__, str(e)[:200])
     del cap
-    rows = build_rows(csv_path, day, src, STAMP11 if bundle else STAMP)
+    rows = build_rows(csv_path, day, src, STAMP12 if b12 else (STAMP11 if bundle else STAMP))
     if notes:
         log('ひとこと 付けた', v3_notes.attach(rows, notes), '頭')
     log('races', len(rows), '◎', ' '.join(f"{r['track']}{r['race_no']}R:{r['marks'][0]['num']}" for r in rows[:12] if r['marks']))

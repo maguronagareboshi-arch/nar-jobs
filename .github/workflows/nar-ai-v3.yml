@@ -51,6 +51,7 @@ jobs:
       V3_CYOKYO_CSV: ${{ github.workspace }}/v3/cyokyo_csv
       V3_KD: ${{ github.workspace }}/v3/kd
       V3_T14: ${{ github.workspace }}/v3/t14
+      V3_F10K: ${{ github.workspace }}/v3/f10k
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
@@ -129,6 +130,21 @@ jobs:
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_t14.tar.gz.enc | tar -C v3/t14 -xzf -
           rm -f in/v3_t14.tar.gz.enc
           ls -l v3/t14 v3/t14/cyokyo_old | head -30
+
+      # 第12版 = 束 f10k(材料 1 万個のふるいの 60 列の木 3 本)。無ければ第11版のまま
+      - name: download f10k bundle files
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-f10k-20261011 -p 'v3_f10k.tar.gz.enc' -D in
+          mkdir -p v3/f10k
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_f10k.tar.gz.enc | tar -C v3/f10k -xzf -
+          rm -f in/v3_f10k.tar.gz.enc
+          ls -l v3/f10k
 
       # 束 t14 の談話 14 列: 本文 → intfloat/multilingual-e5-small(手元と同じ版・CPU)。失敗しても第10版 + 談話の印のまま進む
       - name: install text model (t14 danwa)
