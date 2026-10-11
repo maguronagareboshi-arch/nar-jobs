@@ -52,7 +52,7 @@ def _kb(day, have, log):
     c = KeibabookClient(login_id=os.environ.get('KEIBABOOK_LOGIN_ID'), password=os.environ.get('KEIBABOOK_PASSWORD'),
                         data_dir=d, wait_seconds=float(os.environ.get('FETCH_WAIT_SECONDS', '2.5')))
     import kb_works
-    kb_works.kb_login(c)  # 403(別の便と重なった)は待ってやり直す
+    kb_works.kb_login(c)  # 403 が一度出た便では試さない(kb_works.kb_login)
     ymd = day.replace('-', '')
     meets = parse_nittei(c.get(c.nittei_path(ymd), refresh=True))
     rows = []
@@ -82,8 +82,10 @@ def load(day, log=print):
         log('談話 表 失敗', type(e).__name__, str(e)[:200])
         a = pd.DataFrame(columns=Q4 + TX)
     have = {(t, int(r)) for t, r in zip(a.track, a.race_no)}
+    import kb_works
+    need = kb_works.races_of(day)
     try:
-        b = _kb(day, have, log)
+        b = pd.DataFrame(columns=Q4 + TX) if need and need <= have else _kb(day, have, log)  # 表にそろっている日はログインしない
     except Exception as e:  # noqa: BLE001
         log('談話 競馬ブック 失敗', type(e).__name__, str(e)[:200])
         b = pd.DataFrame(columns=Q4 + TX)

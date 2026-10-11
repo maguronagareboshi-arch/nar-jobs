@@ -58,6 +58,11 @@ def fetch_rows(lo=FROM, hi=None):
         off += PAGE
     if hi:
         have = {str(r.get('race_id')) for r in rows if str(r.get('race_date'))[:10] == hi}
+        pairs = {(r.get('track'), int(r.get('race_no'))) for r in rows if str(r.get('race_date'))[:10] == hi}
+        need = races_of(hi)
+        if need and need <= pairs:  # 表にそろっている日は競馬ブックにログインしない
+            print('[kb_works] 調教', hi, '表', len(have), 'R = 出馬表の', len(need), 'R がそろっている・頁は読まない', flush=True)
+            return rows
         try:
             add = kb_day(hi, have)
         except Exception as e:  # noqa: BLE001  頁が読めなくても表の分で進む(従来どおり)
@@ -68,17 +73,36 @@ def fetch_rows(lo=FROM, hi=None):
     return rows
 
 
-def kb_login(c, tries=3, wait=240):
-    """競馬ブックのログイン。403 は同じ会員の別の便(kb-daily など)と重なった時に出る(2026-10-11 に確認)= 待ってやり直す。"""
-    import time
-    for i in range(tries):
-        try:
-            return c.ensure_login()
-        except Exception as e:  # noqa: BLE001
-            if '403' not in str(e) or i == tries - 1:
-                raise
-            print('[kb_works] 競馬ブック 403 = 別の便と重なった見込み・', wait, '秒待ってやり直す', i + 1, '/', tries - 1, flush=True)
-            time.sleep(wait)
+BLOCKED = []  # この便で一度 403 が出たら印を立てる(同じ便の中ではやり直しても 403 が続く・10/11 に 6 回続けて確認)
+
+
+def kb_login(c):
+    """競馬ブックのログイン。403 はその便の接続元ごと弾かれている見込み(同じ便のやり直しは全部 403・別の便なら通る)
+    = 一度 403 が出たらこの便では二度と試さない(調教・談話の逃げ道の両方)。"""
+    if BLOCKED:
+        raise RuntimeError('競馬ブック 403 済み(この便では試さない)')
+    try:
+        return c.ensure_login()
+    except Exception as e:  # noqa: BLE001
+        if '403' in str(e):
+            BLOCKED.append(1)
+            print('[kb_works] 競馬ブック 403 = この便では頁を読まない(表の分で進む)', flush=True)
+        raise
+
+
+def races_of(day):
+    """本番 nar_runs のその日の南関のレース {(場, R)}(出馬表・読むだけ)。読めなければ None。"""
+    base, key = creds()
+    if not base:
+        return None
+    try:
+        q = urllib.parse.urlencode([('select', 'track,race_no'), ('race_date', f'eq.{day}'),
+                                    ('track', 'in.(' + ','.join(TRACKS) + ')'), ('limit', '3000')])
+        req = urllib.request.Request(f'{base}/rest/v1/nar_runs?{q}', headers={'apikey': key, 'Authorization': f'Bearer {key}', 'User-Agent': 'nar-ai-v3'})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            return {(x['track'], int(x['race_no'])) for x in json.loads(r.read().decode('utf-8'))}
+    except Exception:  # noqa: BLE001
+        return None
 
 
 def kb_day(day, have):
