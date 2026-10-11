@@ -503,7 +503,8 @@ def cmd_apply(allow_large):
         if s["prod"] >= CHANGE_MIN_ROWS:
             if s["ratio"] > CHANGE_MAX_RATIO and not allow_large:
                 stop.append(f"{t} の(変わった+消す)が {s['ratio']:.1%} > {CHANGE_MAX_RATIO:.0%}")
-        elif s["local"] < INPUT_MIN_RATIO * s["prod"]:
+        # 10/11 意図して行が減るとき(例 10/10 3bf5782 で nar_ai_record の南関 8 行を外した)は allow_large で通す
+        elif s["local"] < INPUT_MIN_RATIO * s["prod"] and not allow_large:
             stop.append(f"{t} の手元 {s['local']} 行 < 本番 {s['prod']} 行の {INPUT_MIN_RATIO:.0%}")
     if stop:
         for m in stop:
