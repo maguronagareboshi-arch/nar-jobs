@@ -304,6 +304,8 @@ def cut_from(raw):
     s = str(raw).split("(")[0].strip()
     a, sep, b = s.partition("〜")
     m = re.match(r"(\d{4})-(\d{2})(?:-(\d{2}))?", a)
+    if not m:   # 「2019」「年不明」「2020年度から」など月の無い行は区切りにしない
+        return None
     y, mo = int(m.group(1)), int(m.group(2))
     dd = int(m.group(3)) if m.group(3) and m.group(3) != "00" else None
     b = b.strip()
@@ -342,7 +344,11 @@ def cuts_of(track, sand):
     out = {}
     for e in (sand.get("venues") or {}).get(VKEY[track], []):
         if any(x in CUT_TYPES for x in (e.get("types") or [])):
-            out[cut_from(e["raw"]).isoformat()] = {"raw": e["raw"], "text": e.get("text")}
+            cf = cut_from(e["raw"])
+            if cf is None:
+                print(f"skip cut (no month) {track}: {e['raw']}")
+                continue
+            out[cf.isoformat()] = {"raw": e["raw"], "text": e.get("text")}
     if track == NAG:
         out.setdefault(NAG_BOUNDARY, NAG_CUT)
     return sorted(out.items())
