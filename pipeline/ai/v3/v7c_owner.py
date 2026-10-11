@@ -13,13 +13,14 @@ import os
 import re
 import urllib.parse
 import urllib.request
+from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from v7c_run import KEY, V3
 
-OWN_KD = V3 / 'kd' / 'kd_se_owner_nankan.parquet'
+OWN_KD = Path(os.environ.get('V3_KD') or V3 / 'kd') / 'kd_se_owner_nankan.parquet'  # 便は V3_KD = v3/kd(V3_DATA = v3/v3_data とは別)
 NANKAN4 = ('浦和', '船橋', '大井', '川崎')
 RE_CORP = re.compile(r'\((株|有|同|合|資|名|医|財|社|一社|一財|公財|組)\)|^組\)')
 K4 = KEY + ['umaban']
