@@ -68,6 +68,19 @@ def fetch_rows(lo=FROM, hi=None):
     return rows
 
 
+def kb_login(c, tries=3, wait=240):
+    """競馬ブックのログイン。403 は同じ会員の別の便(kb-daily など)と重なった時に出る(2026-10-11 に確認)= 待ってやり直す。"""
+    import time
+    for i in range(tries):
+        try:
+            return c.ensure_login()
+        except Exception as e:  # noqa: BLE001
+            if '403' not in str(e) or i == tries - 1:
+                raise
+            print('[kb_works] 競馬ブック 403 = 別の便と重なった見込み・', wait, '秒待ってやり直す', i + 1, '/', tries - 1, flush=True)
+            time.sleep(wait)
+
+
 def kb_day(day, have):
     """競馬ブックの調教の頁から、have(race_id)に無い南関の day のレースを読む → nar_kb_works の行の形(DB には書かない)。"""
     if not os.environ.get('KEIBABOOK_LOGIN_ID'):
@@ -78,7 +91,7 @@ def kb_day(day, have):
     c = KeibabookClient(login_id=os.environ.get('KEIBABOOK_LOGIN_ID'), password=os.environ.get('KEIBABOOK_PASSWORD'),
                         data_dir=Path(os.environ.get('KB_DATA_DIR', '/tmp/kbdata_v3')),
                         wait_seconds=float(os.environ.get('FETCH_WAIT_SECONDS', '2.5')))
-    c.ensure_login()
+    kb_login(c)
     ymd = day.replace('-', '')
     rows = []
     for m in parse_nittei(c.get(c.nittei_path(ymd), refresh=True)):

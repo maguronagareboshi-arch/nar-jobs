@@ -51,7 +51,8 @@ def _kb(day, have, log):
     d = Path(os.environ.get('KB_DATA_DIR', '/tmp/kbdata_v3'))
     c = KeibabookClient(login_id=os.environ.get('KEIBABOOK_LOGIN_ID'), password=os.environ.get('KEIBABOOK_PASSWORD'),
                         data_dir=d, wait_seconds=float(os.environ.get('FETCH_WAIT_SECONDS', '2.5')))
-    c.ensure_login()
+    import kb_works
+    kb_works.kb_login(c)  # 403(別の便と重なった)は待ってやり直す
     ymd = day.replace('-', '')
     meets = parse_nittei(c.get(c.nittei_path(ymd), refresh=True))
     rows = []
