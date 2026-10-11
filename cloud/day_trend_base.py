@@ -47,7 +47,7 @@ YEARS = 5
 GOINGS = {"良", "稍重", "重", "不良"}
 L3_OK = (30.0, 55.0)           # 上がりの有効範囲(秒)・0.0= 公式の非計測は落ちる
 ZONES = ("front", "mid", "back")
-POP_BANDS = ("1", "2-3", "4-6", "7+")
+POP_BANDS = ("1", "2-3", "4-6", "7+", "1-3")   # 1-3= 1〜3番人気をまとめた区分(10/12 追加・末尾に足して既存の添字は不変)
 SAND_URL = "https://yukochi.com/data/sand-history.json"
 CN = re.compile(r"([１２３４1234])(?:角|コーナー)")
 DIG = {"１": "1", "２": "2", "３": "3", "４": "4", "1": "1", "2": "2", "3": "3", "4": "4"}
@@ -140,6 +140,13 @@ def pbk(p):
     return None if p is None else "1" if p == 1 else "2-3" if p <= 3 else "4-6" if p <= 6 else "7+"
 
 
+def in_band(p, b):
+    """人気 p が区分 b に入るか(1-3 は 1 と 2-3 の両方に重なる)"""
+    if p is None:
+        return False
+    return p <= 3 if b == "1-3" else pbk(p) == b
+
+
 def rerank(vals):
     """出走馬の人気を付け直す(同じ値は同じ順位= 1,2,2,4)"""
     xs = sorted(v for v in vals.values() if v is not None)
@@ -195,7 +202,7 @@ def race_record(race, runs):
     rec = {"d": d, "no": int(race["race_no"]), "dk": dist_key(race),
            "band": band_fix(race.get("race_name"), race.get("condition"), t)}
     # 人気帯ごとの [頭数, 3着内](10/9 訂正= 頭数あたりの率の元・mock_v3.py と同じ)
-    rec["pop"] = [[sum(1 for e in ent if pbk(e[3]) == b), sum(1 for e in ent if pbk(e[3]) == b and top3(e[1]))]
+    rec["pop"] = [[sum(1 for e in ent if in_band(e[3], b)), sum(1 for e in ent if in_band(e[3], b) and top3(e[1]))]
                   for b in POP_BANDS]
     if t == BANEI:
         rec["going"] = moist_bucket(race.get("going"))

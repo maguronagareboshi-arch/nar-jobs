@@ -63,7 +63,8 @@ class RaceRecord(unittest.TestCase):
         l3 = [36.0, 36.0, 36.0, 40, 40, 40, 39.0, 39.0, 39.0]
         rec = m.race_record(_race(), _runs([1, 2, 3, 4, 5, 6, 7, 8, 9], l3=l3))
         self.assertEqual(rec["cz"], {"3": [[3, 3], [3, 0], [3, 0]], "4": [[3, 0], [3, 0], [3, 3]]})
-        self.assertEqual(rec["pop"], [[1, 1], [2, 2], [3, 0], [3, 0]])
+        self.assertEqual(rec["pop"][:4], [[1, 1], [2, 2], [3, 0], [3, 0]])   # 既存 4 区分は 10/12 前と同じ
+        self.assertEqual(rec["pop"][4], [3, 3])                                # 1-3= 1〜3番人気
         self.assertEqual(rec["dk"], "ダ1400")
         # 4角 9 頭= 後ろ 7〜9番手(馬番 3,2,1= 36.0)− 前 1〜3番手(馬番 9,8,7= 39.0)
         self.assertAlmostEqual(rec["ag"], -3.0)
@@ -71,9 +72,15 @@ class RaceRecord(unittest.TestCase):
     def test_rerank_and_scratch(self):
         # 取消の馬(人気 1)を外して付け直す= 人気 2 が 1 番人気になる
         rec = m.race_record(_race(corners=[]), _runs([None, 1, 2, 3], pop=[1, 2, 3, 4], notes={1: "取消"}))
-        self.assertEqual(rec["pop"], [[1, 1], [2, 2], [0, 0], [0, 0]])
+        self.assertEqual(rec["pop"], [[1, 1], [2, 2], [0, 0], [0, 0], [3, 3]])
         self.assertEqual(rec["cz"], {})
         self.assertIsNone(rec["ag"])
+
+    def test_pop13_mixed(self):
+        # 1-3 は 1〜3番人気の頭数・3着内を 1 区分で数える(人気 1 が 5 着・人気 3 が 1 着)
+        rec = m.race_record(_race(corners=[]), _runs([5, 2, 1, 3, 4, 6], pop=[1, 2, 3, 4, 5, 6]))
+        self.assertEqual(rec["pop"], [[1, 0], [2, 2], [3, 1], [0, 0], [3, 2]])
+        self.assertEqual(m.POP_BANDS, ("1", "2-3", "4-6", "7+", "1-3"))
 
     def test_dropped(self):
         self.assertIsNone(m.race_record(_race(cancelled=True), _runs([1, 2])))
@@ -88,7 +95,7 @@ class RaceRecord(unittest.TestCase):
 
 def _rec(d, band="C3", going="良", cz=None, ag=None, pop=None):
     return {"d": d, "no": 1, "band": band, "going": going, "dk": "ダ1400",
-            "pop": pop or [[1, 1], [2, 1], [3, 1], [3, 0]], "cz": cz if cz is not None else {}, "ag": ag}
+            "pop": pop or [[1, 1], [2, 1], [3, 1], [3, 0], [3, 2]], "cz": cz if cz is not None else {}, "ag": ag}
 
 
 class Cells(unittest.TestCase):
@@ -104,7 +111,8 @@ class Cells(unittest.TestCase):
         self.assertEqual((x["n"], x["pre"]), (40, False))
         self.assertEqual(x["corners"]["4"], [[120, 60], [120, 40], [120, 20]])
         self.assertEqual(x["corners"]["1"], [[60, 60], [60, 0], [60, 0]])   # 角が無いレースは入れない
-        self.assertEqual(x["pop"], [[40, 40], [80, 40], [120, 40], [120, 0]])
+        self.assertEqual(x["pop"][:4], [[40, 40], [80, 40], [120, 40], [120, 0]])
+        self.assertEqual(x["pop"][4], [120, 80])                               # 1-3= 1 と 2-3 の和
         self.assertEqual(x["agari"], [40, 0.5, round(10 / 39, 4)])
         self.assertEqual(cells["L3"]["n"], 41)
 
