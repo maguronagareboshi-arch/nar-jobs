@@ -146,6 +146,24 @@ jobs:
           rm -f in/v3_f10k.tar.gz.enc
           ls -l v3/f10k
 
+      # 決め 23 = 馬主 5 列を走った時の馬主で作り直して全段を学び直した模型一式 + 南関の走りごとの馬主の写し(v3/kd)。
+      # 展開が全部済んでから一度に上書きする。無ければ今の模型 + 台帳の馬主のまま(v7c_owner は写しが無いと使わない)
+      - name: download owner-rt model set
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-own-20261011 -p 'v3_own.tar.gz.enc' -D in
+          mkdir -p in/own
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_own.tar.gz.enc | tar -C in/own -xzf -
+          test -f in/own/kd/kd_se_owner_nankan.parquet && test -f in/own/models/t9_Y3.txt && test -f in/own/f10k/f10k_bundle.json
+          cp -r in/own/. v3/
+          rm -rf in/own in/v3_own.tar.gz.enc
+          ls -l v3/kd v3/models/t9_* v3/models/t10_up* v3/t14/t14_bundle* v3/f10k
+
       # 束 t14 の談話 14 列: 本文 → intfloat/multilingual-e5-small(手元と同じ版・CPU)。失敗しても第10版 + 談話の印のまま進む
       - name: install text model (t14 danwa)
         if: steps.pc.outputs.run == 'yes'
