@@ -143,6 +143,7 @@ class Window(unittest.TestCase):
         self.assertEqual(m.cut_from("2026-08-03〜09-01").isoformat(), "2026-09-02")
         self.assertEqual(m.cut_from("2024-08").isoformat(), "2024-09-01")
         self.assertIsNone(m.cut_from("2019"))
+        self.assertEqual(m.cut_from("2020-01-15〜約1か月(姫路開催中)").isoformat(), "2020-01-15")
         self.assertIsNone(m.cut_from("年月不明(告知の番号は 2021 年)"))
         self.assertEqual(m.cut_from("2019-10-05〜08").isoformat(), "2019-10-09")
 

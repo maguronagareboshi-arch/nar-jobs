@@ -326,8 +326,9 @@ def cut_from(raw):
         elif m1:
             em = int(m1.group(1))
             end = month_end(y + (em < mo), em)
-        else:
-            raise ValueError(raw)
+        else:   # 「約1か月(姫路開催中)」など終わりが読めない= 始めの日から区切る(その間は開催が無い)
+            print(f"cut end unreadable, use start: {raw}")
+            return dt.date(y, mo, dd or 1)
     return end + dt.timedelta(days=1)
 
 
