@@ -47,7 +47,7 @@ INPUTS = {
     # 10/2 KDSCOPE の血統((馬名, 生年月日) で引く・shinba_stats.sql の tmp_ped)。生まれの表なので asof で絞らない
     "nar_kd_pedigree": ("ketto, horse_name, birth_date, sire, dam, broodmare_sire, breeder, src, updated_at",
                         "create index on public.nar_kd_pedigree (horse_name, birth_date)"),
-    "nar_ai_marks": ("model, track, race_date, race_no, timing, marks, computed_at, updated_at",
+    "nar_ai_marks": ("model, track, race_date, race_no, timing, marks, meta, computed_at, updated_at",
                      "create index on public.nar_ai_marks (track, race_date, race_no)"),
     # 10/2 馬主・生産者の正本(owner_breeder.sql)。生まれの表なので asof で絞らない
     "nar_horse_profiles": ("horse_name, birth_date, sex, sire, owner, breeder, last_seen, updated_at",

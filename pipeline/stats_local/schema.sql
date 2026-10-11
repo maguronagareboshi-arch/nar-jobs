@@ -35,7 +35,7 @@ create table public.nar_kd_pedigree (
 );
 create table public.nar_ai_marks (
   model text not null, track text not null, race_date date not null, race_no integer not null, timing text not null,
-  marks jsonb not null, computed_at timestamptz not null, updated_at timestamptz not null
+  marks jsonb not null, meta jsonb, computed_at timestamptz not null, updated_at timestamptz not null
 );
 -- 10/2 馬主・生産者の正本((馬名, 生年月日) で一意)
 create table public.nar_horse_profiles (
