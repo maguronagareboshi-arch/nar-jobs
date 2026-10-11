@@ -126,10 +126,16 @@ def build(h, Q, L):
     q['lk'] = link_key(q.hid)
     q = q.merge(L, left_on='lk', right_index=True, how='left')
     q['_all'] = 'a'
+    try:
+        import v7c_owner
+        log('馬主 走った時の馬主', v7c_owner.owner_rt(r, q, h, norm))
+    except Exception as e:  # noqa: BLE001
+        log('馬主 走った時の馬主 失敗 → 台帳の馬主のまま', repr(e)[:200])
     ix = {c: i for i, c in enumerate(CS)}
     G = d3.wsum(r, ['_all'], CS, q, BIG)
     S = d3.wsum(r, ['hid'], CS, q, BIG)
     S = np.nan_to_num(S)
+    So = np.nan_to_num(d3.wsum(r, ['hid', 'owner'], CS, q, BIG))  # 馬主は同じ馬主の時の自分の走りだけ引く(決め 23)
     with np.errstate(all='ignore'):
         pr = {k: G[:, ix[k]] / G[:, ix[b]] for k, b in (('t3', 'one'), ('w', 'one'), ('t3y2', 'y2'),
                                                        ('t3deb', 'deb'), ('t3fst', 'fst'))}
@@ -140,7 +146,7 @@ def build(h, Q, L):
 
     for tag, by in (('s', 'sire'), ('m', 'bms'), ('d', 'dam'), ('b', 'breeder'), ('o', 'owner')):
         A = d3.wsum(r, [by], CS, q, BIG)
-        A = A - np.where(np.isnan(A), 0, S)
+        A = A - np.where(np.isnan(A), 0, So if tag == 'o' else S)
         if tag in ('s', 'm'):
             out[f'c7_{tag}_n'], out[f'c7_{tag}_t3'], out[f'c7_{tag}_w'] = A[:, ix['one']], shr(A, 't3', 'one'), shr(A, 'w', 'one')
             out[f'c7_{tag}_t3y2'], out[f'c7_{tag}_t3deb'] = shr(A, 't3y2', 'y2'), shr(A, 't3deb', 'deb')
