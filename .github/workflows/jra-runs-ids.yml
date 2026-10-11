@@ -1,0 +1,42 @@
+# 中央の走を馬 ID を指定して取り直す手動便(番人の直しの後など・kb-daily は前日〜2 日後の出馬表の馬しか取らない)。
+# 必要な Secrets: KEIBABOOK_LOGIN_ID / KEIBABOOK_PASSWORD / NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: jra-runs-ids
+on:
+  workflow_dispatch:
+    inputs:
+      horse_ids:
+        description: kb 馬ID のカンマ区切り
+        required: true
+      apply:
+        description: '1= 本番へ書く。空= 書かない'
+        required: false
+        default: ''
+concurrency:
+  group: kb-daily
+  cancel-in-progress: false
+env:
+  TZ: Asia/Tokyo
+  KB_DATA_DIR: /tmp/kbdata
+  PYTHONUNBUFFERED: '1'
+jobs:
+  jra:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: install
+        run: pip install -q requests beautifulsoup4 lxml
+      - name: jra runs by ids
+        env:
+          KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}
+          KEIBABOOK_PASSWORD: ${{ secrets.KEIBABOOK_PASSWORD }}
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          IDS: ${{ inputs.horse_ids }}
+          APPLY: ${{ inputs.apply }}
+        run: |
+          if [ "$APPLY" = "1" ]; then python cloud/kb/fetch_jra_runs.py --horse-ids "$IDS" --no-heartbeat --push
+          else python cloud/kb/fetch_jra_runs.py --horse-ids "$IDS" --no-heartbeat; fi
