@@ -94,6 +94,23 @@ def src_fill(runs, facts, races):
     return h
 
 
+def date_keys(runs, facts, date):
+    """バグ直し(2026-10-11・予想ファクターの監査): 前日の便では facts(nar_run_facts)に DATE の行がまだ無く、
+    v7_feat_b.ubase(base_from)の DATE の馬の鍵が馬名だけになって過去の走りとつながらない
+    = b7_k06_distsi・b7_k06_distsirank が前日版で毎日空(研究 81〜98%)。DATE の南関の行に鍵だけの行
+    (t4_forecast.fill_key と同じ「馬名|生年」)を足して、漏れ検査(v7_feat_b.leak)と同じ形にする。
+    facts に行がある日(レースの後の作り直し)は何も足さない。手元の確かめ: 2026-08-25・2025-11-12 で
+    その日の facts を抜くと k06 が 0% → 足すと研究の値と 134/134・147/147 一致。"""
+    have = facts.loc[facts.race_date == date, KEY + ['umaban']]
+    r = runs[(runs.race_date == date) & runs.track.isin(vb.NANKAN) & runs.age.notna() & runs.horse_name.notna()]
+    r = r.rename(columns={'runner_number': 'umaban'})
+    r = r.assign(race_no=r.race_no.astype(int), umaban=r.umaban.astype(int))
+    r = r.merge(have.assign(_h=1), on=KEY + ['umaban'], how='left')
+    r = r[r._h.isna()]
+    add = r[KEY + ['umaban']].assign(horse_key=r.horse_name + '|' + (r.race_date.str[:4].astype(int) - r.age.astype(int)).astype(str))
+    return pd.concat([facts, add], ignore_index=True)
+
+
 _LED = {}
 
 
@@ -115,6 +132,7 @@ def features(h, races, date, part, lap_lo=FWD):
     T6 = vo.nk(T6)
     Q = T6[KEY + ['umaban']]
     runs, facts, rc = raw7(part, date)
+    facts = date_keys(runs, facts, date)
     F = T6[KEY + ['umaban'] + vb.FCOLS].assign(year=T6.race_date.str[:4].astype(int), Y3=np.nan)
     vb.load_F = lambda day: F[KEY + ['umaban', 'year', 'Y3'] + vb.FCOLS].reset_index(drop=True)
     d3.sources_from = src_fill  # v7_feat_b.prep の中の sources_from にも同じ埋め方
