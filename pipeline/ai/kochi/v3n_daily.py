@@ -28,7 +28,7 @@ MODEL_ID = 'v3n-1'
 W = {30: 0.75, 35: 0.75, 36: 0.5, 46: 0.5, 47: 0.75, 48: 0.5, 50: 0.75, 51: 0.5, 54: 0.75, 55: 0.5}  # 盛岡・姫路は 2026-10-10 ユーザーの判断で足した
 MARKS = ['◎', '○', '▲', '△', '△']  # 2026-10-10 ユーザー決定: 印は 5 頭(◎○▲△△)
 NO_MORNING = ['e_baba', 'e_tenko']  # 当日の馬場・天気 = 公式の表は前の日まで空欄 = 朝の模型に入れない(入れて空で当てると確率がずれる)
-FORM = 'v3n-5: glicko18 + no-going + blood9 + sharpen + cal-iso'  # meta に残す作りの名前(model の名前は v3n-1 のまま = サイト・成績の読み口を変えない)
+FORM = 'v3n-6: glicko18 + no-going + blood9 + sharpen + cal-iso + seq'  # meta に残す作りの名前(model の名前は v3n-1 のまま = サイト・成績の読み口を変えない)
 # 2026-10-11 第 3 版(v3 の out/v3n_next.md): 混ぜた割合 s を頭数の帯ごとに s^γ ÷ Σ s^γ(順位は変わらない)。γ は選ぶ期間 2024-09〜2025-08 で決めた
 GAMMA = [(8, 0.89), (10, 0.95), (12, 1.01), (99, 1.15)]  # (この頭数まで, γ)
 
@@ -65,6 +65,7 @@ def main():
     import k20_lg
     import k25_blood
     import k26_cal
+    import k29_seq_live
     rows, show = [], []
     for j in tracks:
         d = k9.ALT / f't{j}'
@@ -78,6 +79,12 @@ def main():
     LG = k20_lg.build(k9.ALT / 'kd_se.parquet', k9.ALT / f't{tracks[0]}' / 'si_all.parquet', log=lambda *a: print(*a, flush=True))
     # 2026-10-11 第 3 版: 血統の相性 b9_ 9 列(全場で 1 回・公式の runs・races・profiles から・前の走りだけ)
     BL = k25_blood.build(off, log=lambda *a: print(*a, flush=True))
+    # 2026-10-12 第 6 版: 並び読み AI(14 場 + 中央の過去 10 走)の外した分を 3 着内の率に足す(out/v3n_seq.md)。⛔失敗しても第 5 版のまま書く
+    try:
+        SQ = k29_seq_live.prep(off, day, [name[j] for j in tracks], log=lambda *a: print(*a, flush=True))
+    except Exception as e:  # noqa: BLE001
+        print('並び読み 失敗 = 第 5 版のまま', type(e).__name__, str(e)[:200], flush=True)
+        SQ = None
     for j in tracks:
         d = k9.ALT / f't{j}'
         T, cols = k10.load(d)
@@ -128,9 +135,15 @@ def main():
             else:
                 c1 = s1
             p3 = k26_cal.p3(c, len(g))  # 2026-10-11 第 4 版: 3 × 割合をやめ頭数の帯ごとの曲線(out/v3n_cal.md)
-            order = np.argsort(-c, kind='stable')
-            marks = [{'num': int(nums[i]), 'mark': MARKS[k_], 'score': round(float(c[i]) * 100, 1)} for k_, i in enumerate(order[:5])]
-            meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM, 'w': w, 'gamma': gm, 'trained_to': trained_to,
+            u = k29_seq_live.resid(SQ, trk, rno, nums)  # 第 6 版: 並び読みの外した分(無ければ第 5 版のまま)
+            if u is not None:
+                p3 = np.clip(1 / (1 + np.exp(-(np.log(p3 / (1 - p3)) + u))), 0.001, 0.999)
+            key = p3 if u is not None else c   # 印 = 並び読みを足した 3 着内の率の順
+            sc = key / key.sum()
+            order = np.argsort(-key, kind='stable')
+            marks = [{'num': int(nums[i]), 'mark': MARKS[k_], 'score': round(float(sc[i]) * 100, 1)} for k_, i in enumerate(order[:5])]
+            meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM, 'w': w, 'gamma': gm, 'trained_to': trained_to, 'seq': u is not None,
+                    **({'u': {str(int(n)): round(float(x), 4) for n, x in zip(nums, u)}} if u is not None else {}),
                     'runners': [{'num': int(n), 'p1': round(float(a), 4), 'p3': round(float(b_), 4)} for n, a, b_ in zip(nums, c1, p3)],
                     'p': {str(int(n)): round(float(x), 4) for n, x in zip(nums, c)},
                     'own': {str(int(n)): [round(float(a), 4), round(float(b_), 4)] for n, a, b_ in zip(nums, g.p1, g.p3)}}

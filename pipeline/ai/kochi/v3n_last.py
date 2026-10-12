@@ -22,6 +22,8 @@ import sys
 import urllib.parse
 from pathlib import Path
 
+import numpy as np
+
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
 MODEL_ID = 'v3n-1'
@@ -56,10 +58,17 @@ def relabel(meta, gone):
     c = {n: p[n] / s for n in keep}
     run = {int(r['num']): r for r in (meta.get('runners') or [])}
     s1 = sum(float(run[n]['p1']) for n in keep if n in run) or 1.0
-    order = sorted(keep, key=lambda n: (-c[n], keep.index(n)))
     import k26_cal  # 朝(v3n_daily)と同じ 3 着内の率の曲線
     q3 = dict(zip(keep, k26_cal.p3([c[n] for n in keep], len(keep))))
-    marks = [{'num': n, 'mark': MARKS[i], 'score': round(c[n] * 100, 1)} for i, n in enumerate(order[:5])]
+    u = {int(k): float(v) for k, v in (meta.get('u') or {}).items()}
+    if u and all(n in u for n in keep):  # 第 6 版: 朝の並び読みの外した分を足す(朝と同じ式・取消の後の頭数で計算し直すのは未対応)
+        q3 = {n: min(max(1 / (1 + np.exp(-(np.log(q3[n] / (1 - q3[n])) + u[n]))), 0.001), 0.999) for n in keep}
+        key = q3
+    else:
+        key = c
+    ks = sum(key.values()) or 1.0
+    order = sorted(keep, key=lambda n: (-key[n], keep.index(n)))
+    marks = [{'num': n, 'mark': MARKS[i], 'score': round(key[n] / ks * 100, 1)} for i, n in enumerate(order[:5])]
     new = dict(meta)
     new.update({
         'n': len(keep),
@@ -67,6 +76,7 @@ def relabel(meta, gone):
         'runners': [{'num': n, 'p1': round(float(run[n]['p1']) / s1, 4) if n in run else None,
                      'p3': round(float(q3[n]), 4)} for n in keep],
         'own': {k: v for k, v in (meta.get('own') or {}).items() if int(k) not in gone},
+        **({'u': {k: v for k, v in (meta.get('u') or {}).items() if int(k) not in gone}} if meta.get('u') else {}),
         'scratched': sorted(gone),
         'from': 'morning',
     })

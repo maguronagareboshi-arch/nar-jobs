@@ -59,8 +59,25 @@ jobs:
           fi
           echo "day=$DAY" >> "$GITHUB_OUTPUT"; echo "day=$DAY"
 
+      # 2026-10-12 第 6 版 = 並び読み(14 場 + 中央の過去 10 走・v3 の out/v3n_seq.md)の固定ファイル(時計のならし・重み 3 本)。
+      #   無ければ v3n_daily は第 5 版のまま書く(並び読みを足さない)
+      - name: download v3n seq files
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3n-seq-20261012 -p 'v3n_seq.tar.gz.enc' -D in
+          mkdir -p v3n_seq
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3n_seq.tar.gz.enc | tar -C v3n_seq -xzf -
+          rm -f in/v3n_seq.tar.gz.enc
+          ls -l v3n_seq
+
       - name: v3n 8 tracks (fetch → features → train → blend → write)
         env:
+          V3N_SEQ: v3n_seq
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
           WRITE: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_run') && 'yes' || github.event.inputs.write }}
