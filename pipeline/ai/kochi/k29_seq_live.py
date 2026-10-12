@@ -128,3 +128,61 @@ def resid(S, track, rno, nums):
         return None
     idx = np.asarray(idx)
     return np.mean([S2.forward(W, S['hist'][idx], S['ctx'][idx]) for W in S['W']], axis=0)
+
+
+# ================================================================ 直前版(2026-10-12・確かめ = v3 の out/v3n_seq_day.md)
+# 朝の版に当日の 7 列(今日の馬場 4・体重・前走からの増減・体重の欠け)を足した重み(V3N_SEQ_DAY・暗号化リリース v3n-seq-day-20261012)。
+# 対 朝の版 全馬 +16.4 ± 11.8 ×10^-4 /頭・本命 76.98 → 77.18%・本命が替わる 6.9%。直前便(nar-ai-last)の頭で prep_day・周ごとに resid_day。
+DAY_SEQ = Path(os.environ.get('V3N_SEQ_DAY', 'v3n_seq_day'))
+GOING = {'良': 0, '稍重': 1, '稍': 1, '重': 2, '不良': 3, '不': 3}
+NH_COL = 20  # 今回の列の頭数((nh − 11) / 3)= 取消の後の頭数で入れ直す
+
+
+def prep_day(off, day, tracks, out, log=print):
+    """直前便の頭: 公式の表から今日の出走馬の過去 10 走と朝の 28 列・前走の体重を out(npz)に。書けたらそのパス・無理なら None"""
+    need = [DAY_SEQ / 'v3n_seq_std.csv', DAY_SEQ / 'v3n_seq_model.npz', DAY_SEQ / 'v3n_seq_prod.json', Path(off) / 'runs.parquet']
+    if not all(p.exists() for p in need):
+        log('並び読み 直前版 固定ファイルか公式の表が無い = 作らない', [p.name for p in need if not p.exists()])
+        return None
+    std = pd.read_csv(DAY_SEQ / 'v3n_seq_std.csv', encoding='utf-8')
+    d = S2.runs_all(off)
+    T, hist, ctx = build(d, std, day, tracks)
+    np.savez_compressed(out, track=T.track.to_numpy().astype('U4'), race_no=T.race_no.to_numpy(int), umaban=T.umaban.to_numpy(int),
+                        hist=hist.astype(np.float16), ctx=ctx, bw_prev=T.bw_prev.to_numpy(float))
+    log('並び読み 直前版の材料', out, hist.shape, 'R', T[['track', 'race_no']].drop_duplicates().shape[0])
+    return out
+
+
+def load_day(prep_npz):
+    """周ごと: 重み(DAY_SEQ)と頭で作った材料。どちらか無ければ None(取消の割り直しだけ)"""
+    prep_npz = Path(prep_npz)
+    if not (DAY_SEQ / 'v3n_seq_model.npz').exists() or not prep_npz.exists():
+        return None
+    meta = json.loads((DAY_SEQ / 'v3n_seq_prod.json').read_text(encoding='utf-8'))
+    Z = np.load(DAY_SEQ / 'v3n_seq_model.npz')
+    Ws = [{k.split('/', 1)[1]: Z[k].astype(float) for k in Z.files if k.startswith(f's{s}/')} for s in meta['seeds']]
+    P = np.load(prep_npz)
+    assert P['ctx'].shape[1] + 7 == meta['fc'] and P['hist'].shape[1:] == (meta['H'], meta['fh']), '直前版の材料の形が模型と合わない'
+    ix = {(str(a), int(b), int(c)): i for i, (a, b, c) in enumerate(zip(P['track'], P['race_no'], P['umaban']))}
+    return {'W': Ws, 'ix': ix, 'hist': P['hist'].astype(np.float32), 'ctx': P['ctx'], 'bwp': P['bw_prev']}
+
+
+def resid_day(S, track, rno, nums, going, bws):
+    """nums = 取消を外した後の馬番・going = 今日のそのレースの馬場・bws = 馬番 → 今日の体重。
+    → 馬ごとの外した分(3 本の平均)か None(材料に無い馬・馬場が読めない・体重が全頭そろっていない)"""
+    if S is None:
+        return None
+    g = GOING.get(str(going or '').strip(), -1)
+    idx = [S['ix'].get((str(track), int(rno), int(u))) for u in nums]
+    tb = np.array([float(bws.get(int(u)) or np.nan) for u in nums])
+    if g < 0 or not 2 <= len(idx) <= MAXN or any(i is None for i in idx) or not np.all(tb > 0):
+        return None
+    idx = np.asarray(idx)
+    c = S['ctx'][idx].copy()
+    c[:, NH_COL] = (len(nums) - 11) / 3
+    go = np.zeros((len(nums), 4))
+    go[:, g] = 1.0
+    bwd = np.nan_to_num(np.clip(tb - S['bwp'][idx], -30, 30), nan=0.0) / 10
+    cd = np.column_stack([go, (tb - 470) / 30, bwd, np.zeros(len(nums))]).astype(np.float32)
+    c = np.concatenate([c, cd], 1)
+    return np.mean([S2.forward(W, S['hist'][idx], c) for W in S['W']], axis=0)
