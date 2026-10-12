@@ -18,13 +18,9 @@ on:
         description: '本番 nar_ai_marks(v3n-1・morning)に書く(yes/no)'
         required: false
         default: 'no'
-  # 2026-10-11 1 回目 = base-v1 の朝の便(nar-ai-feat)が終わったらすぐ(GitHub の schedule の 07:15 は 10/11 に動かず・09:15 は 42 分遅れた)。
-  #   ⛔nar-ai-feat が失敗・飛ばした便では動かない(下の jobs の if)。base-v1 の朝の行が無いレースは書かない = 2 回目で埋める
-  workflow_run:
-    workflows: [nar-ai-feat]
-    types: [completed]
-  schedule:
-    - cron: '15 0 * * *'    # 09:15 JST の予備(1 回目に base-v1 の行が無くて書かなかったレースを埋める)
+  # schedule:
+  #   - cron: '15 22 * * *'   # 07:15 JST(base-v1 の朝 06:30 の後)。手で 1〜2 日試してから付ける
+  #   - cron: '15 0 * * *'    # 09:15 JST(1 回目に base-v1 の行が無くて書かなかったレースを埋める)
 
 concurrency:
   group: nar-ai-v3n
@@ -35,7 +31,6 @@ permissions:
 
 jobs:
   predict:
-    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
@@ -63,7 +58,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-          WRITE: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_run') && 'yes' || github.event.inputs.write }}
+          WRITE: ${{ github.event_name == 'schedule' && 'yes' || github.event.inputs.write }}
           NAR_JOBS_AI: pipeline/ai
         run: |
           set -o pipefail
