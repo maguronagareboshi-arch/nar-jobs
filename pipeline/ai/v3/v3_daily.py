@@ -178,6 +178,18 @@ def main():
             log('当日版へ束の足し分', [c for c in ('b14_u', 'b19_u') if c in vb.columns], 'あり率', round(float(vb['b14_u'].notna().mean()), 3))
         except Exception as e:  # noqa: BLE001
             log('当日版へ束の足し分 失敗(当日版は第10版 + 体重のまま)', type(e).__name__, str(e)[:200])
+    if b12:  # 並び読み(決め 24・研究 nankan-ai-v3 seq2_day.py・seq2_prod_fit.py・2026-10-12): 第12版の上で学んだので束 f10k を足せた日だけ
+        try:  # 公式の表(V3_OFFICIAL)と土台 U から、その日の南関の出走馬の過去 10 走 → out/DAY_seq2.npz(当日の便が第12版の後に足す)
+            import t14_bundle
+            import seq2_live
+            if (seq2_live.SEQ2 / 'seq2_std.csv').exists() and not (seq2_live.OFFICIAL / 'runs.parquet').exists():
+                sys.path.append(str(HERE.parent / 'kochi'))  # 末尾に足す = v3 の同じ名前の台本を隠さない
+                import k0_dl  # 公式の表(全場・中央)を落とす = 読むだけ・約 3 分(便ではこの手順にだけ鍵がある)
+                seq2_live.OFFICIAL.mkdir(parents=True, exist_ok=True)
+                k0_dl.main([str(seq2_live.OFFICIAL).replace('\\', '/'), 'races', 'runs', 'jra', 'jrah'])
+            seq2_live.prep(day, t14_bundle.CACHE.get('U'), out, log=log)
+        except Exception as e:  # noqa: BLE001
+            log('並び読み 失敗(当日版は第12版のまま)', type(e).__name__, str(e)[:200])
     notes = {}
     try:  # ひとこと(表示だけ・予想の計算には使わない・失敗しても予想の表と書き込みは止めない)
         import v3_notes

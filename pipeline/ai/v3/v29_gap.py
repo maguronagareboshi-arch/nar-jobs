@@ -46,6 +46,7 @@ CY6 = ['cy_day_pct', 'cy_self', 'cy_stable', 'cy_int', 'cy_n14', 'cy_gap']
 HIST = ['bw_norm', 'BEST', 'PREVW', 'PREVF', 'PREVD']
 MODEL_FILE, META_FILE = 'v29_gap_y1.txt', 'v29_gap.json'
 DAY_META = 't11_day.json'  # 当日版の印の上乗せ(51 本 + 当日の体重 15 本・研究 nankan-ai-v3 src/f5_scripts/t11_day.py)
+SEQ2 = None  # 並び読み(決め 24・seq2_live.load の戻り)。live() が読む。無ければ当日版は第12版のまま
 DAY_MIN = 30      # 当日版の印は発走 30 分前から出す(体重はもう出ている・ユーザー 2026-10-01)
 DAY_LAST_MIN = 16  # 発走 15 分前を過ぎた印は DB のトリガーが捨てるので、その手前まで
 DECIDE_MIN = 10   # 発走 10 分前 = 締め切り(発走 2 分前)の 8 分前を過ぎたら決める
@@ -211,8 +212,20 @@ def day_marks(Bk, odds, w, going, dm, day):
         p3 = np.maximum(1 / (1 + np.exp(-(lg(p3p) + b[c].fillna(0.0).to_numpy(float)))), p1)
         p3p = _sum3(p3) if len(b) > 3 else np.minimum(p3, 1.0)
         used.append(c)
+    if used == ['b14_u', 'b19_u'] and SEQ2 is not None:  # 並び読み(決め 24・2026-10-12): 第12版の p3′ の logit に外した分を足し、p3 = max(·, p1)・合計 3
+        try:
+            import seq2_live
+            u = seq2_live.resid(SEQ2, Bk.track.iloc[0], int(Bk.race_no.iloc[0]), b, going)
+        except Exception as e:  # noqa: BLE001  並び読みが落ちても第12版の印は出す
+            log('並び読み 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
+            u = None
+        if u is not None:
+            p3 = np.maximum(1 / (1 + np.exp(-(lg(p3p) + u))), p1)
+            p3p = _sum3(p3) if len(b) > 3 else np.minimum(p3, 1.0)
+            used.append('seq2')
     stamp = 'v3-9 当日版(第10版 + 当日の体重 15 本・t11 + 談話の印 3 定数)' if not used else \
-        'v3-9 当日版(第12版 = 当日の体重 15 本と馬場・t11 + 談話の印 + 束 ' + '・'.join({'b14_u': 't14', 'b19_u': 'f10k'}[c] for c in used) + ')'
+        'v3-9 当日版(第12版 = 当日の体重 15 本と馬場・t11 + 談話の印 + 束 ' + '・'.join({'b14_u': 't14', 'b19_u': 'f10k'}[c] for c in used if c != 'seq2') + \
+        (' + 並び読み' if 'seq2' in used else '') + ')'
     d = pd.DataFrame({'num': b.umaban.astype(int).to_numpy(), 'p1': p1, 'p3': p3p, 'p3_raw': p3})
     d = d.sort_values(['p3', 'p1', 'num'], ascending=[False, False, True], kind='mergesort').reset_index(drop=True)
     marks = [{'num': int(x.num), 'mark': MARKS[i], 'score': round(float(x.p3) * 100, 1)} for i, x in enumerate(d.itertuples()) if i < 5]
@@ -464,6 +477,14 @@ def live(day, base_csv, mdir, write, until):
     except Exception as e:  # noqa: BLE001  当日版が読めなくても 10 分前の候補は出す
         log('当日版の模型 読めない', type(e).__name__)
         dm = None
+    global SEQ2
+    try:  # 並び読み(決め 24): 模型 = mdir の seq2_model.npz・seq2_prod.json、材料 = 前日の便の seq2.npz(土台 base_csv と同じ所)。無ければ第12版のまま
+        import seq2_live
+        SEQ2 = seq2_live.load(mdir, Path(base_csv).parent / 'seq2.npz')
+        log('並び読み', '読めた' if SEQ2 else '無し(第12版のまま)', SEQ2['n'] if SEQ2 else '')
+    except Exception as e:  # noqa: BLE001
+        SEQ2 = None
+        log('並び読み 読めない(第12版のまま)', type(e).__name__, str(e)[:200])
     has_s2 = {'p1_s2', 'p3_s2'} <= set(B.columns) and B.p1_s2.notna().any()
     try:
         tm = TRI.load(mdir)

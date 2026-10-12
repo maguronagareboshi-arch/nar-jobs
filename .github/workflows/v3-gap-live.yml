@@ -87,6 +87,12 @@ jobs:
           gh api "repos/$GITHUB_REPOSITORY/actions/artifacts/$AID/zip" > in/base.zip
           unzip -q -o in/base.zip -d in
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v29_base.csv.enc -out in/v29_base.csv
+          # 2026-10-12 決め 24: 並び読みの前日の材料(無ければ当日版は第12版のまま)
+          if [ -f in/seq2.npz.enc ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/seq2.npz.enc -out in/seq2.npz || echo "並び読みの材料を開けない"
+          else
+            echo "並び読みの材料なし(第12版のまま)"
+          fi
           V3_GAP_KEY=$(printf %s "$V3_GAP_KEY" | tr -d '\r\n'); export V3_GAP_KEY
           gh release download "${TAG:-v3-gap-model-20261001}" -p 'v3_gap_model.tar.gz.enc' -D in
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_GAP_KEY -in in/v3_gap_model.tar.gz.enc | tar -C gapm -xzf -
@@ -114,6 +120,12 @@ jobs:
             fi
           else
             echo "3 連単 d4 の包みなし(d1b のまま)"
+          fi
+          # 2026-10-12 決め 24: 並び読みの重み(seq2_model.npz・seq2_prod.json・V3_ASSET_KEY)。無ければ当日版は第12版のまま
+          if gh release download v3-seq2-20261012 -p 'v3_seq2.tar.gz.enc' -D in; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_seq2.tar.gz.enc | tar -C gapm -xzf - || echo "並び読みの模型を開けない"
+          else
+            echo "並び読みの模型なし(第12版のまま)"
           fi
           ls gapm; wc -l in/v29_base.csv
           echo "ok=yes" >> "$GITHUB_OUTPUT"

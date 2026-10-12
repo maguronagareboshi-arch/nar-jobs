@@ -164,6 +164,22 @@ jobs:
           rm -rf in/own in/v3_own.tar.gz.enc
           ls -l v3/kd v3/models/t9_* v3/models/t10_up* v3/t14/t14_bundle* v3/f10k
 
+      # 決め 24 = 並び読み(全場の過去 10 走を読む小さな模型・2026-10-12)の固定ファイル(時計のならし・重み)。
+      # 公式の表は表の手順の中で落とす(v3_daily → k0_dl・約 3 分)。無ければ材料を作らない = 当日版は第12版のまま
+      - name: download seq2 files
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-seq2-20261012 -p 'v3_seq2.tar.gz.enc' -D in
+          mkdir -p v3/seq2
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_seq2.tar.gz.enc | tar -C v3/seq2 -xzf -
+          rm -f in/v3_seq2.tar.gz.enc
+          ls -l v3/seq2
+
       # 束 t14 の談話 14 列: 本文 → intfloat/multilingual-e5-small(手元と同じ版・CPU)。失敗しても第10版 + 談話の印のまま進む
       - name: install text model (t14 danwa)
         if: steps.pc.outputs.run == 'yes'
@@ -201,6 +217,8 @@ jobs:
           KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}  # 談話の印: nar_kb_danwa に無いレースを競馬ブックの頁から読む(danwa_marks.py)
           KEIBABOOK_PASSWORD: ${{ secrets.KEIBABOOK_PASSWORD }}
           KB_DATA_DIR: /tmp/kbdata_v3
+          V3_SEQ2: v3/seq2  # 並び読みの時計のならし(上の download seq2 files)
+          V3_OFFICIAL: v3/official  # 並び読みの公式の表(v3_daily が落とす)
         run: |
           set -o pipefail
           mkdir -p out
@@ -257,6 +275,12 @@ jobs:
           mkdir -p sealed_v29
           [ -f "out/${DAY}_v29_base.csv" ] || { echo "v29 base が無い"; exit 0; }
           openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:V3_ASSET_KEY -in "out/${DAY}_v29_base.csv" -out sealed_v29/v29_base.csv.enc
+          # 決め 24: 並び読みの材料(無い日 = 当日版は第12版のまま)
+          if [ -f "out/${DAY}_seq2.npz" ]; then
+            openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:V3_ASSET_KEY -in "out/${DAY}_seq2.npz" -out sealed_v29/seq2.npz.enc
+          else
+            echo "並び読みの材料なし(当日版は第12版のまま)"
+          fi
           ls -l sealed_v29
       - uses: actions/upload-artifact@v7
         if: always() && steps.pc.outputs.run == 'yes'
