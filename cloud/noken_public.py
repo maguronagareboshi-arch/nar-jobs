@@ -3500,7 +3500,7 @@ def chihou_enrich(prefix, days, base=None, key=None):
 # ⛔split の無い日は **no を付けない**(偽の番号を DB に残さない= 画面は「検査」見出しに戻る)。
 HYOGO_SPLIT_KEY = "hyogo_noken_split"
 # 提供データから足す列(公式に無いもの)。⛔time/weight/ok は公式を残す
-SPLIT_ADD_KEYS = ("fin", "umaban", "pass_order", "last3f")
+SPLIT_ADD_KEYS = ("fin", "umaban", "pass_order", "last3f", "jockey")   # 10/12 騎手(公式に列が無い)
 UNKNOWN_KIND = "組不明"
 
 
