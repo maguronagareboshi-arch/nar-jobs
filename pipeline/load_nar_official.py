@@ -150,6 +150,11 @@ def conv_run(h):
     # §38 R-0(2026-08-27): 公式CSVの 生年月日/調教師所属。正規化が2列を持っていないとき(= 2026-08-27 より前に
     # 作られた正規化JSON)は **列ごと送らない**。null で送ると既に入っている値を消してしまうため(§27.2 race_kind も同じ)
     add_optional(row, h, OPTIONAL_RUN_COLS)
+    # 騎手の免許番号(出馬表ページの騎手リンク k_riderLicenseNo)。⛔値があるときだけ送る
+    # (月次/日次ZIPの CSV には無い= null で送ると、ページから入れた番号を消してしまう)
+    lic = blank(h.get("jockey_license"))
+    if lic is not None:
+        row["jockey_license"] = str(lic)
     return row
 
 
@@ -474,9 +479,32 @@ def guard_before_upsert(url, key, dedup, log=print, fetch=None):
     return n_run, n_race
 
 
+def has_column(url, key, table, col):
+    """PostgREST で列が引けるか(DDL 前は 400)。読めないときも False= 送らない側に倒す。"""
+    req = urllib.request.Request(f"{url}/rest/v1/{table}?select={col}&limit=1",
+                                 headers={"apikey": key, "Authorization": f"Bearer {key}", "User-Agent": UA})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r:
+            return r.status < 300
+    except Exception:
+        return False
+
+
+def drop_jockey_license_if_missing(url, key, dedup, log=print):
+    """nar_runs.jockey_license が DB に無ければ(DDL 前)行から外す= 今までどおりの列で送る。"""
+    rows = [r for r in dedup.get("runs", {}).values() if "jockey_license" in r]
+    if not rows or has_column(url, key, "nar_runs", "jockey_license"):
+        return
+    for r in rows:
+        r.pop("jockey_license", None)
+    log(f"  nar_runs.jockey_license が無い(DDL 前)= 免許番号 {len(rows):,} 行分は送らない")
+
+
 def upsert_all(url, key, dedup, batch=BATCH, only=None, log=print):
     """3表を順に upsert。成功 0 / 失敗 1(失敗した表で止まる。何度流しても同じ結果)。"""
     batch = max(50, int(batch or BATCH))
+    if only in (None, "runs"):
+        drop_jockey_license_if_missing(url, key, dedup, log=log)
     if only in (None, "runs", "races"):
         try:
             guard_before_upsert(url, key, dedup, log=log)

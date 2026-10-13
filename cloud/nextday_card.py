@@ -100,6 +100,8 @@ def parse_race(h, date, track, race_no):
         num = re.search(r'class="horseNum">\s*(\d+)\s*</td>', b)
         hn = re.search(r'class="horseName"[^>]*>(.*?)</a>', b, re.S)
         jk = re.search(r'class="jockeyName"[^>]*>(.*?)<span class="jockeyarea">', b, re.S)
+        # 騎手の免許番号= 騎手リンク RiderMark?k_riderLicenseNo=N(同じ略称の 2 人= 山本聡 31220/31139 を見分ける)。無ければ None
+        jl = re.search(r'RiderMark\?k_riderLicenseNo=(\d+)', b)
         sa = re.search(r"<span[^>]*>\s*(牡|牝|セン|セ|騸)\s*(\d+)\s*</span>", b)
         bd = re.search(r"<td>\s*(\d{2})\.(\d{2})生\s*</td>", b)
         wt = re.search(r"<td>\s*([^\d<]*?)\s*(\d+\.\d)\s*　", b)
@@ -132,6 +134,7 @@ def parse_race(h, date, track, race_no):
             "birth_date": birth,
             "sire": sire, "dam": dam, "broodmare_sire": bms,
             "jockey": _clean(jk.group(1)) if jk else "",
+            "jockey_license": jl.group(1) if jl else None,
             "trainer": _clean(tr.group(1)) if tr else "",
             "trainer_area": _clean(tr.group(2)) if tr else "",
             "owner": owner, "breeder": breeder,
