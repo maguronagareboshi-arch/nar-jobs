@@ -67,9 +67,10 @@ select m.model, m.track, m.race_date, m.race_no, m.timing, m.num, m.mark, m.pos
 from tmp_ai_mk0 m
 join public.nar_races r on (r.track, r.race_date, r.race_no) = (m.track, m.race_date, m.race_no)
 where r.post_time ~ '^[0-9]{4}$'
-  -- 画面は「前日分まで集計」= 当日(JST)のレースは数えない(2026-10-10 S03)。
+  -- 当日(JST)の確定分まで数える(2026-10-13= 夜 22:15 の nar-stats でその日の分も入れる・旧 10/10 S03 は前日分まで)。
+  -- 結果は下の tmp_ai_res で決着済みだけに絞るので、まだ走っていないレースは入らない。
   -- 後続の tmp_ai_res / hd / ex / u / exu はすべてここから作るので、通算・印別・人気帯・月別・日別・流し・from/to が一度にそろう
-  and m.race_date < (now() at time zone 'Asia/Tokyo')::date
+  and m.race_date <= (now() at time zone 'Asia/Tokyo')::date
   and m.computed_at < ((r.race_date::text || ' ' || substr(r.post_time, 1, 2) || ':' || substr(r.post_time, 3, 2))::timestamp
                        at time zone 'Asia/Tokyo');
 
@@ -89,7 +90,9 @@ join public.nar_runs u on (u.track, u.race_date, u.race_no, u.runner_number) = (
 left join public.nar_race_payouts rp on (rp.track, rp.race_date, rp.race_no) = (k.track, k.race_date, k.race_no)
 where coalesce(u.finish_note, '') !~ '取消|除外'
   and exists (select 1 from public.nar_runs w
-              where w.track = k.track and w.race_date = k.race_date and w.race_no = k.race_no and w.finish = 1);
+              where w.track = k.track and w.race_date = k.race_date and w.race_no = k.race_no and w.finish = 1)
+  -- 10/13: 当日分は払戻が入ってから数える(着順だけ先に入った回に回収 0 で数えない)
+  and (k.race_date < (now() at time zone 'Asia/Tokyo')::date or rp.payouts is not null);
 
 -- ◎から○▲△へ流した馬券(馬連・馬単・三連単)の成績(2026-09-10 追加)。
 -- 買い方はこれだけ= ◎を軸に相手全部(5 頭なら ○▲△△ の 4 頭= 馬連 4・馬単 4・三連単 12 点)へ流す・1組100円。⛔点数は規則で3点/6点に固定せず、
