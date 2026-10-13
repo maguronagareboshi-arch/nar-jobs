@@ -1,0 +1,85 @@
+# 全レース画面の見回り(2026-10-13)。yukochi.com の当日の全場・全レースと場ページを 1280/375 で開いて、
+#   HTTP 状態・console エラー・取得中の残り・行 0 の表・横送り・NaN/undefined/null・転送 を測る(読むだけ)。
+#   崩れが 1 件でもあれば、URL と症状の一覧をログの先頭に出して赤(= 所有者へ失敗メール)+ heartbeat race_sweep に fail。
+#   崩れ 0・開催 0 の日は緑+ ok。崩れた URL の 1 画面スクショは artifact race-sweep に残す。
+#   手本= nar-site/research/race-sweep-20261013/sweep.mjs。台本= cloud/race_sweep.py。
+name: race-sweep
+
+on:
+  schedule:
+    - cron: '30 2 * * *'    # JST 11:30 出馬表
+    - cron: '40 13 * * *'   # JST 22:40 結果・払戻の後
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'YYYY-MM-DD(空= JST の今日)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+
+concurrency:
+  group: race-sweep
+  cancel-in-progress: false
+
+jobs:
+  sweep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install playwright chromium
+        run: |
+          pip install -q playwright
+          python -m playwright install --with-deps chromium
+      - name: sweep all race pages
+        id: sweep
+        env:
+          IN_DATE: ${{ github.event.inputs.date }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          set +e
+          if [ -n "$IN_DATE" ]; then D="--date $IN_DATE"; else D=""; fi
+          python cloud/race_sweep.py $D --out race-sweep-out > sweep.log 2>&1
+          rc=$?
+          echo "rc=$rc" >> "$GITHUB_OUTPUT"
+          echo "===== 崩れの一覧(先頭)====="
+          if [ -f race-sweep-out/summary.txt ]; then cat race-sweep-out/summary.txt; else echo "summary が無い(台本が回らなかった rc=$rc)"; fi
+          if [ -f race-sweep-out/summary.txt ]; then { echo '```'; cat race-sweep-out/summary.txt; echo '```'; } >> "$GITHUB_STEP_SUMMARY"; fi
+          echo "===== 全ログ ====="
+          cat sweep.log
+          exit 0
+      - name: upload shots of broken pages
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: race-sweep
+          path: |
+            race-sweep-out/
+            sweep.log
+          retention-days: 14
+          if-no-files-found: ignore
+      - name: heartbeat and result
+        if: always()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          RC: ${{ steps.sweep.outputs.rc }}
+        run: |
+          if [ "$RC" = "0" ]; then
+            python3 cloud/beat.py race_sweep ok
+            exit 0
+          fi
+          if [ "$RC" = "1" ]; then
+            n=$(($(wc -l < race-sweep-out/summary.txt) - 1))
+            python3 cloud/beat.py race_sweep fail "崩れ ${n} 件"
+            echo "::error::崩れ ${n} 件(一覧は sweep 手順の先頭・スクショは artifact race-sweep)"
+          else
+            python3 cloud/beat.py race_sweep fail "台本が回らなかった rc=${RC:-none}"
+            echo "::error::race_sweep.py が回らなかった(rc=${RC:-none})"
+          fi
+          exit 1
