@@ -121,11 +121,16 @@ jobs:
           else
             echo "3 連単 d4 の包みなし(d1b のまま)"
           fi
-          # 2026-10-12 決め 24: 並び読みの重み(seq2_model.npz・seq2_prod.json・V3_ASSET_KEY)。無ければ当日版は第12版のまま
-          if gh release download v3-seq2-20261012 -p 'v3_seq2.tar.gz.enc' -D in; then
+          # 2026-10-12 決め 24 → 2026-10-13 決め 25: 並び読みの重み(seq2_model.npz・seq2_prod.json・V3_ASSET_KEY)。無ければ当日版は第12版のまま
+          if gh release download v3-seq3-20261013 -p 'v3_seq2.tar.gz.enc' -D in; then
             openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_seq2.tar.gz.enc | tar -C gapm -xzf - || echo "並び読みの模型を開けない"
           else
             echo "並び読みの模型なし(第12版のまま)"
+          fi
+          # 前の版(決め 24)の重み = 版の切り替えの日に前日の材料が前の版の形のとき使う(seq2_live.load が形で選ぶ)
+          mkdir -p in/prev gapm/prev
+          if gh release download v3-seq2-20261012 -p 'v3_seq2.tar.gz.enc' -D in/prev; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/prev/v3_seq2.tar.gz.enc | tar -C gapm/prev -xzf - || echo "前の版の並び読みの模型を開けない"
           fi
           ls gapm; wc -l in/v29_base.csv
           echo "ok=yes" >> "$GITHUB_OUTPUT"

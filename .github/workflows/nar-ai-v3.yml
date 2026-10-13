@@ -165,6 +165,7 @@ jobs:
           ls -l v3/kd v3/models/t9_* v3/models/t10_up* v3/t14/t14_bundle* v3/f10k
 
       # 決め 24 = 並び読み(全場の過去 10 走を読む小さな模型・2026-10-12)の固定ファイル(時計のならし・重み)。
+      # 決め 25(2026-10-13)= 次の版(DEFG + 着差の補助)。同じ名前の包み・seq2_live.prep が seq2_prod.json の形で材料の作りを選ぶ。
       # 公式の表は表の手順の中で落とす(v3_daily → k0_dl・約 3 分)。無ければ材料を作らない = 当日版は第12版のまま
       - name: download seq2 files
         if: steps.pc.outputs.run == 'yes'
@@ -174,7 +175,7 @@ jobs:
         run: |
           set -o pipefail
           V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
-          gh release download v3-seq2-20261012 -p 'v3_seq2.tar.gz.enc' -D in
+          gh release download v3-seq3-20261013 -p 'v3_seq2.tar.gz.enc' -D in
           mkdir -p v3/seq2
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_seq2.tar.gz.enc | tar -C v3/seq2 -xzf -
           rm -f in/v3_seq2.tar.gz.enc

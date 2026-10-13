@@ -481,7 +481,7 @@ def live(day, base_csv, mdir, write, until):
     try:  # 並び読み(決め 24): 模型 = mdir の seq2_model.npz・seq2_prod.json、材料 = 前日の便の seq2.npz(土台 base_csv と同じ所)。無ければ第12版のまま
         import seq2_live
         SEQ2 = seq2_live.load(mdir, Path(base_csv).parent / 'seq2.npz')
-        log('並び読み', '読めた' if SEQ2 else '無し(第12版のまま)', SEQ2['n'] if SEQ2 else '')
+        log('並び読み', '読めた' if SEQ2 else '無し(第12版のまま)', SEQ2['n'] if SEQ2 else '', SEQ2.get('ver', '') if SEQ2 else '')  # ver = now / prev(切り替えの日)
     except Exception as e:  # noqa: BLE001
         SEQ2 = None
         log('並び読み 読めない(第12版のまま)', type(e).__name__, str(e)[:200])

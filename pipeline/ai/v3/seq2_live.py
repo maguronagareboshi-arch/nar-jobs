@@ -11,6 +11,9 @@
      = 当日の馬場・頭数(オッズのある馬)・体重を入れて 3 本の模型(numpy で計算・torch は要らない)の平均。
      day_marks が第12版の p3′ の logit に足し、p3 = max(·, p1)・合計 3 にそろえる(研究の tj.renorm と同じ)。
 固定ファイル(前日の便 = V3_SEQ2・当日の便 = 模型の置き場 gapm): seq2_std.csv(時計のならし)・seq2_model.npz(重み)・seq2_prod.json。
+決め 25(2026-10-13・研究 seq3_day.py・seq3_prod_fit.py): 同じ名前の固定ファイルで次の版(DEFG + 着差の補助)を読む。seq2_prod.json の fh が
+48 + 15(= 63)なら build が過去走ごとに D(その日の馬場差を引いた時計・3 着馬との時計差・中央のペース)・F(前残り・内外の偏り・その走りの枠)・
+G(その走りの騎手・調教師が今日と同じか・その時点の騎手の 3 着内率と今日との差)を、今回の項目に E(取消・除外の回数・最後からの日数)を足す。
 """
 import json
 import math
@@ -73,9 +76,13 @@ def runs_all(off=None):
     r['rkey'] = r.track + '|' + r.race_date.astype(str).str[:10] + '|' + r.race_no.astype(str)
     r['fs'], r['rl3'] = np.nan, np.nan
     r = r.rename(columns={'runner_number': 'umaban'})
+    r['pace'] = np.nan
     cols = ['track', 'race_date', 'race_no', 'umaban', 'hk', 'ven', 'turf', 'jra', 'distance_m', 'going', 'prize1', 'carried_weight',
-            'body_weight', 'finish', 'finish_note', 'time_sec', 'last3f', 'p1', 'p4', 'age', 'sex', 'gate', 'plc', 'rkey', 'fs', 'rl3']
+            'body_weight', 'finish', 'finish_note', 'time_sec', 'last3f', 'p1', 'p4', 'age', 'sex', 'gate', 'plc', 'rkey', 'fs', 'rl3',
+            'jockey', 'trainer', 'pace']  # jockey・trainer・pace は決め 25 の材料だけが使う(決め 24 の列は変わらない)
     j = pd.read_parquet(off / 'jra.parquet')
+    jp = j[['kb_race_id', 'pace']].dropna().drop_duplicates('kb_race_id')  # 研究と同じ = レースごとの最初のペース
+    jpace = dict(zip('J|' + jp.kb_race_id.astype(str), jp.pace))
     j = j[j.surface.isin(['ダ', '芝'])].copy()
     jh = pd.read_parquet(off / 'jrah.parquet')[['kb_horse_id', 'horse_name', 'birth_year']].drop_duplicates('kb_horse_id')
     j = j.merge(jh, on='kb_horse_id', how='left')
@@ -88,13 +95,14 @@ def runs_all(off=None):
     j['p4'] = pd.to_numeric(ps.str[-1], errors='coerce')
     j['age'], j['sex'] = np.nan, None
     j['plc'], j['rkey'], j['fs'], j['rl3'] = j.place, 'J|' + j.kb_race_id.astype(str), j.field_size, j.race_last3f
+    j['trainer'], j['pace'] = None, j.rkey.map(jpace)
     d = pd.concat([r[cols], j[cols]], ignore_index=True)
     d['race_date'] = d.race_date.astype(str).str[:10]
     d = d[~d.finish_note.isin(CANCEL)].copy()
     return d
 
 
-def build(d, U, std, days):
+def build(d, U, std, days, ext=False, canc=None):
     """研究 seq2_day.build と同じ式(時計のならしは固定の表 std・SI は土台 U)。予想する行 = days の南関の行。
     → T(予想する行の鍵と今回の項目)・hist(n, 10, 48)・ctx(n, 25 = 当日の 5:9・14・16・17・18 は 0)・bw_prev(n)"""
     fin = pd.to_numeric(d.finish, errors='coerce')
@@ -145,7 +153,10 @@ def build(d, U, std, days):
     hk, dn = d.hk.to_numpy(), d.dn.to_numpy()
     pos = d.groupby('hk').cumcount().to_numpy()
     dist, ven = d.distance_m.to_numpy(float), d.ven.to_numpy()
-    hist = np.zeros((len(tgt), H, FR + 4), np.float32)
+    NEW = 15 if ext else 0
+    if ext:
+        X3 = _ext(d)
+    hist = np.zeros((len(tgt), H, FR + NEW + 4), np.float32)
     for k in range(1, H + 1):
         j = tgt - k
         ok = (pos[tgt] >= k) & (j >= 0)
@@ -154,14 +165,23 @@ def build(d, U, std, days):
         jj, ii = jj[same], ii[same]
         s = H - k
         hist[ii, s, :FR] = run[jj]
-        hist[ii, s, FR] = np.log1p(dn[tgt[ii]] - dn[jj]) / 3 - 1.5
-        hist[ii, s, FR + 1] = np.nan_to_num((dist[tgt[ii]] - dist[jj]) / 300)
-        hist[ii, s, FR + 2] = (ven[tgt[ii]] == ven[jj])
-        hist[ii, s, FR + 3] = 1.0
+        if ext:  # 研究 seq3_day の load('DEFG') の並び = D 6・F 5・G 4
+            it = tgt[ii]
+            hist[ii, s, FR:FR + 6] = X3['D'][jj]
+            hist[ii, s, FR + 6:FR + 11] = X3['F'][jj]
+            hist[ii, s, FR + 11] = (X3['jk'][jj] == X3['jk'][it])
+            hist[ii, s, FR + 12] = X3['loc'][jj] & (X3['tr'][jj] == X3['tr'][it])
+            hist[ii, s, FR + 13] = np.nan_to_num(X3['jr'][jj] - 0.25) * 4
+            hist[ii, s, FR + 14] = np.nan_to_num(X3['jr'][it] - X3['jr'][jj]) * 4
+        T_ = FR + NEW
+        hist[ii, s, T_] = np.log1p(dn[tgt[ii]] - dn[jj]) / 3 - 1.5
+        hist[ii, s, T_ + 1] = np.nan_to_num((dist[tgt[ii]] - dist[jj]) / 300)
+        hist[ii, s, T_ + 2] = (ven[tgt[ii]] == ven[jj])
+        hist[ii, s, T_ + 3] = 1.0
     T = d.iloc[tgt].reset_index(drop=True)
     nprev = hist[:, :, -1].sum(1)
-    gap = np.where(nprev > 0, hist[:, H - 1, FR], 0)
-    nnk = (hist[:, :, FR + 3] * hist[:, :, 12:16].sum(2)).sum(1)
+    gap = np.where(nprev > 0, hist[:, H - 1, FR + NEW], 0)
+    nnk = (hist[:, :, FR + NEW + 3] * hist[:, :, 12:16].sum(2)).sum(1)
     mon = pd.to_datetime(T.race_date).dt.month.to_numpy()
     lpt = np.log(T.prize1.where(T.prize1 > 0))
     z = np.zeros(len(T))
@@ -170,7 +190,69 @@ def build(d, U, std, days):
         lpt.fillna(14) - 14, (T.carried_weight.fillna(55) - 55) / 2, (T.age.fillna(4) - 4) / 2, T.sex.eq('牝'), T.sex.eq('セ'),
         z, (T.gate.fillna(4) - 4) / 3, z, z, z,
         gap, nprev == 0, nprev / 10, nnk / 10, np.sin(mon / 6 * np.pi), np.cos(mon / 6 * np.pi)]).astype(np.float32)
+    if ext:
+        ctx = np.concatenate([ctx, _cancel_ctx(canc, T)], 1)
     return T, hist, ctx, T.bw_prev.to_numpy(float)
+
+
+def _ext(d):
+    """決め 25 の過去走ごとの材料(研究 seq3_day.build の D・F・G と同じ式)。d = build の中の並べ替えの後の表。"""
+    n = len(d)
+    loc = d.jra.to_numpy() == 0
+    rk = pd.factorize(d.rkey)[0]
+    tzv = d.tz.to_numpy(float)
+    dk = pd.factorize(d.plc + '|' + d.race_date + '|' + d.turf.astype(str))[0]
+    tl = pd.Series(np.where(loc, tzv, np.nan))
+    dm = tl.groupby(dk).transform('mean').to_numpy()
+    dc = tl.notna().groupby(dk).transform('sum').to_numpy()
+    tzd = np.where(loc & (dc >= 12), tzv - dm, np.nan)
+    tsv = d.time_sec.where((d.stop == 0) & (d.time_sec > 0)).to_numpy(float)
+    o = np.lexsort((np.where(np.isnan(tsv), np.inf, tsv), rk))
+    rnk = np.empty(n, np.int64)
+    rnk[o] = pd.Series(rk[o]).groupby(rk[o]).cumcount().to_numpy()
+    sel3 = (rnk == 2) & ~np.isnan(tsv)
+    t3 = pd.Series(rk).map(pd.Series(tsv[sel3], index=rk[sel3])).to_numpy(float)
+    b3 = np.where(loc, np.clip((tsv - t3) / (d.distance_m.to_numpy(float) / 1000), -3, 5), np.nan)
+    pc = d.pace.astype(str).to_numpy()
+    D = np.column_stack([np.nan_to_num(tzd), np.isnan(tzd), np.nan_to_num(b3) / 2, pc == 'S', pc == 'M', pc == 'H']).astype(np.float32)
+    frv = d.frel.to_numpy(float)
+    p1v = d.p1.to_numpy(float)
+    gtv = pd.to_numeric(d.gate, errors='coerce').to_numpy(float)
+    fr_front = np.where(loc & (p1v <= 3), frv, np.nan)
+    rf_ = pd.Series(fr_front).groupby(rk).transform('mean').to_numpy()
+    df_ = pd.Series(fr_front).groupby(dk).transform('mean').to_numpy()
+    inn = pd.Series(np.where(loc & (gtv <= 2), frv, np.nan)).groupby(dk).transform('mean').to_numpy()
+    out_ = pd.Series(np.where(loc & (gtv >= 7), frv, np.nan)).groupby(dk).transform('mean').to_numpy()
+    F = np.column_stack([np.nan_to_num(rf_ - 0.45), np.nan_to_num(df_ - 0.45), np.nan_to_num(inn - out_), np.isnan(rf_),
+                         np.nan_to_num((gtv - 4.5) / 3.5)]).astype(np.float32)
+    jk = d.jockey.fillna('?').to_numpy()
+    J_ = pd.DataFrame({'jk': jk, 'dn': d.dn.to_numpy(), 'y': d.Y3.to_numpy(float), 'isl': loc})
+    J_ = J_[J_.isl]
+    day = J_.groupby(['jk', 'dn']).y.agg(['sum', 'size']).reset_index().sort_values(['jk', 'dn'])
+    day['W'] = day.groupby('jk')['sum'].cumsum() - day['sum']
+    day['N'] = day.groupby('jk')['size'].cumsum() - day['size']
+    day['jr'] = (day.W + 0.25 * 30) / (day.N + 30)
+    jr = pd.DataFrame({'jk': jk, 'dn': d.dn.to_numpy()}).merge(day[['jk', 'dn', 'jr']], on=['jk', 'dn'], how='left').jr.to_numpy()
+    return {'D': D, 'F': F, 'jk': jk, 'tr': d.trainer.fillna('?').to_numpy(), 'jr': np.where(loc, jr, np.nan), 'loc': loc}
+
+
+def _cancel_ctx(canc, T):
+    """決め 25 の今回の項目 E = 取消・除外の過去 365 日の回数 / 2・最後の取消からの近さ 1 / (1 + 日数 / 30)(今回の日より前だけ)。"""
+    e1, e2 = np.zeros(len(T)), np.zeros(len(T))
+    if canc is not None and len(canc):
+        rr = canc[canc.finish_note.isin(CANCEL) & (canc.track != '帯広ば')].copy()
+        rr['hk'] = rr.horse_name.str.strip() + '|' + (rr.race_date.astype(str).str[:4].astype(int) - rr.age).astype('Int64').astype(str)
+        rr['dn'] = (pd.to_datetime(rr.race_date.astype(str).str[:10]) - pd.Timestamp('2014-01-01')).dt.days.astype(float)
+        cv = rr.groupby('hk').dn.apply(lambda x: np.sort(x.to_numpy())).to_dict()
+        for i, (h, t_) in enumerate(zip(T.hk.to_numpy(), T.dn.to_numpy())):
+            a = cv.get(h)
+            if a is None:
+                continue
+            k = np.searchsorted(a, t_, side='left')
+            if k:
+                e1[i] = k - np.searchsorted(a, t_ - 365, side='left')
+                e2[i] = 1.0 / (1.0 + (t_ - a[k - 1]) / 30)
+    return np.column_stack([e1 / 2, e2]).astype(np.float32)
 
 
 def day_fill(ctx, bw_prev, going, nh, tb):
@@ -206,10 +288,13 @@ def prep(day, U, out, log=_log):
             U is not None, (OFFICIAL / 'runs.parquet').exists(), (SEQ2 / 'seq2_std.csv').exists())
         return None
     std = pd.read_csv(SEQ2 / 'seq2_std.csv', encoding='utf-8')
+    mj = SEQ2 / 'seq2_prod.json'
+    ext = mj.exists() and int(json.loads(mj.read_text(encoding='utf-8')).get('fh', 48)) == 48 + 15  # 決め 25 の版
+    canc = pd.read_parquet(OFFICIAL / 'runs.parquet', columns=['track', 'race_date', 'horse_name', 'age', 'finish_note']) if ext else None
     d = runs_all(OFFICIAL)
     last = d[(d.jra == 0) & d.finish.notna()].race_date.max()
     log('並び読み 公式の表', len(d), '走・中央', int((d.jra == 1).sum()), '・着順のある最後の日', last)
-    T, hist, ctx, bwp = build(d, U, std, [day])
+    T, hist, ctx, bwp = build(d, U, std, [day], ext=ext, canc=canc)
     ok, v = watch(T, hist)
     log('並び読み 見張り', {k: round(x, 3) if isinstance(x, float) else x for k, x in v.items()}, '→', '○' if ok else '× = 書かない')
     if not ok:
@@ -217,7 +302,7 @@ def prep(day, U, out, log=_log):
     p = Path(out) / f'{day}_seq2.npz'
     np.savez_compressed(p, track=T.track.to_numpy().astype('U4'), race_no=T.race_no.to_numpy(int), umaban=T.umaban.to_numpy(int),
                         hk=T.hk.to_numpy().astype(str), hist=hist, ctx=ctx, bw_prev=bwp)
-    log('並び読み 材料', p.name, hist.shape, ctx.shape, 'R', T[['track', 'race_no']].drop_duplicates().shape[0])
+    log('並び読み 材料', p.name, hist.shape, ctx.shape, 'R', T[['track', 'race_no']].drop_duplicates().shape[0], '版', '決め 25' if ext else '決め 24')
     return p
 
 
@@ -277,13 +362,20 @@ def load(mdir, prep_npz):
     mdir, prep_npz = Path(mdir), Path(prep_npz)
     if not (mdir / 'seq2_model.npz').exists() or not prep_npz.exists():
         return None
-    meta = json.loads((mdir / 'seq2_prod.json').read_text(encoding='utf-8'))
-    Z = np.load(mdir / 'seq2_model.npz')
-    Ws = [{k.split('/', 1)[1]: Z[k].astype(float) for k in Z.files if k.startswith(f's{s}/')} for s in meta['seeds']]
     P = np.load(prep_npz)
-    assert P['hist'].shape[1:] == (meta['H'], meta['fh']) and P['ctx'].shape[1] == meta['fc'], '並び読みの材料の形が模型と合わない'
+    # 決め 25: 版の切り替えの日は前日の材料が前の版の形 → 前の版の重み(mdir/prev = リリース v3-seq2-20261012)で読む
+    for md in (mdir, mdir / 'prev'):
+        if not (md / 'seq2_model.npz').exists():
+            continue
+        meta = json.loads((md / 'seq2_prod.json').read_text(encoding='utf-8'))
+        if P['hist'].shape[1:] == (meta['H'], meta['fh']) and P['ctx'].shape[1] == meta['fc']:
+            break
+    else:
+        raise AssertionError('並び読みの材料の形が模型と合わない')
+    Z = np.load(md / 'seq2_model.npz')
+    Ws = [{k.split('/', 1)[1]: Z[k].astype(float) for k in Z.files if k.startswith(f's{s}/')} for s in meta['seeds']]
     ix = {(str(a), int(b), int(c)): i for i, (a, b, c) in enumerate(zip(P['track'], P['race_no'], P['umaban']))}
-    return {'W': Ws, 'ix': ix, 'hist': P['hist'], 'ctx': P['ctx'], 'bw_prev': P['bw_prev'], 'n': len(ix)}
+    return {'W': Ws, 'ix': ix, 'hist': P['hist'], 'ctx': P['ctx'], 'bw_prev': P['bw_prev'], 'n': len(ix), 'ver': 'prev' if md != mdir else 'now'}
 
 
 def resid(S, track, rno, b, going):
