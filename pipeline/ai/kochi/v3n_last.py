@@ -50,6 +50,9 @@ def q(s):
     return urllib.parse.quote(s)
 
 
+SEQ_FORM = ''  # 直前版の並び読みの版(load_day の重みの添え書き)= 行の meta.seq_day に残す(本番の行で版を確かめる)
+
+
 def relabel(meta, gone, ud=None):
     """朝の meta と外す馬番の集合 → (marks, 新しい meta)。外すと 1 頭も残らないときは None。
     ud = 直前版の並び読みの外した分(馬番 → logit・当日の馬場と体重入り)。あれば朝の u の代わりに足し meta.direct = True"""
@@ -94,6 +97,7 @@ def relabel(meta, gone, ud=None):
         'from': 'morning',
         'direct': ud is not None,
         **({'u_day': {str(k): round(float(v), 4) for k, v in ud.items()}} if ud is not None else {}),
+        **({'seq_day': SEQ_FORM} if ud is not None and SEQ_FORM else {}),
     })
     return marks, new
 
@@ -148,6 +152,8 @@ def main():
     try:
         import k29_seq_live as SQ
         SD = SQ.load_day(arg('--prep-file', 'today/v3n_seq_prep.npz'))
+        global SEQ_FORM
+        SEQ_FORM = (SD or {}).get('form', '')
     except Exception as e:  # noqa: BLE001
         print('並び読み 直前版を読めない = 取消の割り直しだけ', type(e).__name__, str(e)[:160])
         SD = None

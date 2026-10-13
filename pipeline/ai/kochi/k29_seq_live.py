@@ -25,8 +25,9 @@ H, MAXN = 10, 16
 LOC = ['大井', '川崎', '船橋', '浦和', '門別', '盛岡', '水沢', '金沢', '笠松', '名古屋', '園田', '姫路', '高知', '佐賀']
 
 
-def build(d, std, day, tracks):
-    """研究 k29_seq.build と同じ式(時計のならしは固定の表・SI は空)。予想する行 = day の tracks の行。→ T・hist(n, 10, 48)・ctx(n, 28)"""
+def build(d, std, day, tracks, g=False):
+    """研究 k29_seq.build と同じ式(時計のならしは固定の表・SI は空)。予想する行 = day の tracks の行。→ T・hist(n, 10, 48)・ctx(n, 28)
+    g = True(第 8 版の直前版だけ)= runs_all の騎手・調教師から過去走ごとに 5 列を足す(研究 k44_seq3.build と同じ式)→ hist(n, 10, 53)"""
     fin = pd.to_numeric(d.finish, errors='coerce')
     stop = fin.isna() | d.finish_note.isin(['中止', '競走中止', '落馬'])
     isj = d.jra.to_numpy() == 1
@@ -67,11 +68,15 @@ def build(d, std, day, tracks):
         np.full(len(d), 0.0), np.full(len(d), 64 / 25 - 2.5), np.full(len(d), 50 / 35 - 1.4), np.isnan(na),  # 南関の SI は空(研究と同じ)
         pd.Series(d.l3j).fillna(0).to_numpy() / 2]).astype(np.float32)
     FR = run.shape[1]
+    nn_ = NEW if g else 0
+    if nn_:
+        G = g_cols(d)
     tgt = np.where(d.track.isin(tracks) & (d.race_date == day))[0]
     hk, dn = d.hk.to_numpy(), d.dn.to_numpy()
     pos = d.groupby('hk').cumcount().to_numpy()
     dist, ven = d.distance_m.to_numpy(float), d.ven.to_numpy()
-    hist = np.zeros((len(tgt), H, FR + 4), np.float32)
+    hist = np.zeros((len(tgt), H, FR + nn_ + 4), np.float32)
+    T_ = FR + nn_
     for k in range(1, H + 1):
         j = tgt - k
         ok = (pos[tgt] >= k) & (j >= 0)
@@ -80,15 +85,22 @@ def build(d, std, day, tracks):
         jj, ii = jj[same], ii[same]
         s = H - k
         hist[ii, s, :FR] = run[jj]
-        hist[ii, s, FR] = np.log1p(dn[tgt[ii]] - dn[jj]) / 3 - 1.5
-        hist[ii, s, FR + 1] = np.nan_to_num((dist[tgt[ii]] - dist[jj]) / 300)
-        hist[ii, s, FR + 2] = (ven[tgt[ii]] == ven[jj])
-        hist[ii, s, FR + 3] = 1.0
+        if nn_:
+            it = tgt[ii]
+            hist[ii, s, FR] = (G['jk'][jj] == G['jk'][it])
+            hist[ii, s, FR + 1] = G['loc'][jj] & (G['tr'][jj] == G['tr'][it])
+            hist[ii, s, FR + 2] = np.nan_to_num(G['jr'][jj] - 0.25) * 4
+            hist[ii, s, FR + 3] = np.nan_to_num(G['jr'][it] - G['jr'][jj]) * 4
+            hist[ii, s, FR + 4] = np.nan_to_num(G['b3'][jj]) / 2
+        hist[ii, s, T_] = np.log1p(dn[tgt[ii]] - dn[jj]) / 3 - 1.5
+        hist[ii, s, T_ + 1] = np.nan_to_num((dist[tgt[ii]] - dist[jj]) / 300)
+        hist[ii, s, T_ + 2] = (ven[tgt[ii]] == ven[jj])
+        hist[ii, s, T_ + 3] = 1.0
     hist = hist.astype(np.float16).astype(np.float32)  # 研究は float16 で持った = 同じ丸めにそろえる
     T = d.iloc[tgt].reset_index(drop=True)
     nprev = hist[:, :, -1].sum(1)
-    gap = np.where(nprev > 0, hist[:, H - 1, FR], 0)
-    nsame = (hist[:, :, FR + 2] * hist[:, :, FR + 3]).sum(1)
+    gap = np.where(nprev > 0, hist[:, H - 1, T_], 0)
+    nsame = (hist[:, :, T_ + 2] * hist[:, :, T_ + 3]).sum(1)
     mon = pd.to_datetime(T.race_date).dt.month.to_numpy()
     lpt = np.log(T.prize1.where(T.prize1 > 0))
     ctx = np.column_stack([
@@ -97,6 +109,39 @@ def build(d, std, day, tracks):
         (T.nh - 11) / 3, (T.gate.fillna(4) - 4) / 3,
         gap, nprev == 0, nprev / 10, nsame / 10, np.sin(mon / 6 * np.pi), np.cos(mon / 6 * np.pi)]).astype(np.float32)
     return T, hist, ctx
+
+
+NEW = 5  # 第 8 版の過去走ごとの列の数
+
+
+def g_cols(d):
+    """第 8 版(v3 の out/v3n_seq3_judge.md・研究 src/kochi/k44_seq3.py)の 5 列の元: 騎手・調教師・その時点の騎手の 3 着内率・3 着馬との時計差。
+    騎手の率 = 地方の走りを騎手 × 日で集め、その日より前の全部(30 走分の 0.25 で縮める)。中央の走りは騎手なし。
+    今日の行で騎手・調教師が欠けたら、どの走りとも「同じ」にならない印にする(研究は欠け 0)。"""
+    n = len(d)
+    loc = d.jra.to_numpy() == 0
+    rk = pd.factorize(d.rkey)[0]
+    tsv = d.time_sec.where((d.stop == 0) & (d.time_sec > 0)).to_numpy(float)
+    o = np.lexsort((np.where(np.isnan(tsv), np.inf, tsv), rk))
+    rnk = np.empty(n, np.int64)
+    rnk[o] = pd.Series(rk[o]).groupby(rk[o]).cumcount().to_numpy()
+    sel3 = (rnk == 2) & ~np.isnan(tsv)
+    t3 = pd.Series(rk).map(pd.Series(tsv[sel3], index=rk[sel3])).to_numpy(float)
+    b3 = np.where(loc, np.clip((tsv - t3) / (d.distance_m.to_numpy(float) / 1000), -3, 5), np.nan)
+    jv, tv = d.jockey.to_numpy(object), d.trainer.to_numpy(object)
+    miss_j = pd.isna(jv)
+    miss_t = pd.isna(tv)
+    idx = np.arange(n).astype(str)
+    jk = np.where(loc, np.where(miss_j, np.char.add('?', idx), jv.astype(str)), '?J')
+    J_ = pd.DataFrame({'jk': jk, 'dn': d.dn.to_numpy(), 'y': d.Y3.to_numpy(float)})[loc & ~miss_j]
+    day = J_.groupby(['jk', 'dn']).y.agg(['sum', 'size']).reset_index().sort_values(['jk', 'dn'])
+    day['W'] = day.groupby('jk')['sum'].cumsum() - day['sum']
+    day['N'] = day.groupby('jk')['size'].cumsum() - day['size']
+    day['jr'] = (day.W + 0.25 * 30) / (day.N + 30)
+    jr = pd.DataFrame({'jk': jk, 'dn': d.dn.to_numpy()}).merge(day[['jk', 'dn', 'jr']], on=['jk', 'dn'], how='left').jr.to_numpy()
+    jr = np.where(loc & ~miss_j, jr, np.nan)
+    tr = np.where(loc, np.where(miss_t, np.char.add('?t', idx), tv.astype(str)), '?J')
+    return {'loc': loc, 'b3': b3, 'jk': jk, 'jr': jr, 'tr': tr}
 
 
 def prep(off, day, tracks, log=print):
@@ -145,8 +190,9 @@ def prep_day(off, day, tracks, out, log=print):
         log('並び読み 直前版 固定ファイルか公式の表が無い = 作らない', [p.name for p in need if not p.exists()])
         return None
     std = pd.read_csv(DAY_SEQ / 'v3n_seq_std.csv', encoding='utf-8')
+    meta = json.loads((DAY_SEQ / 'v3n_seq_prod.json').read_text(encoding='utf-8'))
     d = S2.runs_all(off)
-    T, hist, ctx = build(d, std, day, tracks)
+    T, hist, ctx = build(d, std, day, tracks, int(meta.get('new', 0)) == NEW)  # 第 8 版 = 騎手・調教師 + 3 着差(runs_all に騎手・調教師の列あり)
     np.savez_compressed(out, track=T.track.to_numpy().astype('U4'), race_no=T.race_no.to_numpy(int), umaban=T.umaban.to_numpy(int),
                         hist=hist.astype(np.float16), ctx=ctx, bw_prev=T.bw_prev.to_numpy(float))
     log('並び読み 直前版の材料', out, hist.shape, 'R', T[['track', 'race_no']].drop_duplicates().shape[0])
@@ -164,7 +210,8 @@ def load_day(prep_npz):
     P = np.load(prep_npz)
     assert P['ctx'].shape[1] + 7 == meta['fc'] and P['hist'].shape[1:] == (meta['H'], meta['fh']), '直前版の材料の形が模型と合わない'
     ix = {(str(a), int(b), int(c)): i for i, (a, b, c) in enumerate(zip(P['track'], P['race_no'], P['umaban']))}
-    return {'W': Ws, 'ix': ix, 'hist': P['hist'].astype(np.float32), 'ctx': P['ctx'], 'bwp': P['bw_prev']}
+    return {'W': Ws, 'ix': ix, 'hist': P['hist'].astype(np.float32), 'ctx': P['ctx'], 'bwp': P['bw_prev'],
+            'form': str(meta.get('form') or 'v3n-6: seq day')}
 
 
 def resid_day(S, track, rno, nums, going, bws):
