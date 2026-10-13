@@ -69,6 +69,14 @@ def relabel(meta, gone, ud=None):
         key = q3
     else:
         key = c
+    # 2026-10-13 第 7 版: 取消の後の頭数で E1 + 能検(朝の meta.noken_z・4 頭未満はかけない)。q3 は meta.p から作り直すので 2 度かからない
+    import v3n_e1
+    nz = {int(k): float(v) for k, v in (meta.get('noken_z') or {}).items() if int(k) not in gone}
+    arr, e1on = v3n_e1.apply([q3[n] for n in keep], [nz.get(n, 0.0) for n in keep])
+    q3 = dict(zip(keep, arr))
+    if e1on and nz:
+        key = q3
+    f0 = str(meta.get('form') or '').replace('+e1+noken', '').replace('+e1', '')
     ks = sum(key.values()) or 1.0
     order = sorted(keep, key=lambda n: (-key[n], keep.index(n)))
     marks = [{'num': n, 'mark': MARKS[i], 'score': round(key[n] / ks * 100, 1)} for i, n in enumerate(order[:5])]
@@ -81,6 +89,8 @@ def relabel(meta, gone, ud=None):
         'own': {k: v for k, v in (meta.get('own') or {}).items() if int(k) not in gone},
         **({'u': {k: v for k, v in (meta.get('u') or {}).items() if int(k) not in gone}} if meta.get('u') else {}),
         'scratched': sorted(gone),
+        'form': f0 + (('+e1+noken' if 'noken_z' in meta else '+e1') if e1on else ''),
+        **({'noken_z': {str(k): v for k, v in sorted(nz.items())}} if 'noken_z' in meta else {}),
         'from': 'morning',
         'direct': ud is not None,
         **({'u_day': {str(k): round(float(v), 4) for k, v in ud.items()}} if ud is not None else {}),

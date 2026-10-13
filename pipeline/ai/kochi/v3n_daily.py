@@ -85,6 +85,27 @@ def main():
     except Exception as e:  # noqa: BLE001
         print('並び読み 失敗 = 第 5 版のまま', type(e).__name__, str(e)[:200], flush=True)
         SQ = None
+    # 2026-10-13 第 7 版: 率の直し E1 と初出走の能検の z(v3 の out/v3n_ab.md・v3n_e1.py)。⛔能検が読めなくても E1 だけで書く
+    import v3n_e1
+    NZ, nk_ok = {}, False
+    try:
+        NK = v3n_e1.fetch_rows(k0_dl.sb)
+        ru = pd.read_parquet(off / 'runs.parquet', columns=['track', 'race_date', 'race_no', 'runner_number', 'horse_name', 'birth_date'])
+        ru['race_date'] = ru.race_date.astype(str).str[:10]
+        ru['hid'] = ru.horse_name.astype(str) + '|' + ru.birth_date.astype(str).str[:10]
+        seen = set(ru.loc[ru.race_date < day, 'hid'])   # 全場の公式の記録で今日より前に 1 行でもある馬 = 初出走でない(研究の nprev と同じ)
+        td = ru[(ru.race_date == day) & ~ru.hid.isin(seen)].copy()
+        td['num'] = pd.to_numeric(td.runner_number, errors='coerce')
+        td = td.dropna(subset=['num'])
+        for (t_, r_), g_ in td.groupby(['track', 'race_no']):
+            zz = v3n_e1.noken_z(NK, {int(n): str(h) for n, h in zip(g_.num, g_.horse_name)}, day)
+            if zz:
+                NZ[(str(t_), int(r_))] = zz
+        nk_ok = True
+        print('能検の行', len(NK), '・今日の初出走', len(td), '頭・z のある馬', sum(len(v) for v in NZ.values()), flush=True)
+    except Exception as e:  # noqa: BLE001
+        print('能検 読めない = 率の直し E1 だけ', type(e).__name__, str(e)[:200], flush=True)
+        NZ = {}
     for j in tracks:
         d = k9.ALT / f't{j}'
         T, cols = k10.load(d)
@@ -138,12 +159,15 @@ def main():
             u = k29_seq_live.resid(SQ, trk, rno, nums)  # 第 6 版: 並び読みの外した分(無ければ第 5 版のまま)
             if u is not None:
                 p3 = np.clip(1 / (1 + np.exp(-(np.log(p3 / (1 - p3)) + u))), 0.001, 0.999)
-            key = p3 if u is not None else c   # 印 = 並び読みを足した 3 着内の率の順
+            nz = NZ.get((trk, int(rno)), {})
+            p3, e1on = v3n_e1.apply(p3, np.array([nz.get(int(n), 0.0) for n in nums]))  # 第 7 版: 取消の前の頭数で E1 + 能検(4 頭未満はかけない)
+            key = p3 if (u is not None or (e1on and nz)) else c   # 印 = 並び読み・能検を足した 3 着内の率の順(E1 は並びを変えない)
             sc = key / key.sum()
             order = np.argsort(-key, kind='stable')
             marks = [{'num': int(nums[i]), 'mark': MARKS[k_], 'score': round(float(sc[i]) * 100, 1)} for k_, i in enumerate(order[:5])]
-            meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM, 'w': w, 'gamma': gm, 'trained_to': trained_to, 'seq': u is not None,
+            meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM + (('+e1+noken' if nk_ok else '+e1') if e1on else ''), 'w': w, 'gamma': gm, 'trained_to': trained_to, 'seq': u is not None,
                     **({'u': {str(int(n)): round(float(x), 4) for n, x in zip(nums, u)}} if u is not None else {}),
+                    **({'noken_z': {str(k_): float(v) for k_, v in sorted(nz.items())}} if nz else {}),
                     'runners': [{'num': int(n), 'p1': round(float(a), 4), 'p3': round(float(b_), 4)} for n, a, b_ in zip(nums, c1, p3)],
                     'p': {str(int(n)): round(float(x), 4) for n, x in zip(nums, c)},
                     'own': {str(int(n)): [round(float(a), 4), round(float(b_), 4)] for n, a, b_ in zip(nums, g.p1, g.p3)}}
