@@ -198,7 +198,7 @@ jobs:
       # ---------------------------------------------------------------- 学習(段階 2)と今日の印(段階 3)= pipeline/ai/base_v1.py
       # ⛔本番へ書くのは REST の upsert で nar_ai_marks(model='base-v1')だけ。SQL は流さない。既にある行は触らない(凍結)。
       - name: install lightgbm
-        run: pip install -q "lightgbm>=4.3" "pandas>=2.2" "pyarrow>=15" "numpy<2"
+        run: pip install -q "lightgbm>=4.3" "pandas>=2.2" "pyarrow==25.0.1" "numpy<2"
       - name: dump features for training
         run: |
           set -o pipefail

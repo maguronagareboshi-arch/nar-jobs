@@ -51,7 +51,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: install
-        run: pip install -q "pg8000>=1.30" "lightgbm>=4.3" "pandas>=2.2" "pyarrow>=15" "numpy<2" "requests>=2.31"
+        run: pip install -q "pg8000>=1.30" "lightgbm>=4.3" "pandas>=2.2" "pyarrow==25.0.1" "numpy<2" "requests>=2.31"
 
       # ---------------------------------------------------------------- 全列の模型= nar-ai-feat の最新の成功から(event 不問)
       # 監査 A4(2026-09-24): 元は `-e schedule` の便だけ= 予備 schedule の朝便は 09:08 の起動より後に終わるので常に前日以前のモデルだった。

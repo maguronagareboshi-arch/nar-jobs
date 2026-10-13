@@ -75,7 +75,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: install python packages
-        run: pip install -q "pandas>=2.2" "pyarrow>=15" "numpy<2" "lightgbm>=4.3"
+        run: pip install -q "pandas>=2.2" "pyarrow==25.0.1" "numpy<2" "lightgbm>=4.3"
 
       # ---------------------------------------------------------------- 材料(成果物)を取る
       - name: download nar-ai-feat artifact
