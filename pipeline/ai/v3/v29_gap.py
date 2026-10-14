@@ -47,6 +47,7 @@ HIST = ['bw_norm', 'BEST', 'PREVW', 'PREVF', 'PREVD']
 MODEL_FILE, META_FILE = 'v29_gap_y1.txt', 'v29_gap.json'
 DAY_META = 't11_day.json'  # 当日版の印の上乗せ(51 本 + 当日の体重 15 本・研究 nankan-ai-v3 src/f5_scripts/t11_day.py)
 SEQ2 = None  # 並び読み(決め 24・seq2_live.load の戻り)。live() が読む。無ければ当日版は第12版のまま
+TPLM = None  # 全馬の短評の層(決め 30・tanpyo_live.load の戻り)。live() が mdir/tanpyo から読む。無ければ足さない
 DAY_MIN = 30      # 当日版の印は発走 30 分前から出す(体重はもう出ている・ユーザー 2026-10-01)
 DAY_LAST_MIN = 16  # 発走 15 分前を過ぎた印は DB のトリガーが捨てるので、その手前まで
 DECIDE_MIN = 10   # 発走 10 分前 = 締め切り(発走 2 分前)の 8 分前を過ぎたら決める
@@ -238,10 +239,20 @@ def day_marks(Bk, odds, w, going, dm, day):
         used.append('p1f')
     except Exception as e:  # noqa: BLE001  直しが落ちても印は出す
         log('勝つ率の直し 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
+    if TPLM is not None and 'p1f' in used and 'seq2' in used:  # 短評の層(決め 30・2026-10-14): 勝つ率の直しの後に、前の晩の材料 tpl_ で p1・p3′ を直す(研究も同じ土台で学んだ)
+        try:
+            import tanpyo_live
+            r_ = tanpyo_live.apply_day(TPLM, b, p1, p3p)
+            if r_ is not None:
+                p1, p3p = r_
+                used.append('tpl')
+        except Exception as e:  # noqa: BLE001  短評の層が落ちても印は出す
+            log('短評の層 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
     stamp = 'v3-9 当日版(第10版 + 当日の体重 15 本・t11 + 談話の印 3 定数)' if not [c for c in used if c != 'p1f'] else \
         'v3-9 当日版(第12版 = 当日の体重 15 本と馬場・t11 + 談話の印 + 束 ' + '・'.join({'b14_u': 't14', 'b19_u': 'f10k'}[c] for c in used if c in ('b14_u', 'b19_u')) + \
         (' + 並び読み' if 'seq2' in used else '') + (' + 初出走の層' if 'debut' in used else '') + ')'
     stamp += ' + 勝つ率の直し' if 'p1f' in used else ''
+    stamp += ' + 短評の層' if 'tpl' in used else ''
     d = pd.DataFrame({'num': b.umaban.astype(int).to_numpy(), 'p1': p1, 'p3': p3p, 'p3_raw': p3})
     d = d.sort_values(['p3', 'p1', 'num'], ascending=[False, False, True], kind='mergesort').reset_index(drop=True)
     marks = [{'num': int(x.num), 'mark': MARKS[i], 'score': round(float(x.p3) * 100, 1)} for i, x in enumerate(d.itertuples()) if i < 5]
@@ -254,6 +265,8 @@ def day_marks(Bk, odds, w, going, dm, day):
         meta['debut'] = nd
     if 'p1f' in used:
         meta['p1f'] = p1_follow.TAG['day']
+    if 'tpl' in used:
+        meta['tpl'] = 'tpl 決め30 短評の層'  # tanpyo_live.TAG と同じ字
     return {'track': tr, 'race_date': day, 'race_no': rno, 'marks': marks, 'meta': meta}
 
 
@@ -505,6 +518,14 @@ def live(day, base_csv, mdir, write, until):
     except Exception as e:  # noqa: BLE001
         SEQ2 = None
         log('並び読み 読めない(第12版のまま)', type(e).__name__, str(e)[:200])
+    global TPLM
+    try:  # 短評の層(決め 30): 模型 = mdir/tanpyo(便がリリース v3-tanpyo-20261014 を開ける)。無ければ足さない
+        import tanpyo_live
+        TPLM = tanpyo_live.load(Path(mdir) / 'tanpyo')
+        log('短評の層', '読めた' if TPLM else '無し(足さない)', 'tpl_ 材料', 'あり' if set(tanpyo_live.TPL) <= set(B.columns) else 'なし')
+    except Exception as e:  # noqa: BLE001
+        TPLM = None
+        log('短評の層 読めない(足さない)', type(e).__name__, str(e)[:200])
     has_s2 = {'p1_s2', 'p3_s2'} <= set(B.columns) and B.p1_s2.notna().any()
     try:
         tm = TRI.load(mdir)

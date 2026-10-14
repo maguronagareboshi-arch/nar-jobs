@@ -38,6 +38,8 @@ STAMP12 = STAMP11 + '+束 f10k(60 列の木・学び 2023-01〜2026-08)'  # 第1
 STAMP_DEB = '+初出走の層(寸評・時計 35 列の木・学び 2023-01〜2026-08)'  # 決め 28(初出走のいる日だけ)
 MK = ['◎', '○', '▲', '△']
 P1F_TAG = 'p1f 決め29 前日 k0.987'  # p1_follow.TAG['pre'] と同じ字
+STAMP_TPL = '+短評の層(段・型・前走の段 15 列の木 2 本・学び 2023-01〜2026-08)'  # 決め 30(勝つ率の直しの後・足せた日だけ)
+TPL_TAG = 'tpl 決め30 短評の層'  # tanpyo_live.TAG と同じ字
 
 
 def log(*a):
@@ -58,6 +60,8 @@ def build_rows(csv_path, day, src, stamp=STAMP):
             meta['debut'] = int(g.dbt_pre_u.notna().sum())
         if 'p1_t10' in g.columns and g.p1_t10.notna().all():  # 勝つ率の直し(決め 29)を掛けたレース = p1 は直した値・元は p1_t10
             meta['p1f'] = P1F_TAG
+        if 'tpl_u3' in g.columns and (g.tpl_u3.fillna(0) != 0).any():  # 短評の層(決め 30)を足したレース = 元の率は p3p_tpl0・p1_tpl0
+            meta['tpl'] = TPL_TAG
         rows.append({'track': tr, 'race_date': str(day), 'race_no': int(rno), 'marks': marks, 'meta': meta})
     return rows
 
@@ -216,6 +220,14 @@ def main():
         p1_follow.apply_csv(csv_path, log=log)
     except Exception as e:  # noqa: BLE001
         log('勝つ率の直し 失敗(木の勝つ率のまま)', type(e).__name__, str(e)[:200])
+    nt = 0
+    if b12:  # 全馬の短評の層(決め 30・研究 nankan-ai-v3 tanpyo_layer.py・tanpyo_prod.py・ユーザー承認 2026-10-14): 勝つ率の直しの後に
+        #   前日の表の p3′・p1 を直し、直前版の材料 tpl_ を土台へ(当日の便が勝つ率の直しの後に足す)。失敗しても前の段のまま
+        try:
+            import tanpyo_live
+            nt = tanpyo_live.run(day, cap['T'], cap.get('F'), csv_path, out / f'{day}_v29_base.csv', t8._W.get('parsed'), log=log)
+        except Exception as e:  # noqa: BLE001
+            log('短評の層 失敗(前の段のまま)', type(e).__name__, str(e)[:200])
     notes = {}
     try:  # ひとこと(表示だけ・予想の計算には使わない・失敗しても予想の表と書き込みは止めない)
         import v3_notes
@@ -223,7 +235,7 @@ def main():
     except Exception as e:  # noqa: BLE001
         log('ひとこと 失敗', type(e).__name__, str(e)[:200])
     del cap
-    rows = build_rows(csv_path, day, src, (STAMP12 + (STAMP_DEB if nd else '')) if b12 else (STAMP11 if bundle else STAMP))
+    rows = build_rows(csv_path, day, src, (STAMP12 + (STAMP_DEB if nd else '') + (STAMP_TPL if nt else '')) if b12 else (STAMP11 if bundle else STAMP))
     if notes:
         log('ひとこと 付けた', v3_notes.attach(rows, notes), '頭')
     log('races', len(rows), '◎', ' '.join(f"{r['track']}{r['race_no']}R:{r['marks'][0]['num']}" for r in rows[:12] if r['marks']))

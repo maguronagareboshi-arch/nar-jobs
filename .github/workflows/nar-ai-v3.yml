@@ -196,6 +196,20 @@ jobs:
           rm -f in/v3_debut.tar.gz.enc
           ls -l v3/debut
 
+      - name: download tanpyo files
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-tanpyo-20261014 -p 'v3_tanpyo.tar.gz.enc' -D in
+          mkdir -p v3/tanpyo
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_tanpyo.tar.gz.enc | tar -C v3/tanpyo -xzf -
+          rm -f in/v3_tanpyo.tar.gz.enc
+          ls -l v3/tanpyo
+
       # 束 t14 の談話 14 列: 本文 → intfloat/multilingual-e5-small(手元と同じ版・CPU)。失敗しても第10版 + 談話の印のまま進む
       - name: install text model (t14 danwa)
         if: steps.pc.outputs.run == 'yes'
@@ -236,6 +250,7 @@ jobs:
           V3_SEQ2: v3/seq2  # 並び読みの時計のならし(上の download seq2 files)
           V3_OFFICIAL: v3/official  # 並び読みの公式の表(v3_daily が落とす)
           V3_DEBUT: v3/debut  # 初出走の層の模型(上の download debut files)
+          V3_TANPYO: v3/tanpyo  # 全馬の短評の層の模型・前走の元(上の download tanpyo files)
         run: |
           set -o pipefail
           mkdir -p out
