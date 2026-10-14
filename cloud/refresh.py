@@ -143,6 +143,10 @@ def main():
                 fill_weights(url, key, today)
             except Exception as e:                           # noqa: BLE001  埋められなくても便は止めない
                 log(f"体重の代わりの道: 失敗({type(e).__name__}: {str(e)[:160]})")
+            try:
+                fill_results(url, key, today)
+            except Exception as e:                           # noqa: BLE001
+                log(f"着順の代わりの道: 失敗({type(e).__name__}: {str(e)[:160]})")
     rc = main_docs(args, url, key, docs, failed)
     if fill and fill["races"]:
         d2, _ = build_dedup([(fill["source_observed_at"], "nextday-html", fill)])
@@ -230,6 +234,107 @@ def fill_weights(url, key, today):
             _rest(url, key, f"nar_races?race_date=eq.{d}&track=eq.{urllib.parse.quote(t)}&race_no=eq.{rno}", "PATCH", {"going": g})
     log(f"体重の代わりの道: {len(wt)}/{len(need)} レース・{n} 走を空の行にだけ書いた(" +
         " ".join(f"{t}{r}R={s}" for (t, r), s in sorted(src.items())) + ")")
+
+
+# 公式の成績の画面の払戻の券種 → 日次ZIPの取り込み(nar_official_csv)と同じ英名
+PAGE_TICKETS = {"単勝": "win", "複勝": "place", "馬連複": "quinella", "馬連単": "exacta", "枠連複": "wakuren",
+                "枠連単": "wakutan", "ワイド": "wide", "三連複": "trio", "三連単": "trifecta"}
+RESULT_AFTER_MIN = 5                                         # 発走 5 分後から成績の画面を見る
+
+
+def page_payouts(html):
+    """成績の画面の払戻の表 → [{t, c, y, p}](load_nar_official.group_payouts と同じ形・同じ並び)。券種名の無い行は前の券種の続き(複勝・ワイド)"""
+    import re
+    import kochi_results
+    from nar_official_csv import canonical_combination
+    p = kochi_results._Tables()
+    p.feed(html)
+    out, cur = [], None
+    for t in p.tables:
+        for row in t:
+            cells = [c.strip() for c in row]
+            if cells and cells[0] in PAGE_TICKETS:
+                cur, cells = PAGE_TICKETS[cells[0]], cells[1:]
+            elif not (cur and cells and re.fullmatch(r"[\d\-]+", cells[0])):
+                cur = None if cells and not re.fullmatch(r"[\d\-]+", cells[0] or "x") else cur
+                continue
+            if len(cells) < 2 or not re.fullmatch(r"\d+(?:-\d+)*", cells[0]):
+                continue
+            y = re.sub(r"[^\d]", "", cells[1])
+            pop = re.sub(r"[^\d]", "", cells[2]) if len(cells) > 2 else ""
+            if not y:
+                continue
+            try:
+                c = canonical_combination(cur, cells[0].split("-"))
+            except (TypeError, ValueError):
+                continue
+            out.append({"t": cur, "c": c, "y": int(y), "p": int(pop) if pop else None})
+    out.sort(key=lambda x: (x["t"], x["c"]))
+    return out
+
+
+def fill_results(url, key, today):
+    """2026-10-14 日次ZIPが止まった日に着順・払戻が川崎 5R・名古屋 8R・門別 5R で止まった直し: ZIP が取れない回だけ、発走 5 分後を
+    過ぎて着順の無いレースを公式の成績の画面(RaceMarkTable・出馬表と同じく ZIP とは別の入口)から読み、
+    nar_runs は着順・注記・タイム・着差・人気だけを着順の空の行に(⛔上がり 3F は ZIP に無い列なので書かない)、
+    nar_race_payouts は行の無いレースにだけ足す。ZIP が戻れば今までどおり ZIP の行で上書きされる"""
+    import re
+    import urllib.parse
+    import kochi_results
+    from load_nar_official import time_to_sec
+    from weights_alt import BABA, _get
+    d = today.isoformat()
+    races = _rest(url, key, f"nar_races?race_date=eq.{d}&select=track,race_no,post_time,cancelled")
+    fin = _rest(url, key, f"nar_runs?race_date=eq.{d}&or=(finish.not.is.null,finish_note.not.is.null)&select=track,race_no")
+    has_fin = {(r["track"], int(r["race_no"])) for r in fin}
+    has_pay = {(r["track"], int(r["race_no"])) for r in _rest(url, key, f"nar_race_payouts?race_date=eq.{d}&select=track,race_no")}
+    now = dt.datetime.now(JST)
+    need = []
+    for r in races:
+        k = (r["track"], int(r["race_no"]))
+        m = re.fullmatch(r"(\d{1,2}):?(\d{2})", str(r.get("post_time") or "").strip())
+        if k in has_fin or not m or str(r.get("cancelled") or "").strip() or k[0] not in BABA:
+            continue
+        at = dt.datetime.combine(today, dt.time(int(m.group(1)), int(m.group(2))), JST)
+        if (now - at).total_seconds() / 60 >= RESULT_AFTER_MIN:
+            need.append(k)
+    if not need:
+        log("着順の代わりの道: 埋めるレース無し"); return
+    done, n_run, n_pay = [], 0, 0
+    for t, rno in sorted(need):
+        time.sleep(1)
+        try:
+            html = _get("https://www.keiba.go.jp/KeibaWeb/TodayRaceInfo/RaceMarkTable?k_raceDate="
+                        + urllib.parse.quote(f"{today:%Y/%m/%d}", safe="") + f"&k_raceNo={rno}&k_babaCode={BABA[t]}")
+            parsed = kochi_results.parse_mark_table(html)
+        except Exception as e:                               # noqa: BLE001  1 レース落ちても次へ
+            log(f"着順の代わりの道: {t}{rno}R 読めない({type(e).__name__}: {str(e)[:100]})"); continue
+        if not parsed:
+            continue                                         # まだ確定していない
+        tq = urllib.parse.quote(t)
+        for h in parsed["horses"]:
+            ch = (h.get("chakujun") or "").strip()
+            raw = re.sub(r"[^\d]", "", h.get("time") or "").lstrip("0") or None
+            diff = (h.get("diff") or "").strip() or None
+            note = None if ch.isdigit() else (ch or None)
+            if diff and re.search(r"(取消|除外|中止|失格|降着)", diff):
+                note, diff = note or diff, None
+            pop = (h.get("ninki") or "").strip()
+            body = {"finish": int(ch) if ch.isdigit() else None, "finish_note": note,
+                    "time_raw": raw if ch.isdigit() else None, "time_sec": time_to_sec(raw) if ch.isdigit() else None,
+                    "margin": diff, "popularity": int(pop) if pop.isdigit() else None}
+            _rest(url, key, f"nar_runs?race_date=eq.{d}&track=eq.{tq}&race_no=eq.{rno}&runner_number=eq.{int(h['uma_ban'])}"
+                  "&finish=is.null&finish_note=is.null", "PATCH", body)
+            n_run += 1
+        if (t, rno) not in has_pay:
+            pays = page_payouts(html)
+            if pays:
+                _rest(url, key, "nar_race_payouts?on_conflict=track,race_date,race_no", "POST",
+                      [{"track": t, "race_date": d, "race_no": rno, "payouts": pays,
+                        "source_snapshot_hash": "racemarktable-html", "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()}])
+                n_pay += 1
+        done.append(f"{t}{rno}R")
+    log(f"着順の代わりの道: {len(done)}/{len(need)} レース・{n_run} 走・払戻 {n_pay} レース({' '.join(done) or 'なし'})")
 
 
 def main_docs(args, url, key, docs, failed):
