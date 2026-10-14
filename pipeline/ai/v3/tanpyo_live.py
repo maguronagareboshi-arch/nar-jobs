@@ -221,6 +221,9 @@ def run(day, T, F, csv_path, base_csv, parsed, log=log0):
         return 0
     C, src = dl.card_src(day, parsed)
     R = dl.entries(C) if len(C) else pd.DataFrame(columns=Q4 + ['tp_w', 'tp_h'] + dl.TM)
+    for c in dl.TM:  # 時計の比べ(初出走の層だけが使う)はこの層では使わない = 空の列で feats の形に合わせる
+        if c not in R.columns:
+            R[c] = np.nan
     D = dl.feats(x, T, F, R)
     H = history(M, parsed, day)
     D = add_feats(D, C, M, H, day)
