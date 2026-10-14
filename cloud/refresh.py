@@ -136,18 +136,25 @@ def main():
             fill = nextday_card.fill_doc(tomorrow, have_next, log=log)
         except Exception as e:                               # noqa: BLE001
             log(f"翌日 {tomorrow} 出馬表ページ: 取れない({type(e).__name__}: {str(e)[:120]}) → 次の便で取り直す")
-    if zip_down is not None and not args.dry_run and not args.months:
+    live = zip_down is not None and not args.dry_run and not args.months
+    if live:
         zip_beat(url, key, today, zip_down)
-        if zip_down:
-            try:
-                fill_weights(url, key, today)
-            except Exception as e:                           # noqa: BLE001  埋められなくても便は止めない
-                log(f"体重の代わりの道: 失敗({type(e).__name__}: {str(e)[:160]})")
-            try:
-                fill_results(url, key, today)
-            except Exception as e:                           # noqa: BLE001
-                log(f"着順の代わりの道: 失敗({type(e).__name__}: {str(e)[:160]})")
     rc = main_docs(args, url, key, docs, failed)
+    # 2026-10-14 18:29 に ZIP は戻ったが中身が 16:45 ごろのまま約 30 分(体重・着順が入らない)= 取れた・取れないに関わらず、
+    # ZIP を入れた後に毎回、まだ空の体重・着順だけを出馬表・成績の画面から埋める(ZIP が新しければ埋めるものは無い)
+    if live:
+        try:
+            fill_weights(url, key, today)
+        except Exception as e:                               # noqa: BLE001  埋められなくても便は止めない
+            log(f"体重の代わりの道: 失敗({type(e).__name__}: {str(e)[:160]})")
+        late = []
+        try:
+            late = fill_results(url, key, today)
+        except Exception as e:                               # noqa: BLE001
+            log(f"着順の代わりの道: 失敗({type(e).__name__}: {str(e)[:160]})")
+        if late and not zip_down:                            # ZIP は取れたのに、発走から STALE_MIN 分過ぎたレースの着順が無かった
+            import beat
+            beat.beat("official_zip", False, f"{today} 日次ZIPの中身が古い({' '.join(late)} の着順が無く、成績の画面から埋めた)")
     if fill and fill["races"]:
         d2, _ = build_dedup([(fill["source_observed_at"], "nextday-html", fill)])
         for k in ("payouts", "horses", "profiles"):
@@ -240,6 +247,7 @@ def fill_weights(url, key, today):
 PAGE_TICKETS = {"単勝": "win", "複勝": "place", "馬連複": "quinella", "馬連単": "exacta", "枠連複": "wakuren",
                 "枠連単": "wakutan", "ワイド": "wide", "三連複": "trio", "三連単": "trifecta"}
 RESULT_AFTER_MIN = 5                                         # 発走 5 分後から成績の画面を見る
+STALE_MIN = 40                                               # 発走 40 分後でも ZIP に着順が無い= ZIP の中身が古い(見張りを赤に)
 
 
 def page_payouts(html):
@@ -290,18 +298,19 @@ def fill_results(url, key, today):
     has_fin = {(r["track"], int(r["race_no"])) for r in fin}
     has_pay = {(r["track"], int(r["race_no"])) for r in _rest(url, key, f"nar_race_payouts?race_date=eq.{d}&select=track,race_no")}
     now = dt.datetime.now(JST)
-    need = []
+    need, ago = [], {}
     for r in races:
         k = (r["track"], int(r["race_no"]))
         m = re.fullmatch(r"(\d{1,2}):?(\d{2})", str(r.get("post_time") or "").strip())
         if k in has_fin or not m or str(r.get("cancelled") or "").strip() or k[0] not in BABA:
             continue
         at = dt.datetime.combine(today, dt.time(int(m.group(1)), int(m.group(2))), JST)
-        if (now - at).total_seconds() / 60 >= RESULT_AFTER_MIN:
+        ago[k] = (now - at).total_seconds() / 60
+        if ago[k] >= RESULT_AFTER_MIN:
             need.append(k)
     if not need:
-        log("着順の代わりの道: 埋めるレース無し"); return
-    done, n_run, n_pay = [], 0, 0
+        log("着順の代わりの道: 埋めるレース無し"); return []
+    done, n_run, n_pay, late = [], 0, 0, []
     for t, rno in sorted(need):
         time.sleep(1)
         try:
@@ -338,7 +347,10 @@ def fill_results(url, key, today):
                         "source_snapshot_hash": "racemarktable-html", "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()}])
                 n_pay += 1
         done.append(f"{t}{rno}R")
+        if ago[(t, rno)] >= STALE_MIN:
+            late.append(f"{t}{rno}R")
     log(f"着順の代わりの道: {len(done)}/{len(need)} レース・{n_run} 走・払戻 {n_pay} レース({' '.join(done) or 'なし'})")
+    return late
 
 
 def main_docs(args, url, key, docs, failed):

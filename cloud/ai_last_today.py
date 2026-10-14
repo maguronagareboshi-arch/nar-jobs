@@ -150,6 +150,15 @@ def main():
         payload, final_url = download_archive(url, timeout=60)
         doc = normalize_archive(payload, kind="race", scope="daily", source_url=final_url,
                                 observed_at=dt.datetime.now(dt.timezone.utc).isoformat())
+        # 2026-10-14 18:29 に ZIP は戻ったが中身が 16:45 ごろのまま= 取れても待ちのレースの体重が無ければ、その分だけ代わりの道で足す
+        have = {(h["track"], int(h["race_no"])) for h in doc.get("horses") or []
+                if str(h.get("race_date") or "")[:10] == a.date and h.get("body_weight") is not None}
+        stale = [k for k in wait if k not in have]
+        if stale:
+            print(f"official today: ZIP に体重の無い待ちのレース {' '.join(f'{t}{n}R' for t, n in stale)} → 代わりの道", flush=True)
+            extra = alt_doc(a.date, stale)
+            doc["horses"] = list(doc.get("horses") or []) + extra.get("horses", [])
+            doc["races"] = list(doc.get("races") or []) + extra.get("races", [])
     except Exception as e:                                   # noqa: BLE001
         print(f"official today: 取得失敗 {type(e).__name__}: {str(e)[:120]}(待ち {len(wait)} レース → 出馬表の画面の代わりの道)", flush=True)
         doc = alt_doc(a.date, wait)

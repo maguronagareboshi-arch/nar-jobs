@@ -13,6 +13,7 @@
 
 ⛔読むだけ(どこにも書かない)。⛔要るレースだけ・1 枚ごとに 1 秒あける(相手に負荷をかけない)。
 ⛔読めない・体重がまだ(発表前は空や「-」)のレースは返さない= 呼ぶ側は今までどおり DB の値か前の値のまま。
+⛔次の所へ進むのは読めなかった時(落ちている・出馬表の形でない)だけ。正しく読めて発表前なら、そこで止める。
 場コードは rakuten_sales.BABA と同じ(keiba.go.jp と楽天は同じ番号・南関の公式も 18〜21 が同じ)。
 """
 import datetime as dt
@@ -56,6 +57,8 @@ def _rows(html, num_pat, cell_pat):
     """馬番の印 num_pat で区切り、各区切りの最初の体重の欄 cell_pat を読む → {馬番: (体重, 増減)}"""
     out = {}
     parts = re.split(num_pat, html)
+    if len(parts) < 3:  # 馬番の印が 1 つも無い= 出馬表の形でない(障害の画面・様式替え)。「発表前」と区別して次の所へ
+        raise ValueError("出馬表の形でない")
     for i in range(1, len(parts) - 1, 2):
         m = re.search(cell_pat, parts[i + 1], re.S)
         w = _weight(m.group(1)) if m else None
@@ -103,10 +106,10 @@ def _nk_program(day, track):
 
 def from_nankankeiba(day, track, rno):
     if track not in NANKAN:
-        return {}, None
+        raise LookupError("南関の場でない")
     p = _nk_program(day, track)
     if not p:
-        return {}, None
+        raise LookupError("南関の公式に開催が見つからない")
     time.sleep(GAP_S)
     h = _get(f"https://www.nankankeiba.com/uma_shosai/{p}{int(rno):02d}.do", enc="cp932")
     return _rows(h, r"writeOdds\((\d+)\)", r'nk23_c-table23__txt2">(.*?)</td>'), None
@@ -142,8 +145,9 @@ def alt_today(day, need, log=print):
                 wt[(track, rno)] = w
                 src[(track, rno)] = name
                 break
-            tried.append(f"{name} 体重なし")
-            time.sleep(GAP_S)
+            # 2026-10-14 夜: 出馬表が正しく読めて体重が空= まだ発表前。他の所も同じなので見に行かない(毎回の便で読むので負荷を抑える)
+            tried.append(f"{name} 発表前")
+            break
         log(f"[代わりの道] {track}{rno}R: " + (f"{src[(track, rno)]} から {len(wt[(track, rno)])} 頭" if (track, rno) in src
                                                  else "どこも体重なし") + (f"({'・'.join(tried)})" if tried else ""))
         time.sleep(GAP_S)
