@@ -285,7 +285,8 @@ def fill_results(url, key, today):
     from weights_alt import BABA, _get
     d = today.isoformat()
     races = _rest(url, key, f"nar_races?race_date=eq.{d}&select=track,race_no,post_time,cancelled")
-    fin = _rest(url, key, f"nar_runs?race_date=eq.{d}&or=(finish.not.is.null,finish_note.not.is.null)&select=track,race_no")
+    # ⛔取消の注記(finish_note)は出馬表の段で入る= 着順の有無は finish だけで見る(注記で数えると取消のあるレースが埋まらない)
+    fin = _rest(url, key, f"nar_runs?race_date=eq.{d}&finish=not.is.null&select=track,race_no")
     has_fin = {(r["track"], int(r["race_no"])) for r in fin}
     has_pay = {(r["track"], int(r["race_no"])) for r in _rest(url, key, f"nar_race_payouts?race_date=eq.{d}&select=track,race_no")}
     now = dt.datetime.now(JST)
@@ -311,6 +312,9 @@ def fill_results(url, key, today):
             log(f"着順の代わりの道: {t}{rno}R 読めない({type(e).__name__}: {str(e)[:100]})"); continue
         if not parsed:
             continue                                         # まだ確定していない
+        placed = [h for h in parsed["horses"] if (h.get("chakujun") or "").strip().isdigit()]
+        if len(placed) < 4 or any(not re.sub(r"[^\d]", "", h.get("time") or "") for h in placed):
+            continue                                         # 速報(上位 3 頭だけ・タイム空)= 確定の全頭が出てから(途中で書くと残りが埋まらない)
         tq = urllib.parse.quote(t)
         for h in parsed["horses"]:
             ch = (h.get("chakujun") or "").strip()
