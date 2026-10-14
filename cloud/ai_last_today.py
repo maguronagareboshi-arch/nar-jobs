@@ -81,19 +81,26 @@ def race_rows(races, day):
             for r in races if str(r.get("race_date") or "")[:10] == day and (r.get("going") or r.get("post_time"))]
 
 
-def alt_doc(day, wait):
-    """2026-10-14 公式の当日 ZIP が全日付で止まった日の直し: 待ちのレースだけ出馬表の画面(公式 → 南関の公式 → 楽天競馬)から
-    体重と馬場を読み、ZIP を読んだときと同じ形 {horses, races} にする。読めなければ空(= DB の値のまま)"""
+def add_alt(doc, day, wait):
+    """2026-10-14 保険: ZIP が取れない・中身が古い(待ちのレースの体重が 1 頭も無い)ときは、そのレースだけ出馬表の画面から読んで
+    doc に足す(cloud/official_alt.py・公式 → 南関の公式 → 楽天競馬)。読めなければそのまま(= DB の値のまま)"""
+    have = {(h["track"], int(h["race_no"])) for h in doc.get("horses") or []
+            if str(h.get("race_date") or "")[:10] == day and h.get("body_weight") is not None}
+    need = [k for k in wait if k not in have]
+    if not need:
+        return doc
     try:
-        from weights_alt import alt_today
-        wt, go, _ = alt_today(day, wait, log=lambda m: print(m, flush=True))
+        from official_alt import alt_today
+        wt, go, _ = alt_today(day, need, log=lambda m: print(m, flush=True))
     except Exception as e:                                   # noqa: BLE001
-        print(f"official today: 代わりの道も失敗 {type(e).__name__}: {str(e)[:120]}(DB の値のまま)", flush=True)
-        return {}
-    horses = [{"track": t, "race_date": day, "race_no": r, "runner_number": n, "body_weight": bw, "body_weight_change": ch}
-              for (t, r), v in wt.items() for n, (bw, ch) in v.items()]
-    races = [{"track": t, "race_date": day, "race_no": r, "going": g, "post_time": ""} for (t, r), g in go.items()]
-    return {"horses": horses, "races": races}
+        print(f"official today: 保険も失敗 {type(e).__name__}: {str(e)[:120]}(DB の値のまま)", flush=True)
+        return doc
+    doc["horses"] = list(doc.get("horses") or []) + [
+        {"track": t, "race_date": day, "race_no": r, "runner_number": n, "body_weight": bw, "body_weight_change": ch}
+        for (t, r), v in wt.items() for n, (bw, ch) in v.items()]
+    doc["races"] = list(doc.get("races") or []) + [
+        {"track": t, "race_date": day, "race_no": r, "going": g, "post_time": ""} for (t, r), g in go.items()]
+    return doc
 
 
 def write_tsv(path, cols, rows):
@@ -144,24 +151,16 @@ def main():
     if not wait:
         print("official today: skip(待ちのレース無し)", flush=True)
         return 0
+    doc = {}
     try:
         from nar_official_csv import download_archive, download_url, normalize_archive
         url = download_url("race", scope="daily", race_date=a.date)
         payload, final_url = download_archive(url, timeout=60)
         doc = normalize_archive(payload, kind="race", scope="daily", source_url=final_url,
                                 observed_at=dt.datetime.now(dt.timezone.utc).isoformat())
-        # 2026-10-14 18:29 に ZIP は戻ったが中身が 16:45 ごろのまま= 取れても待ちのレースの体重が無ければ、その分だけ代わりの道で足す
-        have = {(h["track"], int(h["race_no"])) for h in doc.get("horses") or []
-                if str(h.get("race_date") or "")[:10] == a.date and h.get("body_weight") is not None}
-        stale = [k for k in wait if k not in have]
-        if stale:
-            print(f"official today: ZIP に体重の無い待ちのレース {' '.join(f'{t}{n}R' for t, n in stale)} → 代わりの道", flush=True)
-            extra = alt_doc(a.date, stale)
-            doc["horses"] = list(doc.get("horses") or []) + extra.get("horses", [])
-            doc["races"] = list(doc.get("races") or []) + extra.get("races", [])
     except Exception as e:                                   # noqa: BLE001
-        print(f"official today: 取得失敗 {type(e).__name__}: {str(e)[:120]}(待ち {len(wait)} レース → 出馬表の画面の代わりの道)", flush=True)
-        doc = alt_doc(a.date, wait)
+        print(f"official today: 取得失敗 {type(e).__name__}: {str(e)[:120]}(待ち {len(wait)} レース → 保険)", flush=True)
+    doc = add_alt(doc, a.date, wait)
     local_null = {(r["track"], int(r["race_no"]), int(r["runner_number"])) for r in runs
                   if r.get("body_weight") is None and not str(r.get("finish_note") or "").strip()}
     rows, new = overlay_rows(doc.get("horses") or [], a.date, local_null)

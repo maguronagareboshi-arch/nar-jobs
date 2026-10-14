@@ -23,6 +23,7 @@ sys.path.insert(0, str(HERE.parent / "pipeline"))
 from nar_official_csv import digest_bytes, download_archive, download_url, normalize_archive  # noqa: E402
 from load_nar_official import build_dedup, load_env, summarize, upsert_all  # noqa: E402
 import nextday_card  # noqa: E402
+import official_alt  # noqa: E402
 
 JST = dt.timezone(dt.timedelta(hours=9))
 
@@ -136,25 +137,13 @@ def main():
             fill = nextday_card.fill_doc(tomorrow, have_next, log=log)
         except Exception as e:                               # noqa: BLE001
             log(f"翌日 {tomorrow} 出馬表ページ: 取れない({type(e).__name__}: {str(e)[:120]}) → 次の便で取り直す")
-    live = zip_down is not None and not args.dry_run and not args.months
-    if live:
-        zip_beat(url, key, today, zip_down)
     rc = main_docs(args, url, key, docs, failed)
-    # 2026-10-14 18:29 に ZIP は戻ったが中身が 16:45 ごろのまま約 30 分(体重・着順が入らない)= 取れた・取れないに関わらず、
-    # ZIP を入れた後に毎回、まだ空の体重・着順だけを出馬表・成績の画面から埋める(ZIP が新しければ埋めるものは無い)
-    if live:
+    # 2026-10-14 保険: ZIP が止まる・中身が古い日も、ZIP の後に空の体重・着順・払戻を画面から埋め、見張り official_zip を書く(cloud/official_alt.py)
+    if zip_down is not None and not args.dry_run and not args.months:
         try:
-            fill_weights(url, key, today)
-        except Exception as e:                               # noqa: BLE001  埋められなくても便は止めない
-            log(f"体重の代わりの道: 失敗({type(e).__name__}: {str(e)[:160]})")
-        late = []
-        try:
-            late = fill_results(url, key, today)
-        except Exception as e:                               # noqa: BLE001
-            log(f"着順の代わりの道: 失敗({type(e).__name__}: {str(e)[:160]})")
-        if late and not zip_down:                            # ZIP は取れたのに、発走から STALE_MIN 分過ぎたレースの着順が無かった
-            import beat
-            beat.beat("official_zip", False, f"{today} 日次ZIPの中身が古い({' '.join(late)} の着順が無く、成績の画面から埋めた)")
+            official_alt.after_zip(url, key, today, zip_down, log=log)
+        except Exception as e:                               # noqa: BLE001  保険が落ちても便は止めない
+            log(f"[保険] 失敗({type(e).__name__}: {str(e)[:160]})")
     if fill and fill["races"]:
         d2, _ = build_dedup([(fill["source_observed_at"], "nextday-html", fill)])
         for k in ("payouts", "horses", "profiles"):
@@ -164,193 +153,6 @@ def main():
         elif upsert_all(url, key, d2, batch=1000, log=log):
             log("翌日の出馬表ページの投入に失敗(次の便で取り直す)")
     return rc
-
-
-def zip_beat(url, key, today, down):
-    """2026-10-14 公式の日次ZIPが 17 時前から全日付で「ファイルをダウンロードできませんでした」になり、「開催なしとみなして」緑のまま
-    体重が入らず直前版の印が 7R から出なかった直し: 開催のある日(本番 nar_races に今日の行がある)の JST 10 時以降に取れなければ
-    heartbeat 'official_zip' を fail(= 見張りが赤・所有者へメール)、取れたら ok。⛔書けなくても便は止めない"""
-    import json
-    import urllib.request
-    import beat
-    if not down:
-        beat.beat("official_zip", True)
-        return
-    if dt.datetime.now(JST).hour < 10:
-        return
-    try:
-        req = urllib.request.Request(f"{url}/rest/v1/nar_races?race_date=eq.{today.isoformat()}&select=race_no&limit=1",
-                                     headers={"apikey": key, "Authorization": f"Bearer {key}"})
-        with urllib.request.urlopen(req, timeout=20) as r:
-            has = bool(json.loads(r.read().decode("utf-8")))
-    except Exception as e:                                   # noqa: BLE001
-        log(f"今日の開催の有無が読めない({type(e).__name__}) → 日次ZIPの見張りは書かない"); return
-    if has:
-        beat.beat("official_zip", False, f"{today} 開催ありなのに日次ZIPが取れない(体重は出馬表の画面の代わりの道で読む)")
-
-
-def _rest(url, key, path, method="GET", body=None):
-    import json
-    import urllib.request
-    req = urllib.request.Request(f"{url}/rest/v1/{path}", method=method,
-                                 data=None if body is None else json.dumps(body).encode("utf-8"),
-                                 headers={"apikey": key, "Authorization": f"Bearer {key}", "Content-Type": "application/json",
-                                          "Prefer": "return=minimal"})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        raw = r.read().decode("utf-8")
-    return json.loads(raw) if raw.strip() else None
-
-
-FILL_BACK_MIN, FILL_AHEAD_MIN = 240, 90                      # 発走の 4 時間前に済んだレース(表示用)〜 90 分先まで
-
-
-def fill_weights(url, key, today):
-    """2026-10-14 日次ZIPが止まった日に本番 nar_runs の体重が空のまま(画面の馬体重・直前版の印の DB の道が空)になった直し:
-    ZIP が取れない回だけ、発走の前後のレースで体重が空の走を出馬表の画面(公式 → 南関の公式 → 楽天競馬)から読み、
-    体重が空の行にだけ書く(⛔値のある行は上書きしない・ZIP が戻れば次の回から今までどおり ZIP が正)。馬場も空のレースだけ"""
-    import re
-    import urllib.parse
-    from weights_alt import alt_today
-    d = today.isoformat()
-    races = _rest(url, key, f"nar_races?race_date=eq.{d}&select=track,race_no,post_time,going,cancelled")
-    runs = _rest(url, key, f"nar_runs?race_date=eq.{d}&body_weight=is.null&select=track,race_no,runner_number,finish_note")
-    miss = {(r["track"], int(r["race_no"])) for r in runs if not str(r.get("finish_note") or "").strip()}
-    now = dt.datetime.now(JST)
-    need = []
-    for r in races:
-        k = (r["track"], int(r["race_no"]))
-        m = re.fullmatch(r"(\d{1,2}):?(\d{2})", str(r.get("post_time") or "").strip())
-        if k not in miss or not m or str(r.get("cancelled") or "").strip():
-            continue
-        at = dt.datetime.combine(today, dt.time(int(m.group(1)), int(m.group(2))), JST)
-        if -FILL_BACK_MIN <= (at - now).total_seconds() / 60 <= FILL_AHEAD_MIN:
-            need.append(k)
-    if not need:
-        log("体重の代わりの道: 埋めるレース無し"); return
-    wt, go, src = alt_today(d, need, log=log)
-    n = 0
-    for (t, rno), v in wt.items():
-        tq = urllib.parse.quote(t)
-        for num, (bw, ch) in v.items():
-            _rest(url, key, f"nar_runs?race_date=eq.{d}&track=eq.{tq}&race_no=eq.{rno}&runner_number=eq.{num}&body_weight=is.null",
-                  "PATCH", {"body_weight": bw, "body_weight_change": ch})
-            n += 1
-    empty_go = {(r["track"], int(r["race_no"])) for r in races if not str(r.get("going") or "").strip()}
-    for (t, rno), g in go.items():
-        if (t, rno) in empty_go:
-            _rest(url, key, f"nar_races?race_date=eq.{d}&track=eq.{urllib.parse.quote(t)}&race_no=eq.{rno}", "PATCH", {"going": g})
-    log(f"体重の代わりの道: {len(wt)}/{len(need)} レース・{n} 走を空の行にだけ書いた(" +
-        " ".join(f"{t}{r}R={s}" for (t, r), s in sorted(src.items())) + ")")
-
-
-# 公式の成績の画面の払戻の券種 → 日次ZIPの取り込み(nar_official_csv)と同じ英名
-PAGE_TICKETS = {"単勝": "win", "複勝": "place", "馬連複": "quinella", "馬連単": "exacta", "枠連複": "wakuren",
-                "枠連単": "wakutan", "ワイド": "wide", "三連複": "trio", "三連単": "trifecta"}
-RESULT_AFTER_MIN = 5                                         # 発走 5 分後から成績の画面を見る
-STALE_MIN = 40                                               # 発走 40 分後でも ZIP に着順が無い= ZIP の中身が古い(見張りを赤に)
-
-
-def page_payouts(html):
-    """成績の画面の払戻の表 → [{t, c, y, p}](load_nar_official.group_payouts と同じ形・同じ並び)。券種名の無い行は前の券種の続き(複勝・ワイド)"""
-    import re
-    import kochi_results
-    from nar_official_csv import canonical_combination
-    p = kochi_results._Tables()
-    p.feed(html)
-    out, cur = [], None
-    for t in p.tables:
-        for row in t:
-            cells = [c.strip() for c in row]
-            if cells and cells[0] in PAGE_TICKETS:
-                cur, cells = PAGE_TICKETS[cells[0]], cells[1:]
-            elif not (cur and cells and re.fullmatch(r"[\d\-]+", cells[0])):
-                cur = None if cells and not re.fullmatch(r"[\d\-]+", cells[0] or "x") else cur
-                continue
-            if len(cells) < 2 or not re.fullmatch(r"\d+(?:-\d+)*", cells[0]):
-                continue
-            y = re.sub(r"[^\d]", "", cells[1])
-            pop = re.sub(r"[^\d]", "", cells[2]) if len(cells) > 2 else ""
-            if not y:
-                continue
-            try:
-                c = canonical_combination(cur, cells[0].split("-"))
-            except (TypeError, ValueError):
-                continue
-            out.append({"t": cur, "c": c, "y": int(y), "p": int(pop) if pop else None})
-    out.sort(key=lambda x: (x["t"], x["c"]))
-    return out
-
-
-def fill_results(url, key, today):
-    """2026-10-14 日次ZIPが止まった日に着順・払戻が川崎 5R・名古屋 8R・門別 5R で止まった直し: ZIP が取れない回だけ、発走 5 分後を
-    過ぎて着順の無いレースを公式の成績の画面(RaceMarkTable・出馬表と同じく ZIP とは別の入口)から読み、
-    nar_runs は着順・注記・タイム・着差・人気だけを着順の空の行に(⛔上がり 3F は ZIP に無い列なので書かない)、
-    nar_race_payouts は行の無いレースにだけ足す。ZIP が戻れば今までどおり ZIP の行で上書きされる"""
-    import re
-    import urllib.parse
-    import kochi_results
-    from load_nar_official import time_to_sec
-    from weights_alt import BABA, _get
-    d = today.isoformat()
-    races = _rest(url, key, f"nar_races?race_date=eq.{d}&select=track,race_no,post_time,cancelled")
-    # ⛔取消の注記(finish_note)は出馬表の段で入る= 着順の有無は finish だけで見る(注記で数えると取消のあるレースが埋まらない)
-    fin = _rest(url, key, f"nar_runs?race_date=eq.{d}&finish=not.is.null&select=track,race_no")
-    has_fin = {(r["track"], int(r["race_no"])) for r in fin}
-    has_pay = {(r["track"], int(r["race_no"])) for r in _rest(url, key, f"nar_race_payouts?race_date=eq.{d}&select=track,race_no")}
-    now = dt.datetime.now(JST)
-    need, ago = [], {}
-    for r in races:
-        k = (r["track"], int(r["race_no"]))
-        m = re.fullmatch(r"(\d{1,2}):?(\d{2})", str(r.get("post_time") or "").strip())
-        if k in has_fin or not m or str(r.get("cancelled") or "").strip() or k[0] not in BABA:
-            continue
-        at = dt.datetime.combine(today, dt.time(int(m.group(1)), int(m.group(2))), JST)
-        ago[k] = (now - at).total_seconds() / 60
-        if ago[k] >= RESULT_AFTER_MIN:
-            need.append(k)
-    if not need:
-        log("着順の代わりの道: 埋めるレース無し"); return []
-    done, n_run, n_pay, late = [], 0, 0, []
-    for t, rno in sorted(need):
-        time.sleep(1)
-        try:
-            html = _get("https://www.keiba.go.jp/KeibaWeb/TodayRaceInfo/RaceMarkTable?k_raceDate="
-                        + urllib.parse.quote(f"{today:%Y/%m/%d}", safe="") + f"&k_raceNo={rno}&k_babaCode={BABA[t]}")
-            parsed = kochi_results.parse_mark_table(html)
-        except Exception as e:                               # noqa: BLE001  1 レース落ちても次へ
-            log(f"着順の代わりの道: {t}{rno}R 読めない({type(e).__name__}: {str(e)[:100]})"); continue
-        if not parsed:
-            continue                                         # まだ確定していない
-        placed = [h for h in parsed["horses"] if (h.get("chakujun") or "").strip().isdigit()]
-        if len(placed) < 4 or any(not re.sub(r"[^\d]", "", h.get("time") or "") for h in placed):
-            continue                                         # 速報(上位 3 頭だけ・タイム空)= 確定の全頭が出てから(途中で書くと残りが埋まらない)
-        tq = urllib.parse.quote(t)
-        for h in parsed["horses"]:
-            ch = (h.get("chakujun") or "").strip()
-            raw = re.sub(r"[^\d]", "", h.get("time") or "").lstrip("0") or None
-            diff = (h.get("diff") or "").strip() or None
-            note = None if ch.isdigit() else (ch or None)
-            if diff and re.search(r"(取消|除外|中止|失格|降着)", diff):
-                note, diff = note or diff, None
-            pop = (h.get("ninki") or "").strip()
-            body = {"finish": int(ch) if ch.isdigit() else None, "finish_note": note,
-                    "time_raw": raw if ch.isdigit() else None, "time_sec": time_to_sec(raw) if ch.isdigit() else None,
-                    "margin": diff, "popularity": int(pop) if pop.isdigit() else None}
-            _rest(url, key, f"nar_runs?race_date=eq.{d}&track=eq.{tq}&race_no=eq.{rno}&runner_number=eq.{int(h['uma_ban'])}"
-                  "&finish=is.null&finish_note=is.null", "PATCH", body)
-            n_run += 1
-        if (t, rno) not in has_pay:
-            pays = page_payouts(html)
-            if pays:
-                _rest(url, key, "nar_race_payouts?on_conflict=track,race_date,race_no", "POST",
-                      [{"track": t, "race_date": d, "race_no": rno, "payouts": pays,
-                        "source_snapshot_hash": "racemarktable-html", "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()}])
-                n_pay += 1
-        done.append(f"{t}{rno}R")
-        if ago[(t, rno)] >= STALE_MIN:
-            late.append(f"{t}{rno}R")
-    log(f"着順の代わりの道: {len(done)}/{len(need)} レース・{n_run} 走・払戻 {n_pay} レース({' '.join(done) or 'なし'})")
-    return late
 
 
 def main_docs(args, url, key, docs, failed):

@@ -438,36 +438,28 @@ def db_weights(day):
 
 
 def today_weights(day, wt, go, need=()):
-    """公式の当日 ZIP → 取れなければ本番 DB の体重。2026-10-07 にこの便の機械だけ 2 時間 ZIP を断られ(同じ時間の nar-ai-last は取れていた)、
-    大井 1〜4R の直前版が出なかった。記録には例外の型しか無く理由が分からなかったので、状態番号と URL も残す"""
-    try:
-        w0, g0 = official_today(day)
-        # 2026-10-14 18:29 に ZIP は戻ったが中身が 16:45 ごろのまま(川崎 10R 以降の体重なし)= 取れても要るレースが空なら DB と代わりの道へ
-        if not [k for k in need if not w0.get(k)]:
-            return w0, g0
-        log('公式の当日 ZIP: 取れたが要るレースの体重が無い(中身が古い)', [k for k in need if not w0.get(k)])
-        wt, go = {**wt, **w0}, {**go, **g0}
-    except Exception as e:  # noqa: BLE001
-        log('公式の当日 ZIP: 失敗', type(e).__name__, str(e)[:200])
-    out = dict(wt)
-    try:
-        w2 = db_weights(day)
-        log('体重は本番 DB から', sum(len(v) for v in w2.values()), '頭', len(w2), 'R')
-        out.update(w2)
-    except Exception as e:  # noqa: BLE001  DB も読めなければ前の値のまま
-        log('本番 DB の体重も読めない', type(e).__name__, str(e)[:120])
-    # 2026-10-14 公式の ZIP が全日付で止まり、DB(= ZIP の写し)にも入らず川崎 7R から当日版の印が出なかった直し:
-    # まだ体重の無い要るレースだけ、出馬表の画面(公式 → 南関の公式 → 楽天競馬)から読む
-    miss = [k for k in need if not out.get(k)]
-    if miss:
+    """要るレース need の体重を 公式の当日 ZIP → 本番 DB → 保険(出馬表の画面・cloud/official_alt.py)の順に、まだ無い分だけ読む。
+    2026-10-07 にこの便の機械だけ 2 時間 ZIP を断られ大井 1〜4R の直前版が出なかった(記録に状態番号と URL も残す)。
+    2026-10-14 は ZIP が 1 時間半止まり、戻った後も 30 分は中身が古く(DB も同じ元)、川崎 7R の直前版が出なかった"""
+    out, go = dict(wt), dict(go)
+    for name, fn in (('公式の当日 ZIP', official_today), ('本番 DB', lambda d: (db_weights(d), {}))):
         try:
-            sys.path.insert(0, str(HERE.parents[2] / 'cloud'))
-            from weights_alt import alt_today
-            w3, g3, _ = alt_today(day, miss, log=lambda m: log(m))
-            out.update(w3)
-            go = {**g3, **go}
-        except Exception as e:  # noqa: BLE001
-            log('代わりの道も読めない', type(e).__name__, str(e)[:120])
+            w, g = fn(day)
+            out.update(w)
+            go.update(g)
+        except Exception as e:  # noqa: BLE001  読めなければ次へ
+            log(f'{name}: 読めない', type(e).__name__, str(e)[:200])
+        miss = [k for k in need if not out.get(k)]
+        if not miss:
+            return out, go
+    try:
+        sys.path.insert(0, str(HERE.parents[2] / 'cloud'))
+        from official_alt import alt_today
+        w, g, _ = alt_today(day, miss, log=lambda m: log(m))
+        out.update(w)
+        go = {**g, **go}
+    except Exception as e:  # noqa: BLE001
+        log('保険も読めない', type(e).__name__, str(e)[:120])
     return out, go
 
 
