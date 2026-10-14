@@ -1,10 +1,12 @@
 # 他場版 v3n(公式の元だけ・場ごとの AI を base-v1 と混ぜる・8 場)を書く便(2026-10-10・v3 の out/kochi_deploy_steps.md)。
+# 2026-10-14 第 9 版(決め 31・v3 の out/v3n_one_u.md): 混ぜをやめて全国 1 本の固定の木(暗号化リリース v3n-one-20261014)。
+#   材料 = nar-ai-feat の成果物の nar_ai_feat_run(base-v1 の朝の材料表)+ 公式の表から作る場の材料。並び読みの重みもイに合わせた版。
 # 場 = 門別・水沢・金沢・笠松・名古屋・園田・高知・佐賀(v3 の out/nation.md で「入れ替えてよい」から南関を除く)。
 # ⛔本番への書き込みは nar_ai_marks(model='v3n-1', timing='morning')の REST upsert だけ。SQL は流さない。
 #   画面に出すかはサイト(nar-viewer)の AI_TAJO_PUBLIC で決める(v3 の out/v3n_site_spec.md)。それまでは見えない。
 #   base-v1 の朝の行が無いレースは書かない= 2 回目の便(09:15)で埋まる。朝の行は凍結(上書きしない)。
 # 読むのは nar-official の公開の表(nar_runs・nar_races・nar_run_facts・nar_horse_profiles・nar_jra_runs・nar_jra_horses)と
-# その日の base-v1 の朝の行だけ。固定ファイルは無い(毎日その日の前までで学び直す・場の数 × 約 4 分)。
+# nar-ai-feat の成果物(材料表)だけ。固定ファイル = 全国 1 本の木・並び読みの重み(暗号化リリース)。
 name: nar-ai-v3n
 
 on:
@@ -32,6 +34,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read               # nar-ai-feat の成果物(材料表)を取るため
 
 jobs:
   predict:
@@ -59,8 +62,51 @@ jobs:
           fi
           echo "day=$DAY" >> "$GITHUB_OUTPUT"; echo "day=$DAY"
 
+      # 2026-10-14 第 9 版: base-v1 の朝の材料表 = nar-ai-feat の成果物。1 回目(workflow_run)はその便、09:15 の予備・手動は成果物のある最新の成功便。
+      #   ⛔材料表に無いレースは v3n_daily が書かない(落ちない)。取れなければこの段で落ちる(何も書かない)
+      - name: fetch base-v1 features (nar-ai-feat artifact)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          RUN_FROM: ${{ github.event.workflow_run.id }}
+        run: |
+          set -o pipefail
+          ID="$RUN_FROM"
+          if [ -z "$ID" ]; then
+            for L in $(gh run list -R "$GITHUB_REPOSITORY" -w nar-ai-feat.yml -s success -L 10 --json databaseId --jq '.[].databaseId'); do
+              N=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$L/artifacts" --jq '[.artifacts[] | select(.name | startswith("nar-ai-feat-") and (endswith("dumps") | not))] | length')
+              if [ "$N" -gt 0 ]; then ID=$L; break; fi
+              echo "run $L は材料表の成果物 0 本= 飛ばす"
+            done
+          fi
+          [ -n "$ID" ] || { echo "nar-ai-feat の成功便が見つからない"; exit 1; }
+          gh run view "$ID" -R "$GITHUB_REPOSITORY" --json createdAt,event --jq '"nar-ai-feat run '"$ID"' \(.event) \(.createdAt)"'
+          gh run download "$ID" -R "$GITHUB_REPOSITORY" -n "$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$ID/artifacts" --jq '[.artifacts[] | select(.name | startswith("nar-ai-feat-") and (endswith("dumps") | not))][0].name')" -D featdl
+          bash ops/artifact_seal.sh unseal featdl
+          F=$(find featdl -name 'nar_ai_feat_run.csv*' | head -n 1)
+          [ -n "$F" ] || { echo "nar_ai_feat_run が無い"; exit 1; }
+          mkdir -p feat
+          case "$F" in *.gz) mv "$F" feat/nar_ai_feat_run.csv.gz ;; *) gzip -c "$F" > feat/nar_ai_feat_run.csv.gz ;; esac
+          rm -rf featdl
+          ls -l feat
+
+      # 2026-10-14 第 9 版 = 全国 1 本の固定の木(v3 の src/f5_scripts/v3n_one_prod.py tree・2026-09-01 切り)。⛔無ければ v3n_daily が落ちる(何も書かない)
+      - name: download v3n one model
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3n-one-20261014 -p 'v3n_one.tar.gz.enc' -D in
+          mkdir -p v3n_one
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3n_one.tar.gz.enc | tar -C v3n_one -xzf -
+          rm -f in/v3n_one.tar.gz.enc
+          ls -l v3n_one
+
       # 2026-10-12 第 6 版 = 並び読み(14 場 + 中央の過去 10 走・v3 の out/v3n_seq.md)の固定ファイル(時計のならし・重み 3 本)。
-      #   無ければ v3n_daily は第 5 版のまま書く(並び読みを足さない)
+      #   2026-10-14 第 9 版: 重みをイの p5 で仕上げ直した版(v3n-seq-one-20261014)。戻すときは v3n-seq-20261012 と v3n_daily の第 8 版を一緒に。
+      #   無ければ v3n_daily は並び読みを足さずに書く
       - name: download v3n seq files
         continue-on-error: true
         env:
@@ -69,15 +115,17 @@ jobs:
         run: |
           set -o pipefail
           V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
-          gh release download v3n-seq-20261012 -p 'v3n_seq.tar.gz.enc' -D in
+          gh release download v3n-seq-one-20261014 -p 'v3n_seq.tar.gz.enc' -D in
           mkdir -p v3n_seq
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3n_seq.tar.gz.enc | tar -C v3n_seq -xzf -
           rm -f in/v3n_seq.tar.gz.enc
           ls -l v3n_seq
 
-      - name: v3n 8 tracks (fetch → features → train → blend → write)
+      - name: v3n 10 tracks (fetch → features → one model → write)
         env:
           V3N_SEQ: v3n_seq
+          V3N_ONE: v3n_one
+          V3N_FEAT: feat/nar_ai_feat_run.csv.gz
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
           WRITE: ${{ (github.event_name == 'schedule' || github.event_name == 'workflow_run') && 'yes' || github.event.inputs.write }}

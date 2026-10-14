@@ -64,8 +64,12 @@ def relabel(meta, gone, ud=None):
     c = {n: p[n] / s for n in keep}
     run = {int(r['num']): r for r in (meta.get('runners') or [])}
     s1 = sum(float(run[n]['p1']) for n in keep if n in run) or 1.0
-    import k26_cal  # 朝(v3n_daily)と同じ 3 着内の率の曲線
-    q3 = dict(zip(keep, k26_cal.p3([c[n] for n in keep], len(keep))))
+    one = bool(meta.get('one'))  # 第 9 版(イ' 全国 1 本・決め 31)の朝の行 = イの曲線と k(それより前の行は今までどおり)
+    if one:
+        import v3n_one as cal
+    else:
+        import k26_cal as cal  # 朝(v3n_daily)と同じ 3 着内の率の曲線
+    q3 = dict(zip(keep, cal.p3([c[n] for n in keep], len(keep))))
     u = {int(k): float(v) for k, v in (ud if ud is not None else (meta.get('u') or {})).items()}
     if u and all(n in u for n in keep):  # 第 6 版: 朝の並び読みの外した分を足す(朝と同じ式・取消の後の頭数で計算し直すのは未対応)
         q3 = {n: min(max(1 / (1 + np.exp(-(np.log(q3[n] / (1 - q3[n])) + u[n]))), 0.001), 0.999) for n in keep}
@@ -86,7 +90,8 @@ def relabel(meta, gone, ud=None):
     if pc and all(n in pc for n in keep):
         import v3n_p1
         xs = np.array([(u[n] if (u and all(m in u for m in keep)) else 0.0) + (v3n_e1.BETA_NOKEN * nz.get(n, 0.0) if e1on else 0.0) for n in keep])
-        p1n = dict(zip(keep, v3n_p1.follow([pc[n] for n in keep], xs, 'di' if ud is not None else 'mo')))
+        ver = ('di' if ud is not None else 'mo') + ('1' if one else '')
+        p1n = dict(zip(keep, v3n_p1.follow([pc[n] for n in keep], xs, ver)))
         q3 = {n: max(q3[n], p1n[n]) for n in keep}
     f0 = str(meta.get('form') or '').replace('+e1+noken', '').replace('+e1', '')
     ks = sum(key.values()) or 1.0
@@ -104,7 +109,7 @@ def relabel(meta, gone, ud=None):
         'form': f0 + (('+e1+noken' if 'noken_z' in meta else '+e1') if e1on else ''),
         **({'noken_z': {str(k): v for k, v in sorted(nz.items())}} if 'noken_z' in meta else {}),
         'from': 'morning',
-        **({'p1c': {str(n): v for n, v in sorted(pc.items()) if n in keep}, 'p1f': v3n_p1.TAG['di' if ud is not None else 'mo']} if p1n is not None else {}),
+        **({'p1c': {str(n): v for n, v in sorted(pc.items()) if n in keep}, 'p1f': v3n_p1.TAG[ver]} if p1n is not None else {}),
         'direct': ud is not None,
         **({'u_day': {str(k): round(float(v), 4) for k, v in ud.items()}} if ud is not None else {}),
         **({'seq_day': SEQ_FORM} if ud is not None and SEQ_FORM else {}),

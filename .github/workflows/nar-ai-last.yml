@@ -136,6 +136,7 @@ jobs:
 
       # ---------------------------------------------------------------- 2026-10-12 他場版 v3n の直前版の並び読み(v3 の out/v3n_seq_day.md)
       # 便の頭で 1 回: 重み(暗号化リリース v3n-seq-day-20261013 = 第 8 版・騎手・調教師 + 3 着差・v3 の out/v3n_seq3_judge.md)を開き、
+      # 2026-10-14 第 9 版(決め 31): 同じ作りの重みをイ' 全国 1 本の p5 で仕上げ直した v3n-seq-day-one-20261014(戻すときは第 8 版と v3n_daily を一緒に)。
       # 公式の表を落として(k0_dl・約 3 分)今日の出走馬の材料を作る。戻すときはリリース名を v3n-seq-day-20261012 に(材料は重みの添え書き new で切り替わる)。
       # ⛔失敗しても周は続ける(v3n_last.py は取消の割り直しだけになる)
       - name: v3n seq day prep
@@ -149,7 +150,7 @@ jobs:
         run: |
           set -o pipefail
           V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
-          gh release download v3n-seq-day-20261013 -p 'v3n_seq_day.tar.gz.enc' -D in
+          gh release download v3n-seq-day-one-20261014 -p 'v3n_seq_day.tar.gz.enc' -D in
           mkdir -p v3n_seq_day today
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3n_seq_day.tar.gz.enc | tar -C v3n_seq_day -xzf -
           rm -f in/v3n_seq_day.tar.gz.enc
