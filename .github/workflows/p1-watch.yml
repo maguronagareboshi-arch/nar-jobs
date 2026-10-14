@@ -1,0 +1,35 @@
+# 勝つ率の見張り(決め 29・30・2026-10-14): その日の AI の行(南関 v3-9・他場 v3n-1)で p1 > p3・p1 の合計・勝つ率の直しの印 p1f を数える。
+#   食い違いが 1 つでもあれば赤(= 所有者へ失敗メール)+ heartbeat p1_watch に fail。読むだけ(本番には書かない)。
+name: p1-watch
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: '見る日(空= JST の今日)'
+        required: false
+        default: ''
+  schedule:
+    - cron: '30 13 * * *'   # JST 22:30(集計便 22:15 の後・その日の最後のレースの後)
+
+jobs:
+  watch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: watch
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          set +e
+          python3 cloud/p1_watch.py ${{ github.event.inputs.date }}
+          rc=$?
+          if [ "$rc" = "0" ]; then
+            python3 cloud/beat.py p1_watch ok
+          else
+            python3 cloud/beat.py p1_watch fail "勝つ率と 3着内の食い違い(rc=$rc)"
+            echo "::error::勝つ率と 3着内の食い違い(上の一覧)"
+          fi
+          exit $rc
