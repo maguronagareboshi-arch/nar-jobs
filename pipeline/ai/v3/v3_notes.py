@@ -16,7 +16,13 @@
   厩舎談話(競馬ブックの談話 = danwa_marks.LAST[day] の本文)= 研究 nankan-ai-v3 src/dw_tmpl.py(この場所の dw_tmpl.py と同じ)で
   欄(状態・上積み・事情・前走・条件・展開・気性・馬体・病気・結論)ごとの型に分ける(談話の 98% に型が付く・out/danwa_tmpl.md)。
   画面に出すかはサイトの旗で別に決める(公開はユーザーの承認後):
-      dw_sum  = 定型の要約 1 行(全部の型)「状態: 維持・変わりなし / 展開: 展開待ち・流れひとつ / 結論: 控えめ(入着・掲示板)」
+      dw_sum  = 談話の札の要約 1 行「今: 順調 / 前走: 好内容 / 今回: 流れ次第 / 結論: 前向き」(2026-10-14 から)。
+                研究 nankan-ai-v3 src/dw_pat.py・dw_tags.py(この場所に同じもの)= 過去の談話 30.9 万件の言い回しの型にエージェントが札を
+                付けた辞書(dw_pat_dict.json.gz)+ 辞書から学んだ補助の読み手(dw_pat_fallback.json.gz)。Claude は使わない・素の Python だけ。
+                独立の採点で札の正しさ 96〜97%・拾い 83〜86%(out/dw_pat/report.md・audit*_report.md)。前の dw_tmpl.summary の置き換え。
+                2026-10-14 から札は BERT(dw_bert.py・模型 V3_DWBERT = tohoku-nlp/bert-base-japanese-v3 を談話まるごとの札 2.5 万件で
+                仕込んだもの・新しい 150 件で重い誤り 1 件 = 規則の版 5 件)で読む。模型が無い・読めない便は規則の版。
+                札を読む本文は研究と同じ「見出し。本文」の形(dw_bert.text)。
       note_dw = 目立つ札(今の AI に対しても差が大きい型だけ):
           「陣営の話: 熱発の後で調整不足」(病気 + 調整不足の言葉・0.53 倍)/「陣営の話: 熱発は回復と明言」(1.12 倍)/
           「陣営の話: きっかけ待ち」(1.19 倍)/「陣営の話: 馬体が細い・減った」(0.72 倍)
@@ -24,6 +30,8 @@
 ⛔読むだけ(GET)。書かない。鍵は印字しない。失敗は呼ぶ側(v3_daily)で受けて、予想の表と書き込みは止めない。
 """
 import json
+import os
+from pathlib import Path
 import re
 import urllib.error
 import urllib.parse
@@ -38,14 +46,47 @@ import t4_day3 as d3
 KEY = ['track', 'race_date', 'race_no']
 # 厩舎談話の定型(研究 nankan-ai-v3 src/dw_tmpl.py と同じファイル = この場所の dw_tmpl.py)
 import dw_tmpl  # noqa: E402
+# 談話の札(要約 1 行 dw_sum)= 研究 nankan-ai-v3 src/dw_pat.py・dw_tags.py と同じファイル
+import dw_pat  # noqa: E402
+import dw_tags  # noqa: E402
+# 談話の札を BERT で読む(2026-10-14・研究 nankan-ai-v3 src/dw_bert.py と同じファイル)。模型は V3_DWBERT(リリース v3-dwbert-20261014)。
+# 模型・部品が無い便は上の規則の版(dw_pat)で読む。
+import dw_bert  # noqa: E402
+_HERE = Path(__file__).resolve().parent
+_DW_PAT = None
+_DW_BERT = None
+
+
+def _dw_bert(log=print):
+    global _DW_BERT
+    if _DW_BERT is None:
+        _DW_BERT = False
+        d = os.environ.get('V3_DWBERT')
+        if d and (Path(d) / 'model.safetensors').exists():
+            try:
+                _DW_BERT = dw_bert.load(d)
+            except Exception as e:  # noqa: BLE001
+                log('談話の札 BERT 読み込み 失敗(規則の版で読む)', type(e).__name__, str(e)[:200])
+        else:
+            log('談話の札 BERT の模型なし(規則の版で読む)', d)
+    return _DW_BERT
+
+
+def _dw_pat():
+    global _DW_PAT
+    if _DW_PAT is None:
+        _DW_PAT = dw_pat.load(_HERE / 'dw_pat_dict.json.gz', _HERE / 'dw_pat_fallback.json.gz')
+        _DW_PAT['ctx_mode'] = 'drop'  # 前後の文で意味が決まる型は札を出さない
+    return _DW_PAT
 
 # 目立つ札にする型(今の AI = 第11版の前日版に対しても差が大きい型だけ・out/danwa_tmpl.md・2023-01〜2026-08)
 DW_HI = {('状態', '停滞・きっかけ待ち'): '陣営の話: きっかけ待ち',      # 1.19 ± 0.08(3,203 頭)
          ('馬体', '細い・減った'): '陣営の話: 馬体が細い・減った'}      # 0.72 ± 0.08(886 頭)
 
 
-def dw_note(t):
-    """談話の本文 → (目立つ札のリスト, 定型の要約 1 行)。病気の札 = 病名 + 結び(調整不足 0.53 倍 / 回復と明言 1.12 倍)。"""
+def dw_note(t, tx=None):
+    """談話の本文 → (目立つ札のリスト, 規則の版の要約 1 行)。病気の札 = 病名 + 結び(調整不足 0.53 倍 / 回復と明言 1.12 倍)。
+    tx = 札を読む形「見出し。本文」(dw_bert.text・研究の談話と同じ形)。無ければ「。本文」。"""
     tg = dw_tmpl.tags(t)
     s = set(tg)
     hi = []
@@ -55,7 +96,7 @@ def dw_note(t):
     elif ill and ('病気', '→ 回復と明言') in s:
         hi.append(f'陣営の話: {ill}は回復と明言')
     hi += [txt for k, txt in DW_HI.items() if k in s]
-    return hi, dw_tmpl.summary(t)
+    return hi, dw_tags.line(dw_pat.read(_dw_pat(), tx if tx is not None else dw_bert.text('', t)))
 SMALL = ('ハナ', 'アタマ', 'クビ')
 SLOW = re.compile('出遅|アオ|立ち遅|ダッシュ付かず')
 # 寸評 → 札(先に当たった方)。調べの組(src/f5_scripts/sunpyo/cls.py)のうち、字にしてよいものだけ。
@@ -189,6 +230,7 @@ def make(day, h, T, kb_rows=None, log=print, dw_rows=None):
                         nkb += 1
     # 厩舎談話(danwa_marks.load が控えた今日の本文)
     ndw = nsum = 0
+    dw_items = []  # (馬, 札を読む形の本文, 規則の版の要約)
     if dw_rows is None:
         try:
             import danwa_marks
@@ -202,15 +244,28 @@ def make(day, h, T, kb_rows=None, log=print, dw_rows=None):
             if k not in keep:
                 continue
             body = r.comment if isinstance(getattr(r, 'comment', None), str) and r.comment else getattr(r, 'raw', '')
-            hi, sm = dw_note(body)
+            tx = dw_bert.text(getattr(r, 'headline', None), body)
+            hi, sm = dw_note(body, tx)
             for txt in hi:
                 add(k, 'note_dw', txt)
             if hi:
                 ndw += 1
-            if sm:
-                notes.setdefault(k, {'note': [], 'note_kb': [], 'note_dw': []})['dw_sum'] = sm
-                nsum += 1
-    log('ひとこと', len(notes), '頭', '出遅れ', nslow, '不利', nkb, '競馬ブックの行', len(kb), '談話の札', ndw, '談話の要約', nsum)
+            dw_items.append((k, tx, sm))
+    # 要約 1 行 dw_sum = BERT の札(読めなければ規則の版の札)
+    how = '規則'
+    sums = [sm for _, _, sm in dw_items]
+    M = _dw_bert(log) if dw_items else False
+    if M:
+        try:
+            sums = [dw_tags.line(c) for c in dw_bert.read(M, [tx for _, tx, _ in dw_items])]
+            how = 'BERT'
+        except Exception as e:  # noqa: BLE001
+            log('談話の札 BERT 失敗(規則の版で読む)', type(e).__name__, str(e)[:200])
+    for (k, _, _), sm in zip(dw_items, sums):
+        if sm:
+            notes.setdefault(k, {'note': [], 'note_kb': [], 'note_dw': []})['dw_sum'] = sm
+            nsum += 1
+    log('ひとこと', len(notes), '頭', '出遅れ', nslow, '不利', nkb, '競馬ブックの行', len(kb), '談話の札', ndw, '談話の要約', nsum, f'({how})')
     return notes
 
 
