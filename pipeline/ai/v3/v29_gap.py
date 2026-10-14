@@ -199,11 +199,14 @@ def day_marks(Bk, odds, w, going, dm, day):
         return np.log(p / (1 - p))
     r = {t: 1 / (1 + np.exp(-(lg(b[f'p{t[1]}_s2']) + np.mean([m.predict(X, raw_score=True) for m in ms], axis=0))))
          for t, ms in M.items()}
+    t3 = r['p3'].copy()  # 勝つ率の直し(決め 29)の木の 3着内 = 談話の印の前
     if 'dw_u' in b.columns:  # 談話の印の 3 定数(v13y・前日の便が土台に入れた・談話が無い馬は 0)
         r['p3'] = 1 / (1 + np.exp(-(lg(r['p3']) + b.dw_u.fillna(0.0).to_numpy(float))))
     p1 = r['p1'] / r['p1'].sum()
     p3 = np.maximum(r['p3'], p1)
     p3p = _sum3(p3) if len(b) > 3 else np.minimum(p3, 1.0)
+    t3 = np.maximum(t3, p1)
+    t3 = _sum3(t3) if len(b) > 3 else np.minimum(t3, 1.0)
     # 第12版の束(前日の便が土台に書いた足し分・研究 nankan-ai-v3 own_day.py・2026-10-12): t14 → f10k の順に足し、そのたび p3 = max(·, p1)・合計 3
     used = []
     for c in ('b14_u', 'b19_u'):
@@ -229,9 +232,16 @@ def day_marks(Bk, odds, w, going, dm, day):
         p3p = _sum3(p3) if len(b) > 3 else np.minimum(p3, 1.0)
         nd = int(b.dbt_u.notna().sum())
         used.append('debut')
-    stamp = 'v3-9 当日版(第10版 + 当日の体重 15 本・t11 + 談話の印 3 定数)' if not used else \
+    try:  # 勝つ率の直し(決め 29・研究 nankan-ai-v3 p1_fix.py・2026-10-14): 上乗せを全部足した後の p3′ に p1 を付いて行かせ・3着内の極端さの直し E・守り
+        import p1_follow
+        p1, p3p = p1_follow.apply('day', p1, t3, p3p)
+        used.append('p1f')
+    except Exception as e:  # noqa: BLE001  直しが落ちても印は出す
+        log('勝つ率の直し 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
+    stamp = 'v3-9 当日版(第10版 + 当日の体重 15 本・t11 + 談話の印 3 定数)' if not [c for c in used if c != 'p1f'] else \
         'v3-9 当日版(第12版 = 当日の体重 15 本と馬場・t11 + 談話の印 + 束 ' + '・'.join({'b14_u': 't14', 'b19_u': 'f10k'}[c] for c in used if c in ('b14_u', 'b19_u')) + \
         (' + 並び読み' if 'seq2' in used else '') + (' + 初出走の層' if 'debut' in used else '') + ')'
+    stamp += ' + 勝つ率の直し' if 'p1f' in used else ''
     d = pd.DataFrame({'num': b.umaban.astype(int).to_numpy(), 'p1': p1, 'p3': p3p, 'p3_raw': p3})
     d = d.sort_values(['p3', 'p1', 'num'], ascending=[False, False, True], kind='mergesort').reset_index(drop=True)
     marks = [{'num': int(x.num), 'mark': MARKS[i], 'score': round(float(x.p3) * 100, 1)} for i, x in enumerate(d.itertuples()) if i < 5]
@@ -242,6 +252,8 @@ def day_marks(Bk, odds, w, going, dm, day):
             'weights': int(b.bw.notna().sum()), 'going': going, 'runners': runners}
     if nd:
         meta['debut'] = nd
+    if 'p1f' in used:
+        meta['p1f'] = p1_follow.TAG['day']
     return {'track': tr, 'race_date': day, 'race_no': rno, 'marks': marks, 'meta': meta}
 
 

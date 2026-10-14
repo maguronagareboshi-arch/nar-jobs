@@ -87,6 +87,7 @@ def main():
         SQ = None
     # 2026-10-13 第 7 版: 率の直し E1 と初出走の能検の z(v3 の out/v3n_ab.md・v3n_e1.py)。⛔能検が読めなくても E1 だけで書く
     import v3n_e1
+    import v3n_p1
     NZ, nk_ok = {}, False
     try:
         NK = v3n_e1.fetch_rows(k0_dl.sb)
@@ -165,10 +166,15 @@ def main():
             sc = key / key.sum()
             order = np.argsort(-key, kind='stable')
             marks = [{'num': int(nums[i]), 'mark': MARKS[k_], 'score': round(float(sc[i]) * 100, 1)} for k_, i in enumerate(order[:5])]
+            # 勝つ率の直し(決め 29): 直す前の c1 に 並び読み u + 能検 β·z を付いて行かせる。表示の p3 は max(p3, p1)(印は上で決めたまま)
+            zz = np.array([nz.get(int(n), 0.0) for n in nums]) if e1on else np.zeros(len(nums))
+            q1 = v3n_p1.follow(c1, (np.asarray(u, float) if u is not None else 0.0) + v3n_e1.BETA_NOKEN * zz, 'mo')
+            p3s = np.maximum(p3, q1)
             meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM + (('+e1+noken' if nk_ok else '+e1') if e1on else ''), 'w': w, 'gamma': gm, 'trained_to': trained_to, 'seq': u is not None,
                     **({'u': {str(int(n)): round(float(x), 4) for n, x in zip(nums, u)}} if u is not None else {}),
                     **({'noken_z': {str(k_): float(v) for k_, v in sorted(nz.items())}} if nz else {}),
-                    'runners': [{'num': int(n), 'p1': round(float(a), 4), 'p3': round(float(b_), 4)} for n, a, b_ in zip(nums, c1, p3)],
+                    'runners': [{'num': int(n), 'p1': round(float(a), 4), 'p3': round(float(b_), 4)} for n, a, b_ in zip(nums, q1, p3s)],
+                    'p1c': {str(int(n)): round(float(a), 6) for n, a in zip(nums, c1)}, 'p1f': v3n_p1.TAG['mo'],
                     'p': {str(int(n)): round(float(x), 4) for n, x in zip(nums, c)},
                     'own': {str(int(n)): [round(float(a), 4), round(float(b_), 4)] for n, a, b_ in zip(nums, g.p1, g.p3)}}
             rows.append({'track': trk, 'race_date': day, 'race_no': int(rno), 'marks': marks, 'meta': meta})

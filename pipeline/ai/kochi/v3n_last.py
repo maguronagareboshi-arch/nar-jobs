@@ -79,6 +79,15 @@ def relabel(meta, gone, ud=None):
     q3 = dict(zip(keep, arr))
     if e1on and nz:
         key = q3
+    # 勝つ率の直し(決め 29): 朝の meta.p1c(直す前の c1)を取消の後の馬で割り直し、x = 並び読み u(直前は u_day)+ 能検 β·z を掛け直す。
+    #   表示の p3 = max(p3, p1)(印は key の順のまま)。p1c の無い古い朝の行は今までどおり runners の p1 を割り直す。
+    p1n = None
+    pc = {int(k): float(v) for k, v in (meta.get('p1c') or {}).items()}
+    if pc and all(n in pc for n in keep):
+        import v3n_p1
+        xs = np.array([(u[n] if (u and all(m in u for m in keep)) else 0.0) + (v3n_e1.BETA_NOKEN * nz.get(n, 0.0) if e1on else 0.0) for n in keep])
+        p1n = dict(zip(keep, v3n_p1.follow([pc[n] for n in keep], xs, 'di' if ud is not None else 'mo')))
+        q3 = {n: max(q3[n], p1n[n]) for n in keep}
     f0 = str(meta.get('form') or '').replace('+e1+noken', '').replace('+e1', '')
     ks = sum(key.values()) or 1.0
     order = sorted(keep, key=lambda n: (-key[n], keep.index(n)))
@@ -87,7 +96,7 @@ def relabel(meta, gone, ud=None):
     new.update({
         'n': len(keep),
         'p': {str(n): round(c[n], 4) for n in keep},
-        'runners': [{'num': n, 'p1': round(float(run[n]['p1']) / s1, 4) if n in run else None,
+        'runners': [{'num': n, 'p1': (round(float(p1n[n]), 4) if p1n is not None else round(float(run[n]['p1']) / s1, 4) if n in run else None),
                      'p3': round(float(q3[n]), 4)} for n in keep],
         'own': {k: v for k, v in (meta.get('own') or {}).items() if int(k) not in gone},
         **({'u': {k: v for k, v in (meta.get('u') or {}).items() if int(k) not in gone}} if meta.get('u') else {}),
@@ -95,6 +104,7 @@ def relabel(meta, gone, ud=None):
         'form': f0 + (('+e1+noken' if 'noken_z' in meta else '+e1') if e1on else ''),
         **({'noken_z': {str(k): v for k, v in sorted(nz.items())}} if 'noken_z' in meta else {}),
         'from': 'morning',
+        **({'p1c': {str(n): v for n, v in sorted(pc.items()) if n in keep}, 'p1f': v3n_p1.TAG['di' if ud is not None else 'mo']} if p1n is not None else {}),
         'direct': ud is not None,
         **({'u_day': {str(k): round(float(v), 4) for k, v in ud.items()}} if ud is not None else {}),
         **({'seq_day': SEQ_FORM} if ud is not None and SEQ_FORM else {}),

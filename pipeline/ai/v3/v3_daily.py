@@ -37,6 +37,7 @@ STAMP11 = STAMP + '+束 t14(37 列の木・学び 2023-01〜2026-08)'  # 第11�
 STAMP12 = STAMP11 + '+束 f10k(60 列の木・学び 2023-01〜2026-08)'  # 第12版(束 t14 と f10k を両方足せた日だけ)
 STAMP_DEB = '+初出走の層(寸評・時計 35 列の木・学び 2023-01〜2026-08)'  # 決め 28(初出走のいる日だけ)
 MK = ['◎', '○', '▲', '△']
+P1F_TAG = 'p1f 決め29 前日 k0.987'  # p1_follow.TAG['pre'] と同じ字
 
 
 def log(*a):
@@ -55,6 +56,8 @@ def build_rows(csv_path, day, src, stamp=STAMP):
         meta = {'n': int(len(g)), 'model': MODEL_ID, 'stamp': stamp, 'works_src': src, 'runners': runners}
         if 'dbt_pre_u' in g.columns and g.dbt_pre_u.notna().any():  # 初出走の層を足したレース = 足した頭数(表の行で確かめる)
             meta['debut'] = int(g.dbt_pre_u.notna().sum())
+        if 'p1_t10' in g.columns and g.p1_t10.notna().all():  # 勝つ率の直し(決め 29)を掛けたレース = p1 は直した値・元は p1_t10
+            meta['p1f'] = P1F_TAG
         rows.append({'track': tr, 'race_date': str(day), 'race_no': int(rno), 'marks': marks, 'meta': meta})
     return rows
 
@@ -149,6 +152,13 @@ def main():
         log('v29 base', len(vb), '頭', 'hist', round(float(vb.bw_norm.notna().mean()), 3))
     except Exception as e:  # noqa: BLE001
         log('v29 base 失敗', type(e).__name__, str(e)[:200])
+    try:  # 勝つ率の直し(決め 29)が使う木の 3着内 p3p_t10 を、上乗せの前に控える(談話の印が書くのと同じ値・談話が落ちても残る)
+        _t = pd.read_csv(csv_path, encoding='utf-8-sig')
+        if 'p3p_t10' not in _t.columns:
+            _t['p3p_t10'] = _t.p3p
+            _t.to_csv(csv_path, index=False, encoding='utf-8-sig')
+    except Exception as e:  # noqa: BLE001
+        log('木の 3着内の控え 失敗', type(e).__name__, str(e)[:200])
     try:  # 談話の印の 3 定数(v13y・2026-10)= 印と p3′ だけ。v29 の土台・v31 は上の第10版のまま(土台には dw_u を足す = 当日版の印が使う)
         import danwa_marks
         danwa_marks.apply_csv(csv_path, day, base_csv=out / f'{day}_v29_base.csv', log=log)
@@ -200,6 +210,12 @@ def main():
             nd = debut_live.run(day, cap['T'], cap.get('F'), csv_path, out / f'{day}_v29_base.csv', t8._W.get('parsed'), t8.works()[0], log=log)
         except Exception as e:  # noqa: BLE001
             log('初出走の層 失敗(第12版のまま)', type(e).__name__, str(e)[:200])
+    try:  # 勝つ率の直し(決め 29・研究 nankan-ai-v3 p1_fix.py・2026-10-14): 上乗せを全部足した後に p1 を 3着内に付いて行かせる。
+        #   v29 の土台・v31・v3_tri は上で第10版の p1 を読み済み(学んだ時と同じ = 変えない)
+        import p1_follow
+        p1_follow.apply_csv(csv_path, log=log)
+    except Exception as e:  # noqa: BLE001
+        log('勝つ率の直し 失敗(木の勝つ率のまま)', type(e).__name__, str(e)[:200])
     notes = {}
     try:  # ひとこと(表示だけ・予想の計算には使わない・失敗しても予想の表と書き込みは止めない)
         import v3_notes
