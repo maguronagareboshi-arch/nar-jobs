@@ -81,6 +81,7 @@ def main():
         targets.append(("nextday", {"year": tomorrow.year, "month": tomorrow.month}))
 
     docs = []; failed = 0
+    zip_down = None                                          # 2026-10-14 当日の日次ZIP: True= 取れない・False= 取れた・None= 取りに行っていない
     have_next = set()                                        # 月次ZIPに入っていた翌日の (場, R)
     for scope, kw in targets:
         optional = scope == "monthly-next"
@@ -93,6 +94,7 @@ def main():
             if nextday:
                 log(f"翌日 {tomorrow} (月次 {kw}): まだ公式に無い({e}) → 投入なし"); continue
             if scope == "daily":
+                zip_down = True
                 log(f"daily {kw['race_date']}: 公式が ZIP を返さない({e}) → 開催なしとみなして投入なし"); continue
             if optional:
                 log(f"翌月 {kw}: まだ公式に無い({e})"); continue
@@ -101,10 +103,13 @@ def main():
             if nextday:                                      # 翌日分は失敗扱いにしない(次の便が取り直す)
                 log(f"翌日 {tomorrow} (月次 {kw}): 取れない({type(e).__name__}: {str(e)[:120]}) → 投入なし"); continue
             if scope == "daily" and not_found(e):            # §186 daily の 404= ZIP でない応答と同じ(夜の手押しで rc=2 が 2 回)
+                zip_down = True
                 log(f"daily {kw['race_date']}: 公式が 404 を返す → 開催なしとみなして投入なし"); continue
             failed += 1; log(f"取得失敗 {scope} {kw}: {type(e).__name__}: {str(e)[:200]}"); continue
         races = doc.get("races") or []
         dates = sorted({r.get("race_date") for r in races if r.get("race_date")})
+        if scope == "daily":
+            zip_down = False
         if scope == "daily" and today.isoformat() not in dates:
             log(f"daily {kw['race_date']}: 当日のレースが無い(中身 {dates[:1]}..{dates[-1:]}) → 投入なし"); continue
         if nextday:                                          # 月次の文書は翌日の行だけ使う(当日・過去の行に一切触らない)
@@ -131,6 +136,8 @@ def main():
             fill = nextday_card.fill_doc(tomorrow, have_next, log=log)
         except Exception as e:                               # noqa: BLE001
             log(f"翌日 {tomorrow} 出馬表ページ: 取れない({type(e).__name__}: {str(e)[:120]}) → 次の便で取り直す")
+    if zip_down is not None and not args.dry_run and not args.months:
+        zip_beat(url, key, today, zip_down)
     rc = main_docs(args, url, key, docs, failed)
     if fill and fill["races"]:
         d2, _ = build_dedup([(fill["source_observed_at"], "nextday-html", fill)])
@@ -141,6 +148,29 @@ def main():
         elif upsert_all(url, key, d2, batch=1000, log=log):
             log("翌日の出馬表ページの投入に失敗(次の便で取り直す)")
     return rc
+
+
+def zip_beat(url, key, today, down):
+    """2026-10-14 公式の日次ZIPが 17 時前から全日付で「ファイルをダウンロードできませんでした」になり、「開催なしとみなして」緑のまま
+    体重が入らず直前版の印が 7R から出なかった直し: 開催のある日(本番 nar_races に今日の行がある)の JST 10 時以降に取れなければ
+    heartbeat 'official_zip' を fail(= 見張りが赤・所有者へメール)、取れたら ok。⛔書けなくても便は止めない"""
+    import json
+    import urllib.request
+    import beat
+    if not down:
+        beat.beat("official_zip", True)
+        return
+    if dt.datetime.now(JST).hour < 10:
+        return
+    try:
+        req = urllib.request.Request(f"{url}/rest/v1/nar_races?race_date=eq.{today.isoformat()}&select=race_no&limit=1",
+                                     headers={"apikey": key, "Authorization": f"Bearer {key}"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            has = bool(json.loads(r.read().decode("utf-8")))
+    except Exception as e:                                   # noqa: BLE001
+        log(f"今日の開催の有無が読めない({type(e).__name__}) → 日次ZIPの見張りは書かない"); return
+    if has:
+        beat.beat("official_zip", False, f"{today} 開催ありなのに日次ZIPが取れない(体重は出馬表の画面の代わりの道で読む)")
 
 
 def main_docs(args, url, key, docs, failed):

@@ -81,6 +81,21 @@ def race_rows(races, day):
             for r in races if str(r.get("race_date") or "")[:10] == day and (r.get("going") or r.get("post_time"))]
 
 
+def alt_doc(day, wait):
+    """2026-10-14 公式の当日 ZIP が全日付で止まった日の直し: 待ちのレースだけ出馬表の画面(公式 → 南関の公式 → 楽天競馬)から
+    体重と馬場を読み、ZIP を読んだときと同じ形 {horses, races} にする。読めなければ空(= DB の値のまま)"""
+    try:
+        from weights_alt import alt_today
+        wt, go, _ = alt_today(day, wait, log=lambda m: print(m, flush=True))
+    except Exception as e:                                   # noqa: BLE001
+        print(f"official today: 代わりの道も失敗 {type(e).__name__}: {str(e)[:120]}(DB の値のまま)", flush=True)
+        return {}
+    horses = [{"track": t, "race_date": day, "race_no": r, "runner_number": n, "body_weight": bw, "body_weight_change": ch}
+              for (t, r), v in wt.items() for n, (bw, ch) in v.items()]
+    races = [{"track": t, "race_date": day, "race_no": r, "going": g, "post_time": ""} for (t, r), g in go.items()]
+    return {"horses": horses, "races": races}
+
+
 def write_tsv(path, cols, rows):
     """psql の \\copy(text 形式)で読める TSV。空の値は空文字(going/post_time)・体重増減の空は \\N"""
     with open(path, "w", encoding="utf-8", newline="") as f:
@@ -136,8 +151,8 @@ def main():
         doc = normalize_archive(payload, kind="race", scope="daily", source_url=final_url,
                                 observed_at=dt.datetime.now(dt.timezone.utc).isoformat())
     except Exception as e:                                   # noqa: BLE001
-        print(f"official today: 取得失敗 {type(e).__name__}: {str(e)[:120]}(待ち {len(wait)} レース・DB の値のまま)", flush=True)
-        return 0
+        print(f"official today: 取得失敗 {type(e).__name__}: {str(e)[:120]}(待ち {len(wait)} レース → 出馬表の画面の代わりの道)", flush=True)
+        doc = alt_doc(a.date, wait)
     local_null = {(r["track"], int(r["race_no"]), int(r["runner_number"])) for r in runs
                   if r.get("body_weight") is None and not str(r.get("finish_note") or "").strip()}
     rows, new = overlay_rows(doc.get("horses") or [], a.date, local_null)

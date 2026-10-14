@@ -437,20 +437,33 @@ def db_weights(day):
     return wt
 
 
-def today_weights(day, wt, go):
+def today_weights(day, wt, go, need=()):
     """公式の当日 ZIP → 取れなければ本番 DB の体重。2026-10-07 にこの便の機械だけ 2 時間 ZIP を断られ(同じ時間の nar-ai-last は取れていた)、
     大井 1〜4R の直前版が出なかった。記録には例外の型しか無く理由が分からなかったので、状態番号と URL も残す"""
     try:
         return official_today(day)
     except Exception as e:  # noqa: BLE001
         log('公式の当日 ZIP: 失敗', type(e).__name__, str(e)[:200])
+    out = dict(wt)
     try:
         w2 = db_weights(day)
         log('体重は本番 DB から', sum(len(v) for v in w2.values()), '頭', len(w2), 'R')
-        return {**wt, **w2}, go
+        out.update(w2)
     except Exception as e:  # noqa: BLE001  DB も読めなければ前の値のまま
         log('本番 DB の体重も読めない', type(e).__name__, str(e)[:120])
-        return wt, go
+    # 2026-10-14 公式の ZIP が全日付で止まり、DB(= ZIP の写し)にも入らず川崎 7R から当日版の印が出なかった直し:
+    # まだ体重の無い要るレースだけ、出馬表の画面(公式 → 南関の公式 → 楽天競馬)から読む
+    miss = [k for k in need if not out.get(k)]
+    if miss:
+        try:
+            sys.path.insert(0, str(HERE.parents[2] / 'cloud'))
+            from weights_alt import alt_today
+            w3, g3, _ = alt_today(day, miss, log=lambda m: log(m))
+            out.update(w3)
+            go = {**g3, **go}
+        except Exception as e:  # noqa: BLE001
+            log('代わりの道も読めない', type(e).__name__, str(e)[:120])
+    return out, go
 
 
 def post_at(day, pt):
@@ -570,7 +583,7 @@ def live(day, base_csv, mdir, write, until):
         dd = [x for x in todo if DAY_LAST_MIN < x[0] <= DAY_MIN and x[2] not in day_done] if dm is not None and has_s2 else []
         if dd:
             if any(not wt.get((x[1]['track'], int(x[1]['race_no']))) for x in dd) and (wt_at is None or (now - wt_at).total_seconds() > 60):
-                wt, go = today_weights(day, wt, go)
+                wt, go = today_weights(day, wt, go, [(x[1]['track'], int(x[1]['race_no'])) for x in dd])
                 wt_at = now
             for mins, r, k, at in dd:
                 tr, rno = r['track'], int(r['race_no'])
@@ -599,7 +612,7 @@ def live(day, base_csv, mdir, write, until):
         if due:
             need = [x for x in due if len(wt.get((x[1]['track'], int(x[1]['race_no'])), {})) == 0]
             if need and (wt_at is None or (now - wt_at).total_seconds() > 120):
-                wt, go = today_weights(day, wt, go)  # 両方取れなければ体重なしで決める(模型は欠けを扱える)
+                wt, go = today_weights(day, wt, go, [(x[1]['track'], int(x[1]['race_no'])) for x in need])  # どこも取れなければ体重なしで決める(模型は欠けを扱える)
                 wt_at = now
             for mins, r, k, at in due:
                 tr, rno = r['track'], int(r['race_no'])
