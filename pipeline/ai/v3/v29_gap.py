@@ -441,7 +441,12 @@ def today_weights(day, wt, go, need=()):
     """公式の当日 ZIP → 取れなければ本番 DB の体重。2026-10-07 にこの便の機械だけ 2 時間 ZIP を断られ(同じ時間の nar-ai-last は取れていた)、
     大井 1〜4R の直前版が出なかった。記録には例外の型しか無く理由が分からなかったので、状態番号と URL も残す"""
     try:
-        return official_today(day)
+        w0, g0 = official_today(day)
+        # 2026-10-14 18:29 に ZIP は戻ったが中身が 16:45 ごろのまま(川崎 10R 以降の体重なし)= 取れても要るレースが空なら DB と代わりの道へ
+        if not [k for k in need if not w0.get(k)]:
+            return w0, g0
+        log('公式の当日 ZIP: 取れたが要るレースの体重が無い(中身が古い)', [k for k in need if not w0.get(k)])
+        wt, go = {**wt, **w0}, {**go, **g0}
     except Exception as e:  # noqa: BLE001
         log('公式の当日 ZIP: 失敗', type(e).__name__, str(e)[:200])
     out = dict(wt)
