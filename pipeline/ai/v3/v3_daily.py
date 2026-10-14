@@ -35,6 +35,7 @@ TIMING = 'morning'
 STAMP = 't9_Y1/Y3(182 列・j7_last_pop なし)+t9_s2(2022-01〜2026-08)+t10 上乗せ+談話の印 3 定数(v13y)'
 STAMP11 = STAMP + '+束 t14(37 列の木・学び 2023-01〜2026-08)'  # 第11版(束を足せた日だけ)
 STAMP12 = STAMP11 + '+束 f10k(60 列の木・学び 2023-01〜2026-08)'  # 第12版(束 t14 と f10k を両方足せた日だけ)
+STAMP_DEB = '+初出走の層(寸評・時計 35 列の木・学び 2023-01〜2026-08)'  # 決め 28(初出走のいる日だけ)
 MK = ['◎', '○', '▲', '△']
 
 
@@ -52,6 +53,8 @@ def build_rows(csv_path, day, src, stamp=STAMP):
         runners = [{'num': int(r.umaban), 'p1': round(float(r.p1), 4), 'p3': round(float(r.p3p), 4),
                     'p3_raw': round(float(r.p3), 4)} for r in g.sort_values('umaban').itertuples()]
         meta = {'n': int(len(g)), 'model': MODEL_ID, 'stamp': stamp, 'works_src': src, 'runners': runners}
+        if 'dbt_pre_u' in g.columns and g.dbt_pre_u.notna().any():  # 初出走の層を足したレース = 足した頭数(表の行で確かめる)
+            meta['debut'] = int(g.dbt_pre_u.notna().sum())
         rows.append({'track': tr, 'race_date': str(day), 'race_no': int(rno), 'marks': marks, 'meta': meta})
     return rows
 
@@ -190,6 +193,13 @@ def main():
             seq2_live.prep(day, t14_bundle.CACHE.get('U'), out, log=log)
         except Exception as e:  # noqa: BLE001
             log('並び読み 失敗(当日版は第12版のまま)', type(e).__name__, str(e)[:200])
+    nd = 0
+    if b12:  # 初出走の層(決め 28・研究 nankan-ai-v3 debut_tp.py・debut_prod_fit.py・ユーザー承認 2026-10-14): 第12版の前日の表を直し、直前版の外した分 dbt_u を土台へ
+        try:
+            import debut_live
+            nd = debut_live.run(day, cap['T'], cap.get('F'), csv_path, out / f'{day}_v29_base.csv', t8._W.get('parsed'), t8.works()[0], log=log)
+        except Exception as e:  # noqa: BLE001
+            log('初出走の層 失敗(第12版のまま)', type(e).__name__, str(e)[:200])
     notes = {}
     try:  # ひとこと(表示だけ・予想の計算には使わない・失敗しても予想の表と書き込みは止めない)
         import v3_notes
@@ -197,7 +207,7 @@ def main():
     except Exception as e:  # noqa: BLE001
         log('ひとこと 失敗', type(e).__name__, str(e)[:200])
     del cap
-    rows = build_rows(csv_path, day, src, STAMP12 if b12 else (STAMP11 if bundle else STAMP))
+    rows = build_rows(csv_path, day, src, (STAMP12 + (STAMP_DEB if nd else '')) if b12 else (STAMP11 if bundle else STAMP))
     if notes:
         log('ひとこと 付けた', v3_notes.attach(rows, notes), '頭')
     log('races', len(rows), '◎', ' '.join(f"{r['track']}{r['race_no']}R:{r['marks'][0]['num']}" for r in rows[:12] if r['marks']))

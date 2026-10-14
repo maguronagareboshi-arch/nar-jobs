@@ -180,7 +180,8 @@ def install(t8, hi=None):
     def works():
         if 'W' in t8._W:
             return t8._W['W'], t8._W['info']
-        W, info = make_works(t8, rows_to_parsed(fetch_rows(hi=hi)))
-        t8._W.update(W=W, info=info)
+        parsed = rows_to_parsed(fetch_rows(hi=hi))
+        W, info = make_works(t8, parsed)
+        t8._W.update(W=W, info=info, parsed=parsed)  # parsed = 初出走の層(debut_live)がその日の寸評を読む
         return W, info
     t8.works = works

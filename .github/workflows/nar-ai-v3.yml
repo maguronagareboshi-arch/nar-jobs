@@ -181,6 +181,21 @@ jobs:
           rm -f in/v3_seq2.tar.gz.enc
           ls -l v3/seq2
 
+      # 初出走の層(決め 28・2026-10-14)= 寸評・時計 35 列の木 種 3 本 × 前日版用・直前版用 + debut_tp.json。無ければ第12版のまま(debut_live が落ちて log に出る)
+      - name: download debut files
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-debut-20261014 -p 'v3_debut.tar.gz.enc' -D in
+          mkdir -p v3/debut
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_debut.tar.gz.enc | tar -C v3/debut -xzf -
+          rm -f in/v3_debut.tar.gz.enc
+          ls -l v3/debut
+
       # 束 t14 の談話 14 列: 本文 → intfloat/multilingual-e5-small(手元と同じ版・CPU)。失敗しても第10版 + 談話の印のまま進む
       - name: install text model (t14 danwa)
         if: steps.pc.outputs.run == 'yes'
@@ -220,6 +235,7 @@ jobs:
           KB_DATA_DIR: /tmp/kbdata_v3
           V3_SEQ2: v3/seq2  # 並び読みの時計のならし(上の download seq2 files)
           V3_OFFICIAL: v3/official  # 並び読みの公式の表(v3_daily が落とす)
+          V3_DEBUT: v3/debut  # 初出走の層の模型(上の download debut files)
         run: |
           set -o pipefail
           mkdir -p out

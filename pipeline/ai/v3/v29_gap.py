@@ -223,9 +223,15 @@ def day_marks(Bk, odds, w, going, dm, day):
             p3 = np.maximum(1 / (1 + np.exp(-(lg(p3p) + u))), p1)
             p3p = _sum3(p3) if len(b) > 3 else np.minimum(p3, 1.0)
             used.append('seq2')
+    nd = 0
+    if 'seq2' in used and 'dbt_u' in b.columns and b.dbt_u.notna().any():  # 初出走の層(決め 28・2026-10-14): 並び読みの後の p3′ の logit に前の晩の外した分を足し、p3 = max(·, p1)・合計 3
+        p3 = np.maximum(1 / (1 + np.exp(-(lg(p3p) + b.dbt_u.fillna(0.0).to_numpy(float)))), p1)
+        p3p = _sum3(p3) if len(b) > 3 else np.minimum(p3, 1.0)
+        nd = int(b.dbt_u.notna().sum())
+        used.append('debut')
     stamp = 'v3-9 当日版(第10版 + 当日の体重 15 本・t11 + 談話の印 3 定数)' if not used else \
-        'v3-9 当日版(第12版 = 当日の体重 15 本と馬場・t11 + 談話の印 + 束 ' + '・'.join({'b14_u': 't14', 'b19_u': 'f10k'}[c] for c in used if c != 'seq2') + \
-        (' + 並び読み' if 'seq2' in used else '') + ')'
+        'v3-9 当日版(第12版 = 当日の体重 15 本と馬場・t11 + 談話の印 + 束 ' + '・'.join({'b14_u': 't14', 'b19_u': 'f10k'}[c] for c in used if c in ('b14_u', 'b19_u')) + \
+        (' + 並び読み' if 'seq2' in used else '') + (' + 初出走の層' if 'debut' in used else '') + ')'
     d = pd.DataFrame({'num': b.umaban.astype(int).to_numpy(), 'p1': p1, 'p3': p3p, 'p3_raw': p3})
     d = d.sort_values(['p3', 'p1', 'num'], ascending=[False, False, True], kind='mergesort').reset_index(drop=True)
     marks = [{'num': int(x.num), 'mark': MARKS[i], 'score': round(float(x.p3) * 100, 1)} for i, x in enumerate(d.itertuples()) if i < 5]
@@ -234,6 +240,8 @@ def day_marks(Bk, odds, w, going, dm, day):
     tr, rno = Bk.track.iloc[0], int(Bk.race_no.iloc[0])
     meta = {'n': int(len(d)), 'model': 'v3-9', 'timing': 'last', 'stamp': stamp,
             'weights': int(b.bw.notna().sum()), 'going': going, 'runners': runners}
+    if nd:
+        meta['debut'] = nd
     return {'track': tr, 'race_date': day, 'race_no': rno, 'marks': marks, 'meta': meta}
 
 
