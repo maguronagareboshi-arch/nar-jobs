@@ -382,9 +382,11 @@ jobs:
               if t is None or t.date() != today:
                   bad.append(f"votes が今日まだ成功していない(最終 {t})")
           if hm >= 800:
-              t = last_ok('k43_daily')
-              if t is None or t.date() != today:
-                  bad.append(f"k43_daily が今日まだ成功していない(最終 {t})")
+              # cond_stats= 条件で集計 /stats の毎朝便(JST 05:40・2026-10-15)
+              for job in ('k43_daily', 'cond_stats'):
+                  t = last_ok(job)
+                  if t is None or t.date() != today:
+                      bad.append(f"{job} が今日まだ成功していない(最終 {t})")
           import re
           m = re.search(r'見込み=(\d{4}-\d{2}-\d{2})', str((got.get('monbetsu_class') or {}).get('note') or ''))
           if m:
