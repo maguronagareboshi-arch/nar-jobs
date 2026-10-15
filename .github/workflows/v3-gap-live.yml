@@ -139,6 +139,12 @@ jobs:
           else
             echo "短評の層の模型なし(足さない)"
           fi
+          # 2026-10-15 決め 38-1: 直前版の勝つ率で学んだ買いの模型(種 3 本・V3_ASSET_KEY)。無ければ全部 v31 で決める
+          if gh release download v3-buy38-20261015 -p 'v3_buy38.tar.gz.enc' -D in; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_buy38.tar.gz.enc | tar -C gapm -xzf - || echo "買いの模型 決め38-1 を開けない(v31 のまま)"
+          else
+            echo "買いの模型 決め38-1 なし(v31 のまま)"
+          fi
           ls gapm; wc -l in/v29_base.csv
           echo "ok=yes" >> "$GITHUB_OUTPUT"
 
