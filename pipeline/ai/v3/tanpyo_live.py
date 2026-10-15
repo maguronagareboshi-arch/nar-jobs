@@ -10,7 +10,10 @@
 - 足し方(研究 tanpyo_layer.probs と同じ): p1′ = R で合計 1(σ(logit p1 + u1))・p3′ = 合計 3(max(σ(logit p3 + u3), min(p1′, 0.999)))。
 - 土台 = 勝つ率の直し(p1_follow)の後の率(研究もその土台で学んだ)。前日版は前日の表の CSV を直し、直前版は材料を v29 の土台へ
   書いて当日の便(v29_gap.day_marks)が勝つ率の直しの後に足す。
-模型 = V3_TANPYO/tanpyo.json・tanpyo_{day,pre}_{p3,p1}_s{種}.txt・tanpyo_hist.parquet(リリース v3-tanpyo-20261014)。
+模型 = V3_TANPYO/tanpyo.json・tanpyo_{day8,pre}_{p3,p1}_s{種}.txt・tanpyo_hist.parquet(リリース v3-tanpyo-20261015)。
+決め 36(2026-10-15・研究 tanpyo_sitb_judge.py・tanpyo_sitb_prod.py): 直前版だけ、状況の印 8 列(ADD8)を足した模型(meta の feats_day)。
+  休み明け初戦・休みの日数・中央/他地区から転入初戦・転厩初戦・初めての場 は前日の便で材料表 T から作って tpl_ に書き、
+  体重の増減とその大きさは当日の便の公式の増減(v29_gap.feats の bwd)から作る。前日版は今のまま(feats)。
 """
 import json
 import os
@@ -27,9 +30,14 @@ KEY = ['track', 'race_date', 'race_no']
 Q4 = KEY + ['umaban']
 OLD9 = ['cy_day_pct', 'cy_self', 'cy_stable', 'cy_int', 'cy_n14', 'cy_gap', 'cy_day_pct_rk', 'cy_stable_rk', 'shinba']
 NEW = ['v_h', 'v_w', 'c_h', 'c_w', 'pv_h']
-TPL = ['tpl_' + c for c in OLD9 + NEW] + ['tpl_lay']  # v29 の土台へ書く列(直前版用)
+SRC6 = ['g_rest', 'g_nrest', 'i_move', 'l_jra', 'l_nar', 'e_first']  # 材料表 T の元の列(研究 feat_t4 と同じ名前)
+PRE6 = ['f_rest1', 'd_rest', 'f_jra1', 'f_nar1', 'f_move1', 'e_first']  # 前日に作れる 6 列
+ADD8 = PRE6 + ['f_bwabs', 'o_bwchg']  # 決め 36 の 8 列(研究 tanpyo_sitb_polish.FLX と同じ並び)
+TPL = ['tpl_' + c for c in OLD9 + NEW + PRE6] + ['tpl_lay']  # v29 の土台へ書く列(直前版用)
 MK = {1: '◎', 2: '○', 3: '▲', 4: '△', 5: '△'}
 TAG = 'tpl 決め30 短評の層'
+TAG8 = '決め36 状況の印'  # 当日の便が 8 列入りの模型を使った時に記録へ足す字
+LAST_VER = None  # apply_day が最後に使った模型('day8' = 決め 36・'day' = 決め 30 のまま)
 
 
 def log0(*a):
@@ -131,6 +139,29 @@ def add_feats(D, C, M, H, day):
     return D
 
 
+def add6(D, T):
+    """材料表 T の元の列 → 前日に作れる 6 列(研究 tanpyo_sitb_prod.add8 と同じ式)。T に無い列は空。"""
+    D = D.drop(columns=[c for c in SRC6 + PRE6 if c in D.columns])
+    t = T.reindex(columns=Q4 + SRC6).copy()
+    t['race_date'] = t.race_date.astype(str).str[:10]
+    t['race_no'], t['umaban'] = pd.to_numeric(t.race_no).astype(int), pd.to_numeric(t.umaban).astype(int)
+    D = D.merge(t.drop_duplicates(Q4), on=Q4, how='left', validate='1:1')
+    D['f_rest1'] = (D.g_nrest == 1).astype(float)
+    D['d_rest'] = pd.to_numeric(D.g_rest, errors='coerce')
+    D['f_jra1'] = (D.l_jra == 1).astype(float)
+    D['f_nar1'] = (D.l_nar == 1).astype(float)
+    D['f_move1'] = (D.i_move == 1).astype(float)
+    D['e_first'] = pd.to_numeric(D.e_first, errors='coerce')
+    return D
+
+
+def bw2(F, bwd):
+    """当日の公式の体重の増減 → 体重の 2 列(研究 add8 と同じ)。"""
+    F['o_bwchg'] = pd.to_numeric(pd.Series(np.asarray(bwd, float)), errors='coerce').to_numpy(float)
+    F['f_bwabs'] = np.abs(F.o_bwchg)
+    return F
+
+
 def _lg(p):
     p = np.clip(np.asarray(p, float), 1e-6, 1 - 1e-6)
     return np.log(p / (1 - p))
@@ -150,7 +181,11 @@ def apply(M, ver, F, p1, p3, g):
     F = F.reset_index(drop=True)
     p1, p3, g = np.asarray(p1, float), np.asarray(p3, float), np.asarray(g)
     lay = F.lay.to_numpy(bool)
-    A = F.assign(off3=_lg(p3)).reindex(columns=M['feats']).astype(float).to_numpy()
+    fe = M.get('feats_' + ver, M['feats'])  # 決め 36: day8 は 8 列入りの模型・day / pre は決め 30 の 15 列
+    miss = [c for c in fe if c != 'off3' and c not in F.columns]
+    if miss:
+        raise KeyError(f'短評の層の材料が無い {miss}')
+    A = F.assign(off3=_lg(p3)).reindex(columns=fe).astype(float).to_numpy()
     u3, u1 = np.zeros(len(F)), np.zeros(len(F))
     if lay.any():
         u3[lay] = np.mean([b.predict(A[lay], raw_score=True) for b in M['M'][f'{ver}_p3']], axis=0)
@@ -198,11 +233,20 @@ def apply_csv(M, csv_path, D, log=log0):
 
 def apply_day(M, b, p1, p3p):
     """当日の便(v29_gap.day_marks・勝つ率の直しの後): 1 レースの土台の表 b(tpl_ 列)・p1・p3p → (p1′, p3′)。材料が無ければ None。"""
-    if not set(TPL) <= set(b.columns) or b.tpl_lay.isna().all():
+    global LAST_VER
+    LAST_VER = None
+    base = ['tpl_' + c for c in OLD9 + NEW] + ['tpl_lay']
+    if not set(base) <= set(b.columns) or b.tpl_lay.isna().all():
         return None
-    F = pd.DataFrame({c: pd.to_numeric(b['tpl_' + c], errors='coerce').to_numpy(float) for c in OLD9 + NEW})
+    six = [f'tpl_{c}' for c in PRE6]
+    ver = 'day8' if 'day8_p3' in M['M'] and set(six) <= set(b.columns) else 'day'  # 前日の便が 6 列を書けなかった日は決め 30 のまま(レースの中の空は普通の欠け)
+    cs = OLD9 + NEW + (PRE6 if ver == 'day8' else [])
+    F = pd.DataFrame({c: pd.to_numeric(b['tpl_' + c], errors='coerce').to_numpy(float) for c in cs})
+    if ver == 'day8':
+        F = bw2(F, b['bwd'] if 'bwd' in b.columns else np.full(len(b), np.nan))
     F['lay'] = b.tpl_lay.fillna(1).astype(float).to_numpy() > 0
-    q1, q3, _, _ = apply(M, 'day', F, p1, p3p, np.zeros(len(b), int))
+    q1, q3, _, _ = apply(M, ver, F, p1, p3p, np.zeros(len(b), int))
+    LAST_VER = ver
     return q1, q3
 
 
@@ -227,6 +271,10 @@ def run(day, T, F, csv_path, base_csv, parsed, log=log0):
     D = dl.feats(x, T, F, R)
     H = history(M, parsed, day)
     D = add_feats(D, C, M, H, day)
+    D = add6(D, T)
+    log('状況の印(決め 36)休み明け初戦', int((D.f_rest1 == 1).sum()), '・日数あり', int(D.d_rest.notna().sum()), '/', len(D),
+        '・転入 中央', int((D.f_jra1 == 1).sum()), '・他地区', int((D.f_nar1 == 1).sum()), '・転厩', int((D.f_move1 == 1).sum()),
+        '・材料表に無い列', [c for c in SRC6 if c not in T.columns])
     log('出走表の調教', src, len(C), '行・馬の短評あり', int(D.v_h.notna().sum()), '/', len(D), '頭・最終追いの短評あり', int(D.v_w.notna().sum()),
         '・前走の段あり', int(D.pv_h.notna().sum()), '・表に無い言葉', int((D.v_h.notna() & D.c_h.isna()).sum() + (D.v_w.notna() & D.c_w.isna()).sum()),
         '・初出走の層の馬(触らない)', int((~D.lay).sum()), '・前走の元', len(H), '行・秒', round(time.time() - t0))
@@ -236,11 +284,13 @@ def run(day, T, F, csv_path, base_csv, parsed, log=log0):
         vb = pd.read_csv(bp, encoding='utf-8-sig').drop(columns=TPL, errors='ignore')
         vb['race_date'] = vb.race_date.astype(str).str[:10]
         vb['race_no'], vb['umaban'] = vb.race_no.astype(int), vb.umaban.astype(int)
-        Z = D[Q4 + OLD9 + NEW].rename(columns={c: 'tpl_' + c for c in OLD9 + NEW})
+        cs = OLD9 + NEW + (PRE6 if all(c in T.columns for c in SRC6) else [])  # 材料表に元の列が無い日は 6 列を書かない = 当日は決め 30 の模型
+        vb = vb.drop(columns=[f'tpl_{c}' for c in PRE6], errors='ignore')
+        Z = D[Q4 + cs].rename(columns={c: 'tpl_' + c for c in cs})
         Z['tpl_lay'] = D.lay.astype(float).to_numpy()
         vb = vb.merge(Z, on=Q4, how='left', validate='1:1')
         vb.to_csv(bp, index=False, encoding='utf-8-sig')
-        log('直前版へ材料', int(vb.tpl_lay.notna().sum()), '頭')
+        log('直前版へ材料', int(vb.tpl_lay.notna().sum()), '頭・状況の印 6 列', '書いた' if len(cs) > len(OLD9 + NEW) else '書かない(材料表に元の列が無い = 決め 30 のまま)')
     return n
 
 
@@ -281,7 +331,7 @@ def check(days=None, cut='2025-09-01'):
             res.append({'day': day, '列': c, '行': len(D), '一致': float(np.mean(same))})
         g = Pd.groupby(KEY, sort=False).ngroup().to_numpy()
         n3 += int((pd.Series(g).value_counts() <= 3).sum())
-        for ver in ('day', 'pre'):
+        for ver in ('day', 'pre'):  # 決め 30 の模型(決め 36 の day8 は check8 で照合)
             F = Pd[Q4 + OLD9 + NEW].copy()
             F['lay'] = Pd.lay.to_numpy(bool)
             q1, q3, u3, u1 = apply(M, ver, F, Pd[f'p1b_{ver}'].to_numpy(float), Pd[f'base_{ver}'].to_numpy(float), g)
@@ -295,6 +345,55 @@ def check(days=None, cut='2025-09-01'):
     return Rr
 
 
+
+def check8(days=None):
+    """決め 36 の直前版: 研究の元の列(feat_t4)を材料表 T のかわりに add6・bw2 へ通し、研究 tanpyo_sitb_prod_preds の 8 列・外した分・率と比べる。
+    apply_day(当日の便の 1 レースずつ・tpl_ と bwd から)でも同じ率になるかを見る。"""
+    M = load()
+    P = pd.read_parquet('C:/Users/kouki/nankan_ai/v3/tanpyo_sitb_prod_preds.parquet')
+    P['race_date'] = P.race_date.astype(str).str[:10]
+    V = 'C:/Users/kouki/nankan_ai/v3/'
+    T = pd.concat([pd.read_parquet(V + f, columns=Q4 + SRC6 + ['o_bwchg']) for f in ('feat_t4_explore.parquet', 'feat_t4_open.parquet')]).drop_duplicates(Q4)
+    T['race_date'] = T.race_date.astype(str).str[:10]
+    if days is None:
+        dd = sorted(P.race_date.unique())
+        days = dd[::max(1, len(dd) // 60)]
+    res = []
+    for day in days:
+        Pd = P[P.race_date == day].sort_values(Q4).reset_index(drop=True)
+        Td = T[T.race_date == day]
+        D = add6(Pd[Q4 + OLD9 + NEW].copy(), Td)
+        bwd = Pd[Q4].merge(Td[Q4 + ['o_bwchg']], on=Q4, how='left', validate='1:1').o_bwchg.to_numpy(float)
+        D = bw2(D, bwd)
+        for c in ADD8:
+            a, b = D[c].to_numpy(float), Pd[c].to_numpy(float)
+            res.append({'列': c, '行': len(D), '一致': float(np.mean((np.isnan(a) & np.isnan(b)) | (np.abs(a - b) <= 1e-9)))})
+        g = Pd.groupby(KEY, sort=False).ngroup().to_numpy()
+        F = D.copy()
+        F['lay'] = Pd.lay.to_numpy(bool)
+        q1, q3, u3, u1 = apply(M, 'day8', F, Pd.p1b_day.to_numpy(float), Pd.base_day.to_numpy(float), g)
+        for nm, a, b in (('u3', u3, Pd.u3_day), ('u1', u1, Pd.u1_day), ('p3', q3, Pd.p3_day), ('p1', q1, Pd.p1_day)):
+            b = np.where(Pd.hl.to_numpy(bool) | (nm[0] == 'p'), b.to_numpy(float), 0.0)
+            res.append({'列': nm + '_day', '行': len(Pd), '一致': float(np.mean(np.abs(a - b) <= (1e-9 if nm[0] == 'u' else 1e-6)))})
+        # 当日の便の道: レースごとに tpl_ と bwd の表 b から apply_day
+        Z = D[Q4 + OLD9 + NEW + PRE6].rename(columns={c: 'tpl_' + c for c in OLD9 + NEW + PRE6})
+        Z['tpl_lay'] = Pd.lay.astype(float).to_numpy()
+        Z['bwd'] = bwd
+        ok = []
+        for _, ix in Z.groupby(KEY, sort=False).indices.items():
+            b = Z.iloc[ix].reset_index(drop=True)
+            r = apply_day(M, b, Pd.p1b_day.to_numpy(float)[ix], Pd.base_day.to_numpy(float)[ix])
+            ok.append(r is not None and LAST_VER == 'day8' and np.allclose(r[1], q3[ix], atol=1e-9) and np.allclose(r[0], q1[ix], atol=1e-9))
+        res.append({'列': 'apply_day = apply', '行': len(ok), '一致': float(np.mean(ok))})
+    Rr = pd.DataFrame(res)
+    S = Rr.groupby('列', sort=False).agg(行=('行', 'sum'), 一致=('一致', 'mean'), 最小=('一致', 'min'))
+    print(S.to_string())
+    print('日', len(days), '・全列の一致の最小', S['最小'].min())
+    return Rr
+
+
 if __name__ == '__main__':
     if sys.argv[1] == 'check':
         check(sys.argv[2:] or None)
+    elif sys.argv[1] == 'check8':
+        check8(sys.argv[2:] or None)

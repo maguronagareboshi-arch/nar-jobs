@@ -134,7 +134,7 @@ jobs:
           fi
           # 2026-10-14 決め 30: 全馬の短評の層の模型(V3_ASSET_KEY)。無ければ当日版は短評の層を足さない
           mkdir -p gapm/tanpyo
-          if gh release download v3-tanpyo-20261014 -p 'v3_tanpyo.tar.gz.enc' -D in; then
+          if gh release download v3-tanpyo-20261015 -p 'v3_tanpyo.tar.gz.enc' -D in; then
             openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_tanpyo.tar.gz.enc | tar -C gapm/tanpyo -xzf - || echo "短評の層の模型を開けない"
           else
             echo "短評の層の模型なし(足さない)"

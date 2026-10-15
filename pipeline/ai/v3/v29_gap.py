@@ -267,6 +267,8 @@ def day_marks(Bk, odds, w, going, dm, day):
         meta['p1f'] = p1_follow.TAG['day']
     if 'tpl' in used:
         meta['tpl'] = 'tpl 決め30 短評の層'  # tanpyo_live.TAG と同じ字
+        if getattr(sys.modules.get('tanpyo_live'), 'LAST_VER', None) == 'day8':
+            meta['sitb'] = '決め36 状況の印'  # tanpyo_live.TAG8 と同じ字(8 列入りの模型を使った)
     return {'track': tr, 'race_date': day, 'race_no': rno, 'marks': marks, 'meta': meta}
 
 
@@ -529,7 +531,7 @@ def live(day, base_csv, mdir, write, until):
         SEQ2 = None
         log('並び読み 読めない(第12版のまま)', type(e).__name__, str(e)[:200])
     global TPLM
-    try:  # 短評の層(決め 30): 模型 = mdir/tanpyo(便がリリース v3-tanpyo-20261014 を開ける)。無ければ足さない
+    try:  # 短評の層(決め 30): 模型 = mdir/tanpyo(便がリリース v3-tanpyo-20261015 を開ける)。無ければ足さない
         import tanpyo_live
         TPLM = tanpyo_live.load(Path(mdir) / 'tanpyo')
         log('短評の層', '読めた' if TPLM else '無し(足さない)', 'tpl_ 材料', 'あり' if set(tanpyo_live.TPL) <= set(B.columns) else 'なし')

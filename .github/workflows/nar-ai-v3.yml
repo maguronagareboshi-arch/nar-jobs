@@ -204,7 +204,7 @@ jobs:
         run: |
           set -o pipefail
           V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
-          gh release download v3-tanpyo-20261014 -p 'v3_tanpyo.tar.gz.enc' -D in
+          gh release download v3-tanpyo-20261015 -p 'v3_tanpyo.tar.gz.enc' -D in
           mkdir -p v3/tanpyo
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_tanpyo.tar.gz.enc | tar -C v3/tanpyo -xzf -
           rm -f in/v3_tanpyo.tar.gz.enc
