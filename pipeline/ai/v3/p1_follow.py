@@ -8,11 +8,18 @@
   直前版だけ 3着内の極端さの直し E: p3 = 合計 3(max(σ(e_a · logit p3), p1'))→ 守り(並べ順は変わらない)。
 定数 = 研究の全期間(2023-01〜2026-08)の学び直し(v3/p1f/prod.json)。確かめ 直前 +134.2 ± 20.8・E +35.9・前日 +52.5 ± 11.0。
 """
+import sys
+from pathlib import Path
+
 import numpy as np
 import pandas as pd
 
-FORM = {'pre': (1.0, 0.9868, None), 'day': (0.9429, 0.7916, 0.91)}
-TAG = {'pre': 'p1f 決め29 前日 k0.987', 'day': 'p1f 決め29 直前 a0.943 k0.792 E0.91'}
+sys.path.append(str(Path(__file__).resolve().parent.parent))  # 末尾に足す = pipeline/ai の sealed
+import sealed  # noqa: E402
+
+_S = sealed.get('p1_follow')  # 定数は暗号化したリリース(公開のコードに置かない)
+FORM = {v: tuple(x) for v, x in _S['FORM'].items()}  # ver → (a, k, E)
+TAG = _S['TAG']
 Q4 = ['track', 'race_date', 'race_no', 'umaban']
 MK = {1: '◎', 2: '○', 3: '▲', 4: '△', 5: '△'}
 

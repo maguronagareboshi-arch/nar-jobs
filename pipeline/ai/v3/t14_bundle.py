@@ -36,6 +36,8 @@ import pandas as pd
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
+sys.path.append(str(HERE.parent))  # 末尾に足す = pipeline/ai の sealed
+import sealed  # noqa: E402  定数は暗号化したリリース(公開のコードに置かない)
 ASSET = Path(os.environ.get('V3_T14', 'C:/Users/kouki/nankan_ai/v3/t14_prod'))
 NK = ['浦和', '船橋', '大井', '川崎']
 KEY = ['track', 'race_date', 'race_no']
@@ -51,7 +53,7 @@ STAMP = '束 t14(Glicko 18・事実 5・談話 14 = 37 列の木・学び 2023-0
 # ① の定数(研究 out/lit_g_feats.md: 2014 を慣らし 2015 の南関で選んだ)
 C_G, W_G, PHI0 = 50.0, 3.0, 350.0
 QG = np.log(10) / 400
-M_GLOB, V0 = 59.040189686947464, 177.01299085325905  # 2014〜15 の SI の平均・(SI − a_prior) の分散
+M_GLOB, V0 = sealed.get('t14_bundle')['M_GLOB'], sealed.get('t14_bundle')['V0']  # 2014〜15 の SI の平均・(SI − a_prior) の分散
 R_K, QD = V0 * 0.5, V0 * 0.002
 # 見張りの線(その日の南関の出走馬のうち値のある割合。研究の確かめの期間の 1 日ごとの最小より低めに置く)
 WATCH = {'lg_g_mu': 0.60, 'lg_k_mu': 0.50, 'fc_n30': 0.20, 'dw_dir': 0.50}  # 確かめの期間の 1 日ごとの最低 0.76・0.74・0.25・1.0

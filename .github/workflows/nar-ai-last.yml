@@ -134,6 +134,29 @@ jobs:
           psql -v ON_ERROR_STOP=1 -X -c "analyze"
           psql -v ON_ERROR_STOP=1 -X -f pipeline/sql/ai_feat_20260908.sql
 
+      # 2026-10-15 予想の学んだ定数・表(勝つ率の直し・談話の印・他場の曲線など)= 暗号化したリリース v3-consts-20261015(公開のコードに置かない)。
+      #   この便は base-v1 の直前も回すので、取れない時も周は続ける(v3n の直前だけ止まり、朝の行のまま)→ 最後の段で便を赤にする。中身の確かめ = pipeline/ai/sealed.py check
+      - name: download sealed constants
+        id: sc
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          : "${V3_ASSET_KEY:?secrets.V3_ASSET_KEY が無い}"
+          mkdir -p in sealed_consts
+          for i in 1 2 3; do
+            gh release download v3-consts-20261015 -p 'v3_consts.tar.gz.enc' -D in --clobber && break
+            [ "$i" = 3 ] && { echo "::error::⛔ 予想の定数(v3-consts-20261015)を 3 回取れなかった"; exit 1; }
+            sleep 20
+          done
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_consts.tar.gz.enc | tar -C sealed_consts -xzf -
+          rm -f in/v3_consts.tar.gz.enc
+          V3_CONSTS="$PWD/sealed_consts" python -X utf8 pipeline/ai/sealed.py check
+          echo "V3_CONSTS=$PWD/sealed_consts" >> "$GITHUB_ENV"
+
       # ---------------------------------------------------------------- 2026-10-12 他場版 v3n の直前版の並び読み(v3 の out/v3n_seq_day.md)
       # 便の頭で 1 回: 重み(暗号化リリース v3n-seq-day-20261013 = 第 8 版・騎手・調教師 + 3 着差・v3 の out/v3n_seq3_judge.md)を開き、
       # 2026-10-14 第 9 版(決め 31): 同じ作りの重みをイ' 全国 1 本の p5 で仕上げ直した v3n-seq-day-one-20261014(戻すときは第 8 版と v3n_daily を一緒に)。
@@ -228,6 +251,13 @@ jobs:
             fi
           done
           echo "rounds = $n"
+
+      # 予想の定数が取れなかった日は便を赤に(上の download sealed constants・v3n の直前は朝の行のまま)
+      - name: sealed constants missing
+        if: steps.sc.outcome == 'failure'
+        run: |
+          echo "::error::⛔ 予想の定数(v3-consts-20261015)が取れず、他場版 v3n の直前予想を出していない"
+          exit 1
 
       - name: stop local postgres
         if: always()

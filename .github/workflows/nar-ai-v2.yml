@@ -4,6 +4,7 @@
 # ⛔本番に触るのは最後の 1 手順だけ(nar_ai_marks の REST upsert・model='base-v2'・timing='morning')。
 #   SQL は 1 つも流さない。schedule 由来のときだけ書く(dispatch は write=yes のときだけ)。
 # ⛔学習はしない(固定模型を pipeline/ai/v2/model/ から読む)。
+# 2026-10-15 この便は 9/26 から止めている(disabled)。模型 pipeline/ai/v2/model/ は公開の置き場から消した = このままでは動かない。
 # ⛔材料は成果物からだけ取る(本番からは読まない)= nar-ai-feat の dump_*.tsv.gz と nar_ai_feat_run.csv.gz、
 #   便 A(nar-ai-v2-raw)の nar_paper_runs.csv.gz。
 # 監査 A3(2026-09-24) 公開 repo なので成果物は暗号化して置く(*.tar.gz.enc・鍵= SUPABASE_SERVICE_KEY の sha256)。手元で戻す 1 行:

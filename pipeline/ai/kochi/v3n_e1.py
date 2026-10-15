@@ -15,11 +15,18 @@ import datetime as dt
 import re
 from decimal import Decimal
 
+import sys
+from pathlib import Path
+
 import numpy as np
 
-B_E1 = 0.93          # A の傾き b(選び全体で対数損失が最小)
-S_NOKEN = 1.6039     # 選びの初出走の馬の秒の差の標準偏差 s(秒)
-BETA_NOKEN = -0.8291  # 能検の z の係数 β(E1 の後の logit を固定の項にしたロジスティック)
+sys.path.append(str(Path(__file__).resolve().parent.parent))  # 末尾に足す = pipeline/ai の sealed
+import sealed  # noqa: E402  定数は暗号化したリリース(公開のコードに置かない)
+
+_S = sealed.get('v3n_e1')
+B_E1 = _S['B_E1']              # A の傾き b(選び全体で対数損失が最小)
+S_NOKEN = _S['S_NOKEN']        # 選びの初出走の馬の秒の差の標準偏差 s(秒)
+BETA_NOKEN = _S['BETA_NOKEN']  # 能検の z の係数 β(E1 の後の logit を固定の項にしたロジスティック)
 EPS = 1e-3
 N_MIN = 4             # 取消の後の頭数がこれ未満のレースはかけない
 FORM_TAG = '+e1+noken'

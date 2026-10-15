@@ -20,12 +20,15 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+sys.path.append(str(Path(__file__).resolve().parent.parent))  # 末尾に足す = pipeline/ai の sealed
+import sealed  # noqa: E402  定数は暗号化したリリース(公開のコードに置かない)
+
 HERE = Path(__file__).resolve().parent
 TRACKS = ['大井', '川崎', '船橋', '浦和']
 Q4 = ['track', 'race_date', 'race_no', 'umaban']
 TX = ['raw', 'headline', 'trainer', 'comment']  # 束 t14 の談話 14 列が本文と話し手を使う(印の 3 定数は raw だけ)
 LAST = {}  # load が読んだ日の全列(日付 → 表)。t14_bundle が使い回す(競馬ブックの頁を 2 度読まない)
-CONST = {'◎': 0.2006, '○': 0.0219, '〇': 0.0219, '△': -0.2308}  # v13y_res.json の const(学び 2018-05〜19・2022・n/(n+200) で縮めた値)
+CONST = sealed.get('danwa_marks')['CONST']  # 印 → 定数。 v13y_res.json の const(学び 2018-05〜19・2022・n/(n+200) で縮めた値)
 STAMP = '談話の印 3 定数(v13y)'
 
 

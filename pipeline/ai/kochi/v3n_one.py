@@ -6,10 +6,11 @@
   当日の馬場・天気を抜く)+ 場の番号 trk。帯広を除く全場の 2022-11〜で学び、対象 10 場の行は重み 2。
   3 着内 g3 = (2 値の木 3 本の平均 + 順位の木の R 内 softmax × 3)÷ 2・勝ち = 勝ちの木を R で合計 1 → 帯の表(1 年前の切りの木の当て)→ 合計 1。
   木は固定ファイル(暗号化リリース・年 1 回 9 月に学び直す = 決め 16)= V3N_ONE/v3n_one_model.json。
-  γ と 3 着内の曲線(頭数の帯ごと・選び 2024-09〜25-08 で決めた)= v3n_one_p5.json(この置き場)。
+  γ と 3 着内の曲線(頭数の帯ごと・選び 2024-09〜25-08 で決めた)= v3n_one_p5.json(暗号化したリリース v3-consts の中・pipeline/ai/sealed.py で読む)。
 """
 import json
 import os
+import sys
 from pathlib import Path
 
 import numpy as np
@@ -18,7 +19,9 @@ import pandas as pd
 HERE = Path(__file__).resolve().parent
 FORM = 'v3n-10: one15 (base-v1 + v_ + trk・2015〜) + seq-one15'
 KEY = ['track', 'race_date', 'race_no', 'runner_number']
-P5 = json.loads((HERE / 'v3n_one_p5.json').read_text(encoding='utf-8'))
+sys.path.append(str(HERE.parent))  # 末尾に足す = pipeline/ai の sealed
+import sealed  # noqa: E402  表は暗号化したリリース(公開のコードに置かない)
+P5 = json.loads(sealed.path('v3n_one_p5.json').read_text(encoding='utf-8'))
 NB = [8, 10, 12, 99]
 
 

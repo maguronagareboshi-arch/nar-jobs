@@ -7,11 +7,14 @@
 (第 4 版の 2 次式は見込み 2% 以下の人気薄の率を逆に上げていた = 10/11 の本番で 1.1% → 1.4%)
 """
 import json
+import sys
 from pathlib import Path
 
 import numpy as np
 
-TAB = json.loads((Path(__file__).resolve().parent / 'k26_cal_table.json').read_text(encoding='utf-8'))
+sys.path.append(str(Path(__file__).resolve().parent.parent))  # 末尾に足す = pipeline/ai の sealed
+import sealed  # noqa: E402  表は暗号化したリリース(公開のコードに置かない)
+TAB = json.loads(sealed.path('k26_cal_table.json').read_text(encoding='utf-8'))
 
 
 def p3(s, n):

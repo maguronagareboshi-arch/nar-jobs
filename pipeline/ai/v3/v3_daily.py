@@ -37,7 +37,6 @@ STAMP11 = STAMP + '+束 t14(37 列の木・学び 2023-01〜2026-08)'  # 第11�
 STAMP12 = STAMP11 + '+束 f10k(60 列の木・学び 2023-01〜2026-08)'  # 第12版(束 t14 と f10k を両方足せた日だけ)
 STAMP_DEB = '+初出走の層(寸評・時計 35 列の木・学び 2023-01〜2026-08)'  # 決め 28(初出走のいる日だけ)
 MK = ['◎', '○', '▲', '△']
-P1F_TAG = 'p1f 決め29 前日 k0.987'  # p1_follow.TAG['pre'] と同じ字
 STAMP_TPL = '+短評の層(段・型・前走の段 15 列の木 2 本・学び 2023-01〜2026-08)'  # 決め 30(勝つ率の直しの後・足せた日だけ)
 TPL_TAG = 'tpl 決め30 短評の層'  # tanpyo_live.TAG と同じ字
 
@@ -59,7 +58,8 @@ def build_rows(csv_path, day, src, stamp=STAMP):
         if 'dbt_pre_u' in g.columns and g.dbt_pre_u.notna().any():  # 初出走の層を足したレース = 足した頭数(表の行で確かめる)
             meta['debut'] = int(g.dbt_pre_u.notna().sum())
         if 'p1_t10' in g.columns and g.p1_t10.notna().all():  # 勝つ率の直し(決め 29)を掛けたレース = p1 は直した値・元は p1_t10
-            meta['p1f'] = P1F_TAG
+            import p1_follow  # 記録の字 = p1_follow.TAG['pre'](暗号化した定数)
+            meta['p1f'] = p1_follow.TAG['pre']
         if 'tpl_u3' in g.columns and (g.tpl_u3.fillna(0) != 0).any():  # 短評の層(決め 30)を足したレース = 元の率は p3p_tpl0・p1_tpl0
             meta['tpl'] = TPL_TAG
         rows.append({'track': tr, 'race_date': str(day), 'race_no': int(rno), 'marks': marks, 'meta': meta})

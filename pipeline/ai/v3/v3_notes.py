@@ -75,7 +75,11 @@ def _dw_bert(log=print):
 def _dw_pat():
     global _DW_PAT
     if _DW_PAT is None:
-        _DW_PAT = dw_pat.load(_HERE / 'dw_pat_dict.json.gz', _HERE / 'dw_pat_fallback.json.gz')
+        import sys
+        if str(_HERE.parent) not in sys.path:
+            sys.path.append(str(_HERE.parent))  # 末尾に足す = pipeline/ai の sealed
+        import sealed  # 辞書は暗号化したリリース(公開のコードに置かない)
+        _DW_PAT = dw_pat.load(sealed.path('dw_pat_dict.json.gz'), sealed.path('dw_pat_fallback.json.gz'))
         _DW_PAT['ctx_mode'] = 'drop'  # 前後の文で意味が決まる型は札を出さない
     return _DW_PAT
 
