@@ -304,6 +304,83 @@ def decide(B, odds, wt, going, model, meta):
     return score(b, model, meta) if len(b) else b
 
 
+# 決め 38-1(2026-10-15・研究 nankan-ai-v3 src/f5_scripts/buy38_prod.py): 買いの模型の AI の 4 列を、前日版の代わりに
+# 同じ便が発走 30〜16 分前に作った直前版の p1・p3 で作る。直前版(勝つ率の直し入り)が無いレースは今の v31 で決める。
+NEW_META = 'buy38_new.json'
+NEW = None  # load_new の戻り。live() が mdir から読む。無ければ全部 v31
+DAYP = {}   # (場, R) → {'p': {馬番: (p1, p3)}, 'meta': 直前版の meta}(day_marks を書いた時に入れる)
+
+
+def load_new(mdir):
+    """決め 38-1 の模型(buy38_new.json・種 3 本)。無ければ None。"""
+    p = Path(mdir) / NEW_META
+    if not p.exists():
+        return None
+    import lightgbm as lgb
+    m = json.loads(p.read_text(encoding='utf-8'))
+    m['boosters'] = [lgb.Booster(model_str=(Path(mdir) / Path(f).name).read_text(encoding='utf-8')) for f in m['files']]
+    return m
+
+
+def use_day(b, dayp):
+    """feats の後の 1 レース b の AI の 4 列を直前版の p1・p3 に替えた写し。出走する馬に直前版の値が無ければ (None, 理由)。
+    p1 は出走する馬で合計 1(研究の p1n と同じ)・p3 はそのまま(研究の p3a)・rk = p3 の順位(同じなら馬番の若い順)。"""
+    us = [int(u) for u in b.umaban]
+    miss = [u for u in us if u not in dayp]
+    if miss:
+        return None, f'直前版に無い馬 {len(miss)} 頭'
+    b = b.copy()
+    p1 = np.array([dayp[u][0] for u in us], float)
+    b['p3p'] = np.array([dayp[u][1] for u in us], float)
+    b['p1d'] = p1 / p1.sum()
+    b['lp1'] = np.log(b.p1d.clip(lower=1e-4))
+    o = b.sort_values(['p3p', 'umaban'], ascending=[False, True], kind='mergesort').index
+    b.loc[o, 'rk'] = np.arange(1, len(b) + 1)
+    b['gap'] = b.lp1 - b.lq
+    return b, ''
+
+
+def score_new(b, nm):
+    """決め 38-1 の勝つ率 pg1 = 種ごとに合計 1 → 平均 → 合計 1(研究 buy38_prod.research_p と同じ)・ev・buy(線・p3 の下限は v31 と同じ)。"""
+    X = b.reindex(columns=nm['features']).astype(float)
+    q = b.q.clip(1e-4, 1 - 1e-4).to_numpy()
+    lq = np.log(q / (1 - q))
+    per = []
+    for m in nm['boosters']:
+        p = 1 / (1 + np.exp(-(lq + m.predict(X, raw_score=True))))
+        per.append(p / p.sum())
+    p = np.mean(per, axis=0)
+    b = b.copy()
+    b['pg1'] = p / p.sum()
+    b['ev'] = b.pg1 * b.win
+    b['buy'] = (b.p3p >= nm['p3_min']) & (b.ev >= nm['line'])
+    return b
+
+
+def decide_buy(B, odds, wt, going, model, meta, key):
+    """10 分前の候補。直前版(勝つ率の直し入り)と決め 38-1 の模型があれば新しい勝つ率、無ければ今の v31。
+    → (b, 記録の meta)。b.pg1_v31 = v31 の勝つ率(3 連単・3 連複の記録は v31 の率のまま)。"""
+    b = feats(B, odds, wt, going)
+    if not len(b):
+        return b, {}
+    old = score(b, model, meta)
+    d = DAYP.get(key)
+    why = '模型なし' if NEW is None else '直前版なし' if d is None else '直前版に勝つ率の直しなし' if 'p1f' not in d['meta'] else ''
+    if not why:
+        try:
+            b2, why = use_day(b, d['p'])
+            if b2 is not None:
+                new = score_new(b2, NEW)
+                new['pg1_v31'] = old.pg1.to_numpy()
+                m = d['meta']
+                return new, {'buy_model': NEW.get('tag', 'b38'), 'day_at': m.get('at'),
+                             'day_parts': [k for k in ('p1f', 'tpl', 'sitb') if k in m]}
+        except Exception as e:  # noqa: BLE001  新しい模型が落ちても v31 で決める
+            why = f'失敗 {type(e).__name__} {str(e)[:80]}'
+    old['pg1_v31'] = old.pg1.to_numpy()
+    return old, {'buy_model': 'v31', 'buy_model_why': why}
+
+
 MARKS = ['◎', '○', '▲', '△', '△']
 COMBO_LINES = {'wide': 1.4, 'umaren': 1.4}  # ワイド・馬連は「記録だけ」(買わない・ユーザー 2026-09-30)。研究 v28 の線。模型の json の combo_lines が優先
 COMBO_FLOOR = 1.2  # 線より下でも期待値 ≥ 1.2 の組は combo_all に残す(あとで線を変えて数え直すため・ユーザー 2026-10-01)
@@ -538,6 +615,13 @@ def live(day, base_csv, mdir, write, until):
     except Exception as e:  # noqa: BLE001
         TPLM = None
         log('短評の層 読めない(足さない)', type(e).__name__, str(e)[:200])
+    global NEW
+    try:  # 決め 38-1: 直前版の勝つ率で学んだ買いの模型(mdir/buy38_new.json・種 3 本)。無ければ全部 v31
+        NEW = load_new(mdir)
+        log('買いの模型 決め38-1', f'読めた(種 {len(NEW["boosters"])} 本)' if NEW else '無し(v31 のまま)')
+    except Exception as e:  # noqa: BLE001
+        NEW = None
+        log('買いの模型 決め38-1 読めない(v31 のまま)', type(e).__name__, str(e)[:200])
     has_s2 = {'p1_s2', 'p3_s2'} <= set(B.columns) and B.p1_s2.notna().any()
     try:
         tm = TRI.load(mdir)
@@ -602,6 +686,9 @@ def live(day, base_csv, mdir, write, until):
                     else:
                         took = write_day(row, day) if write else 'dry'
                         n_day += 1
+                        DAYP[(tr, rno)] = {'p': {int(x['num']): (float(x['p1']), float(x['p3'])) for x in row['meta']['runners']},
+                                           'meta': {**{k: row['meta'][k] for k in ('p1f', 'tpl', 'sitb') if k in row['meta']},
+                                                    'at': now.strftime('%H:%M:%S')}}
                         log(f'{tr}{rno}R: 当日版の印 発走 {at:%H:%M}・{now:%H:%M:%S}・体重 {row["meta"]["weights"]}/{row["meta"]["n"]} 頭'
                             f'・◎ {row["marks"][0]["num"] if row["marks"] else "-"}・書き込み {took}')
                 except Exception as e:  # noqa: BLE001
@@ -629,7 +716,7 @@ def live(day, base_csv, mdir, write, until):
                     done.add(k)
                     continue
                 w = wt.get((tr, rno), {})
-                b = decide(Bk, odds, w, go.get((tr, rno)) or r.get('going') or '', model, meta)
+                b, bm = decide_buy(Bk, odds, w, go.get((tr, rno)) or r.get('going') or '', model, meta, (tr, rno))
                 if b.empty:
                     done.add(k)
                     continue
@@ -647,7 +734,7 @@ def live(day, base_csv, mdir, write, until):
                 if tm is not None and cmb:
                     try:  # 3 連単(d1b)・3 連複(c8)の期待値 ≥ 1.0 の組 = 記録だけ(買わない)
                         p3b = Bk.drop_duplicates('umaban').set_index('umaban').p3p
-                        h3 = b[['umaban', 'win', 'pg1', 'p1']].assign(p3p_base=b.umaban.map(p3b).to_numpy())
+                        h3 = b[['umaban', 'win', 'p1']].assign(pg1=b.pg1_v31.to_numpy(), p3p_base=b.umaban.map(p3b).to_numpy())  # 3 連単・3 連複は v31 の率で学んだ = v31 のまま
                         tri = TRI.race(h3, cmb, tm)
                     except Exception as e:  # noqa: BLE001
                         log(f'{tr}{rno}R: 3 連単・3 連複 失敗 {type(e).__name__} {str(e)[:120]}')
@@ -660,8 +747,10 @@ def live(day, base_csv, mdir, write, until):
                        'runners': [{'num': int(x.umaban), 'name': x.horse_name, 'rank': rk[int(x.umaban)] + 1,
                                     'mark': MARKS[rk[int(x.umaban)]] if rk[int(x.umaban)] < 5 else '',
                                     'p3': round(float(x.p3p), 4), 'odds': float(x.win), 'pg1': round(float(x.pg1), 4),
-                                    'ev': round(float(x.ev), 3), 'buy': bool(x.buy)} for x in b.itertuples()],
+                                    'ev': round(float(x.ev), 3), 'buy': bool(x.buy), 'pg1_v31': round(float(x.pg1_v31), 4)}
+                                   for x in b.itertuples()],
                        'combo_line': lines['wide'], 'combo_lines': lines, 'combo': combo, 'combo_all': combo_all}
+                val.update(bm)  # 決め 38-1: どちらの模型で決めたか(buy_model = b38… / v31・buy_model_why・day_at・day_parts)
                 if tri:
                     val['tri_model'] = {'tri': tri_name, 'trio': 'c8', 'ev_min': TRI.EV_MIN, 'cols': ['組', 'オッズ', '期待値', '模型の率', '市場の率']}
                     val.update(tri)
@@ -674,7 +763,7 @@ def live(day, base_csv, mdir, write, until):
                 n_w += 1
                 n_buy += len(c)
                 log(f'{tr}{rno}R: 発走 {at:%H:%M}・{now:%H:%M:%S} に決めた・{len(b)} 頭(体重 {val["weights"]})'
-                    f'・候補 {len(c)} 頭・3 連単 {len(val.get("tri") or [])}・3 連複 {len(val.get("trio") or [])} 組(記録)・書き込み {st}')
+                    f'・{val["buy_model"]}・候補 {len(c)} 頭・3 連単 {len(val.get("tri") or [])}・3 連複 {len(val.get("trio") or [])} 組(記録)・書き込み {st}')
         if now > end:
             log('時間切れ: 書いた', n_w, 'R・候補', n_buy, '頭')
             _record_after(day, write)
