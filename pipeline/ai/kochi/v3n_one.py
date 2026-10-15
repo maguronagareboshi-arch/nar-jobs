@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""他場版 v3n 第 9 版 = イ' 全国 1 本の木(決め 31・v3 の out/v3n_one_u.md・研究 src/f5_scripts/v3n_one.py pool・v3n_one_prod.py)。
+"""他場版 v3n 第 10 版(決め 32・2026-10-15)= 同じ作りの木を材料表 2014〜・学び 2015-01〜切りの前で(B15・v3 の out/v3n_2015_u.md・研究 v3n_2015_prod.py)。
+第 9 版 = イ' 全国 1 本の木(決め 31・v3 の out/v3n_one_u.md・研究 src/f5_scripts/v3n_one.py pool・v3n_one_prod.py)。
 
   土台 = base-v1 の朝の材料(nar_ai_feat_run・当日の馬場・体重の列を抜いた 263 列)+ 場の材料 v_ 148 列(k1・k4・k8 + Glicko 18 + 血統 9・
   当日の馬場・天気を抜く)+ 場の番号 trk。帯広を除く全場の 2022-11〜で学び、対象 10 場の行は重み 2。
@@ -15,7 +16,7 @@ import numpy as np
 import pandas as pd
 
 HERE = Path(__file__).resolve().parent
-FORM = 'v3n-9: one (base-v1 + v_ + trk) + seq-one'
+FORM = 'v3n-10: one15 (base-v1 + v_ + trk・2015〜) + seq-one15'
 KEY = ['track', 'race_date', 'race_no', 'runner_number']
 P5 = json.loads((HERE / 'v3n_one_p5.json').read_text(encoding='utf-8'))
 NB = [8, 10, 12, 99]

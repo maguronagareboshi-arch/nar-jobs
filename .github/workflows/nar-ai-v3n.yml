@@ -1,5 +1,6 @@
 # 他場版 v3n(公式の元だけ・場ごとの AI を base-v1 と混ぜる・8 場)を書く便(2026-10-10・v3 の out/kochi_deploy_steps.md)。
 # 2026-10-14 第 9 版(決め 31・v3 の out/v3n_one_u.md): 混ぜをやめて全国 1 本の固定の木(暗号化リリース v3n-one-20261014)。
+# 2026-10-15 第 10 版(決め 32・v3 の out/v3n_2015_u.md): 同じ作りの木を材料表 2014〜・学び 2015-01〜で(v3n-one15-20261015)・並び読みも B15 の p5 で(v3n-seq-one15-20261015)。戻すときはリリース名を 20261014 の 2 つに・v3n_one_p5.json も一緒に戻す。
 #   材料 = nar-ai-feat の成果物の nar_ai_feat_run(base-v1 の朝の材料表)+ 公式の表から作る場の材料。並び読みの重みもイに合わせた版。
 # 場 = 門別・水沢・金沢・笠松・名古屋・園田・高知・佐賀(v3 の out/nation.md で「入れ替えてよい」から南関を除く)。
 # ⛔本番への書き込みは nar_ai_marks(model='v3n-1', timing='morning')の REST upsert だけ。SQL は流さない。
@@ -98,7 +99,7 @@ jobs:
         run: |
           set -o pipefail
           V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
-          gh release download v3n-one-20261014 -p 'v3n_one.tar.gz.enc' -D in
+          gh release download v3n-one15-20261015 -p 'v3n_one.tar.gz.enc' -D in
           mkdir -p v3n_one
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3n_one.tar.gz.enc | tar -C v3n_one -xzf -
           rm -f in/v3n_one.tar.gz.enc
@@ -115,7 +116,7 @@ jobs:
         run: |
           set -o pipefail
           V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
-          gh release download v3n-seq-one-20261014 -p 'v3n_seq.tar.gz.enc' -D in
+          gh release download v3n-seq-one15-20261015 -p 'v3n_seq.tar.gz.enc' -D in
           mkdir -p v3n_seq
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3n_seq.tar.gz.enc | tar -C v3n_seq -xzf -
           rm -f in/v3n_seq.tar.gz.enc

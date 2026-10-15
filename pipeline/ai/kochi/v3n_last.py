@@ -90,7 +90,7 @@ def relabel(meta, gone, ud=None):
     if pc and all(n in pc for n in keep):
         import v3n_p1
         xs = np.array([(u[n] if (u and all(m in u for m in keep)) else 0.0) + (v3n_e1.BETA_NOKEN * nz.get(n, 0.0) if e1on else 0.0) for n in keep])
-        ver = ('di' if ud is not None else 'mo') + ('1' if one else '')
+        ver = ('di' if ud is not None else 'mo') + ('2' if meta.get('one15') else '1' if one else '')  # 第 10 版(決め 32)の朝の行 = k mo2・di2
         p1n = dict(zip(keep, v3n_p1.follow([pc[n] for n in keep], xs, ver)))
         q3 = {n: max(q3[n], p1n[n]) for n in keep}
     f0 = str(meta.get('form') or '').replace('+e1+noken', '').replace('+e1', '')

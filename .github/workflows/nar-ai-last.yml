@@ -150,7 +150,8 @@ jobs:
         run: |
           set -o pipefail
           V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
-          gh release download v3n-seq-day-one-20261014 -p 'v3n_seq_day.tar.gz.enc' -D in
+          # 2026-10-15 第 10 版(決め 32): 重みを B15 の p5 で仕上げ直した v3n-seq-day-one15-20261015(戻すときは v3n-seq-day-one-20261014・v3n_one_p5.json と一緒に)
+          gh release download v3n-seq-day-one15-20261015 -p 'v3n_seq_day.tar.gz.enc' -D in
           mkdir -p v3n_seq_day today
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3n_seq_day.tar.gz.enc | tar -C v3n_seq_day -xzf -
           rm -f in/v3n_seq_day.tar.gz.enc

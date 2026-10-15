@@ -9,6 +9,8 @@
    base-v1 の朝の材料表(nar-ai-feat の成果物 nar_ai_feat_run・--feat)のその日の行 + 2. の場の材料 v_ + 場の番号を入れて当てる。
    (第 8 版までの「場ごとに毎日学ぶ木 × W + base-v1 の行の混ぜ」はやめた)。材料表に無い・馬番がそろわないレースは書かない(後の便で書く)。
 4. γ・3 着内の曲線(v3n_one_p5.json)→ 並び読み u(イの p5 で仕上げた重み)→ E1・能検 → 勝つ率の直し(k 朝 0.812)。
+   2026-10-15 第 10 版(決め 32・v3 の out/v3n_2015_u.md): 木を材料表 2014〜・学び 2015-01〜の B15 に替えた(便の材料表は今のまま)。
+   γ・曲線・並び読みの重みは B15 の p5 で決め直し・勝つ率の直しの k 朝 0.761(meta.one15)。
 5. --write のときだけ nar_ai_marks に model='v3n-1'・timing='morning' で書く(base_v1.write_marks = 朝の行は凍結・読み直し)。
    meta.runners = [{num, p1, p3}](南関 v3 と同じ形)。画面に出すかはサイト側の旗で決める(出すまでは見えない)。
 対象 = out/nation.md で「入れ替えてよい」の場から南関を除いた 8 場 + 盛岡・姫路(2026-10-10 ユーザー・線は通っていない)= 10 場。
@@ -29,7 +31,7 @@ MODEL_ID = 'v3n-1'
 W = {30: 0.75, 35: 0.75, 36: 0.5, 46: 0.5, 47: 0.75, 48: 0.5, 50: 0.75, 51: 0.5, 54: 0.75, 55: 0.5}  # 対象 10 場(第 9 版から混ぜの割合は使わない・場の一覧として残す)
 MARKS = ['◎', '○', '▲', '△', '△']  # 2026-10-10 ユーザー決定: 印は 5 頭(◎○▲△△)
 NO_MORNING = ['e_baba', 'e_tenko']  # 当日の馬場・天気 = 公式の表は前の日まで空欄 = 朝の模型に入れない(入れて空で当てると確率がずれる)
-FORM = 'v3n-9: one (base-v1 + v_ + trk) + seq-one'  # meta に残す作りの名前(model の名前は v3n-1 のまま = サイト・成績の読み口を変えない)・v3n_one.FORM と同じ
+FORM = 'v3n-10: one15 (base-v1 + v_ + trk・2015〜) + seq-one15'  # meta に残す作りの名前(model の名前は v3n-1 のまま = サイト・成績の読み口を変えない)・v3n_one.FORM と同じ
 # γ(頭数の帯ごとの s^γ ÷ Σ)と 3 着内の曲線は第 9 版から v3n_one_p5.json(イの選びで決め直した値)
 
 
@@ -110,6 +112,8 @@ def main():
     #   材料表に無い・馬番がそろわないレースは書かない(後の便で書く)。⛔木が読めなければ何も書かない(落ちる)
     import v3n_one
     ONE = v3n_one.load()
+    ONE15 = str(ONE.get('form', '')).endswith('one15')  # 第 10 版の木(決め 32)= 勝つ率の直しの k を mo2・行に meta.one15
+    VK = 'mo2' if ONE15 else 'mo1'
     feat = arg('--feat', os.environ.get('V3N_FEAT', 'feat/nar_ai_feat_run.csv.gz'))
     FD = v3n_one.feat_day(feat, day, [name[j] for j in tracks])
     print('材料表', feat, 'その日の行', len(FD), '・木', ONE['cut'], '切り(〜', ONE['trained_to'], ')', flush=True)
@@ -165,14 +169,14 @@ def main():
             marks = [{'num': int(nums[i]), 'mark': MARKS[k_], 'score': round(float(sc[i]) * 100, 1)} for k_, i in enumerate(order[:5])]
             # 勝つ率の直し(決め 29・第 9 版の k = 決め 31): c1 = イの勝ち(帯の表の後)に 並び読み u + 能検 β·z を付いて行かせる。表示の p3 = max(p3, p1)
             zz = np.array([nz.get(int(n), 0.0) for n in nums]) if e1on else np.zeros(len(nums))
-            q1 = v3n_p1.follow(c1, (np.asarray(u, float) if u is not None else 0.0) + v3n_e1.BETA_NOKEN * zz, 'mo1')
+            q1 = v3n_p1.follow(c1, (np.asarray(u, float) if u is not None else 0.0) + v3n_e1.BETA_NOKEN * zz, VK)
             p3s = np.maximum(p3, q1)
-            meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM + (('+e1+noken' if nk_ok else '+e1') if e1on else ''), 'one': ONE['cut'],
+            meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM + (('+e1+noken' if nk_ok else '+e1') if e1on else ''), 'one': ONE['cut'], **({'one15': True} if ONE15 else {}),
                     'gamma': gm, 'trained_to': trained_to, 'seq': u is not None,
                     **({'u': {str(int(n)): round(float(x), 4) for n, x in zip(nums, u)}} if u is not None else {}),
                     **({'noken_z': {str(k_): float(v) for k_, v in sorted(nz.items())}} if nz else {}),
                     'runners': [{'num': int(n), 'p1': round(float(a), 4), 'p3': round(float(b_), 4)} for n, a, b_ in zip(nums, q1, p3s)],
-                    'p1c': {str(int(n)): round(float(a), 6) for n, a in zip(nums, c1)}, 'p1f': v3n_p1.TAG['mo1'],
+                    'p1c': {str(int(n)): round(float(a), 6) for n, a in zip(nums, c1)}, 'p1f': v3n_p1.TAG[VK],
                     'p': {str(int(n)): round(float(x), 4) for n, x in zip(nums, c)},
                     'own': {str(int(n)): [round(float(a), 4), round(float(b_), 4)] for n, a, b_ in zip(nums, c1, g3)}}
             rows.append({'track': trk, 'race_date': day, 'race_no': int(rno), 'marks': marks, 'meta': meta})
