@@ -28,7 +28,8 @@ on:
         default: 'yes'
 
 concurrency:
-  group: nar-ai-last
+  # 2026-10-15 master 以外の枝の試しの便は別の列(本番の待ちを消さない・本番は今までどおり nar-ai-last)
+  group: nar-ai-last${{ github.ref_name != 'master' && format('-{0}', github.ref_name) || '' }}
   cancel-in-progress: false
 
 permissions:
