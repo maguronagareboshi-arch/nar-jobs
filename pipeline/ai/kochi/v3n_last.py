@@ -85,19 +85,24 @@ def relabel(meta, gone, ud=None):
         key = q3
     # 勝つ率の直し(決め 29): 朝の meta.p1c(直す前の c1)を取消の後の馬で割り直し、x = 並び読み u(直前は u_day)+ 能検 β·z を掛け直す。
     #   表示の p3 = max(p3, p1)(印は key の順のまま)。p1c の無い古い朝の行は今までどおり runners の p1 を割り直す。
-    p1n = None
+    p1n = p1r = mv = None
     pc = {int(k): float(v) for k, v in (meta.get('p1c') or {}).items()}
     if pc and all(n in pc for n in keep):
         import v3n_p1
         xs = np.array([(u[n] if (u and all(m in u for m in keep)) else 0.0) + (v3n_e1.BETA_NOKEN * nz.get(n, 0.0) if e1on else 0.0) for n in keep])
         ver = ('di' if ud is not None else 'mo') + ('2' if meta.get('one15') else '1' if one else '')  # 第 10 版(決め 32)の朝の行 = k mo2・di2
         p1n = dict(zip(keep, v3n_p1.follow([pc[n] for n in keep], xs, ver)))
+        import v3n_p1mix
+        if meta.get('one15') and len(keep) >= v3n_p1mix.MIN_N:  # 決め 40: 画面の勝つ率を 3 着内率(E1・能検の後・max の前)と混ぜる。第 10 版の行だけ・印は key の順のまま
+            mv = 'di' if ud is not None else 'mo'
+            p1r = dict(p1n)
+            p1n = dict(zip(keep, v3n_p1mix.mix([p1r[n] for n in keep], [q3[n] for n in keep], mv)))
         q3 = {n: max(q3[n], p1n[n]) for n in keep}
     f0 = str(meta.get('form') or '').replace('+e1+noken', '').replace('+e1', '')
     ks = sum(key.values()) or 1.0
     order = sorted(keep, key=lambda n: (-key[n], keep.index(n)))
     marks = [{'num': n, 'mark': MARKS[i], 'score': round(key[n] / ks * 100, 1)} for i, n in enumerate(order[:5])]
-    new = dict(meta)
+    new = {k: v for k, v in meta.items() if k not in ('p1_raw', 'p1mix')}  # 朝の混ぜの記録は持ち越さない(直前で混ぜた時だけ下で書き直す)
     new.update({
         'n': len(keep),
         'p': {str(n): round(c[n], 4) for n in keep},
@@ -110,6 +115,7 @@ def relabel(meta, gone, ud=None):
         **({'noken_z': {str(k): v for k, v in sorted(nz.items())}} if 'noken_z' in meta else {}),
         'from': 'morning',
         **({'p1c': {str(n): v for n, v in sorted(pc.items()) if n in keep}, 'p1f': v3n_p1.TAG[ver]} if p1n is not None else {}),
+        **({'p1_raw': {str(n): round(float(p1r[n]), 6) for n in keep}, 'p1mix': v3n_p1mix.TAG[mv]} if p1r is not None else {}),
         'direct': ud is not None,
         **({'u_day': {str(k): round(float(v), 4) for k, v in ud.items()}} if ud is not None else {}),
         **({'seq_day': SEQ_FORM} if ud is not None and SEQ_FORM else {}),
@@ -229,6 +235,7 @@ def main():
     print('\n'.join(show))
     print('朝の行', len(morning), '・取消のあるレース', sum(1 for k in gone if any(k == (m['track'], int(m['race_no'])) for m in morning)),
           '・書く行', len(rows), '(前の回と同じは書かない)')
+    print('勝つ率の混ぜ(決め 40)', sum(1 for r in rows if r['meta'].get('p1mix')), '/', len(rows), 'R')
     if write and rows:
         sys.path.insert(0, os.environ.get('NAR_JOBS_AI', str(HERE.parent)))
         import base_v1 as B1
