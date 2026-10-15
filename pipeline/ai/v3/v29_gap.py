@@ -308,6 +308,7 @@ def decide(B, odds, wt, going, model, meta):
 # 同じ便が発走 30〜16 分前に作った直前版の p1・p3 で作る。直前版(勝つ率の直し入り)が無いレースは今の v31 で決める。
 NEW_META = 'buy38_new.json'
 NEW = None  # load_new の戻り。live() が mdir から読む。無ければ全部 v31
+PLACE_LINE = 1.1  # 決め 39(2026-10-15): 単勝で買う馬のうち 新しい勝つ率 × 10 分前の単勝 ≥ 1.1 を「複勝も」(記録だけ・新しい模型で決めたレースだけ)
 DAYP = {}   # (場, R) → {'p': {馬番: (p1, p3)}, 'meta': 直前版の meta}(day_marks を書いた時に入れる)
 
 
@@ -751,6 +752,10 @@ def live(day, base_csv, mdir, write, until):
                                    for x in b.itertuples()],
                        'combo_line': lines['wide'], 'combo_lines': lines, 'combo': combo, 'combo_all': combo_all}
                 val.update(bm)  # 決め 38-1: どちらの模型で決めたか(buy_model = b38… / v31・buy_model_why・day_at・day_parts)
+                if bm.get('buy_model', 'v31') != 'v31':  # 決め 39: 複勝も(記録だけ・取消は答え合わせで数えない)
+                    val['place_line'] = PLACE_LINE
+                    val['place'] = [{'num': int(x.umaban), 'odds': float(x.win), 'ev': round(float(x.ev), 3)}
+                                    for x in c.itertuples() if x.ev >= PLACE_LINE]
                 if tri:
                     val['tri_model'] = {'tri': tri_name, 'trio': 'c8', 'ev_min': TRI.EV_MIN, 'cols': ['組', 'オッズ', '期待値', '模型の率', '市場の率']}
                     val.update(tri)
@@ -763,7 +768,7 @@ def live(day, base_csv, mdir, write, until):
                 n_w += 1
                 n_buy += len(c)
                 log(f'{tr}{rno}R: 発走 {at:%H:%M}・{now:%H:%M:%S} に決めた・{len(b)} 頭(体重 {val["weights"]})'
-                    f'・{val["buy_model"]}・候補 {len(c)} 頭・3 連単 {len(val.get("tri") or [])}・3 連複 {len(val.get("trio") or [])} 組(記録)・書き込み {st}')
+                    f'・{val["buy_model"]}・候補 {len(c)} 頭(複勝も {len(val.get("place") or [])})・3 連単 {len(val.get("tri") or [])}・3 連複 {len(val.get("trio") or [])} 組(記録)・書き込み {st}')
         if now > end:
             log('時間切れ: 書いた', n_w, 'R・候補', n_buy, '頭')
             _record_after(day, write)
@@ -803,6 +808,8 @@ def record(days):
         cb = {k: {'bets': 0, 'hits': 0, 'return': 0} for k in ('wide', 'umaren')}
         tc = {k: {str(L): {'bets': 0, 'hits': 0, 'return': 0} for L in TRI_LINES} for k in TRI_PICK}
         hei = {'bets': 0, 'hits': 0, 'return': 0}
+        plc = {'bets': 0, 'hits': 0, 'return': 0}  # 決め 39 の複勝(取消 = 確定の単勝オッズが無い馬は数えない)
+        ran = None
         for r in rows:
             _, tr, rno = r['key'].split(':')
             v = r.get('value') or {}
@@ -832,6 +839,21 @@ def record(days):
                             a['bets'] += 1
                             a['hits'] += y > 0
                             a['return'] += y
+            if p and v.get('place'):
+                if ran is None:  # 確定の単勝オッズ(f = true)のある馬 = 走った馬
+                    ran = {(x['track'], int(x['race_no'])): {int(k) for k, o in (x.get('w') or {}).items() if o not in (None, '') and float(o) > 0}
+                           for x in _get(f'/rest/v1/nar_odds_ticks?race_date=eq.{day}&track=in.({q})&f=eq.true&select=track,race_no,w')}
+                yp = {}
+                for x in p:
+                    if x.get('t') == 'place':
+                        yp[str(x.get('c'))] = yp.get(str(x.get('c')), 0) + int(x.get('y') or 0)
+                for b in v['place']:
+                    if int(b['num']) not in ran.get((tr, int(rno)), {int(b['num'])}):
+                        continue
+                    y = yp.get(str(b['num']), 0)
+                    plc['bets'] += 1
+                    plc['hits'] += y > 0
+                    plc['return'] += y
             buy = (r.get('value') or {}).get('buy') or []
             combo = (r.get('value') or {}).get('combo') or {}
             if not buy and not any(combo.values()):
@@ -861,10 +883,10 @@ def record(days):
                 hit += y > 0
                 ret += y
         dd[day] = {'races': races, 'bets': n, 'hits': hit, 'return': ret, 'pending': pend, **cb, **tc,
-                   **({'hei': hei} if day >= HEI_FROM else {})}
+                   **({'hei': hei} if day >= HEI_FROM else {}), **({'place': plc} if plc['bets'] else {})}
     tot = {k: sum(v.get(k, 0) for v in dd.values()) for k in ('races', 'bets', 'hits', 'return')}
     tot['roi'] = round(100 * tot['return'] / (100 * tot['bets']), 1) if tot['bets'] else None
-    for kk in ('wide', 'umaren', 'hei'):
+    for kk in ('wide', 'umaren', 'hei', 'place'):
         t = {k: sum((v.get(kk) or {}).get(k, 0) for v in dd.values()) for k in ('bets', 'hits', 'return')}
         t['roi'] = round(t['return'] / t['bets'], 1) if t['bets'] else None
         tot[kk] = t
