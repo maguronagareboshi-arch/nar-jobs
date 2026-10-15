@@ -277,7 +277,10 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/nankan_points.py --apply --days 2 --max-horses 400; else echo "nankan points は朝の便だけ(JST $H)=スキップ"; fi
+          if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/nankan_points.py --apply --days 2 --max-horses 400
+          # 夕方 17 時台= 翌日の出馬表の新顔(休み明け・転入)だけ。前日の夜から格を出す(既知の馬は朝の便のまま)
+          elif [ "$EVENING" = 1 ] && [ $((10#$H)) -lt 1800 ]; then python cloud/nankan_points.py --apply --days 0 --new-only --max-horses 200 || echo "⚠ nankan points 夕方の新顔が取れない(続行)"
+          else echo "nankan points は朝の便と夕方 17 時台だけ(JST $H)=スキップ"; fi
           # §196b 第 2 段= 走った馬の格付ポイントの履歴(表 nar_nankan_point_hist)。nankan_points の直後・朝の便だけ
           if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/nankan_hist.py --apply --days 3; fi
 

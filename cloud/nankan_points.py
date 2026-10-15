@@ -14,7 +14,7 @@
 環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY。終了コード: 0 正常 / 1 投入失敗 / 2 前提の読み取りに失敗
 
 流れ(横着せず、走った馬だけ取り直す= #155 の教訓):
-  ① nar_runs(窓= 直近 --days 日)から 場×日×R と出走馬名を集める
+  ① nar_runs(窓= 直近 --days 日〜 --ahead 日先の出馬表)から 場×日×R と出走馬名を集める(先の日は②の新顔集めだけ)
   ② 馬名がまだ表に無い馬がいるレースだけ 出馬表 uma_shosai/{YYYYMMDD+場2桁+回2+日2+R2}.do を引き、馬コードを集める
      (回・日は /calendar/000000.do(直近数か月ぶん・日々動くので毎回読む)と過去月 /calendar/YYYYMM.do から。⛔当月以降の月別URLは 404 #157)
   ③ 馬ページ uma_info/{code}.do → 馬名・格・格付ポイント・「◯日現在」・生年月日。取り直しの規則=
@@ -257,6 +257,8 @@ def main():
     ap.add_argument("--env")
     ap.add_argument("--apply", action="store_true", help="表へ書く(無ければドライラン)")
     ap.add_argument("--days", type=int, default=2, help="直近この日数に走った馬を対象にする")
+    ap.add_argument("--ahead", type=int, default=1, help="この日数先までの出馬表の新顔も取る(休み明け・転入を前日から出す)")
+    ap.add_argument("--new-only", action="store_true", help="新顔(表に無い馬)だけ= 既知の馬の取り直しと④をしない(夕方の便)")
     ap.add_argument("--max-horses", type=int, default=400, help="馬ページを引く上限(1本 1.5 秒)")
     ap.add_argument("--max-races", type=int, default=200, help="出馬表を引く上限")
     ap.add_argument("--runs-csv", help="nar_runs の代わりに読む CSV(track,race_date,race_no,horse_name,birth_date)")
@@ -332,13 +334,15 @@ def main():
 
     # ---- ① 窓の中の出走(nar_runs か CSV)
     lo = (today - dt.timedelta(days=args.days)).isoformat()
+    # 先の出馬表(翌日ぶん)は② 新顔の馬コード集めだけに使う。最終出走日(③の取り直し規則)は今日までの出走から
+    hi = (today + dt.timedelta(days=max(args.ahead, 0))).isoformat()
     try:
         if args.runs_csv:
-            runs = read_runs_csv(args.runs_csv, lo, today_s)
+            runs = read_runs_csv(args.runs_csv, lo, hi)
         else:
             tr = ",".join(f'"{t}"' for t in BA)
             runs = sb_all(url, key, f"nar_runs?select=track,race_date,race_no,horse_name,birth_date"
-                                    f"&track=in.({urllib.request.quote(tr)})&race_date=gte.{lo}&race_date=lte.{today_s}"
+                                    f"&track=in.({urllib.request.quote(tr)})&race_date=gte.{lo}&race_date=lte.{hi}"
                                     "&order=race_date.asc,track.asc,race_no.asc")
     except Exception as e:
         log(f"出走の読み取りに失敗: {type(e).__name__}: {str(e)[:200]}")
@@ -348,9 +352,9 @@ def main():
     for r in runs:
         k = (r["track"], r["race_date"], int(r["race_no"]))
         by_race.setdefault(k, []).append(r)
-        if r["race_date"] > last_run.get(r["horse_name"], ""):
+        if today_s >= r["race_date"] > last_run.get(r["horse_name"], ""):
             last_run[r["horse_name"]] = r["race_date"]
-    log(f"{lo}〜{today_s}: 出走 {len(runs)} / レース {len(by_race)} / 馬 {len(last_run)} / 既知 {len(known)}")
+    log(f"{lo}〜{hi}: 出走 {len(runs)} / レース {len(by_race)} / 馬 {len(last_run)} / 既知 {len(known)}")
     if not by_race:
         log("窓の中に南関の出走なし=終わり")
         if seeded and args.apply and not args.state_json:
@@ -412,7 +416,7 @@ def main():
 
     # ---- ③ 馬ページ: 新顔 + 走ったのに基準日が古い既知の馬
     targets = [(c, tr, d) for c, (tr, d) in new_codes.items()]
-    for name, lr in last_run.items():
+    for name, lr in ({} if args.new_only else last_run).items():
         for c in names_known.get(name, []):
             if args.shard and int(c) % shard_n != shard_i:
                 continue
@@ -447,6 +451,7 @@ def main():
         if v["points"] is None:
             nopts += 1
         prev = known.get(c, {})
+        d = d if (d or "") <= today_s else None             # 先の出馬表で見つけた馬= まだ走っていない
         lr = max(last_run.get(v["horse_name"] or "", ""), prev.get("last_run") or "", d or "") or None
         row = {"code": c, **v, "last_run": lr, "seen_track": tr or prev.get("seen_track"),
                "fetched": today_s, "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()}
@@ -472,7 +477,7 @@ def main():
     else:
         log("dry-run: 書かない")
     # ---- ④ §196b 走り終えたレースの結果ページ → nar_races.nankan(⛔③の表の書き込みとは別= ここで失敗しても③は済んでいる)
-    if args.no_results or args.state_json or args.test:
+    if args.no_results or args.new_only or args.state_json or args.test:
         return rc
     try:
         have = sb_all(url, key, f"nar_races?select=track,race_date,race_no,nankan&track=in.({urllib.request.quote(','.join(chr(34) + t + chr(34) for t in BA))})"
