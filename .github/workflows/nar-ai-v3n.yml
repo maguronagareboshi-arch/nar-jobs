@@ -30,7 +30,8 @@ on:
     - cron: '15 0 * * *'    # 09:15 JST の予備(1 回目に base-v1 の行が無くて書かなかったレースを埋める)
 
 concurrency:
-  group: nar-ai-v3n
+  # 2026-10-15 master 以外の枝の試しの便は別の列(本番の待ちを消さない・本番は今までどおり nar-ai-v3n)
+  group: nar-ai-v3n${{ github.ref_name != 'master' && format('-{0}', github.ref_name) || '' }}
   cancel-in-progress: false
 
 permissions:
