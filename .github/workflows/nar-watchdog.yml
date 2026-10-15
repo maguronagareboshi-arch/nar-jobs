@@ -360,8 +360,17 @@ jobs:
               except Exception:
                   return False
           down = None
+          # 2026-10-16 外のサイト頼みの便は 1 回の fail では黄。最後の成功がこの時間より古くなったら赤(= 続けて取れない)
+          #   wind_store= 気象庁(毎晩 1 回・10 日分は先方に残るので翌晩に取り直せる)
+          #   official_zip= 公式の日次 ZIP(取れない間も体重は出馬表の画面から読む予備の道がある)
+          GRACE_H = {'wind_store': 50, 'official_zip': 26}
           for job in sorted(got):
               if (got.get(job) or {}).get('last_status') == 'fail':
+                  if job in GRACE_H:
+                      t = last_ok(job)
+                      if t is not None and (now - t).total_seconds() <= GRACE_H[job] * 3600:
+                          print(f"::warning::{job} は fail だが最後の成功 {t} から {GRACE_H[job]} 時間以内= 黄(note={(got.get(job) or {}).get('note')})")
+                          continue
                   if job == 'ooi_feed':
                       down = tck_down() if down is None else down
                       if down:

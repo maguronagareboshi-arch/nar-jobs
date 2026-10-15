@@ -4,7 +4,8 @@
   python3 cloud/watchdog_dedupe.py   … env NEEDS(= toJSON(needs))から赤の理由を集め、nar_meta 'watchdog_last_red' と比べる
 
 各 job は点検の手順を continue-on-error にして outputs red(true/false)・reasons(JSON の配列)を出す。
-  赤なし                         → 保存を消して exit 0(次に赤になったら 1 通目として出る)
+  赤なし(前回の保存が別の日)   → 保存を消して exit 0(次に赤になったら 1 通目として出る)
+  赤なし(前回の保存が今日)     → 保存を残して exit 0(10/16: 赤→緑→赤 の行き来で同じ理由が同じ日に 2 通出た)
   同じ JST 日付で理由が全部既出 → ::warning:: 今日は通知済み・exit 0(メールが出ない)
   それ以外(初回・新しい理由・日付が変わった)→ 保存して exit 1(= 所有者へ失敗メール)
 ⛔標準ライブラリだけ。nar_meta が読めない/書けないときは「初回」とみなして鳴らす側に倒す。
@@ -52,10 +53,10 @@ def decide(prev, today, reasons):
     戻り= (action, save)。action は 'clear'(赤なし= 消す)/'silent'(通知済み)/'notify'(鳴らす)。
     save は notify のときに保存する値(同じ日なら前回分との和)。"""
     reasons = sorted(set(reasons or []))
-    if not reasons:
-        return "clear", None
     prev = prev if isinstance(prev, dict) else None
     same_day = bool(prev) and prev.get("date") == today
+    if not reasons:
+        return ("keep" if same_day else "clear"), None
     old = set(prev.get("reasons") or []) if same_day else set()
     if same_day and set(reasons) <= old:
         return "silent", None
@@ -109,6 +110,9 @@ def main():
                 _clear()
             except Exception as e:                  # noqa: BLE001
                 print(f"⚠nar_meta {META_KEY} を消せない: {type(e).__name__}", flush=True)
+        return 0
+    if action == "keep":
+        print(f"赤なし= 今日({today})の通知済みは残す")
         return 0
     if action == "silent":
         print(f"::warning::今日は通知済み({today}・同じ理由 {len(reasons)} 件)= メールは出さない")

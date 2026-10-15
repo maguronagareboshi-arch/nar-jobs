@@ -103,7 +103,7 @@ def main():
                 targets[f"venue_{m.group(1)}"] = f"/venue/{m.group(1)}/{DATE}"
 
     broken = []  # (url, width, [症状])
-    n_measured = n_fail = 0
+    n_measured = n_fail = n_retry_ok = 0
     with sync_playwright() as pw:
         br = pw.chromium.launch(headless=True)
         try:
@@ -141,49 +141,66 @@ def main():
                 print("開催 0 = 見回らない")
                 return 0
 
-            # 2) 測る
+            # 2) 測る(崩れた画面は 60 秒あけて 1 回だけ測り直し、まだ崩れていれば数える。
+            #    10/15: 本番を出している途中に当たり、古い HTML と新しい CSS の食い違いで 41 件の空振りが出た)
+            def measure(w, tid, path, tag=""):
+                nonlocal n_measured, n_fail
+                url = url_of(path)
+                errs = []
+                page = ctxs[w].new_page()
+                page.on("console", lambda m, e=errs: e.append("console: " + m.text[:200]) if m.type in ("error", "assert") else None)
+                page.on("pageerror", lambda x, e=errs: e.append("exception: " + str(x)[:200]))
+                t0 = time.time()
+                sy = None
+                try:
+                    r = page.goto(url, wait_until="load", timeout=60000)
+                    status = r.status if r else None
+                    page.wait_for_timeout(a.wait * 1000)
+                    v = page.evaluate(MEASURE)
+                    errs_u = list(dict.fromkeys(errs))[:8]
+                    sy = symptoms(path, status, errs_u, v)
+                    rec = {"id": tid, "url": url, "width": w, "status": status, "errors": errs_u,
+                           "symptoms": sy, "ms": int((time.time() - t0) * 1000), "retry": bool(tag), **v}
+                    n_measured += 1
+                    if sy and tag:
+                        png = f"{tid}_{w}.png"
+                        try:
+                            page.screenshot(path=os.path.join(a.out, "shots", png), full_page=False)
+                            rec["png"] = png
+                        except Exception as e:
+                            rec["png_error"] = str(e)[:200]
+                    print(w, tid, tag, status, "NG " + " | ".join(sy) if sy else "ok", flush=True)
+                except Exception as e:
+                    n_fail += 1
+                    rec = {"id": tid, "url": url, "width": w, "error": str(e)[:300], "retry": bool(tag)}
+                    sy = ["測定できない: " + str(e)[:200]]
+                    print(w, tid, tag, "FAIL", str(e)[:200], flush=True)
+                finally:
+                    page.close()
+                jsonl.write(json.dumps(rec, ensure_ascii=False) + "\n")
+                jsonl.flush()
+                time.sleep(1.0)
+                return url, sy
+
+            suspects = []
             for w in (1280, 375):
                 for tid, path in lst:
-                    url = url_of(path)
-                    errs = []
-                    page = ctxs[w].new_page()
-                    page.on("console", lambda m, e=errs: e.append("console: " + m.text[:200]) if m.type in ("error", "assert") else None)
-                    page.on("pageerror", lambda x, e=errs: e.append("exception: " + str(x)[:200]))
-                    t0 = time.time()
-                    try:
-                        r = page.goto(url, wait_until="load", timeout=60000)
-                        status = r.status if r else None
-                        page.wait_for_timeout(a.wait * 1000)
-                        v = page.evaluate(MEASURE)
-                        errs_u = list(dict.fromkeys(errs))[:8]
-                        sy = symptoms(path, status, errs_u, v)
-                        rec = {"id": tid, "url": url, "width": w, "status": status, "errors": errs_u,
-                               "symptoms": sy, "ms": int((time.time() - t0) * 1000), **v}
-                        n_measured += 1
-                        if sy:
-                            png = f"{tid}_{w}.png"
-                            try:
-                                page.screenshot(path=os.path.join(a.out, "shots", png), full_page=False)
-                                rec["png"] = png
-                            except Exception as e:
-                                rec["png_error"] = str(e)[:200]
-                            broken.append((url, w, sy))
-                        print(w, tid, status, "NG " + " | ".join(sy) if sy else "ok", flush=True)
-                    except Exception as e:
-                        n_fail += 1
-                        rec = {"id": tid, "url": url, "width": w, "error": str(e)[:300]}
-                        broken.append((url, w, ["測定できない: " + str(e)[:200]]))
-                        print(w, tid, "FAIL", str(e)[:200], flush=True)
-                    finally:
-                        page.close()
-                    jsonl.write(json.dumps(rec, ensure_ascii=False) + "\n")
-                    jsonl.flush()
-                    time.sleep(1.0)
+                    _, sy = measure(w, tid, path)
+                    if sy:
+                        suspects.append((w, tid, path))
+            if suspects:
+                print(f"崩れの候補 {len(suspects)} 件= 60 秒あけて測り直す", flush=True)
+                time.sleep(60)
+                for w, tid, path in suspects:
+                    url, sy = measure(w, tid, path, tag="再")
+                    if sy:
+                        broken.append((url, w, sy))
+                n_retry_ok = len(suspects) - len(broken)
         finally:
             br.close()
 
     mins = (time.time() - t_start) / 60
-    lines = [f"{DATE}: 場 {n_venue}・レース {n_race}・URL {len(lst)}・測定 {n_measured}・失敗 {n_fail}・崩れ {len(broken)}・{mins:.1f} 分"]
+    lines = [f"{DATE}: 場 {n_venue}・レース {n_race}・URL {len(lst)}・測定 {n_measured}・失敗 {n_fail}・崩れ {len(broken)}(測り直しで直った {n_retry_ok})・{mins:.1f} 分"]
     for url, w, sy in broken:
         lines.append(f"  [{w}] {url} — " + " ; ".join(sy))
     txt = "\n".join(lines) + "\n"

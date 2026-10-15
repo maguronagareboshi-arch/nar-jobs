@@ -34,10 +34,20 @@ class Decide(unittest.TestCase):
         self.assertEqual(act, "notify")
         self.assertEqual(save, {"date": D2, "reasons": [A]})
 
-    def test_no_red_clears(self):
+    def test_no_red_same_day_keeps(self):
         act, save = wd.decide({"date": D1, "reasons": [A]}, D1, [])
+        self.assertEqual(act, "keep")
+        self.assertIsNone(save)
+
+    def test_no_red_old_day_clears(self):
+        act, save = wd.decide({"date": D1, "reasons": [A]}, D2, [])
         self.assertEqual(act, "clear")
         self.assertIsNone(save)
+
+    def test_red_green_red_same_day_silent(self):
+        prev = {"date": D1, "reasons": [A]}
+        self.assertEqual(wd.decide(prev, D1, [])[0], "keep")
+        self.assertEqual(wd.decide(prev, D1, [A])[0], "silent")
 
 
 class Collect(unittest.TestCase):
