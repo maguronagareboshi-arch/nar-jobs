@@ -88,6 +88,7 @@ def main():
     # 2026-10-13 第 7 版: 率の直し E1 と初出走の能検の z(v3 の out/v3n_ab.md・v3n_e1.py)。⛔能検が読めなくても E1 だけで書く
     import v3n_e1
     import v3n_p1
+    import v3n_p1mix  # 決め 40: 画面の勝つ率を 3 着内率と混ぜる(定数は暗号化した定数)
     NZ, nk_ok = {}, False
     try:
         NK = v3n_e1.fetch_rows(k0_dl.sb)
@@ -170,6 +171,10 @@ def main():
             # 勝つ率の直し(決め 29・第 9 版の k = 決め 31): c1 = イの勝ち(帯の表の後)に 並び読み u + 能検 β·z を付いて行かせる。表示の p3 = max(p3, p1)
             zz = np.array([nz.get(int(n), 0.0) for n in nums]) if e1on else np.zeros(len(nums))
             q1 = v3n_p1.follow(c1, (np.asarray(u, float) if u is not None else 0.0) + v3n_e1.BETA_NOKEN * zz, VK)
+            q1r = q1  # 混ぜる前の勝つ率(meta.p1_raw)
+            mixed = ONE15 and len(nums) >= v3n_p1mix.MIN_N  # 混ぜの定数は第 10 版(B15)で学んだ = 第 10 版の行だけ・4 頭以下は混ぜない
+            if mixed:
+                q1 = v3n_p1mix.mix(q1, p3, 'mo')  # 画面の勝つ率を 3 着内率と混ぜる(決め 40)。印は上で決めたまま
             p3s = np.maximum(p3, q1)
             meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM + (('+e1+noken' if nk_ok else '+e1') if e1on else ''), 'one': ONE['cut'], **({'one15': True} if ONE15 else {}),
                     'gamma': gm, 'trained_to': trained_to, 'seq': u is not None,
@@ -177,6 +182,7 @@ def main():
                     **({'noken_z': {str(k_): float(v) for k_, v in sorted(nz.items())}} if nz else {}),
                     'runners': [{'num': int(n), 'p1': round(float(a), 4), 'p3': round(float(b_), 4)} for n, a, b_ in zip(nums, q1, p3s)],
                     'p1c': {str(int(n)): round(float(a), 6) for n, a in zip(nums, c1)}, 'p1f': v3n_p1.TAG[VK],
+                    **({'p1_raw': {str(int(n)): round(float(a), 6) for n, a in zip(nums, q1r)}, 'p1mix': v3n_p1mix.TAG['mo']} if mixed else {}),
                     'p': {str(int(n)): round(float(x), 4) for n, x in zip(nums, c)},
                     'own': {str(int(n)): [round(float(a), 4), round(float(b_), 4)] for n, a, b_ in zip(nums, c1, g3)}}
             rows.append({'track': trk, 'race_date': day, 'race_no': int(rno), 'marks': marks, 'meta': meta})
@@ -184,6 +190,7 @@ def main():
     (work / f'v3n_{day}.json').write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding='utf-8')
     print('\n'.join(show))
     print('書く行', len(rows))
+    print('勝つ率の混ぜ(決め 40)', sum(1 for r in rows if r['meta'].get('p1mix')), '/', len(rows), 'R')
     if write and rows:
         sys.path.insert(0, os.environ.get('NAR_JOBS_AI', 'pipeline/ai'))
         import base_v1 as B1
