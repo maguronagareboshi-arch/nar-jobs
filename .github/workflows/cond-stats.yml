@@ -1,6 +1,6 @@
-# 条件で集計 /stats(2026-10-15・ユーザー了承済み見本 v3)の明細ファイルを作り、公開バケット share の cond-stats/v1/ へ上げる毎朝の便。
+# 条件で集計 /stats(2026-10-15・ユーザー了承済み見本 v3)の明細ファイルを作り、専用の公開バケット cond-stats の v1/ へ上げる毎朝の便。
 # 台本 cloud/cond_stats.py。約束の正本= nar-site research/site-boost-20261015/SPEC-condstats.md。
-# ⛔本番 DB では REST の単純 select だけ(場ごと)。書くのは Storage の share だけ(DB に書かない・バケットは既存)。
+# ⛔本番 DB では REST の単純 select だけ(場ごと)。書くのは Storage の cond-stats だけ(DB に書かない・無ければ初回に公開・JSON だけ・5MB までで作る= 10/15 ユーザー了承)。
 # 既定= 毎朝 JST 05:40(= UTC 20:40)。前日までの 1 年・3 年。
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
 name: cond-stats

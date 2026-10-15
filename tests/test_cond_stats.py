@@ -74,8 +74,9 @@ class TestCondStats(unittest.TestCase):
         src = open(os.path.join(ROOT, "cloud", "cond_stats.py"), encoding="utf-8").read()
         self.assertIn('"Cache-Control": CACHE', src)
         self.assertEqual(cs.CACHE, "max-age=3600")
-        self.assertEqual(cs.BUCKET, "share")
-        self.assertEqual(cs.ROOT, "cond-stats/v1/")
+        self.assertEqual(cs.BUCKET, "cond-stats")
+        self.assertEqual(cs.ROOT, "v1/")
+        self.assertEqual(cs.MIME, ["application/json"])
         self.assertEqual(len(cs.VENUES), 15)
 
 

@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
-"""条件で集計 /stats(2026-10-15・ユーザー了承済み見本 v3)の明細ファイルを毎朝作り、公開バケット share へ上げる。
+"""条件で集計 /stats(2026-10-15・ユーザー了承済み見本 v3)の明細ファイルを毎朝作り、専用の公開バケット cond-stats へ上げる
+(share は PNG・1MB までで入らない= 10/15 ユーザー了承で新設・無ければ初回に作る)。
 
   py -3.12 -X utf8 cloud/cond_stats.py --dry-run --out out/ --venue kochi   # 上げずに手元へ書く(読み取りだけ)
-  python3 cloud/cond_stats.py --apply                                       # 便(cond-stats.yml)。全 15 場→share→照合
+  python3 cloud/cond_stats.py --apply                                       # 便(cond-stats.yml)。全 15 場→cond-stats→照合
 
 約束の正本= nar-site research/site-boost-20261015/SPEC-condstats.md。形の元= proto/build_proto.py(列 d r u h dist g w n f p j t s b st)。
-- 置き場: share/cond-stats/v1/<prefix>_1y.json・<prefix>_3y.json・index.json(Cache-Control max-age=3600・上げたら取り直して sha256 照合)。
+- 置き場: バケット cond-stats の v1/<prefix>_1y.json・<prefix>_3y.json・index.json(Cache-Control max-age=3600・上げたら取り直して sha256 照合)。
 - 期間: 1y= 前日から 365 日・3y= 前日から 1095 日(どちらも前日まで= 当日は入れない)。日付は JST。
 - 走数から外す: 出走取消・競走除外・1 着の無いレース(不成立)の全走。競走中止は入れる。
-- ⛔本番 DB は REST の単純 select だけ(場ごと・一意の order でページ送り)。書くのは Storage の share だけ。
+- ⛔本番 DB は REST の単純 select だけ(場ごと・一意の order でページ送り)。書くのは Storage の cond-stats だけ(無ければ公開・JSON だけ・5MB までで作る)。
 - 全場を作り終えてから上げる= 1 場でも作れなければ何も上げずに exit 1(古い目次とファイルが残る)。
 環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY(dry-run は SUPABASE_ANON_KEY でも可)。
 """
@@ -24,8 +25,10 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-BUCKET = "share"
-ROOT = "cond-stats/v1/"
+BUCKET = "cond-stats"
+ROOT = "v1/"
+MIME = ["application/json"]
+SIZE_LIMIT = 5 * 1024 * 1024
 CACHE = "max-age=3600"
 UA = "nar-jobs cond_stats (+https://yukochi.com/)"
 JST = dt.timezone(dt.timedelta(hours=9))
@@ -238,6 +241,20 @@ def build_venue(rest, track, today):
 
 
 # ---------- 上げる ----------
+def ensure_bucket(rest):
+    """公開バケット cond-stats が無ければ作る(odds_archive.py と同じ作法・JSON だけ・1 個 5MB まで)。"""
+    try:
+        rest.req("/storage/v1/bucket/%s" % BUCKET)
+        return
+    except urllib.error.HTTPError as e:
+        if e.code not in (400, 404):
+            raise
+    body = json.dumps({"id": BUCKET, "name": BUCKET, "public": True,
+                       "allowed_mime_types": MIME, "file_size_limit": SIZE_LIMIT}).encode("utf-8")
+    rest.req("/storage/v1/bucket", "POST", body, {"Content-Type": "application/json"})
+    log("バケット %s を作った(公開・JSON だけ・5MB まで)" % BUCKET)
+
+
 def upload(rest, name, data):
     path = ROOT + name
     rest.req("/storage/v1/object/%s/%s" % (BUCKET, path), "POST", data,
@@ -251,7 +268,7 @@ def upload(rest, name, data):
 def main(argv=None):
     ap = argparse.ArgumentParser()
     g = ap.add_mutually_exclusive_group(required=True)
-    g.add_argument("--apply", action="store_true", help="share へ上げる")
+    g.add_argument("--apply", action="store_true", help="cond-stats へ上げる")
     g.add_argument("--dry-run", action="store_true", help="上げずに --out へ書く")
     ap.add_argument("--out", default="cond_stats_out", help="--dry-run の出し先")
     ap.add_argument("--venue", default="", help="場の URL 名(カンマ区切り・空= 全 15 場。--apply は全場のみ)")
@@ -299,6 +316,7 @@ def main(argv=None):
                 f.write(data)
         log("dry-run: %d ファイルを %s へ(REST %d 回)" % (len(files), a.out, rest.nreq))
         return 0
+    ensure_bucket(rest)
     for n, data in files:                            # 目次は最後
         upload(rest, n, data)
     log("上げた %d ファイル(REST %d 回)" % (len(files), rest.nreq))
