@@ -1,0 +1,59 @@
+# 10/15 トップの帯「今日の出走馬」(移籍後の初出走・休み明け・距離が大きく替わる・前走と別の場)の件数と一覧を
+# nar_meta 'top_band'(件数)と 'top_band:YYYY-MM-DD'(一覧)へ書く便。台本 cloud/top_band.py。
+# 出馬表は前日に入り、移籍の表(nar_horse_changes)は 05:33 の便で入る= 毎朝 JST 09:40 に 1 回・念のため 12:40 にもう 1 回(冪等)。
+# ⛔本番 DB では REST の単純 select だけ(その日の出走+前走 1 本)。古い top_band:* は 7 日で消す。1 回およそ 1 分。
+# 手動= workflow_dispatch(dry_run= 書かずに件数を log に出す・date= 空なら今日)。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: top-band
+on:
+  schedule:
+    - cron: '40 0 * * *'         # JST 09:40
+    - cron: '40 3 * * *'         # JST 12:40(念のため)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'dry run (no write)'
+        required: false
+        default: true
+        type: boolean
+      date:
+        description: 'YYYY-MM-DD (empty = today JST)'
+        required: false
+        default: ''
+permissions:
+  contents: read
+concurrency:
+  group: top-band
+  cancel-in-progress: false
+jobs:
+  band:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: unit tests
+        run: python3 -m unittest discover -s tests -p "test_top_band.py"
+      - name: top band
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          DRY: ${{ github.event.inputs.dry_run }}
+          DAY: ${{ github.event.inputs.date }}
+        run: |
+          set --
+          if [ -n "$DAY" ]; then set -- "$@" --date "$DAY"; fi
+          if [ "$DRY" = "true" ]; then
+            python3 cloud/top_band.py --dry-run "$@"
+          else
+            python3 cloud/top_band.py --apply "$@"
+            # 最終成功時刻(表 nar_job_heartbeat)。⛔表が無くても落ちない
+            python3 cloud/beat.py top_band ok
+          fi
+
+      # 失敗の印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py top_band fail 失敗

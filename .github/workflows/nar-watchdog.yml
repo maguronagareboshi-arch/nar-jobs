@@ -381,6 +381,11 @@ jobs:
               t = last_ok('votes')
               if t is None or t.date() != today:
                   bad.append(f"votes が今日まだ成功していない(最終 {t})")
+          if hm >= 1030:
+              # top_band= トップの帯「今日の出走馬」の毎朝便(JST 09:40・念のため 12:40・2026-10-16)
+              t = last_ok('top_band')
+              if t is None or t.date() != today:
+                  bad.append(f"top_band が今日まだ成功していない(最終 {t})")
           if hm >= 800:
               # cond_stats= 条件で集計 /stats の毎朝便(JST 05:40・2026-10-15)
               for job in ('k43_daily', 'cond_stats'):
