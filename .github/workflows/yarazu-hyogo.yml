@@ -1,4 +1,4 @@
-# 研究用・1 回きり。兵庫の格付修正の直前のヤラズの痕跡(cloud/yarazu_hyogo.py)を 2014-01〜2026-09 で集計し docs/yarazu-hyogo/result.md を書く。
+# 研究用・1 回きり。兵庫の格付修正の直前のヤラズの痕跡(cloud/yarazu_hyogo.py)を 2014-01〜2026-09 で集計し docs/yarazu-hyogo/result2.md を書く(⑥見込みのずれ・⑦調子をそろえた比べを足した・result.md は残す)。
 # ⛔本番 DB では REST の単純 select だけ(年ごと・order は一意)。集計は全部 Python。書き込みなし。schedule なし。
 name: yarazu-hyogo
 on:
@@ -28,7 +28,7 @@ jobs:
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
             git add docs/yarazu-hyogo
-            git commit -m "兵庫 降級前のヤラズ 研究集計 $(TZ=Asia/Tokyo date +%F)"
+            git commit -m "兵庫 降級前のヤラズ 研究集計2 $(TZ=Asia/Tokyo date +%F)"
             for i in 1 2 3; do
               git fetch origin "${GITHUB_REF_NAME}"
               git rebase "origin/${GITHUB_REF_NAME}"

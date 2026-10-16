@@ -18,6 +18,9 @@ A1・C3 は対象外。修正の日・級の読み取りは class_calc.py の hy
 ③ 見込み= 人気×頭数ごとの平均(着順・3着内率・勝ち馬との秒差・上がり3F 順位)。自分の年を除いた全年(兵庫の全走)から作る。
    95% 区間= 馬ごとのクラスタ bootstrap 1000 回。
 ④ 降級直後= 実際に下がった馬の R 後の兵庫の 1・2 戦目。対照= 下がった先の級に R 前から居て R 後も同じ級で走った馬。
+⑥ 見込みのずれ= 使う年の全走で 実際 − 見込み の平均。今の表と「使う年だけで作り直した表」を比べ、ほぼ 0 の方を⑦に使う。
+⑦ 調子をそろえた比べ= C から級が変わった直後の 1・2 戦目を除いた C' と、級×前 2 走の着順合計×人気の層の中で比べる。
+結果は docs/yarazu-hyogo/result2.md(①〜⑤は前回と同じ作り方・result.md は残す)。
 """
 import datetime as dt
 import io
@@ -35,7 +38,7 @@ from late_money import rows_offset, num, log  # noqa: E402
 
 Y_FROM, Y_TO = 2014, 2026
 D_TO = dt.date(2026, 9, 30)
-OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "yarazu-hyogo", "result.md")
+OUT = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "docs", "yarazu-hyogo", "result2.md")
 EXCL = ("Ａ１", "Ｃ３")
 MIN_CELL = 30
 BOOT = 1000
@@ -119,11 +122,11 @@ def build_nr(runs):
     return nr, rinfo
 
 
-def build_exp(nr):
-    """(pop, n, year) → [件数, 着順和, 3着内, 秒差和, 秒差件数, 上がり順位和, 上がり件数]"""
+def build_exp(nr, years=None):
+    """(pop, n, year) → [件数, 着順和, 3着内, 秒差和, 秒差件数, 上がり順位和, 上がり件数]。years を渡すとその年の走だけで作る"""
     cell = defaultdict(lambda: [0, 0.0, 0, 0.0, 0, 0.0, 0])
     for v in nr.values():
-        if v["fin"] and v["pop"] and v["n"]:
+        if v["fin"] and v["pop"] and v["n"] and (years is None or v["year"] in years):
             c = cell[(v["pop"], v["n"], v["year"])]
             c[0] += 1
             c[1] += v["fin"]
@@ -406,22 +409,26 @@ def main():
         return statistics.median(prev) if len(prev) == 3 else None
 
     # ② ③ 走ごとの区分
+    def make_in3(ex):
+        out = {}   # (code, 走の idx) → (i, 位置, 区分)
+        for (code, i), got in R0["last3"].items():
+            c = R0["state"][(code, i)][0]
+            B = exp_b(i, c)
+            s = 0
+            for p, (j, f) in enumerate(got, 1):
+                cat = "見込みなし"
+                if B is not None:
+                    v = seqs[code][j]["nrv"]
+                    mm = metrics(v, ex) if v else None
+                    if mm:
+                        delta = B * p / 3 - s - mm["efin"]
+                        cat = "近い" if abs(delta) <= 3 else ("遠い・安全" if delta > 3 else "深く圏内")
+                out[(code, j)] = (i, p, cat)
+                s += f
+        return out
+
     acc = Acc()
-    in3 = {}   # (code, 走の idx) → (i, 位置, 区分)
-    for (code, i), got in R0["last3"].items():
-        c = R0["state"][(code, i)][0]
-        B = exp_b(i, c)
-        s = 0
-        for p, (j, f) in enumerate(got, 1):
-            cat = "見込みなし"
-            if B is not None:
-                v = seqs[code][j]["nrv"]
-                mm = metrics(v, exp) if v else None
-                if mm:
-                    delta = B * p / 3 - s - mm["efin"]
-                    cat = "近い" if abs(delta) <= 3 else ("遠い・安全" if delta > 3 else "深く圏内")
-            in3[(code, j)] = (i, p, cat)
-            s += f
+    in3 = make_in3(exp)
     nC = nD = 0
     for code, seq in seqs.items():
         for j, x in enumerate(seq):
@@ -482,6 +489,151 @@ def main():
                 rr[3] += pl.get(v["num"], 0.0) if v["fin"] <= 3 else 0.0
                 pay_dates.append(v["race"][1])
 
+    # ---------------------------------------------------------------- ⑥ 見込みの表のずれ
+    use_years = set(passed)
+    exp_new = build_exp(nr, years=use_years)
+
+    def bias(ex, vals):
+        a = [0.0, 0.0, 0, 0]   # 着順和, 3着内和, 件数, 見込みなし
+        for v in vals:
+            if v["year"] not in use_years or not v["fin"]:
+                continue
+            mm = metrics(v, ex)
+            if not mm:
+                a[3] += 1
+                continue
+            a[0] += mm["fin"]
+            a[1] += mm["top3"]
+            a[2] += 1
+        return (a[0] / a[2] if a[2] else None, a[1] / a[2] if a[2] else None, a[2], a[3])
+
+    led_vals = list({id(x["nrv"]): x["nrv"] for seq in seqs.values() for x in seq if x["nrv"]}.values())
+    b6 = {}
+    for nm, ex in (("今の作り方(2014〜 全年・自分の年を除く)", exp), ("作り直し(使う年だけ・自分の年を除く)", exp_new)):
+        b6[nm] = (bias(ex, nr.values()), bias(ex, led_vals))
+    ok6 = {nm: (v[0][0] is not None and abs(v[0][0]) < 0.03 and abs(100 * v[0][1]) < 0.5) for nm, v in b6.items()}
+    nm_old, nm_new = list(b6)
+    if ok6[nm_old] and ok6[nm_new]:
+        pick = nm_old if abs(b6[nm_old][0][0]) <= abs(b6[nm_new][0][0]) else nm_new
+    elif ok6[nm_old]:
+        pick = nm_old
+    else:
+        pick = nm_new
+    E = exp if pick == nm_old else exp_new
+    log("⑥ 見込み: %s を使う" % pick)
+
+    # ---------------------------------------------------------------- ⑦ 調子をそろえた比べ
+    in3E = make_in3(E)
+
+    def fbin(t):
+        return "2〜6" if t <= 6 else "7〜10" if t <= 10 else "11〜14" if t <= 14 else "15〜18" if t <= 18 else "19以上"
+
+    def pbin(p):
+        return "1〜3" if p <= 3 else "4〜6" if p <= 6 else "7以上"
+
+    recs = []   # (群, code, 年, 層 or None, 指標)
+    nCp = nCx = 0
+    for code, seq in seqs.items():
+        prev_lab, kk = None, 0
+        for j, x in enumerate(seq):
+            if x["lab"]:
+                kk = kk + 1 if x["lab"] == prev_lab else 1
+                prev_lab = x["lab"]
+            if not x["lab"] or x["lab"][0] != "old" or x["lab"][1] in EXCL:
+                continue
+            i = next((t for t, R in enumerate(revs) if R > x["d"]), None)
+            if i is None or revs[i].year not in passed:
+                continue
+            mm = metrics(x["nrv"], E)
+            if not mm:
+                continue
+            layer = None
+            if j >= 2:
+                f1, f2 = counted(seq[j - 1], M), counted(seq[j - 2], M)
+                if f1 is not None and f2 is not None:
+                    layer = (x["lab"][1], fbin(f1 + f2), pbin(x["nrv"]["pop"]))
+            yr = x["d"].year
+            if (code, j) in in3E and in3E[(code, j)][0] == i:
+                _, p, cat = in3E[(code, j)]
+                recs.append(("%s・%d走目" % (cat, p), code, yr, layer, mm))
+            elif kk <= 2:
+                nCx += 1
+            else:
+                recs.append(("C'", code, yr, layer, mm))
+                nCp += 1
+
+    def compare(T, Rg):
+        rT = [r for r in recs if r[0] == T]
+        rR = [r for r in recs if r[0] == Rg]
+        nR_l = Counter(r[3] for r in rR if r[3] is not None)
+        keep = {L for L, n in nR_l.items() if n >= 20}
+        drop_none = sum(1 for r in rT if r[3] is None)
+        drop_small = sum(1 for r in rT if r[3] is not None and r[3] not in keep)
+        tK = [r for r in rT if r[3] in keep]
+        rK = [r for r in rR if r[3] in keep]
+        layers = sorted(keep)
+        li = {L: n for n, L in enumerate(layers)}
+        hs = sorted({r[1] for r in tK} | {r[1] for r in rK})
+        hix = {h: n for n, h in enumerate(hs)}
+        out = {"n": len(tK), "drop_none": drop_none, "drop_small": drop_small, "nR": len(rK), "nRall": len(rR)}
+        for k in ("fin", "top3", "mar", "l3r"):
+            if not tK or not layers:
+                continue
+            ST = np.zeros((len(hs), len(layers)))
+            NT = np.zeros_like(ST)
+            SR = np.zeros_like(ST)
+            NR = np.zeros_like(ST)
+            for r in tK:
+                if k in r[4]:
+                    ST[hix[r[1]], li[r[3]]] += r[4][k]
+                    NT[hix[r[1]], li[r[3]]] += 1
+            for r in rK:
+                if k in r[4]:
+                    SR[hix[r[1]], li[r[3]]] += r[4][k]
+                    NR[hix[r[1]], li[r[3]]] += 1
+
+            def est(st, nt, sr, nrr):
+                ok = (nt > 0) & (nrr > 0)
+                if not ok.any():
+                    return np.nan
+                d = st[ok] / nt[ok] - sr[ok] / nrr[ok]
+                return float((nt[ok] * d).sum() / nt[ok].sum())
+
+            pt = est(ST.sum(0), NT.sum(0), SR.sum(0), NR.sum(0))
+            H = len(hs)
+            bs = []
+            for _ in range(BOOT):
+                w_ = np.bincount(RNG.integers(0, H, H), minlength=H).astype(float)
+                bs.append(est(w_ @ ST, w_ @ NT, w_ @ SR, w_ @ NR))
+            lo, hi_ = np.nanpercentile(bs, [2.5, 97.5])
+            ys = {}
+            for y in sorted({r[2] for r in tK}):
+                ty = [r for r in tK if r[2] == y and k in r[4]]
+                if len(ty) < 20:
+                    continue
+                a = defaultdict(lambda: [0.0, 0, 0.0, 0])
+                for r in ty:
+                    a[r[3]][0] += r[4][k]
+                    a[r[3]][1] += 1
+                for r in rK:
+                    if r[2] == y and k in r[4]:
+                        a[r[3]][2] += r[4][k]
+                        a[r[3]][3] += 1
+                num_ = den = 0.0
+                for v in a.values():
+                    if v[1] and v[3]:
+                        num_ += v[1] * (v[0] / v[1] - v[2] / v[3])
+                        den += v[1]
+                if den:
+                    ys[y] = num_ / den
+            out[k] = (pt, lo, hi_, int(NT.sum()), sum(1 for v in ys.values() if v > 0), len(ys))
+        return out
+
+    comps = [("A", "近い・3走目", "C'"), ("B", "近い・3走目", "近い・1走目"),
+             ("C", "深く圏内・3走目", "C'"), ("C", "遠い・安全・3走目", "C'")]
+    cres = [(lab, T, Rg, compare(T, Rg)) for lab, T, Rg in comps]
+    log("⑦ C' %d 走・級が変わった直後で除いた %d 走" % (nCp, nCx))
+
     # ---------------------------------------------------------------- 書き出し
     o = io.StringIO()
     w = lambda s="": o.write(s + "\n")  # noqa: E731
@@ -518,7 +670,7 @@ def main():
         rt = v["ov"] / v["k"] if v["k"] else None
         w("| %d | %d | %d | %s | %s | %s |" % (y, len(v["revs"]), v["k"], "-" if rt is None else "%.1f%%" % (100 * rt),
                                              "-" if not v["t"] else "%g" % statistics.median(v["t"]),
-                                             "使う" if y in passed else "外す(70%% 未満)" if v["k"] else "外す(降級なし)"))
+                                             "使う" if y in passed else "外す(70% 未満)" if v["k"] else "外す(降級なし)"))
     w()
     w("## ②③ 走ごとの区分(使う年だけ・実際 − 人気からの見込み・95%% 区間は馬ごとのクラスタ bootstrap %d 回)" % BOOT)
     w()
@@ -532,7 +684,7 @@ def main():
     for k in ("fin", "top3", "mar", "l3r"):
         w("### %s" % labels[k])
         w()
-        w("| 区分 | 走 | 実際 − 見込み [95%%] | 差(− C) [95%%] | 年の向き |")
+        w("| 区分 | 走 | 実際 − 見込み [95%] | 差(− C) [95%] | 年の向き |")
         w("|---|---|---|---|---|")
         for g in order:
             if g not in acc.h or not acc.h[g][k]:
@@ -556,7 +708,7 @@ def main():
     w()
     w("下がった先の級の内訳: " + "・".join("%s %d" % (c, n) for c, n in sorted(dest.items(), key=lambda x: names.index(x[0]))))
     w()
-    w("| 群 | 走 | 3着内率の実際 − 見込み [95%%] (pt) | 着順の実際 − 見込み |")
+    w("| 群 | 走 | 3着内率の実際 − 見込み [95%] (pt) | 着順の実際 − 見込み |")
     w("|---|---|---|---|")
     keys4 = ["降級・1戦目", "降級・2戦目", "前から居る・1戦目(先の級すべて)", "前から居る・2戦目(先の級すべて)"] + \
         sorted(g for g in acc4.h if g.startswith("前から居る(級"))
@@ -593,6 +745,44 @@ def main():
             worse = (b[3] > 0) if k != "top3" else (b[3] < 0)
             w("- %s: 近い・3走目 − C = %+.3f [%+.3f, %+.3f]・区間が 0 に%s・向き %s・年の向き(+ の年) %d/%d"
               % (labels[k], b[3], b[4], b[5], "かからない" if zero else "かかる", "見込みより悪い" if worse else "悪くない", up, ny))
+    w()
+    w("## ⑥ 見込みの表のずれ(使う年 %s の兵庫の走・実際 − 見込みの平均)" % "・".join(str(y) for y in sorted(use_years)))
+    w()
+    w("| 見込みの作り方 | 範囲 | 走 | 着順 | 3着内 (pt) | 見込みなし | 全走が 着順<0.03 かつ 3着内<0.5pt |")
+    w("|---|---|---|---|---|---|---|")
+    for nm, (ba, bl) in b6.items():
+        for rng_, bb in (("全走", ba), ("台帳に載る馬だけ", bl)):
+            w("| %s | %s | %d | %s | %s | %d | %s |" % (nm, rng_, bb[2], "-" if bb[0] is None else "%+.4f" % bb[0],
+                                                   "-" if bb[1] is None else "%+.2f" % (100 * bb[1]), bb[3],
+                                                   ("満たす" if ok6[nm] else "満たさない") if rng_ == "全走" else ""))
+    w()
+    w("以後(⑦)は **%s** を使う%s。" % (pick, "" if (ok6[nm_old] or ok6[nm_new]) else "(どちらも基準を満たさなかったので作り直した方)"))
+    w("全走と台帳に載る馬だけの違い(%s の見込み・台帳に載る − 全走): 着順 %+.4f・3着内 %+.2f pt。" % (
+        pick, b6[pick][1][0] - b6[pick][0][0], 100 * (b6[pick][1][1] - b6[pick][0][1])))
+    w()
+    w("## ⑦ 調子をそろえた比べ(使う年だけ・%s の見込み)" % pick)
+    w()
+    w("- C'= 対照 C(近3走に入らない・A1・C3 以外)から、級が変わった直後の 1・2 戦目を除いた走(%d 走・除いた走 %d)。台帳の最初の走も「変わった直後」に数える。" % (nCp, nCx))
+    w("- 層= 級 × 前 2 走(兵庫・級を問わない・着順なしは①の扱い %s)の着順合計 2〜6・7〜10・11〜14・15〜18・19以上 × 人気 1〜3・4〜6・7以上。" % M)
+    w("- 差= 層ごとの(比べる群 − 対照)の「実際 − 見込み」の差を、比べる群の走の数で重み付けした平均。95%% 区間は馬ごとのクラスタ bootstrap %d 回。年の向き= + の年/年数(その年の比べる群が 20 走以上)。" % BOOT)
+    w("- 対照の走が 20 未満の層は捨てる。着順・秒差・上がり順位は + が悪い、3着内は − が悪い。")
+    w()
+    w("| 比べ | 比べる群 − 対照 | 指標 | 比べる群の走 | 差 [95%] | 年の向き |")
+    w("|---|---|---|---|---|---|")
+    for lab, T, Rg, r in cres:
+        for k in ("fin", "top3", "mar", "l3r"):
+            if k not in r:
+                continue
+            pt, lo, hi_, nn, up, ny = r[k]
+            sc = 100 if k == "top3" else 1
+            fmt = "%+.1f" if k == "top3" else "%+.3f"
+            w("| %s | %s − %s | %s | %d | %s | %d/%d |" % (lab, T, Rg, labels[k] + (" (pt)" if k == "top3" else ""), nn,
+                                                       (fmt + " [" + fmt + ", " + fmt + "]") % (sc * pt, sc * lo, sc * hi_), up, ny))
+    w()
+    w("| 比べ | 比べる群 − 対照 | 使った走 | 捨てた走(前 2 走が取れない) | 捨てた走(対照 20 走未満の層) | 対照の走(使った/全部) |")
+    w("|---|---|---|---|---|---|")
+    for lab, T, Rg, r in cres:
+        w("| %s | %s − %s | %d | %d | %d | %d / %d |" % (lab, T, Rg, r["n"], r["drop_none"], r["drop_small"], r["nR"], r["nRall"]))
     w()
     w("定義は cloud/yarazu_hyogo.py の頭の説明。馬名・騎手・調教師・馬主は出さない。")
     os.makedirs(os.path.dirname(OUT), exist_ok=True)
