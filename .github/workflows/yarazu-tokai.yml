@@ -1,4 +1,4 @@
-# 研究用・1 回きり。名古屋・笠松の降級前のヤラズの痕跡(cloud/yarazu_tokai.py)。docs/yarazu-tokai/result.md を書く。
+# 研究用・1 回きり。名古屋・笠松の降級前のヤラズの痕跡(cloud/yarazu_tokai.py)。10/17 やり直し= docs/yarazu-tokai/result2.md を書く(result.md は前回のまま)。
 # ⛔本番 DB では REST の単純 select だけ(場×年/月ごと・order は一意)。集計は全部 Python。書き込みなし。schedule なし。
 name: yarazu-tokai
 on:
@@ -27,8 +27,8 @@ jobs:
           if [ -n "$(git status --porcelain docs/yarazu-tokai)" ]; then
             git config user.name "github-actions[bot]"
             git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-            git add docs/yarazu-tokai/result.md
-            git commit -m "名古屋・笠松 降級前のヤラズ 研究集計 $(TZ=Asia/Tokyo date +%F)"
+            git add docs/yarazu-tokai/result2.md
+            git commit -m "名古屋・笠松 降級前のヤラズ 研究集計やり直し $(TZ=Asia/Tokyo date +%F)"
             for i in 1 2 3; do
               git fetch origin "${GITHUB_REF_NAME}"
               git rebase "origin/${GITHUB_REF_NAME}"
