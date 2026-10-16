@@ -714,12 +714,12 @@ def main():
     only = real and not safe and not any(others.values())
     L.append("## 6. 判定")
     L.append("")
-    L.append("境目×的の差(入着率か着順でヤラズの向きに 95% が 0 をまたがない)= %s・安全 %s・対象外 %s・偽の日 −60 %s・+60 %s → %s" % (
+    L.append("境目×的の差(入着率か着順でヤラズの向きに 95%% が 0 をまたがない)= %s・安全 %s・対象外 %s・偽の日 −60 %s・+60 %s → %s" % (
         "出た" if real else "出ない", "出た" if safe else "出ない", "出た" if others["a"] else "出ない",
         "出た" if others["b-60"] else "出ない", "出た" if others["b+60"] else "出ない",
         "本物だけに出る= 痕跡あり" if only else ("本物にも出ない= 痕跡は言えない" if not real else "対照の群にも出る= 決まりのせいとは言えない")))
     L.append("")
-    L.append("差= 層ごとの(的 − 対照)の「実際 − 見込み」を的の走の数で重み付け。95% は馬ごとのクラスタ bootstrap %d 回。" % BOOT)
+    L.append("差= 層ごとの(的 − 対照)の「実際 − 見込み」を的の走の数で重み付け。95%% は馬ごとのクラスタ bootstrap %d 回。" % BOOT)
     L.append("層= 級×前2走の着順合計(~6/7-12/13-18/19~/無)×人気(1/2-3/4-6/7~)×前走からの間隔(~14/15-28/29-56/57~/無)。対照 %d 走未満の層は捨てる。" % MIN_CTRL)
     L.append("対象外の見かけの線= 8歳以上は今の線 + 同じ級の 7 歳が同じ切替で受ける線の上げ幅・C3 は同じ切替・馬齢の C2 の線 ÷ 2。線が空欄の欄も対象外。")
     OUT.parent.mkdir(parents=True, exist_ok=True)
