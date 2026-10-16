@@ -12,9 +12,11 @@ import sys
 from pathlib import Path
 
 DIR = Path(os.environ.get('V3_CONSTS', 'C:/Users/kouki/nankan_ai/v3/consts_prod'))
-FILES = ['consts.json', 'v3n_one_p5.json', 'k26_cal_table.json', 'dw_pat_dict.json.gz', 'dw_pat_fallback.json.gz']
+FILES = ['consts.json', 'v3n_one_p5.json', 'k26_cal_table.json', 'dw_pat_dict.json.gz', 'dw_pat_fallback.json.gz',
+         'v3n_f41_grp.parquet', 'v3n_f41_horse.parquet']   # 2026-10-17 決め 41 の固めた表(KDS から・父・生産者の群の合計と馬の台帳)
 NEED = {'p1_follow': ['FORM', 'TAG'], 'danwa_marks': ['CONST'], 't14_bundle': ['M_GLOB', 'V0'],
-        'v3n_p1': ['K', 'TAG'], 'v3n_e1': ['B_E1', 'S_NOKEN', 'BETA_NOKEN'], 'v3n_p1mix': ['AB', 'TAG']}
+        'v3n_p1': ['K', 'TAG'], 'v3n_e1': ['B_E1', 'S_NOKEN', 'BETA_NOKEN'], 'v3n_p1mix': ['AB', 'TAG'],
+        'v3n_f41': ['NAMES', 'BETA', 'B', 'TAG', 'CUT']}
 _C = None
 
 

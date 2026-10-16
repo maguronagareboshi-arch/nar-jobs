@@ -348,6 +348,16 @@ def prep(off, day, tracks, out, log=print):
     R = runs_frame(off)
     tidx = np.where(R.track.isin(tracks) & (R.race_date == day) & (R.src == 0))[0]
     F = raw(R, tidx)
+    # 父・生産者 = 混ぜ作り(KDS から固めた表 + CUT 以後の公式の走り・研究の値との相関 0.97・0.99)
+    import sealed
+    G = pd.read_parquet(sealed.path('v3n_f41_grp.parquet'))
+    H = pd.read_parquet(sealed.path('v3n_f41_horse.parquet'))
+    pf = Path(off) / 'profiles.parquet'
+    prof = pd.read_parquet(pf, columns=['horse_name', 'birth_date', 'sire', 'breeder']) if pf.exists() else None
+    bmap = H.dropna(subset=['breeder']).drop_duplicates('breeder').set_index('breeder').breeder_cd
+    R2 = horse_attrs(R, H, prof, bmap)
+    for ent, cond, nm in GRP:
+        F[nm] = grp_hybrid(R2, tidx, G, ent, cond)
     T = R.iloc[tidx]
     np.savez_compressed(out, track=T.track.to_numpy().astype('U4'), race_no=T.race.to_numpy(int), umaban=T.umaban.to_numpy(int),
                         cols=np.array(list(F.columns)), X=F.to_numpy(np.float64))
@@ -378,3 +388,72 @@ def race_shift(S, track, rno, nums, q3):
     M = design(S['F'].iloc[idx].reset_index(drop=True), rc, list(C['NAMES']))
     s = shift_logit(M, q3, rc, C['BETA'], C['B'])
     return apply3(q3, s, rc), s
+
+
+# ================================================================ 2026-10-17 混ぜ作り(父・生産者の群の成績)
+# 変わらない過去 = KDSCOPE から 1 回だけ取り出して固めた表(暗号化の定数のフォルダの v3n_f41_grp.parquet・v3n_f41_horse.parquet)。
+#   CUT(2026-03-01・KDS の中央の走りが止まった日)より前の全場 + 中央の走りの群ごとの合計と、馬ごとの合計(本人を抜く用)。
+# 毎日変わる分 = 公式の表の CUT 以後の走り(地方 + 公式の中央 = 地方に来た馬の分)。馬は 名前|生まれ年 で KDS の台帳(固めた表)につなぎ、
+#   台帳に無い新しい馬は公式 profiles の父の名前・生産者の名前で引く。
+CUT = '2026-03-01'
+GRP = [('sire', 'src', 'o/g|sire|src|all|fr-par#raw'), ('breeder_cd', 'agec', 'o/g|breeder_cd|agec|all|fr-par#raw')]
+
+
+def horse_attrs(R, Hmap, prof=None, bmap=None):
+    """公式の表の走り R に ketto・sire・breeder_cd・agec を付ける。Hmap = 固めた台帳(name・birth_year・ketto・sire・breeder_cd)"""
+    R = R.copy()
+    by = R.hk.str.rsplit('|', n=1).str[1]
+    nm = R.hk.str.rsplit('|', n=1).str[0]
+    H = Hmap.assign(k=Hmap.name.astype(str).str.strip() + '|' + Hmap.birth_year.astype(int).astype(str)).drop_duplicates('k').set_index('k')
+    hit = R.hk.map(H.ketto.astype(str))
+    R['ketto'] = hit.fillna('N:' + R.hk).to_numpy()
+    R['sire'] = R.hk.map(H.sire)
+    R['breeder_cd'] = R.hk.map(H.breeder_cd)
+    if prof is not None:   # 台帳に無い馬 = 公式 profiles の名前
+        P = prof.assign(k=prof.horse_name.astype(str).str.strip() + '|' + prof.birth_date.astype(str).str[:4]).drop_duplicates('k').set_index('k')
+        R['sire'] = R.sire.fillna(R.hk.map(P.sire))
+        bn = R.hk.map(P.breeder)
+        R['breeder_cd'] = R.breeder_cd.fillna(bn.map(bmap) if bmap is not None else None).fillna('N:' + bn.astype(str)).where(R.breeder_cd.notna() | bn.notna())
+    yr = R.year.to_numpy()
+    R['agec'] = np.clip(yr - pd.to_numeric(by, errors='coerce').to_numpy(float), 2, 4)
+    return R
+
+
+def grp_hybrid(R, tidx, G, ent, cond, m=20):
+    """研究 grp_block(全期間・本人を抜く・群全体へ m 走分で縮める)と同じ式を、固めた表 G(CUT より前の合計)+ R の CUT 以後の走りで。
+    R = horse_attrs の後の公式の走り(CUT 以後の分だけ足す)。→ 値 − 群全体の値(fr-par)"""
+    gm = float(G.loc[G.kind == 'gm', 'v'].iloc[0])
+    okn = R.top3.notna().to_numpy()
+    yv = R.fin_r.to_numpy(float)
+    after = (R.race_date >= CUT).to_numpy()
+    qd = R.day.to_numpy()[tidx]
+    hk = R.ketto.astype(str).to_numpy()
+
+    def keyof(cnd):
+        ck = np.full(len(R), '', object) if cnd == 'none' else R[cnd].astype(str).to_numpy()
+        return (R[ent].astype(str).to_numpy() + '#' + ck).astype(object), (R[ent].notna().to_numpy() & (R[cnd].notna().to_numpy() if cnd != 'none' else True))
+
+    def asof(key, valid, kind):
+        D = pd.DataFrame({'key': key[valid & after], 'day': R.day.to_numpy()[valid & after], 'n': okn[valid & after].astype(float),
+                          'v': np.nan_to_num(yv[valid & after]) * okn[valid & after]}).groupby(['key', 'day'], sort=True).sum().reset_index()
+        kc, ku = pd.factorize(D.key, sort=True)
+        comb = kc.astype(np.int64) * 1000000 + D.day.to_numpy()
+        Cn, Cv = np.r_[0.0, np.cumsum(D.n.to_numpy())], np.r_[0.0, np.cumsum(D.v.to_numpy())]
+        qk = pd.Index(ku).get_indexer(key[tidx])
+        hi = np.searchsorted(comb, qk * 1000000 + qd, 'left')
+        lo = np.searchsorted(comb, qk * 1000000, 'left')
+        n, s = np.where(qk < 0, 0, Cn[hi] - Cn[lo]), np.where(qk < 0, 0, Cv[hi] - Cv[lo])
+        T = G[G.kind == kind].set_index('key')
+        n0 = pd.Series(key[tidx]).map(T.n).fillna(0).to_numpy()
+        s0 = pd.Series(key[tidx]).map(T.v).fillna(0).to_numpy()
+        return n + n0, s + s0
+    res = {}
+    for cnd in ('none', cond):
+        key, valid = keyof(cnd)
+        n, s = asof(key, valid, f'{ent}|{cnd}')
+        lk = (key + '#' + hk).astype(object)
+        n2, s2 = asof(lk, valid, f'{ent}|{cnd}|self')
+        n, s = n - n2, s - s2
+        p0 = res['none'] if cnd != 'none' else gm
+        res[cnd] = np.where(~valid[tidx], np.nan, (s + m * p0) / (n + m))
+    return res[cond] - res['none']
