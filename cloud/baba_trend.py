@@ -10,7 +10,7 @@
   内外 io = レースごとの Spearman ρ(枠番 gate, 着順) → 日の中央値
             ⛔ρ>0= 内枠ほど着順が良い= **内が有利**(外が伸びるのは ρ<0 の側)
 
-  出力 = {"built":"2026-09-05T09:10+09:00", "q_built":"2026-09-05",
+  出力 = {"built":"2026-09-05T09:10+09:00", "q_built":"2026-09-05", "q":{"ooi":{"f":[0.2,0.52],"io":[-0.14,0.19]}, …},
           "days": {"2026-09-05": {"saga": {"t":-0.3,"tn":6,"f":0.41,"fn":6,"io":-0.02,"ion":6,
                                            "partial":true,"w":["前が止まらない"]}, …}}}
   - 数の無い指標はキーごと省く。`w` は閾値表(上下1割)(pipeline/baba_trend_q.json)のある場だけ。
@@ -521,8 +521,11 @@ def main():
         edge = (today - dt.timedelta(days=WINDOW_DAYS)).isoformat()
         days = {d: v for d, v in merged.items() if d >= edge}
         q_built = q_built or old.get("q_built")
+    # 10/16 図化2-③ 画面(場ページ「最近の馬場」の左右の棒)が使う「いつもの範囲」= 閾値表をそのまま足す(n は落とす)
+    q_all, _ = load_q()
+    q_out = {p: {k: v[k] for k in ("f", "io", "t") if k in v} for p, v in (q_all or {}).items()}
     value = {"built": dt.datetime.now(JST).isoformat(timespec="minutes"),
-             "q_built": q_built, "days": days}
+             "q_built": q_built, "q": {p: v for p, v in q_out.items() if v}, "days": days}
     st = upsert(base, key, value)
     log("   nar_meta/%s 更新 %s(%d日 %d場日)" % (META_KEY, st, len(days),
                                                 sum(len(v) for v in days.values())))
