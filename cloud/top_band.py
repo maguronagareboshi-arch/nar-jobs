@@ -6,7 +6,7 @@
   top_band:YYYY-MM-DD  = {v:1, date, built, rows:{layoff:[[HHMM, 場, R, 馬番, 馬名, 日数]],
                           dist:[[…, 前走m, 今回m]], venue:[[…, 前走の場]]}} … 一覧 /today/facts/:kind が読む
 新馬(noken_debuts)とオークション(auction_today)の件数は画面が既存の行から数える= ここでは書かない。
-10/16 前の晩の分: 夜の回(JST 22:10)が `--date 翌日 --key top_band_next --no-transfer` で翌日分を別の鍵に書く
+10/16 前の晩の分: 夜の回(JST 22:10)が `--date 翌日 --key top_band_next` で翌日分を別の鍵に書く(10/16 から移籍も= 先に horse_changes を夜にも流す。--no-transfer は便が止まったとき用に残す)
   (翌日の出馬表は前日までに入っている。⛔移籍の表は当日朝 05:33 の便で半分ほど足される= 実測 10/14〜16 で
    その日の行の 31〜52% が当日 06:00〜06:15 に入った→ 夜は移籍を書かない= n.transfer と transfer は null)。
   一覧 top_band:翌日 は日付つきなのでそのまま書く(朝の回が同じ鍵を上書きする)。画面は top_band が今日でなければ top_band_next を使う。

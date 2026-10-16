@@ -49,6 +49,7 @@ jobs:
           DRY: ${{ github.event.inputs.dry_run }}
           NIGHT_IN: ${{ github.event.inputs.night }}
           DAY: ${{ github.event.inputs.date }}
+          SUPABASE_DB_PASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H)
           # 夜の回= 18 時以降に起きた予定の便か、手動で night を選んだとき
@@ -59,7 +60,11 @@ jobs:
           if [ "$DRY" = "true" ]; then W=--dry-run; else W=--apply; fi
           echo "夜の回= $NIGHT・日= $DAY・$W"
           if [ "$NIGHT" = "1" ]; then
-            python3 cloud/top_band.py $W --date "$DAY" --key top_band_next --no-transfer
+            # 10/16 移籍の表(nar_horse_changes)は朝 05:33 の便でしか作っていなかった= 翌日の出走表は前日に揃っている
+            #   (10/17 分 341 行・所属の空 0 を確認)ので、夜にも作ってから数える(冪等= 朝の便と重ねても増えない)
+            pip install -q -r cloud/requirements.txt
+            if [ "$DRY" = "true" ]; then python3 cloud/horse_changes.py; else python3 cloud/horse_changes.py --apply; fi
+            python3 cloud/top_band.py $W --date "$DAY" --key top_band_next
             python3 cloud/auction_today.py $W --date "$DAY" --key auction_next
             JOB=top_band_next
           else
