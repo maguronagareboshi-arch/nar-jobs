@@ -8,7 +8,7 @@
   走歴= 台帳(nar_horse_prize.runs)に居る馬は台帳の走(+台帳に無い東海の走を nar_runs から足す)、居ない馬は nar_runs の全場の走
   (馬名+生年月日で 1 頭に絞る。生年の無い走は外して数える)。賞金= nar_races.prize_yen の着順の額。
   印= 台帳に居ない馬で、走歴の頭が 2 歳でない(それより前・中央の走が分からない)か、1〜5着の賞金が分からない走がある馬。
-- 見直しの日= 決まりから: 名古屋= 年度の第 7・13・19・26 回の開催の最終日(開催= nar_races の続いた開催日の塊)・
+- 見直しの日= 決まりから: 名古屋= 年度の第 7・13・19・26 回の最終日(公式の出走馬編成一覧表 PDF・表 NG_OFFICIAL・読めない回は外す)・
   笠松= 6・9・12・3 月に終わる最後の開催の最終日。nar_meta 'tokai_adj_days' にある日はそれを使う。R の日の走は見直し前。
   tokai_state の調整日(TOKAI_ADJ)もこの日の翌日に置き換える(それ以外の四半期は tokai_adj_dates の既定のまま)。
 - 級= 台帳の走の cls の頭の字。台帳に無い走は、同じレースの台帳の馬(2 頭以上)の級がそろっていればその級。
@@ -39,7 +39,16 @@ PFX = {"名古屋": "nagoya", "笠松": "kasamatsu"}
 D_FROM, D_TO = dt.date(2024, 1, 1), dt.date(2026, 9, 30)
 F_FROM = dt.date(2023, 9, 1)            # 前回の見直し(2023-12)と収得の期間のために前から読む
 F_TO = dt.date(2026, 10, 16)            # 見直しの後の級(①)のために後ろまで読む
-R_FROM = dt.date(2022, 11, 1)           # 東海のレース表(換算率・開催の塊)
+R_FROM = dt.date(2014, 1, 1)            # 東海のレース表(換算率)と台帳の無い馬の走歴はここから(10/17 本体の決定(イ))
+HIST_ADJ_FROM = dt.date(2022, 11, 1)    # 計算の履歴の確かめ= 台帳の便と同じレース表の範囲で調整日を作る
+# 名古屋の見直しの日= 公式の出走馬編成一覧表(nagoyakeiba.com/info/program/file/<年度>-<回>-<日>.pdf)の最終日の PDF に
+#   書かれた日付(10/17 に手で読んだ)。年度 2023・2024 と 2025 の第 7・13 回は PDF が 404 で読めない= その回は外す。
+NG_OFFICIAL = {(2025, 19): "2025-12-24", (2025, 26): "2026-03-27", (2026, 7): "2026-07-03", (2026, 13): "2026-10-02"}
+NG_URLS = ["https://www.nagoyakeiba.com/info/program/file/2025-19-5.pdf", "https://www.nagoyakeiba.com/info/program/file/2025-20-1.pdf",
+           "https://www.nagoyakeiba.com/info/program/file/2025-26-5.pdf", "https://www.nagoyakeiba.com/info/program/file/2026-1-1.pdf",
+           "https://www.nagoyakeiba.com/info/program/file/2026-7-4.pdf", "https://www.nagoyakeiba.com/info/program/file/2026-8-1.pdf",
+           "https://www.nagoyakeiba.com/info/program/file/2026-13-4.pdf", "https://www.nagoyakeiba.com/info/program/file/2026-14-1.pdf"]
+NG_UNREAD = "2023 年度・2024 年度の第 7・13・19・26 回と 2025 年度の第 7・13 回(<年度>-<回>-1.pdf が 404)"
 LET = {"Ａ": "A", "Ｂ": "B", "Ｃ": "C", "A": "A", "B": "B", "C": "C"}
 LINE = td.LINE
 RK = td.RK
@@ -249,8 +258,8 @@ def fetch(base, key):
     D["all"], D["codes"] = [], []
     for i in range(0, len(names), 60):
         D["all"] += pages(base, key, "/rest/v1/nar_runs?select=track,race_date,race_no,horse_name,birth_date,finish,trainer_area"
-                          "&horse_name=in.(%s)&race_date=lte.%s&order=race_date.asc,track.asc,race_no.asc,runner_number.asc"
-                          % (qin(names[i:i + 60]), F_TO))
+                          "&horse_name=in.(%s)&race_date=gte.%s&race_date=lte.%s&order=race_date.asc,track.asc,race_no.asc,runner_number.asc"
+                          % (qin(names[i:i + 60]), R_FROM, F_TO))
         if i % 1200 == 0:
             log("全場の走 %d / 馬名 %d・行 %d" % (i, len(names), len(D["all"])))
     for i in range(0, len(names), 80):
@@ -449,16 +458,7 @@ def ng_meets(ds, g):
 def rule_revs(race_days, meta):
     """→ revs{場: [(R, 出どころ)]}・表の行・名古屋の塊の幅 g と回の数"""
     last = max(max(v) for v in race_days.values())
-    known_ng = {(y, k): dt.date.fromisoformat(d) for (y, k), d in td.ADJ_SET["NG"].items()}
-    best = None
-    for g in (1, 2, 3):
-        mt, cnt = ng_meets(race_days["名古屋"], g)
-        hit = sum(1 for yk, d in known_ng.items() if mt.get(yk) == d)
-        dev = sum(abs(c - 26) for y, c in cnt.items() if fy(R_FROM) < y < fy(last))
-        sc = (hit, -dev)
-        if best is None or sc > best[0]:
-            best = (sc, g, mt, cnt)
-    _, g, mt, cnt = best
+    g, cnt = None, {}
     meta_ks = (meta or {}).get("KS") or {}
     meta_ng = (meta or {}).get("NG") or {}
     rows, revs, revq = [], {v: [] for v in TRACKS}, {}
@@ -480,9 +480,7 @@ def rule_revs(race_days, meta):
             else:
                 k = {6: 7, 9: 13, 12: 19, 3: 26}[m]
                 fyy = y if m != 3 else y - 1
-                rule = mt.get((fyy, k))
-                nxt = mt.get((fyy, k + 1))
-                rule = rule if (rule and nxt) else None       # 次の回が見えていなければ確定しない
+                rule = dt.date.fromisoformat(NG_OFFICIAL[(fyy, k)]) if (fyy, k) in NG_OFFICIAL else None   # 公式の PDF・読めない回は外す
                 setv = td.ADJ_SET["NG"].get((fyy, k))
                 mv = meta_ng.get(ym)
             use, src = None, None
@@ -902,11 +900,11 @@ def main():
     revs, revq, revrows, ng_g, ng_cnt = rule_revs(race_days, D["meta"])
     for v in TRACKS:
         log("%s 見直しの日 %s" % (v, [(R.isoformat(), s) for R, s in revs[v]]))
-    base_adj, new_adj = set_adj(races, revs, revq)
+    base_adj, new_adj = set_adj(races, revs, revq)   # 既定は 2014 からのレース表(古い調整も入る)
 
     # 計算の確かめ= 既定の調整日・lag で台帳の馬の計算の履歴を当て直す(標本 3000 行)
     cc.TOKAI_ADJ.clear()
-    cc.TOKAI_ADJ.update(base_adj)
+    cc.TOKAI_ADJ.update(cc.tokai_adj_dates({k: v for k, v in races.items() if k[1] >= HIST_ADJ_FROM.isoformat()}))
     hk_by_code = {h["code"]: hk for hk, h in horses.items() if h["led"]}
     samp = [x for x in D["hist"] if x["code"] in hk_by_code and pflt(x.get("v")) is not None]
     samp = [samp[i] for i in sorted(RNG.choice(len(samp), size=min(3000, len(samp)), replace=False))] if samp else []
@@ -1091,8 +1089,8 @@ def main():
         A("| 東海の走の %s | %d |" % (k, n))
     A("")
     A("## 3. 見直しの日(決まり+nar_meta)\n")
-    A("名古屋の開催の塊= 開催日の空き %d 日以内を 1 開催(設定値の日に合う幅を 1〜3 日から選んだ)。年度ごとの回の数: %s\n" % (
-        ng_g, "・".join("%d年度 %d" % (y, c) for y, c in sorted(ng_cnt.items()))))
+    A("名古屋の決まりの日= 公式の出走馬編成一覧表の各年度 第 7・13・19・26 回の最終日(10/17 に読んだ・開催の塊を数える方法はやめた)。"
+      "見たページ: %s。読めずに外した回: %s。笠松= nar_meta+6・9・12・3 月に終わる最後の開催の最終日。\n" % (" ・ ".join(NG_URLS), NG_UNREAD))
     A("| 場 | 四半期 | 決まりの日 | nar_meta | 設定値(ADJ_SET) | 前回の日 | 使う日 | 出どころ | 前回から足した |\n|---|---|---|---|---|---|---|---|---|")
     for r in revrows:
         A("| %s | %s | %s | %s | %s | %s | %s | %s | %s |" % (
@@ -1210,8 +1208,10 @@ def main():
                             ("偽の日でも出る", not fake_out)) if ok) or "言えない")
     else:
         verdict = "痕跡なし: 境目×的の時期の 5着内率の差は 95% 区間が 0 を含む(または + の向き)。"
+    if len(used) <= 3:
+        verdict = "データ不足で言えない: ①で使える回が %d 回(3 回以下)。(台本の決め方では「%s」)" % (len(used), verdict.split(":")[0])
     A("## ⑤ 判定\n")
-    A(verdict + "(前回= %s)" % PREV["verdict"])
+    A(verdict + "(前回= %s)" % PREV["verdict"] + "・10/17 1 回目 6a046ae= 使える回 2/22・境目 0 走")
     A("\n(5着内率・両場: 境目 %s・差の差 %s・安全 %s・Ｃ境目 %s・偽 −45 %s・偽 +45 %s・印を除く境目 %s・印を除く差の差 %s)\n" % (
         fmt(main_, "t5"), fmt(dd, "t5"), fmt(res[(None, "安全")], "t5"), fmt(res[(None, "C境目")], "t5"),
         fmt(fakes[-45][0], "t5"), fmt(fakes[45][0], "t5"), fmt(nof["境目"], "t5"), fmt(nof["差の差"], "t5")))
