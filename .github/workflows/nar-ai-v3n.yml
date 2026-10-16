@@ -39,8 +39,34 @@ permissions:
   actions: read               # nar-ai-feat の成果物(材料表)を取るため
 
 jobs:
-  predict:
+  # 2026-10-16 10/15・10/16 の実例: nar-ai-feat の予備 schedule(06:30 の予定が 08:46 ごろに遅れて走る)は gate が「今日は済み」で
+  #   build を飛ばし成果物 0 本の success になる → それに起こされて「no valid artifacts」で毎朝 1 回落ちていた。
+  #   nar-ai-v2 と同じく、起こした便に材料表の成果物が無ければ predict を飛ばす(行は本物の便で先に書き済み・残りは 09:15 の予備で埋める)
+  check:
     if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    runs-on: ubuntu-latest
+    outputs:
+      go: ${{ steps.c.outputs.go }}
+    steps:
+      - name: skip when the feat run has no artifacts
+        id: c
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EV_ID: ${{ github.event.workflow_run.id }}
+        run: |
+          if [ -z "$EV_ID" ]; then echo "go=1" >> "$GITHUB_OUTPUT"; exit 0; fi
+          N=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$EV_ID/artifacts" --jq '[.artifacts[] | select(.name | startswith("nar-ai-feat-") and (endswith("dumps") | not))] | length')
+          echo "nar-ai-feat run=$EV_ID 材料表の成果物 $N 本"
+          if [ "$N" -gt 0 ]; then
+            echo "go=1" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::nar-ai-feat run $EV_ID は build を飛ばした便(成果物 0)= 他場の朝の予想は作らない"
+            echo "go=0" >> "$GITHUB_OUTPUT"
+          fi
+
+  predict:
+    needs: check
+    if: needs.check.outputs.go == '1'
     runs-on: ubuntu-latest
     timeout-minutes: 120
     steps:
