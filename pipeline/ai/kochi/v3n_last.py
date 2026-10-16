@@ -4,6 +4,8 @@
   python -X utf8 pipeline/ai/kochi/v3n_last.py 2026-10-11 [--write] [--only-scratched] [--now "2026-10-11 09:00"]
   python -X utf8 pipeline/ai/kochi/v3n_last.py 2026-10-11 --prep   # 直前便の頭で 1 回 = 並び読みの直前版の材料(today/v3n_seq_prep.npz)
 2026-10-12 直前版: 材料と重み(V3N_SEQ_DAY)があれば、体重と馬場が全頭そろったレースで並び読みを当日の値で計算し直す(meta.direct = true)。
+2026-10-17 決め 41: 直前版(direct)の第 10 版の行だけ、E1・能検の後の 3 着内率に「今日と同じ騎手で走った時の成績」など 29 個の直線のずらしを足す
+(v3n_f41.py・材料は --prep で today/v3n_f41.npz・定数は暗号化の consts.json の v3n_f41・meta.f41)。朝の行・直前版でない行は今までどおり。
 
 確かめ(v3 の out/v3n_last3.md): 本番 base-v1 朝 9/8〜10/10・他場 763 R で取消・除外のあるレース 8.7%・
 取消の馬に 11.5% が割り振られていた・◎ が取消 12 R → 割り直しで ◎ 71.95 → 73.39%。直前の材料(体重・当日の偏り)は
@@ -50,12 +52,14 @@ def q(s):
     return urllib.parse.quote(s)
 
 
+F41_TAG = '決め41 直前 29 個'  # meta.f41(本番の行で入ったかを確かめる)
 SEQ_FORM = ''  # 直前版の並び読みの版(load_day の重みの添え書き)= 行の meta.seq_day に残す(本番の行で版を確かめる)
 
 
-def relabel(meta, gone, ud=None):
+def relabel(meta, gone, ud=None, sf=None, rk=None):
     """朝の meta と外す馬番の集合 → (marks, 新しい meta)。外すと 1 頭も残らないときは None。
-    ud = 直前版の並び読みの外した分(馬番 → logit・当日の馬場と体重入り)。あれば朝の u の代わりに足し meta.direct = True"""
+    ud = 直前版の並び読みの外した分(馬番 → logit・当日の馬場と体重入り)。あれば朝の u の代わりに足し meta.direct = True
+    sf = 決め 41 の材料(v3n_f41.load)・rk = (場, R)。直前版(ud あり)の第 10 版の行だけ使う"""
     p = {int(k): float(v) for k, v in (meta.get('p') or {}).items()}
     keep = [n for n in sorted(p) if n not in gone]
     if not keep:
@@ -83,13 +87,27 @@ def relabel(meta, gone, ud=None):
     q3 = dict(zip(keep, arr))
     if e1on and nz:
         key = q3
+    # 2026-10-17 決め 41: 直前版の第 10 版の行だけ、E1・能検の後の q3 に 29 個の直線のずらしを足して合計 3 にそろえる(印もこの順)。
+    #   ずらし s は勝つ率の直しの x にも足す(上乗せは勝つ率も一緒に動かす・決め 29 の作法)。材料に無い馬がいる R は足さない。
+    fs = None
+    if ud is not None and sf is not None and rk is not None and meta.get('one15'):
+        import v3n_f41
+        try:
+            r41 = v3n_f41.race_shift(sf, rk[0], rk[1], keep, [q3[n] for n in keep])
+        except Exception as e:  # noqa: BLE001
+            print('決め 41 のずらしに失敗', rk, type(e).__name__, str(e)[:120])
+            r41 = None
+        if r41 is not None:
+            q3 = dict(zip(keep, (float(v) for v in r41[0])))
+            fs = dict(zip(keep, (float(v) for v in r41[1])))
+            key = q3
     # 勝つ率の直し(決め 29): 朝の meta.p1c(直す前の c1)を取消の後の馬で割り直し、x = 並び読み u(直前は u_day)+ 能検 β·z を掛け直す。
     #   表示の p3 = max(p3, p1)(印は key の順のまま)。p1c の無い古い朝の行は今までどおり runners の p1 を割り直す。
     p1n = p1r = mv = None
     pc = {int(k): float(v) for k, v in (meta.get('p1c') or {}).items()}
     if pc and all(n in pc for n in keep):
         import v3n_p1
-        xs = np.array([(u[n] if (u and all(m in u for m in keep)) else 0.0) + (v3n_e1.BETA_NOKEN * nz.get(n, 0.0) if e1on else 0.0) for n in keep])
+        xs = np.array([(u[n] if (u and all(m in u for m in keep)) else 0.0) + (v3n_e1.BETA_NOKEN * nz.get(n, 0.0) if e1on else 0.0) + (fs[n] if fs is not None else 0.0) for n in keep])
         ver = ('di' if ud is not None else 'mo') + ('2' if meta.get('one15') else '1' if one else '')  # 第 10 版(決め 32)の朝の行 = k mo2・di2
         p1n = dict(zip(keep, v3n_p1.follow([pc[n] for n in keep], xs, ver)))
         import v3n_p1mix
@@ -102,7 +120,7 @@ def relabel(meta, gone, ud=None):
     ks = sum(key.values()) or 1.0
     order = sorted(keep, key=lambda n: (-key[n], keep.index(n)))
     marks = [{'num': n, 'mark': MARKS[i], 'score': round(key[n] / ks * 100, 1)} for i, n in enumerate(order[:5])]
-    new = {k: v for k, v in meta.items() if k not in ('p1_raw', 'p1mix')}  # 朝の混ぜの記録は持ち越さない(直前で混ぜた時だけ下で書き直す)
+    new = {k: v for k, v in meta.items() if k not in ('p1_raw', 'p1mix', 'f41', 'f41_s')}  # 朝の混ぜの記録は持ち越さない(直前で混ぜた時だけ下で書き直す)
     new.update({
         'n': len(keep),
         'p': {str(n): round(c[n], 4) for n in keep},
@@ -119,6 +137,7 @@ def relabel(meta, gone, ud=None):
         'direct': ud is not None,
         **({'u_day': {str(k): round(float(v), 4) for k, v in ud.items()}} if ud is not None else {}),
         **({'seq_day': SEQ_FORM} if ud is not None and SEQ_FORM else {}),
+        **({'f41': F41_TAG, 'f41_s': {str(n): round(fs[n], 4) for n in keep}} if fs is not None else {}),
     })
     return marks, new
 
@@ -156,9 +175,15 @@ def prep(day):
     import k0_dl
     import k29_seq_live as SQ
     off = Path(arg('--official', 'today/official'))
-    k0_dl.main([str(off).replace('\\', '/'), 'races', 'runs', 'jra', 'jrah'])
+    k0_dl.main([str(off).replace('\\', '/'), 'races', 'runs', 'jra', 'jrah', 'profiles'])   # profiles = 決め 41 の父・生産者
     tracks = ['門別', '盛岡', '水沢', '金沢', '笠松', '名古屋', '園田', '姫路', '高知', '佐賀']
-    return SQ.prep_day(off, day, tracks, arg('--prep-file', 'today/v3n_seq_prep.npz'))
+    out = SQ.prep_day(off, day, tracks, arg('--prep-file', 'today/v3n_seq_prep.npz'))
+    try:  # 2026-10-17 決め 41 の材料(失敗しても周は続ける = 決め 41 を足さないだけ)
+        import v3n_f41
+        v3n_f41.prep(off, day, tracks, arg('--f41-file', 'today/v3n_f41.npz'))
+    except Exception as e:  # noqa: BLE001
+        print('決め 41 の材料を作れない = 足さない', type(e).__name__, str(e)[:160])
+    return out
 
 
 def main():
@@ -179,6 +204,13 @@ def main():
         print('並び読み 直前版を読めない = 取消の割り直しだけ', type(e).__name__, str(e)[:160])
         SD = None
     going, bws = day_inputs(day, sb) if SD is not None else ({}, {})
+    SF = None
+    try:  # 2026-10-17 決め 41 の材料(--prep で作った npz)
+        import v3n_f41
+        SF = v3n_f41.load(arg('--f41-file', 'today/v3n_f41.npz'))
+    except Exception as e:  # noqa: BLE001
+        print('決め 41 の材料を読めない = 足さない', type(e).__name__, str(e)[:160])
+    print('決め 41 の材料', '無し' if SF is None else f"{len(SF['ix'])} 頭")
     morning = sb.get(f'/rest/v1/nar_ai_marks?select=track,race_no,marks,meta&model=eq.{MODEL_ID}'
                      f'&timing=eq.morning&race_date=eq.{day}&limit=1000')
     if not morning:
@@ -222,7 +254,7 @@ def main():
         prev = done.get(key)
         if prev is not None and prev[0] == sorted(g) and (prev[1] or ud is None):
             continue   # 外した馬が同じで、直前版を書いた後か まだ書けない = 書き直さない
-        res = relabel(meta, g, ud)
+        res = relabel(meta, g, ud, SF, key)
         if res is None:
             show.append(f'{key[0]}{key[1]}R 全頭が外れた = 書かない')
             continue
@@ -236,6 +268,7 @@ def main():
     print('朝の行', len(morning), '・取消のあるレース', sum(1 for k in gone if any(k == (m['track'], int(m['race_no'])) for m in morning)),
           '・書く行', len(rows), '(前の回と同じは書かない)')
     print('勝つ率の混ぜ(決め 40)', sum(1 for r in rows if r['meta'].get('p1mix')), '/', len(rows), 'R')
+    print('決め 41 のずらし', sum(1 for r in rows if r['meta'].get('f41')), '/', len(rows), 'R')
     if write and rows:
         sys.path.insert(0, os.environ.get('NAR_JOBS_AI', str(HERE.parent)))
         import base_v1 as B1
