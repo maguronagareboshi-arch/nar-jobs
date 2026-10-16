@@ -1,0 +1,41 @@
+# 研究用・1 回きり。名古屋・笠松の降級前のヤラズの痕跡(cloud/yarazu_tokai.py)。docs/yarazu-tokai/result.md を書く。
+# ⛔本番 DB では REST の単純 select だけ(場×年/月ごと・order は一意)。集計は全部 Python。書き込みなし。schedule なし。
+name: yarazu-tokai
+on:
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: yarazu-tokai
+  cancel-in-progress: false
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install numpy
+      - name: yarazu tokai
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          python -X utf8 cloud/yarazu_tokai.py
+          if [ -n "$(git status --porcelain docs/yarazu-tokai)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/yarazu-tokai/result.md
+            git commit -m "名古屋・笠松 降級前のヤラズ 研究集計 $(TZ=Asia/Tokyo date +%F)"
+            for i in 1 2 3; do
+              git fetch origin "${GITHUB_REF_NAME}"
+              git rebase "origin/${GITHUB_REF_NAME}"
+              if git push origin "HEAD:${GITHUB_REF_NAME}"; then break; fi
+              if [ "$i" = 3 ]; then exit 1; fi
+              sleep $((i * 15))
+            done
+          else
+            echo "差分なし"
+          fi
