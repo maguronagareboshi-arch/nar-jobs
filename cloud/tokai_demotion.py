@@ -659,6 +659,7 @@ def forecast(trk, lists, cands, today, url, key, ern_all=None, cutoff=None):
         c0, c1, c2 = cls(P), cls(P1), cls(P2)
         if not (RK[c1] < RK[c0] or RK[c2] < RK[c1]):
             continue
+        # need= 級に残るのに足りない「見直し後の額」(万円)。⛔稼ぐ賞金ではない= 稼ぐと額+1・控除−0.75 で約 1.75 倍効く(画面が ÷1.75 で直す・10/16)
         if pending:
             need = max(0, math.ceil((LINE[c1] - math.floor(0.75 * P1)) / 10)) if RK[c2] < RK[c1] else None
         elif RK[c1] < RK[c0]:

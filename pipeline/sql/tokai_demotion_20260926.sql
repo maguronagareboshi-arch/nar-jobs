@@ -15,7 +15,7 @@ create table if not exists public.nar_tokai_demotion (
   cls1        text not null,
   p2          integer not null,
   cls2        text not null,
-  need_man    integer,                   -- 級に残るのに要る額(万円)。無ければ null
+  need_man    integer,                   -- 級に残るのに足りない「見直し後の額」(万円)。稼ぐ賞金ではない(稼いだ賞金は見直し後の額を約 1.75 倍押し上げる= 画面 race-level.js が ÷1.75 で賞金に直す・10/16)。無ければ null
   pending     boolean not null default false,
   asof        timestamptz not null default now(),
   primary key (venue, horse_name)
