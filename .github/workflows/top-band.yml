@@ -1,13 +1,17 @@
 # 10/15 トップの帯「今日の出走馬」(移籍後の初出走・休み明け・距離が大きく替わる・前走と別の場)の件数と一覧を
 # nar_meta 'top_band'(件数)と 'top_band:YYYY-MM-DD'(一覧)へ書く便。台本 cloud/top_band.py。
-# 出馬表は前日に入り、移籍の表(nar_horse_changes)は 05:33 の便で入る= 毎朝 JST 09:40 に 1 回・念のため 12:40 にもう 1 回(冪等)。
+# 10/16 前の晩に翌日分を数える形へ: 翌日の出馬表は前日までに入っている(実測)= 夜 22:10 に翌日分を top_band_next(移籍なし)と
+#   auction_next へ。移籍の表(nar_horse_changes)は当日 05:33 の便で半分ほど足される= 朝 06:50 に今日分を top_band へ(移籍つき)。
+#   09:40・12:40 は取消の反映(冪等)。heartbeat= 夜 top_band_next・朝 top_band。
 # ⛔本番 DB では REST の単純 select だけ(その日の出走+前走 1 本)。古い top_band:* は 7 日で消す。1 回およそ 1 分。
 # 手動= workflow_dispatch(dry_run= 書かずに件数を log に出す・date= 空なら今日)。
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
 name: top-band
 on:
   schedule:
-    - cron: '40 0 * * *'         # JST 09:40
+    - cron: '10 13 * * *'        # JST 22:10= 前の晩の回(翌日分を top_band_next と auction_next へ)
+    - cron: '50 21 * * *'        # JST 06:50= 朝の回(移籍の表が 05:33 の便で 06:15 ごろまでに入った後)
+    - cron: '40 0 * * *'         # JST 09:40(取消の反映)
     - cron: '40 3 * * *'         # JST 12:40(念のため)
   workflow_dispatch:
     inputs:
@@ -16,8 +20,13 @@ on:
         required: false
         default: true
         type: boolean
+      night:
+        description: 'night run (next day to top_band_next and auction_next)'
+        required: false
+        default: false
+        type: boolean
       date:
-        description: 'YYYY-MM-DD (empty = today JST)'
+        description: 'YYYY-MM-DD (empty = today JST, or tomorrow for night)'
         required: false
         default: ''
 permissions:
@@ -38,17 +47,28 @@ jobs:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
           DRY: ${{ github.event.inputs.dry_run }}
+          NIGHT_IN: ${{ github.event.inputs.night }}
           DAY: ${{ github.event.inputs.date }}
         run: |
-          set --
-          if [ -n "$DAY" ]; then set -- "$@" --date "$DAY"; fi
-          if [ "$DRY" = "true" ]; then
-            python3 cloud/top_band.py --dry-run "$@"
-          else
-            python3 cloud/top_band.py --apply "$@"
-            # 最終成功時刻(表 nar_job_heartbeat)。⛔表が無くても落ちない
-            python3 cloud/beat.py top_band ok
+          H=$(TZ=Asia/Tokyo date +%H)
+          # 夜の回= 18 時以降に起きた予定の便か、手動で night を選んだとき
+          if [ "$NIGHT_IN" = "true" ] || { [ -z "$NIGHT_IN" ] && [ $((10#$H)) -ge 18 ]; }; then NIGHT=1; else NIGHT=0; fi
+          if [ -z "$DAY" ]; then
+            if [ "$NIGHT" = "1" ]; then DAY=$(TZ=Asia/Tokyo date -d tomorrow +%F); else DAY=$(TZ=Asia/Tokyo date +%F); fi
           fi
+          if [ "$DRY" = "true" ]; then W=--dry-run; else W=--apply; fi
+          echo "夜の回= $NIGHT・日= $DAY・$W"
+          if [ "$NIGHT" = "1" ]; then
+            python3 cloud/top_band.py $W --date "$DAY" --key top_band_next --no-transfer
+            python3 cloud/auction_today.py $W --date "$DAY" --key auction_next
+            JOB=top_band_next
+          else
+            python3 cloud/top_band.py $W --date "$DAY"
+            JOB=top_band
+          fi
+          # 最終成功時刻(表 nar_job_heartbeat)。⛔表が無くても落ちない
+          if [ "$DRY" != "true" ]; then python3 cloud/beat.py "$JOB" ok; fi
+          echo "JOB=$JOB" >> "$GITHUB_ENV"
 
       # 失敗の印(表 nar_job_heartbeat)。⛔表が無くても落ちない
       - name: heartbeat fail
@@ -56,4 +76,4 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: python3 cloud/beat.py top_band fail 失敗
+        run: python3 cloud/beat.py "${JOB:-top_band}" fail 失敗

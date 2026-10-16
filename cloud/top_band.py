@@ -6,6 +6,10 @@
   top_band:YYYY-MM-DD  = {v:1, date, built, rows:{layoff:[[HHMM, 場, R, 馬番, 馬名, 日数]],
                           dist:[[…, 前走m, 今回m]], venue:[[…, 前走の場]]}} … 一覧 /today/facts/:kind が読む
 新馬(noken_debuts)とオークション(auction_today)の件数は画面が既存の行から数える= ここでは書かない。
+10/16 前の晩の分: 夜の回(JST 22:10)が `--date 翌日 --key top_band_next --no-transfer` で翌日分を別の鍵に書く
+  (翌日の出馬表は前日までに入っている。⛔移籍の表は当日朝 05:33 の便で半分ほど足される= 実測 10/14〜16 で
+   その日の行の 31〜52% が当日 06:00〜06:15 に入った→ 夜は移籍を書かない= n.transfer と transfer は null)。
+  一覧 top_band:翌日 は日付つきなのでそのまま書く(朝の回が同じ鍵を上書きする)。画面は top_band が今日でなければ top_band_next を使う。
 
 規則(画面の言葉と同じ):
   休み明け= 前走から 70 日以上 / 距離= 前走から 400m 以上の差 / 前走と別の場= 前走の場が今日の場と違う
@@ -104,6 +108,15 @@ def count_band(date, runs, races, prevs, prev_dist, changes):
     return {"n": n, "transfer": tr, "rows": out}
 
 
+def head_value(date, built, got, with_transfer=True):
+    """件数の行(top_band / top_band_next)。夜の回は移籍を null にする(画面は「◯時すぎに数えます」を出す)。"""
+    n = dict(got["n"])
+    tr = dict(got["transfer"]) if with_transfer else None
+    if not with_transfer:
+        n["transfer"] = None
+    return {"v": 1, "date": date, "built": built, "n": n, "transfer": tr}
+
+
 def to_int(v):
     try:
         return int(v) if v is not None else None
@@ -169,6 +182,8 @@ def main():
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--dry-run", action="store_true", help="書かない(既定と同じ)")
     ap.add_argument("--out", help="ドライランで作った 2 行を JSON で保存するファイル")
+    ap.add_argument("--key", default="top_band", choices=["top_band", "top_band_next"], help="件数の行の鍵(夜の回は top_band_next)")
+    ap.add_argument("--no-transfer", action="store_true", help="移籍を書かない(夜の回= 移籍の表が当日朝に足されるため)")
     a = ap.parse_args()
     if a.env:
         load_env(a.env)
@@ -185,20 +200,20 @@ def main():
     except Exception as e:  # ⛔読み取りに失敗したら書かない
         log(f"読み取りに失敗(書かない) {type(e).__name__}: {e}"); return 1
     built = dt.datetime.now(JST).isoformat(timespec="seconds")
-    head = {"v": 1, "date": date, "built": built, "n": got["n"], "transfer": got["transfer"]}
+    head = head_value(date, built, got, with_transfer=not a.no_transfer)
     day = {"v": 1, "date": date, "built": built, "rows": got["rows"]}
     log(f"件数 {json.dumps(got['n'], ensure_ascii=False)}・移籍の内訳 {json.dumps(got['transfer'], ensure_ascii=False)}"
         f"・一覧 {len(json.dumps(day, ensure_ascii=False).encode('utf-8'))} バイト")
     if a.out:
         with open(a.out, "w", encoding="utf-8") as f:
-            json.dump({"top_band": head, "top_band:" + date: day}, f, ensure_ascii=False)
+            json.dump({a.key: head, "top_band:" + date: day}, f, ensure_ascii=False)
     if not apply:
         log("ドライラン(--apply で書く)"); return 0
     now = dt.datetime.now(dt.timezone.utc).isoformat()
     st, _ = req(base, key, "/rest/v1/nar_meta?on_conflict=key", "POST",
                 json.dumps([{"key": "top_band:" + date, "value": day, "updated_at": now},
-                            {"key": "top_band", "value": head, "updated_at": now}], ensure_ascii=False).encode("utf-8"))
-    log(f"nar_meta/top_band・top_band:{date} 更新 {st}")
+                            {"key": a.key, "value": head, "updated_at": now}], ensure_ascii=False).encode("utf-8"))
+    log(f"nar_meta/{a.key}・top_band:{date} 更新 {st}")
     if st not in (200, 201, 204):
         return 1
     old = str(dt.date.fromisoformat(date) - dt.timedelta(days=KEEP_DAYS))

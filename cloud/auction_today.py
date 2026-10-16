@@ -5,6 +5,8 @@
   python cloud/auction_today.py --env pipeline/.env.nar            # ドライラン(表示だけ・匿名キーでも動く)
   python cloud/auction_today.py --env pipeline/.env.nar --apply    # 書き込み
 workflow(nar-refresh.yml)では noken_debuts.py の直後に回す(30 分ごと= 取消が 30 分以内に反映・冪等)。
+10/16 前の晩の分: top-band 便の夜の回(JST 22:10)が `--date 翌日 --key auction_next` で翌日分を別の鍵に書く
+(翌日の出馬表は前日までに入っている= 実測。画面のトップは auction_today が今日でなければ auction_next を使う)。
 
 value= {built, date, rows:[{track, no, umaban, name, post_time, note, sales:[{date, source, item_id, price, sold,
         category, url, runs_after, first_after}]}]}。rows は取引が 1 件以上ある出走だけ・sales は新しい順。
@@ -77,6 +79,8 @@ def main():
     ap.add_argument("--env")
     ap.add_argument("--apply", action="store_true")
     ap.add_argument("--dry-run", action="store_true", help="表示だけ(既定と同じ)")
+    ap.add_argument("--date", help="YYYY-MM-DD(既定= JST の今日・夜の回は翌日)")
+    ap.add_argument("--key", default="auction_today", choices=["auction_today", "auction_next"])
     a = ap.parse_args()
     if a.env:
         load_env(a.env)
@@ -84,7 +88,9 @@ def main():
     key = os.environ.get("SUPABASE_SERVICE_KEY", "") or ("" if a.apply else os.environ.get("SUPABASE_ANON_KEY", ""))
     if not base or not key:
         log("SUPABASE_URL / SUPABASE_SERVICE_KEY が無い"); return 2
-    today = str(dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).date())
+    today = a.date or str(dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).date())
+    if not re.match(r"^\d{4}-\d{2}-\d{2}$", today):
+        log("--date は YYYY-MM-DD"); return 2
     try:
         out = build(base, key, today)
     except Exception as e:  # ⛔読み取りに失敗したら書かない(前の値が残る= 画面は built の日付で判定)
@@ -93,12 +99,12 @@ def main():
     log(f"取引のある出走 {len(out)}行(一番新しい取引がセリ市場でない {not_sale}・発走時刻なし "
         f"{sum(1 for x in out if not x['post_time'])}・note あり {sum(1 for x in out if x['note'])})")
     value = {"built": dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).isoformat(timespec="seconds"), "date": today, "rows": out}
-    if not a.apply:
-        log("ドライラン(--apply で書く)"); return 0
+    if not a.apply or a.dry_run:
+        log(f"ドライラン(--apply で書く・鍵 {a.key}・{today})"); return 0
     st, _ = req(base, key, "/rest/v1/nar_meta?on_conflict=key", "POST",
-                json.dumps([{"key": "auction_today", "value": value,
+                json.dumps([{"key": a.key, "value": value,
                              "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()}], ensure_ascii=False).encode("utf-8"))
-    log(f"nar_meta/auction_today 更新 {st}")
+    log(f"nar_meta/{a.key}({today})更新 {st}")
     return 0 if st in (200, 201) else 1
 
 

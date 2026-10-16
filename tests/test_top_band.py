@@ -59,6 +59,15 @@ class TopBandTest(unittest.TestCase):
         self.assertEqual(tb.pick_prev(r, cands)["track"], "船橋")
         self.assertIsNone(tb.pick_prev(r, cands[:3]))
 
+    def test_head_value_night_drops_transfer(self):
+        got = {"n": {"transfer": 5, "layoff": 1, "dist": 2, "venue": 3}, "transfer": {"jra": 1, "area": 3, "stable": 1}}
+        night = tb.head_value("2026-10-17", "b", got, with_transfer=False)
+        self.assertEqual(night["n"], {"transfer": None, "layoff": 1, "dist": 2, "venue": 3})
+        self.assertIsNone(night["transfer"])
+        self.assertEqual(got["n"]["transfer"], 5)                      # 元の数は壊さない
+        day = tb.head_value("2026-10-17", "b", got)
+        self.assertEqual((day["n"]["transfer"], day["transfer"]["area"], day["date"]), (5, 3, "2026-10-17"))
+
 
 if __name__ == "__main__":
     unittest.main()
