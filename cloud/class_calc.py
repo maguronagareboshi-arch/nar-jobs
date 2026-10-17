@@ -447,8 +447,19 @@ def fetch_obihiro(url, key, since):
 #         ④重賞/認定/新馬/九州産は nar_races の名前と種別で判定(他場の走は台帳の短い名前だけ)
 SAGA_AWAY_DAYS = 150
 SAGA_LOW = ("佐賀記念", "サマーチャンピオン")
-# (ヘ) 協賛金拠出競走 20%: 原文に競走名は無い。新聞の値で確かめた名前だけ(2026-03-22 佐賀いちごさん賞・2026-10-17 新聞)
-SAGA_KYOSAN_NAMES = ("いちごさん",)
+# (ヘ) 協賛金拠出競走 20%: 原文に競走名は無い。新聞の値で確かめた名前だけ(2026-10-17・10-18 新聞)。
+#   2026-03 の 3歳戦(種別は普通)。「いちごの日いちごさん賞Ｃ１」など同じ語の別レースを拾わないよう、名前は丸ごと書く
+SAGA_KYOSAN_NAMES = ("佐賀にじゅうまる賞３歳", "佐賀いちごさん賞３歳", "佐賀ひなたまる賞３歳",
+                     "ＳＡＧＡリベンジャーズリミテッド３歳")
+# 再転入(以前に佐賀を走った馬が転出後に戻った)の 6歳以上の入厩時減額: 該当歳時+130万(初めての新規馬は原文どおり +100万)。
+#   新聞 2026-10-17 シュリーデービー・ビーガールで一致。歳ごとの額(該当歳時と 1月減額済みの歳を除く)の合計から引く= 過去の 8月減額は戻る
+SAGA_REENTRY_EXTRA = 1_300_000
+# 8月 −50万の候補(既定は原文どおり None): 新聞 2026-10-17/18 では 8/1 時点 1,216万以上の 4・5歳 4 頭にかかっていない・1,054万以下の 4 頭にはかかっている。
+#   線の根拠が原文に無いので入れていない(fix2.md)
+SAGA_AUG45_SKIP = None
+# ④(ロ)「他場所属での佐賀競馬出走時も含む」: 転入前(在籍でない)の佐賀の走で、調教師が直前の他場の走と同じものは他場の走として換算
+#   (2・3歳= 100%・4歳以上= 50%)。新聞 2026-10-18 ナンゴクトップガン・カシノフレックス(ＪＲＡ交流の九州産特別)・ノーブルプロセスで一致
+SAGA_VISIT = True
 SAGA_ROUND = "total"
 
 
@@ -568,7 +579,8 @@ def saga_state(runs, birth, asof, lag, races, trace=False):
     events.sort(key=lambda t: (t[1], 0 if t[0] != "run" else 1))
     value, by_age, removed = 0, Counter(), set()
     resident, pending, labels = False, [], Counter()
-    last_saga, last_trn = None, None
+    last_saga, last_trn, last_other_trn = None, None, None
+    entry_cut_year = None                       # 1〜7月に入厩して 5歳 −50万を受けた年= 同じ年に再転入しても 2 回目はかけない(2026-10-18 新聞 ワンダービジブル)
     y3_after, y3_done, aug3 = 0, False, set()   # 8/1 減額を受けずに 8 月以後の 3歳戦で得た分・一般編入の減額済み・8/1 減額を受けた年
     rnd = _thou if SAGA_ROUND == "run" else (lambda v: v)
 
@@ -602,11 +614,15 @@ def saga_state(runs, birth, asof, lag, races, trace=False):
             if resident and a == 3:
                 cut(value * 0.5)
                 aug3.add(d.year)
-            elif resident and a in (4, 5):
+            elif resident and a in (4, 5) and not (SAGA_AUG45_SKIP is not None and value >= SAGA_AUG45_SKIP):
                 cut(500_000)
             continue
         prize = int(r.get("prize") or 0)
-        if r.get("tr") == "佐賀":
+        visiting = (SAGA_VISIT and r.get("tr") == "佐賀" and not resident and r.get("trn")
+                    and r.get("trn") == last_other_trn)
+        if visiting:
+            pending.append(r)                         # 他場所属での佐賀出走(④(ロ))= 転入前の走として換算
+        elif r.get("tr") == "佐賀":
             if not resident:
                 for p in pending:                     # 転入(入厩時格付)= 転入前の走をまとめて換算
                     rate, label = saga_rate_entry(p, saga_entry_age(a, d))
@@ -616,10 +632,18 @@ def saga_state(runs, birth, asof, lag, races, trace=False):
                 if a == 4 and d.month >= 8:
                     cut(500_000)
                 elif a == 5:
-                    cut(500_000 if d.month <= 7 else 1_000_000)
+                    if d.month <= 7:
+                        if entry_cut_year != d.year:
+                            cut(500_000)
+                        entry_cut_year = d.year
+                    else:
+                        cut(1_000_000)
                 elif a is not None and a >= 6:
                     ages = {6: (2,), 7: (2, 3)}.get(a, (2, 3, 4))
-                    cut(sum(by_age[x] for x in ages if x not in removed) + 1_000_000)
+                    if last_saga is not None:         # 再転入: 歳ごとの額から組み直す(過去の 8月減額は戻す)・+130万
+                        value = max(0, sum(v for x, v in by_age.items() if x not in ages and x not in removed) - SAGA_REENTRY_EXTRA)
+                    else:
+                        cut(sum(by_age[x] for x in ages if x not in removed) + 1_000_000)
                     removed.update(ages)
                 resident = True
             is3 = "３歳" in str(r.get("cls") or "")
@@ -635,6 +659,7 @@ def saga_state(runs, birth, asof, lag, races, trace=False):
             last_saga = d
             last_trn = r.get("trn") or last_trn
         else:
+            last_other_trn = r.get("trn")
             if r.get("trn") and last_trn:
                 away = resident and r.get("trn") == last_trn
             else:
