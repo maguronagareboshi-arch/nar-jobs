@@ -1,0 +1,53 @@
+# 中央のレースの本賞金(1〜5着・付加賞抜き)を表 nar_jra_race_prize へ(cloud/kb/jra_race_prize.py・2026-10-17)。
+# 佐賀の番組賞金(class_calc の fetch_saga)が台帳の付加賞込みの中央の収得賞金を差し替えるのに使う。
+# 毎日 JST 14:37(kb-daily 13:17 が新しい転入馬の中央の走を取った後)→ 翌朝の class calc で効く。
+# 頁は 1 本 10〜15 秒= 埋め直しは手押しで max を大きく(1 本ごとに書くので途中で切れても次は続きから)。heartbeat 'jra_race_prize'
+name: jra-race-prize
+on:
+  schedule:
+    - cron: '37 5 * * *'   # JST 14:37
+  workflow_dispatch:
+    inputs:
+      max:
+        description: 今回取るレースの上限(1 本 10〜15 秒)
+        required: false
+        default: '1200'
+      days:
+        description: 佐賀を走った馬の範囲(日)
+        required: false
+        default: '400'
+concurrency:
+  group: jra-race-prize
+  cancel-in-progress: false
+env:
+  TZ: Asia/Tokyo
+  PYTHONUNBUFFERED: '1'
+jobs:
+  prize:
+    runs-on: ubuntu-latest
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install -r cloud/requirements.txt
+      - name: jra race prize
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          MAX: ${{ inputs.max || '80' }}
+          DAYS: ${{ inputs.days || '400' }}
+        run: python cloud/kb/jra_race_prize.py --days "$DAYS" --max "$MAX" --apply
+      - name: heartbeat ok
+        if: success()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py jra_race_prize ok "JST $(TZ=Asia/Tokyo date +%H:%M)"
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py jra_race_prize fail "JST $(TZ=Asia/Tokyo date +%H:%M)"

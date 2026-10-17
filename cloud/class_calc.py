@@ -561,6 +561,46 @@ def saga_rate_entry(run, age_entry):
     return (0.30, "転入前中央") if jra else (0.50, "転入前地方")
 
 
+def jra_honsho_merge(runs, jra_rows):
+    """台帳の中央の走の prize(付加賞込み)を 本賞金(1〜5着・付加賞抜き)に差し替え、台帳に無い中央の走を足す。
+    jra_rows= nar_jra_runs の行 {race_date, place, race_no, finish, race_name, field_size, honsho: [1着..5着 円] | None}。
+    本賞金が取れていないレースは台帳の値のまま(足す走は 6着以下だけ= 0 円)。(2026-10-17 コスモジンバック わらび賞 3着 2,747,000→2,700,000)"""
+    if not jra_rows:
+        return runs
+    out = [dict(r) for r in runs]
+    by_d = {}
+    for j in jra_rows:
+        by_d.setdefault(str(j["race_date"])[:10], []).append(j)
+
+    def honsho(j):
+        f, h = j.get("finish"), j.get("honsho")
+        if f is None or f > 5:
+            return 0
+        return h[f - 1] if h and len(h) >= f else None
+
+    for r in out:
+        if not r.get("jra"):
+            continue
+        js = by_d.get(str(r.get("d"))[:10]) or []
+        j = next((x for x in js if x.get("finish") == r.get("fin")), None)
+        v = honsho(j) if j else None
+        if v is not None:
+            r["prize"] = v
+    have = {str(r.get("d"))[:10] for r in out}
+    for d, js in by_d.items():
+        if d in have:
+            continue
+        for j in js:
+            v = honsho(j)
+            if v is None:
+                continue
+            out.append({"d": d, "jra": True, "tr": "Ｊ" + (j.get("place") or ""), "no": j.get("race_no"),
+                        "fin": j.get("finish"), "name": j.get("race_name"), "head": j.get("field_size"),
+                        "prize": v, "src": "jra_runs"})
+    out.sort(key=lambda r: str(r.get("d")), reverse=True)
+    return out
+
+
 def saga_state(runs, birth, asof, lag, races, trace=False):
     """asof の lag 日前までを時系列に再現。→ (value, by_age, resident, labels)"""
     cutoff = asof - dt.timedelta(days=lag)
@@ -786,9 +826,57 @@ def fetch_saga(url, key, since):
     for i in range(0, len(cs), 100):
         led += sb_all(url, key, f"{T_PRIZE}?select=code,horse_name,age,last_cls,local_prize,runs,calc&code=in.({','.join(cs[i:i + 100])})")
     births = fill_births({c["code"]: c.get("birth_date") for c in codes}, codes, runs)
+    if SAGA_JRA_HONSHO:
+        saga_jra_honsho(url, key, led, births)
     races = sb_all(url, key, f"nar_races?select=race_date,race_no,race_name,race_kind&track=eq.{q('佐賀')}"
                              f"&race_date=gte.2022-11-01")
     return led, births, entered, saga_field_ages(url, key, race_map(races))
+
+
+SAGA_JRA_HONSHO = True   # 中央の走を本賞金(付加賞抜き・nar_jra_race_prize)に差し替え・台帳に無い中央の走を足す(2026-10-17)
+
+
+def saga_jra_honsho(url, key, led, births):
+    """台帳の各馬の runs を jra_honsho_merge で直す(馬は 名前+生年月日で nar_jra_horses に結ぶ)。"""
+    q = urllib.parse.quote
+    names = sorted({r["horse_name"] for r in led})
+    hs = []
+    for i in range(0, len(names), 80):
+        inq = ",".join('"' + n + '"' for n in names[i:i + 80])
+        hs += sb_all(url, key, f"nar_jra_horses?select=kb_horse_id,horse_name,birth_date&horse_name=in.({q(inq)})")
+    kb = defaultdict(list)
+    for h in hs:
+        kb[h["horse_name"]].append(h)
+    ids = sorted({h["kb_horse_id"] for h in hs})
+    jr = []
+    for i in range(0, len(ids), 100):
+        jr += sb_all(url, key, "nar_jra_runs?select=kb_horse_id,race_date,place,race_no,finish,race_name,field_size,kb_race_id"
+                               f"&kb_horse_id=in.({','.join(ids[i:i + 100])})")
+    rids = sorted({r["kb_race_id"] for r in jr if r.get("kb_race_id") and (r.get("finish") or 99) <= 5})
+    hon = {}
+    for i in range(0, len(rids), 150):
+        for p in sb_all(url, key, f"nar_jra_race_prize?select=kb_race_id,honsho&kb_race_id=in.({','.join(rids[i:i + 150])})"):
+            hon[p["kb_race_id"]] = p.get("honsho")
+    by_h = defaultdict(list)
+    for r in jr:
+        by_h[r["kb_horse_id"]].append(dict(r, honsho=hon.get(r.get("kb_race_id"))))
+    n_h = n_add = n_chg = 0
+    for row in led:
+        b = str(births.get(row["code"]) or "")[:10]
+        cand = [h for h in kb.get(row["horse_name"], []) if not b or not h.get("birth_date") or str(h["birth_date"])[:10] == b]
+        if len(cand) != 1:
+            continue
+        before = row.get("runs") or []
+        after = jra_honsho_merge(before, by_h.get(cand[0]["kb_horse_id"]))
+        add = sum(1 for x in after if x.get("src") == "jra_runs")
+        chg = sum(x.get("prize") or 0 for x in before if x.get("jra")) != sum(x.get("prize") or 0 for x in after if x.get("jra") and not x.get("src"))
+        if add or chg:
+            n_h += 1
+            n_add += add
+            n_chg += chg
+            row["runs"] = after
+    log(f"佐賀 中央の本賞金: 結んだ馬 {len(ids)}・直した馬 {n_h}(本賞金に差し替え {n_chg}・中央の走を足した {n_add})・"
+        f"本賞金の表 {sum(1 for v in hon.values() if v)}/{len(rids)} レース")
 
 
 def main_saga(a):
