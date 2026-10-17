@@ -399,8 +399,8 @@ jobs:
               if t is None or t.date() < today - dt.timedelta(days=1):
                   bad.append(f"top_band_next(前の晩の翌日分)が昨夜成功していない(最終 {t})")
           if hm >= 800:
-              # cond_stats= 条件で集計 /stats の毎朝便(JST 05:40・2026-10-15)
-              for job in ('k43_daily', 'cond_stats'):
+              # cond_stats= 条件で集計 /stats の毎朝便(JST 05:40・2026-10-15)・milestones= 区切りの勝利(JST 06:20・2026-10-17)
+              for job in ('k43_daily', 'cond_stats', 'milestones'):
                   t = last_ok(job)
                   if t is None or t.date() != today:
                       bad.append(f"{job} が今日まだ成功していない(最終 {t})")
