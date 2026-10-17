@@ -607,7 +607,31 @@ def run(client, start, end, apply, show=0):
     rows = []
     known = known_sources(client, start, end) if apply else {}   # ドライランは全部読む(検品用)
     parsed = []                                                   # 今回読んだ PDF の記録
+    month = [None]
+
+    # 2026-10-17 月が変わるたびに書く(1 年分を最後にまとめて書くと進み具合が見えず、落ちると全部やり直し)
+    def flush():
+        if not apply:
+            return
+        uniq = {}
+        for row in rows:
+            uniq[row["penalty_id"]] = row
+        if uniq:
+            n["upserted"] += upsert(client, list(uniq.values()))
+        for i in range(0, len(parsed), UPSERT_CHUNK):          # 行の upsert が通ってから記録(途中で落ちたら次回また読む)
+            client.post("nar_penalty_sources?on_conflict=track,race_date", parsed[i:i + UPSERT_CHUNK],
+                        "resolution=merge-duplicates,return=minimal")
+        if uniq or parsed:
+            log("  書いた %s rows=%d sources=%d" % (month[0], len(uniq), len(parsed)))
+        n["rows"] += len(uniq)
+        del rows[:]
+        del parsed[:]
+
     for track, race_date, expected in race_days(client, start, end):
+        ym = str(race_date)[:7]
+        if month[0] is not None and ym != month[0]:
+            flush()
+        month[0] = ym
         url, _ref = pdf_url(track, race_date)
         try:
             res = download_pdf(url, limiter, None)
@@ -650,17 +674,10 @@ def run(client, start, end, apply, show=0):
                 log("   %s %s %sR %s %s %s | %s" % (
                     row["race_date"], row["track"], row["race_no"], row["person_kind"],
                     row["person_name"], row["kind"], row["detail"][:56]))
-    uniq = {}
-    for row in rows:
-        uniq[row["penalty_id"]] = row
-    rows = list(uniq.values())
-    n["rows"] = len(rows)
-    if apply and rows:
-        n["upserted"] = upsert(client, rows)
-    if apply and parsed:                                           # 行の upsert が通ってから記録(途中で落ちたら次回また読む)
-        for i in range(0, len(parsed), UPSERT_CHUNK):
-            client.post("nar_penalty_sources?on_conflict=track,race_date", parsed[i:i + UPSERT_CHUNK],
-                        "resolution=merge-duplicates,return=minimal")
+    if apply:
+        flush()
+    else:                                                          # ドライランは全期間の重複を除いた数
+        n["rows"] = len({row["penalty_id"] for row in rows})
     log("sources=%d unchanged=%d pdf_missing=%d rows=%d by_kind=%s by_person_kind=%s unparsed=%d "
         "name_unmatched=%d horse_named=%d upserted=%d errors=%d"
         % (n["sources"], n["unchanged"], n["pdf_missing"], n["rows"], json.dumps(by_kind, ensure_ascii=False),
