@@ -13,11 +13,21 @@
 二重送信防止: nar_push_sent (device,horse,race,kind) に**先に** insert(重複は無視)→ 返ってきた行だけ送る。
 失敗: 404/410= 購読を消す・その他= fail_count+1(5 回で消す)。
 環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY / NAR_VAPID_PRIVATE(無ければ --apply でも送らず exit 0)/ NAR_VAPID_SUBJECT(mailto:…)
-heartbeat: nar_job_heartbeat の 'push_notify'(--apply のときだけ)。
+heartbeat: nar_job_heartbeat の 'push_notify'(夜便 --slot night は 'push_night')(--apply のときだけ)。
+
+B2(10/17 案B)☆の騎手・調教師と重賞の日(各 1 端末 1 日 1 通・まとめ文):
+  P= 明日の☆の人の出番(JST 20 時台の回)・R= 今日の☆の人の結果(夜便 push-night.yml 22:37)・
+  G= 今日の地方重賞(JST 9 時台の回・want_g の人だけ)。P/R は want_p。
+  --slot auto(既定)= 時刻で P/G を足す・night= R と C だけ・p/r/g= その種類を必ず足す(手元の確認用)。
+  照合= 画面と同じ: 名前一致 かつ(any_venue か venues 空か venues に場の prefix)。nar_runs.jockey/trainer と
+  ☆の name(短い公式表記・nar_persons.name_short)は同じ表記(10/17 本物で照合)。
+  二重送りよけ= nar_push_sent に horse_id `p:<日付>`/`r:<日付>`/`g:<日付>`・race_id=日付・kind P/R/G を先に insert。
+  ⛔表 nar_viewer_people・列 want_p/want_g が本番に無い(400/404)ときは P/R/G を飛ばし、今までの A/C だけ送る。
 """
 import argparse
 import datetime as dt
 import json
+import re
 import os
 import sys
 import urllib.error
@@ -43,6 +53,10 @@ TRACK_PREFIX = {
 }
 SHOW_TRACK = {"帯広ば": "帯広"}
 NO_RUN_NOTES = ("取消", "除外")
+GRADED_KINDS = ("重賞", "準重賞")
+SLOT_P_HOUR = 20                           # JST 20 時台の回で P(30 分おきの 2 回とも当たるが nar_push_sent の鍵で 1 日 1 通)
+SLOT_G_HOUR = 9                            # JST 9 時台の回で G
+WANT_COL = {"A": "want_a", "C": "want_c", "P": "want_p", "R": "want_p", "G": "want_g"}
 
 
 def log(*a):
@@ -158,6 +172,8 @@ def pick(subs, horses, runs, now):
 
 
 def message(x):
+    if x["kind"] in ("P", "R", "G"):
+        return {"title": TITLE, "body": x["body"], "url": x["url"], "tag": "%s:%s" % (x["kind"], x["race_id"])}
     tr = SHOW_TRACK.get(x["track"], x["track"])
     md = "%d/%d" % (int(x["race_date"][5:7]), int(x["race_date"][8:10]))
     if x["kind"] == "A":
@@ -166,6 +182,135 @@ def message(x):
         body = "%s の %s %s %dR の結果: %s着" % (x["name"], md, tr, x["race_no"], x["finish"])
     return {"title": TITLE, "body": body, "url": "/race/" + x["race_id"],
             "tag": "%s:%s:%s" % (x["kind"], x["horse_id"], x["race_id"])}
+
+
+# ---------------------------------------------------------------- B2 ☆の人・重賞の日(純粋関数)
+def slot_kinds(slot, now):
+    """→ (この回で足すまとめ通知の種類 P/R/G の集合, 馬の通知のうち送る種類)。"""
+    h = now.astimezone(JST).hour
+    if slot == "night":
+        return {"R"}, {"C"}
+    if slot in ("p", "r", "g"):
+        return {slot.upper()}, {"A", "C"}
+    extra = set()
+    if h == SLOT_P_HOUR:
+        extra.add("P")
+    if h == SLOT_G_HOUR:
+        extra.add("G")
+    return extra, {"A", "C"}
+
+
+def person_hit(p, run):
+    """画面の starPersonHit と同じ: 名前一致 かつ(any_venue か venues 空か venues に場の prefix)。"""
+    if run.get(p.get("kind")) != p.get("name"):
+        return False
+    if p.get("any_venue"):
+        return True
+    vs = p.get("venues") or []
+    return not vs or TRACK_PREFIX.get(run.get("track")) in vs
+
+
+def is_scratch(run):
+    note = str(run.get("finish_note") or "")
+    return any(x in note for x in NO_RUN_NOTES)
+
+
+def people_stats(people, runs, date):
+    """☆の人ごとに date の鞍(取消・除外を除く)を数える。→ [{name, kind, tracks, n, done, places}](鞍 0 の人は除く)。"""
+    out = []
+    for p in people:
+        rows, seen = [], set()
+        for r in runs:
+            if str(r.get("race_date"))[:10] != date or is_scratch(r) or not person_hit(p, r):
+                continue
+            k = (r.get("track"), int(r["race_no"]), r.get("runner_number"), r.get("horse_name"))
+            if k in seen:
+                continue
+            seen.add(k)
+            rows.append(r)
+        if not rows:
+            continue
+        tracks = []
+        for r in sorted(rows, key=lambda r: int(r["race_no"])):
+            t = SHOW_TRACK.get(r["track"], r["track"])
+            if t not in tracks:
+                tracks.append(t)
+        places, done = {1: 0, 2: 0, 3: 0}, 0
+        for r in rows:
+            f = r.get("finish")
+            if f is None:
+                continue
+            done += 1
+            try:
+                fi = int(f)
+            except (TypeError, ValueError):
+                continue
+            if fi in places:
+                places[fi] += 1
+        out.append({"name": p["name"], "kind": p.get("kind"), "tracks": tracks, "n": len(rows), "done": done, "places": places})
+    return out
+
+
+def body_p(stats):
+    return "明日の出番: " + "・".join("%s(%s)%d鞍" % (x["name"], "・".join(x["tracks"]), x["n"]) for x in stats)
+
+
+def body_r(stats):
+    parts = []
+    for x in stats:
+        pl = "・".join("%d着%d回" % (k, x["places"][k]) for k in (1, 2, 3) if x["places"][k])
+        if not pl:
+            pl = "3着以内なし" if x["done"] else "未確定"
+        cnt = "%d鞍" % x["n"] if x["done"] >= x["n"] else "確定%d/%d鞍" % (x["done"], x["n"])
+        parts.append("%s %s(%s)" % (x["name"], pl, cnt))
+    return "今日の結果: " + "・".join(parts)
+
+
+def graded_name(n):
+    return re.sub(r"^第[0-9０-９]+回\s*", "", str(n or "")).strip()
+
+
+def body_g(races):
+    rs = sorted(races, key=lambda r: (str(r.get("post_time") or "9999"), r.get("track") or "", int(r.get("race_no") or 0)))
+    parts = []
+    for r in rs:
+        pt = str(r.get("post_time") or "")
+        hm = " %s:%s" % (pt[:2], pt[2:4]) if len(pt) == 4 and pt.isdigit() else ""
+        parts.append("%s %s%s" % (SHOW_TRACK.get(r["track"], r["track"]), graded_name(r.get("race_name")), hm))
+    return "今日の重賞: " + "・".join(parts)
+
+
+def pick_people(subs, people, runs, graded, now, kinds):
+    """P/R/G のまとめ通知(1 端末 1 種類 1 通)。people=None は表が無い= P/R を出さない・graded が空/None は G を出さない。"""
+    if not kinds:
+        return []
+    jd = now.astimezone(JST).date()
+    today, tomorrow = jd.isoformat(), (jd + dt.timedelta(days=1)).isoformat()
+    by_dev = {}
+    for p in people or []:
+        by_dev.setdefault(p["device_id"], []).append(p)
+    out = []
+    for s in latest_per_device(subs):
+        dev = s["device_id"]
+        for kind in ("P", "R", "G"):
+            if kind not in kinds or not s.get(WANT_COL[kind]):
+                continue
+            if kind == "G":
+                if not graded:
+                    continue
+                date, body, url = today, body_g(graded), "/graded/week"
+            else:
+                if people is None or not by_dev.get(dev):
+                    continue
+                date = tomorrow if kind == "P" else today
+                st = people_stats(by_dev[dev], runs, date)
+                if not st:
+                    continue
+                body = body_p(st) if kind == "P" else body_r(st)
+                url = "/mymarks"
+            out.append({"device_id": dev, "horse_id": "%s:%s" % (kind.lower(), date), "race_id": date, "kind": kind,
+                        "body": body, "url": url})
+    return out
 
 
 # ---------------------------------------------------------------- DB(REST・service_role)
@@ -194,9 +339,50 @@ def pg_in(vals):
     return "in.(" + ",".join('"%s"' % str(v).replace('"', '') for v in vals) + ")"
 
 
-def load(rest, now):
-    subs = rest.get("nar_push_subs", select="endpoint,device_id,p256dh,auth,want_a,want_c,created_at,fail_count",
+def load_subs(rest):
+    """→ subs。want_p/want_g の列がまだ無い(400)ときは今までの形で読み直す(☆の人・重賞は飛ぶ)。"""
+    try:
+        return rest.get("nar_push_subs", select="endpoint,device_id,p256dh,auth,want_a,want_c,want_p,want_g,created_at,fail_count",
+                        **{"or": "(want_a.is.true,want_c.is.true,want_p.is.true,want_g.is.true)"})
+    except urllib.error.HTTPError as e:
+        if e.code != 400:
+            raise
+        log("nar_push_subs に want_p/want_g が無い= ☆の人・重賞は飛ばす")
+    return rest.get("nar_push_subs", select="endpoint,device_id,p256dh,auth,want_a,want_c,created_at,fail_count",
                     **{"or": "(want_a.is.true,want_c.is.true)"})
+
+
+def load_people(rest, subs, now, kinds):
+    """→ (people or None, runs, graded or None)。表・列が無い(400/404)は None= その種類を飛ばす。"""
+    people, pruns, graded = None, [], None
+    jd = now.astimezone(JST).date()
+    devs = sorted({s["device_id"] for s in subs if s.get("want_p")})
+    if devs and kinds & {"P", "R"}:
+        try:
+            people = []
+            for i in range(0, len(devs), 50):
+                people += rest.get("nar_viewer_people", select="device_id,kind,name,venues,any_venue,added_at",
+                                   device_id=pg_in(devs[i:i + 50]), order="device_id,added_at,name")
+        except urllib.error.HTTPError as e:
+            if e.code not in (400, 404):
+                raise
+            log("nar_viewer_people が無い(%d)= ☆の人は飛ばす" % e.code)
+            people = None
+        if people:
+            date = (jd + dt.timedelta(days=1)).isoformat() if "P" in kinds else jd.isoformat()
+            for col in ("jockey", "trainer"):
+                names = sorted({p["name"] for p in people if p.get("kind") == col})
+                for i in range(0, len(names), 40):
+                    pruns += rest.get("nar_runs", select="track,race_date,race_no,runner_number,horse_name,jockey,trainer,finish,finish_note",
+                                      **{col: pg_in(names[i:i + 40]), "race_date": "eq." + date})
+    if "G" in kinds and any(s.get("want_g") for s in subs):
+        graded = rest.get("nar_races", select="track,race_date,race_no,race_name,race_kind,post_time",
+                          race_date="eq." + jd.isoformat(), race_kind=pg_in(GRADED_KINDS))
+    return people, pruns, graded
+
+
+def load(rest, now):
+    subs = load_subs(rest)
     if not subs:
         return subs, [], []
     devs = sorted({s["device_id"] for s in subs})
@@ -213,10 +399,17 @@ def load(rest, now):
 
 
 def claim(rest, x):
-    """nar_push_sent に先に入れる。入った(=初めて)なら True。重複は無視される(返りが空)。"""
-    got = rest.req("nar_push_sent?on_conflict=device_id,horse_id,race_id,kind", "POST",
-                   [{k: x[k] for k in ("device_id", "horse_id", "race_id", "kind")}],
-                   prefer="resolution=ignore-duplicates,return=representation")
+    """nar_push_sent に先に入れる。入った(=初めて)なら True。重複は無視される(返りが空)。
+    P/R/G で 400(kind の check がまだ A/C だけ)は送らない= False。"""
+    try:
+        got = rest.req("nar_push_sent?on_conflict=device_id,horse_id,race_id,kind", "POST",
+                       [{k: x[k] for k in ("device_id", "horse_id", "race_id", "kind")}],
+                       prefer="resolution=ignore-duplicates,return=representation")
+    except urllib.error.HTTPError as e:
+        if e.code != 400 or x["kind"] not in ("P", "R", "G"):
+            raise
+        log("  nar_push_sent が %s を受け付けない(check 前)= 送らない" % x["kind"])
+        return False
     return bool(got)
 
 
@@ -233,7 +426,7 @@ def send_all(rest, subs, targets, vapid_private, vapid_sub):
             continue
         payload = json.dumps(message(x), ensure_ascii=False)
         for s in by_dev.get(x["device_id"], []):
-            if s["endpoint"] in dead or not s.get("want_a" if x["kind"] == "A" else "want_c"):
+            if s["endpoint"] in dead or not s.get(WANT_COL[x["kind"]]):
                 continue
             ep = urllib.parse.quote(s["endpoint"], safe="")
             try:
@@ -269,13 +462,18 @@ def main():
     g.add_argument("--dry-run", action="store_true", help="数えて出すだけ(既定)")
     ap.add_argument("--fixture", help="DB の代わりに読む JSON(dry-run 専用)")
     ap.add_argument("--now", help="ISO 時刻(fixture の確認用)")
+    ap.add_argument("--slot", default="auto", choices=["auto", "night", "p", "r", "g"],
+                    help="auto= 時刻で P(20 時台)/G(9 時台)を足す・night= 夜便(R と C)")
     a = ap.parse_args()
     now = parse_ts(a.now) if a.now else dt.datetime.now(dt.timezone.utc)
+    extra, horse_kinds = slot_kinds(a.slot, now)
+    hb = "push_night" if a.slot == "night" else "push_notify"
 
     if a.fixture:
         with open(a.fixture, encoding="utf-8") as f:
             fx = json.load(f)
         subs, horses, runs = fx.get("subs", []), fx.get("horses", []), fx.get("runs", [])
+        people, pruns, graded = fx.get("people"), fx.get("runs", []), fx.get("graded")
         a.apply = False
         rest = None
     else:
@@ -287,15 +485,18 @@ def main():
         rest = Rest()
         try:
             subs, horses, runs = load(rest, now)
+            people, pruns, graded = load_people(rest, subs, now, extra) if subs else (None, [], None)
         except urllib.error.HTTPError as e:
             if e.code == 404:                                   # 表がまだ無い(migration 前)= 静かに抜ける
                 log("nar_push_subs が無い(migration 前)= 何もしない"); return 0
             raise
 
-    targets = pick(subs, horses, runs, now)
-    na = sum(1 for x in targets if x["kind"] == "A")
-    log("購読 %d・端末 %d・馬 %d・出走 %d → 対象 A=%d C=%d" % (
-        len(subs), len({s["device_id"] for s in subs}), len(horses), len(runs), na, len(targets) - na))
+    targets = [x for x in pick(subs, horses, runs, now) if x["kind"] in horse_kinds]
+    targets += pick_people(subs, people, pruns, graded, now, extra)
+    cnt = {k: sum(1 for x in targets if x["kind"] == k) for k in "ACPRG"}
+    log("購読 %d・端末 %d・馬 %d・出走 %d・slot %s(足す %s)→ 対象 %s" % (
+        len(subs), len({s["device_id"] for s in subs}), len(horses), len(runs), a.slot, "".join(sorted(extra)) or "-",
+        " ".join("%s=%d" % kv for kv in cnt.items())))
     for x in targets[:20]:
         log("  %s %s" % (x["kind"], message(x)["body"]))
     if not a.apply:
@@ -309,10 +510,10 @@ def main():
         cut = (now - dt.timedelta(days=SENT_KEEP_DAYS)).isoformat()
         rest.req("nar_push_sent?sent_at=lt." + urllib.parse.quote(cut), "DELETE", prefer="return=minimal")
     except Exception as e:                                       # noqa: BLE001
-        beat.beat("push_notify", False, "%s: %s" % (type(e).__name__, str(e)[:80]))
+        beat.beat(hb, False, "%s: %s" % (type(e).__name__, str(e)[:80]))
         raise
     log("送った %d・送信済みで飛ばした %d・失敗 %d・消した購読 %d" % (sent, skipped, failed, gone))
-    beat.beat("push_notify", True, "送信 %d・失敗 %d" % (sent, failed))
+    beat.beat(hb, True, "送信 %d・失敗 %d" % (sent, failed))
     return 0
 
 

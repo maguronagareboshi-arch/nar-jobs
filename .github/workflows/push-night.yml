@@ -1,0 +1,36 @@
+# B2(2026-10-17 案B)夜の通知便: JST 22:37 に
+#   R= 今日の☆の騎手・調教師の結果(1 端末 1 通のまとめ・取消/除外は鞍数から外す・未確定が残れば「確定◯/◯鞍」)
+#   C= ☆の馬の結果(nar-refresh の最後の回 21:37 より後に確定した分の取りこぼし直し・3 時間窓)
+# 二重送りよけは nar_push_sent(push_notify.py の claim)。heartbeat 'push_night'(台本の中で書く)。
+# ⛔表 nar_viewer_people・列 want_p が本番に無いうちは R を飛ばして C だけ送る(台本が 400/404 で退く)。
+# ⛔secret NAR_VAPID_PRIVATE が無ければ送らず緑で抜ける。
+name: push-night
+
+on:
+  schedule:
+    - cron: '37 13 * * *'   # UTC 13:37 = JST 22:37
+  workflow_dispatch:
+
+concurrency:
+  group: push-night
+  cancel-in-progress: false
+
+jobs:
+  push-night:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install -r cloud/requirements.txt
+      - name: push night
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          NAR_VAPID_PRIVATE: ${{ secrets.NAR_VAPID_PRIVATE }}
+          NAR_VAPID_SUBJECT: ${{ secrets.NAR_VAPID_SUBJECT }}
+        run: |
+          if [ -z "$NAR_VAPID_PRIVATE" ]; then echo "NAR_VAPID_PRIVATE が無い= 送らない"; exit 0; fi
+          python cloud/push_notify.py --apply --slot night
