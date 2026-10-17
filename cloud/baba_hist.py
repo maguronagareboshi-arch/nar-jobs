@@ -143,7 +143,12 @@ def main(argv=None):
             samples = to_samples(track, wins, races)
             targets = {s[1] for s in samples if lo <= s[1] <= today.isoformat()}
             targets |= {d for d in (old or {}) if lo <= d <= today.isoformat()}
+            # ⛔標準は前日までの1年= その場の最初のレースから 1 年たつ前の日は標準が欠ける(2014 年・姫路の再開直後)→ 出さない
+            fr = rest.get("nar_races?select=race_date&track=eq.%s&order=race_date.asc&limit=1" % cond_stats.enc(track))
+            ok_from = (dt.date.fromisoformat(fr[0]["race_date"]) + dt.timedelta(days=365)).isoformat() if fr else lo
+            targets = {d for d in targets if d >= ok_from}
             days, rebuilt = merge_days(prefix, samples, targets, old, today, a.rebuild_all)
+            days = {d: v for d, v in days.items() if d >= ok_from}
             doc = {"v": 1, "built": today.isoformat(), "track": track, "days": days}
             data = json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             first = next(iter(days), None)
