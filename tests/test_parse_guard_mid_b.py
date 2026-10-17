@@ -208,6 +208,11 @@ class JraRuns(unittest.TestCase):
         self.assertTrue(J.jra_run_bad(dict(ok, distance=1000, first3f=15.0)))
         self.assertEqual(J.jra_run_bad(dict(ok, distance=1200, first3f=35.1)), "")
         self.assertTrue(J.jra_run_bad(dict(ok, distance=1200, first3f=23.0)))
+        # 上がりだけ遅すぎ(止まりかけ)= 上がりを空にして書く・ほかも外れなら捨てる(2026-10-17)
+        self.assertTrue(J.slow_last3f_only(dict(ok, last3f=87.6)))
+        self.assertFalse(J.slow_last3f_only(dict(ok, last3f=12.3)))
+        self.assertFalse(J.slow_last3f_only(dict(ok, last3f=87.6, body_weight=57)))
+        self.assertFalse(J.slow_last3f_only(ok))
 
 
 class FakeKb:

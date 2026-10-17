@@ -259,9 +259,16 @@ def upload(rest, name, data):
     path = ROOT + name
     rest.req("/storage/v1/object/%s/%s" % (BUCKET, path), "POST", data,
              {"Content-Type": "application/json; charset=utf-8", "x-upsert": "true", "Cache-Control": CACHE})
-    back = rest.req("/storage/v1/object/%s/%s" % (BUCKET, path))
-    if hashlib.sha256(back).hexdigest() != hashlib.sha256(data).hexdigest():
-        raise RuntimeError("取り直した中身が違う: %s/%s" % (BUCKET, path))
+    # 取り直しは認証つきの口+毎回違う ?t= で古い写し(CDN)を避け、違えば 3 回まで待って取り直す。
+    # 1 時間以内の手動の再実行で前回の写しが返り赤になった(2026-10-17 baba-hist 7 場)。
+    want = hashlib.sha256(data).hexdigest()
+    for i in range(4):
+        back = rest.req("/storage/v1/object/authenticated/%s/%s?t=%d" % (BUCKET, path, time.time_ns()))
+        if hashlib.sha256(back).hexdigest() == want:
+            break
+        if i == 3:
+            raise RuntimeError("取り直した中身が違う: %s/%s" % (BUCKET, path))
+        time.sleep(10 * (i + 1))
     log("上げた %s/%s(%d bytes・照合 OK)" % (BUCKET, path, len(data)))
 
 

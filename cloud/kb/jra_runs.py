@@ -178,6 +178,7 @@ JR_4F_MINUS_3F = (9.0, 16.0)
 JR_BODY = (300, 650)
 JR_CARRIED = (40.0, 70.0)
 JRA_GUARD = []           # 外した走の理由(呼び側が数える)
+JRA_SOFT = []            # 上がりだけ空にして書いた走(赤にしない・2026-10-17)
 
 
 def front_range(lo, hi, dist):
@@ -219,6 +220,14 @@ def jra_run_bad(r):
     return ""
 
 
+def slow_last3f_only(r):
+    """上がりだけが遅すぎる側に外れ、ほかの値は全部範囲内= 止まりかけ・歩いて入線の実値かもしれない(例 87.6)。
+    読み違い(列ずれ)なら他の値も外れるので、それは今どおり捨てる。(2026-10-17)"""
+    v = r.get("last3f")
+    hi = (JR_3F_JUMP if r.get("surface") == "障" else JR_3F)[1]
+    return v is not None and v > hi and jra_run_bad(dict(r, last3f=None)) == ""
+
+
 def parse_kanzen(html, kb_horse_id):
     """馬の頁 → {'horse': {...}, 'runs': [中央の走だけ], 'n_blocks': 頁の全走}。値の外れの走は runs に入れない。"""
     soup = BeautifulSoup(html, "lxml")
@@ -228,6 +237,11 @@ def parse_kanzen(html, kb_horse_id):
         r = _parse_block(b, kb_horse_id)
         if r is not None:
             bad = jra_run_bad(r)
+            if bad and slow_last3f_only(r):
+                JRA_SOFT.append(f"{kb_horse_id} {r.get('race_date')} {r.get('place')} {r.get('race_no')}R {bad}")
+                print(f"::warning::中央の走 上がりだけ空にして書く {JRA_SOFT[-1]}", flush=True)
+                r["last3f"] = None
+                bad = ""
             if bad:
                 JRA_GUARD.append(f"{kb_horse_id} {r.get('race_date')} {r.get('place')} {r.get('race_no')}R {bad}")
                 print(f"::warning::中央の走 書かない {JRA_GUARD[-1]}", flush=True)

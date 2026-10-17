@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
   freshness:
@@ -329,6 +330,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           python3 - <<'PY'
           import sys, datetime as dt
@@ -360,6 +362,38 @@ jobs:
               except Exception:
                   return False
           down = None
+          # 2026-10-17 2 重メールをやめる(案 D): fail を書いた便が Actions の run として赤で終わっていれば、
+          #   GitHub がその run の失敗メールを出している= 見張りは数えない(黄)。PC の便など対になる赤 run が無ければ今どおり赤。
+          #   一覧が取れない時も今どおり赤(知らせ漏れより 2 重のほうがまし)。
+          def failed_runs():
+              import os, json, urllib.request
+              try:
+                  since = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=30)).strftime('%Y-%m-%dT%H:%M:%SZ')
+                  u = f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/actions/runs?status=failure&per_page=100&created=%3E{since}"
+                  rq = urllib.request.Request(u, headers={'Authorization': 'Bearer ' + os.environ['GH_TOKEN'],
+                                                          'Accept': 'application/vnd.github+json'})
+                  with urllib.request.urlopen(rq, timeout=20) as x:
+                      runs = json.load(x).get('workflow_runs') or []
+                  iso = lambda v: dt.datetime.fromisoformat(v.replace('Z', '+00:00'))
+                  return [(r.get('name'), iso(r['run_started_at']), iso(r['updated_at']))
+                          for r in runs if r.get('name') != 'nar-watchdog' and r.get('updated_at') and r.get('run_started_at')]
+              except Exception as e:
+                  print(f"::warning::失敗 run の一覧が取れない= 2 重かどうか見ない({e})")
+                  return []
+          fails = None
+          def own_red_run(job):
+              """job の fail を書いた時刻(last_try)が走っている間に入る赤 run の名前(無ければ None)。"""
+              global fails
+              v = (got.get(job) or {}).get('last_try')
+              if not v:
+                  return None
+              t = dt.datetime.fromisoformat(str(v).replace('Z', '+00:00'))
+              if fails is None:
+                  fails = failed_runs()
+              for name, start, end in fails:
+                  if start <= t <= end + dt.timedelta(minutes=10):
+                      return name
+              return None
           # 2026-10-16 外のサイト頼みの便は 1 回の fail では黄。最後の成功がこの時間より古くなったら赤(= 続けて取れない)
           #   wind_store= 気象庁(毎晩 1 回・10 日分は先方に残るので翌晩に取り直せる)
           #   official_zip= 公式の日次 ZIP(取れない間も体重は出馬表の画面から読む予備の道がある)
@@ -376,6 +410,10 @@ jobs:
                       if down:
                           print('::warning::ooi_feed は fail だが大井公式サイトが 503(先方の障害)= 黄')
                           continue
+                  run = own_red_run(job)
+                  if run:
+                      print(f"::warning::{job} は fail だが元の便 {run} が自分で赤(メール済み)= 見張りは知らせない(note={(got.get(job) or {}).get('note')})")
+                      continue
                   bad.append(f"{job} の last_status= fail(note={(got.get(job) or {}).get('note')})")
           if 930 <= hm < 2200:
               t = last_ok('refresh')
