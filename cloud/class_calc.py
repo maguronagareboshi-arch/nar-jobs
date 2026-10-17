@@ -436,6 +436,10 @@ def fetch_obihiro(url, key, since):
 #           2歳3歳重賞 30% は「出走馬が全員 3歳以下の重賞」で判定(races の field_max_age= nar_runs の生年から・saga_field_ages)。
 #           ロータスクラウン賞など名前に「３歳」が無い 3歳重賞のため(2026-10-17 新聞で確認)。nar_runs に出走馬が無い古いレースだけ名前で判定。
 #  減額 ③: 8月競馬= 3歳 50%減額(一般格編入)・4歳5歳 −50万円。1月= 6歳が2歳時ぶん・7歳が3歳時ぶん・8歳が4歳時ぶん。
+#           過去の減額はその年度の要領で(fy_cut_month): 令和6年度までは 8月でなく 10月競馬・令和3/4年度の 3歳は −30万円
+#           (3歳格の終了まで在籍して出走した馬だけ)・3歳戦の後払い 50% は令和5年度から。
+#           A1(1,000万以上)で減額しても 1,000万以上に残る馬は 8月の 4歳5歳 −50万・1月の歳時ぶんをかけない(新聞と出走級で確認)。
+#           A1 の 4歳以上の重賞は 50% にせず 100%(新聞 2026-10-17/18)。
 #           新規馬(入厩時)= 4歳 8〜12月 −50万 / 5歳 1〜7月 −50万・8〜12月 −100万 / 6歳 2歳時+100万 / 7歳 2・3歳時+100万 / 8歳以上 2・3・4歳時+100万。
 #  格付 (1): Ａ1 1,000万以上 / Ａ2 600万以上 / Ｂ 300万以上 / Ｃ1 150万以上 / Ｃ2 150万未満。2歳格・3歳格(3歳は 300万超で編入・1〜3月を除く・8月に一斉編入)。
 #  遠征/転出(チ)(ヌ): 他場の走の調教師(runs.trn)が直前の佐賀の走の調教師と同じなら遠征 10%・違えば転出(戻ったら新規馬)。
@@ -451,12 +455,11 @@ SAGA_LOW = ("佐賀記念", "サマーチャンピオン")
 #   2026-03 の 3歳戦(種別は普通)。「いちごの日いちごさん賞Ｃ１」など同じ語の別レースを拾わないよう、名前は丸ごと書く
 SAGA_KYOSAN_NAMES = ("佐賀にじゅうまる賞３歳", "佐賀いちごさん賞３歳", "佐賀ひなたまる賞３歳",
                      "ＳＡＧＡリベンジャーズリミテッド３歳")
-# 再転入(以前に佐賀を走った馬が転出後に戻った)の 6歳以上の入厩時減額: 該当歳時+130万(初めての新規馬は原文どおり +100万)。
-#   新聞 2026-10-17 シュリーデービー・ビーガールで一致。歳ごとの額(該当歳時と 1月減額済みの歳を除く)の合計から引く= 過去の 8月減額は戻る
-SAGA_REENTRY_EXTRA = 1_300_000
-# 8月 −50万の候補(既定は原文どおり None): 新聞 2026-10-17/18 では 8/1 時点 1,216万以上の 4・5歳 4 頭にかかっていない・1,054万以下の 4 頭にはかかっている。
-#   線の根拠が原文に無いので入れていない(fix2.md)
-SAGA_AUG45_SKIP = None
+# 再転入(以前に佐賀を走った馬が転出後に戻った)の 6歳以上: 原文どおり該当歳時+100万を引き、在籍中に受けた 4歳5歳 −50万は戻す
+#   (減額の表の「在籍馬」の列が「新規馬(入厩時)」の列に置き換わる)。3歳の減額は戻さない。
+#   2026-10-18 シュリーデービー(2022 4歳 −50万を戻すと新聞・出走級 28 走とも一致)・ビーガール(3歳 −30万も戻すと 30万ずれる)
+#   (旧= 全減額を戻して +130万。原文に無い額なのでやめた)
+SAGA_A1 = 10_000_000
 # ④(ロ)「他場所属での佐賀競馬出走時も含む」: 転入前(在籍でない)の佐賀の走で、調教師が直前の他場の走と同じものは他場の走として換算
 #   (2・3歳= 100%・4歳以上= 50%)。新聞 2026-10-18 ナンゴクトップガン・カシノフレックス(ＪＲＡ交流の九州産特別)・ノーブルプロセスで一致
 SAGA_VISIT = True
@@ -542,8 +545,14 @@ def saga_rate_resident(run, race, age=None):
 # 検算で決めた読み方(2026-09-03・docs/s79_p3_verify_saga_20260903.md): (ハ)「3歳馬の古馬編入後の新規馬は 4歳以上を適用」は
 #   **換算率(④)だけ**に効き、入厩時の減額表は 3歳のまま(= 減額なし)。減額も 4歳扱いにすると 96.8%、率も 3歳のままだと 95.8%、
 #   2・3歳の他場地方を 50% にしても下がる(97.2%)。→ 率だけ 4歳扱い= 98.27%
+def fy_cut_month(d):
+    """一般編入・4歳5歳減額の月= 令和7年度(2025-04)から 8月・それより前は 10月"""
+    fy = d.year if d.month >= 4 else d.year - 1
+    return 8 if fy >= 2025 else 10
+
+
 def saga_entry_age(a, d):
-    return 4 if (a == 3 and d.month >= 8) else a
+    return 4 if (a == 3 and d.month >= fy_cut_month(d)) else a
 
 
 def saga_cut_age(a, d):
@@ -612,12 +621,13 @@ def saga_state(runs, birth, asof, lag, races, trace=False):
     first = _date(rs[0].get("d"))
     events = [("run", _date(r.get("d")), r) for r in rs]
     for y in range(first.year, cutoff.year + 1):
-        for md, kind in ((1, "jan"), (8, "aug")):
+        for md, kind in ((1, "jan"), (8 if y >= 2025 else 10, "aug")):
             e = dt.date(y, md, 1)
             if first < e < cutoff:
                 events.append((kind, e, None))
     events.sort(key=lambda t: (t[1], 0 if t[0] != "run" else 1))
     value, by_age, removed = 0, Counter(), set()
+    res45 = 0                                   # 在籍中に受けた 4歳5歳 −50万の合計(6歳以上で再転入したら戻す)
     resident, pending, labels = False, [], Counter()
     last_saga, last_trn, last_other_trn = None, None, None
     entry_cut_year = None                       # 1〜7月に入厩して 5歳 −50万を受けた年= 同じ年に再転入しても 2 回目はかけない(2026-10-18 新聞 ワンダービジブル)
@@ -643,8 +653,19 @@ def saga_state(runs, birth, asof, lag, races, trace=False):
                 return x
         return None
 
+    def a1_stays(d, a):                         # A1 で、減額しても A1 に残る馬は減額しない
+        if value < SAGA_A1:
+            return False
+        if d.month == 1:
+            amt = by_age[a - 4] if a in (6, 7, 8) and (a - 4) not in removed else 0
+        else:
+            amt = 500_000 if a in (4, 5) else 0
+        return amt > 0 and value - amt >= SAGA_A1
+
     for kind, d, r in events:
         a = age(d)
+        if kind in ("jan", "aug") and a1_stays(d, a):
+            continue
         if kind == "jan":
             if resident and a in (6, 7, 8) and (a - 4) not in removed:
                 cut(by_age[a - 4])
@@ -652,10 +673,17 @@ def saga_state(runs, birth, asof, lag, races, trace=False):
             continue
         if kind == "aug":
             if resident and a == 3:
-                cut(value * 0.5)
+                if d.year <= 2022:                    # 令和3・4年度: 3歳格の終了まで在籍して出走した馬だけ −30万
+                    if any(_date(x.get("d")).year == d.year and x.get("tr") == "佐賀" and _date(x.get("d")) < d for x in rs):
+                        cut(300_000)
+                    y3_done = True
+                else:
+                    cut(value * 0.5)
                 aug3.add(d.year)
-            elif resident and a in (4, 5) and not (SAGA_AUG45_SKIP is not None and value >= SAGA_AUG45_SKIP):
+            elif resident and a in (4, 5):
+                before = value
                 cut(500_000)
+                res45 += before - value
             continue
         prize = int(r.get("prize") or 0)
         visiting = (SAGA_VISIT and r.get("tr") == "佐賀" and not resident and r.get("trn")
@@ -669,10 +697,10 @@ def saga_state(runs, birth, asof, lag, races, trace=False):
                     add(int(p.get("prize") or 0) * rate, age(_date(p.get("d"))), label)
                 pending = []
                 a = saga_cut_age(a, d)
-                if a == 4 and d.month >= 8:
+                if a == 4 and d.month >= fy_cut_month(d):
                     cut(500_000)
                 elif a == 5:
-                    if d.month <= 7:
+                    if d.month < fy_cut_month(d):
                         if entry_cut_year != d.year:
                             cut(500_000)
                         entry_cut_year = d.year
@@ -680,11 +708,9 @@ def saga_state(runs, birth, asof, lag, races, trace=False):
                         cut(1_000_000)
                 elif a is not None and a >= 6:
                     ages = {6: (2,), 7: (2, 3)}.get(a, (2, 3, 4))
-                    if last_saga is not None:         # 再転入: 歳ごとの額から組み直す(過去の 8月減額は戻す)・+130万
-                        value = max(0, sum(v for x, v in by_age.items() if x not in ages and x not in removed) - SAGA_REENTRY_EXTRA)
-                    else:
-                        cut(sum(by_age[x] for x in ages if x not in removed) + 1_000_000)
+                    cut(sum(by_age[x] for x in ages if x not in removed) + 1_000_000)
                     removed.update(ages)
+                    value, res45 = value + res45, 0   # 再転入= 在籍中の 4歳5歳 −50万を戻す
                 resident = True
             is3 = "３歳" in str(r.get("cls") or "")
             if y3_after and not is3 and r.get("cls") and not y3_done:
@@ -692,9 +718,11 @@ def saga_state(runs, birth, asof, lag, races, trace=False):
                 y3_done = True
                 y3_after = 0
             rate, label = saga_rate_resident(r, races.get(_rkey(r)), a)
+            if label == "重賞" and value >= SAGA_A1 and a is not None and a >= 4:   # A1 の 4歳以上の重賞は 50% にしない
+                rate, label = 1.00, "重賞A1"
             before = value
             add(prize * rate, a, label)
-            if a == 3 and d.month >= 8 and is3 and d.year not in aug3 and not y3_done:
+            if a == 3 and d.month >= fy_cut_month(d) and d.year >= 2023 and is3 and d.year not in aug3 and not y3_done:
                 y3_after += value - before
             last_saga = d
             last_trn = r.get("trn") or last_trn
