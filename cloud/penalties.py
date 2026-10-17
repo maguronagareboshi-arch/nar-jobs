@@ -20,7 +20,7 @@ PDF の取り方(`download_pdf` / `pdf_pages` / `pdf_url` / `NAR_PDF` / `UA` / `
   川崎  制裁【制裁】調教師◯◯は…戒告され、令和8年8月21日から令和8年9月7日までの実効2日間賞典を停止された。
   船橋  制裁「騎手◯◯は、…扶助操作に適切を欠いた(…)ため、令和8年9月1日、2日の2日間騎乗停止した。」
   園田  制裁11番◯◯号は、競走中鼻出血を発症したため出走制限となった。  ← **馬**の話= 読まない
-  名古屋 制裁(タイムオーバー)3号馬◯◯号は、令和8年9月18日まで出走できない。 ← 同上
+  名古屋 制裁(タイムオーバー)3号馬◯◯号は、令和8年9月18日まで出走できない。 ← 同上(2026-10-17 から馬の行= person_kind='horse')
   笠松  制裁(発走調教再審査)第2号馬◯◯号は、… ← 同上
 ⛔PDF の字は 1 字ずつ空白で割れる= **空白を全部落としてから**読む。
 ⛔「制裁」の行は 売得金 と コーナー通過順 の間にあり、次の見出しまで**折り返して続く**。
@@ -50,7 +50,7 @@ from horse_health import (                                          # noqa: E402
     NAR_PDF, UA, HostLimiter, _segments, download_pdf, pdf_pages, pdf_url,
 )
 
-PARSER_VERSION = "penalties-1.2"      # §111c 馬名(本文の馬番 → 名簿の馬名)を足した
+PARSER_VERSION = "penalties-1.3"      # 2026-10-17 馬への措置の行・賞典停止の印・飛び日付・期間の文の戻し
 JST = dt.timezone(dt.timedelta(hours=9))
 DEFAULT_DAYS = 14
 UPSERT_CHUNK = 500
@@ -68,7 +68,8 @@ _PENALTY_HEAD = re.compile(r"^制裁")
 #   頁の頭が「2026/01/12 09:30作成」「40/ 40」の 2 行で、その次の行に前の頁の**続き**が
 #   「制裁」のラベルつきで来る= ここで切ると文が途中で終わる。
 #   ⛔頁番号だけの行は今までどおりかたまりを閉じる(_ROW_HEAD)= 落とすのは**脚注の直後**だけ。
-_FOOTNOTE = re.compile(r"^\d{4}/\d{1,2}/\d{1,2}\s*\d{1,2}:\d{2}\s*作成$")
+# 2026-10-17 太字の頁の頭は字が 2 重になる(「競競走走成成績績表表2026/10/1509:30作成」名古屋・帯広 実物)
+_FOOTNOTE = re.compile(r"^(?:競競走走成成績績表表|競走成績表)?\d{4}/\d{1,2}/\d{1,2}\s*\d{1,2}:\d{2}\s*作成$")
 _PAGE_NO = re.compile(r"^\d+/\s*\d+$")
 # §111b #1 公式の飾り。先頭の【制裁】「」と、末尾の」を落とす。⛔(…)は公式の文言なので落とさない
 _LEAD_MARK = re.compile(r"^(?:【制裁】|「|」)+")
@@ -81,6 +82,29 @@ _ROLE_NEAR = 4                      # 名前の前後この字数に役の語が
 NAME_GAP = 4                        # 略称の「苗字」と「名の1字」の間に許す字数(実測は 2 まで)
 # 期間は**書いてある形だけ**。⛔「9月1日、2日の2日間」のような並びは読まない(推測しない)
 _RANGE = re.compile(r"令和(\d{1,2})年(\d{1,2})月(\d{1,2})日から令和(\d{1,2})年(\d{1,2})月(\d{1,2})日まで")
+# 2026-10-17 期間の書き方を足す(どれも実物の PDF の文)。⛔書いてある日だけ読む:
+#   範囲 「令和8年10月11日から10月17日まで」(高知)「令和8年10月16日~11月14日」(園田)
+#   飛び日付「4日間(10月19日、21日、22日、23日)」(名古屋)「2日(令和8年10月21日、22日)」(園田)
+#   期限 「令和8年11月3日まで出走できない」(名古屋)「11月11日まで番組除外」(盛岡)= through だけ
+#   ⛔年の書いてない日は開催日の年(開催日より 180 日以上前になるときだけ翌年= 12 月の開催の 1 月)
+_DATE = r"(?:令和(\d{1,2})年)?(\d{1,2})月(\d{1,2})日"
+_RANGE2 = re.compile(_DATE + r"(?:から|~|〜)" + _DATE)
+_LIST = re.compile(_DATE + r"((?:、(?:\d{1,2}月)?\d{1,2}日)+)")
+_LIST_ITEM = re.compile(r"、(?:(\d{1,2})月)?(\d{1,2})日")
+_UNTIL = re.compile(_DATE + r"まで")
+_HAS_DATE = re.compile(r"\d{1,2}月\d{1,2}日")
+# 「。」の後ろに来る期間だけの頭(園田「2日(令和8年10月21日、22日)」「賞典停止2日(…)」「30日(…~…)」)
+_LEAD_PERIOD = re.compile(r"^(?:賞典停止)?(?:実効)?\d{1,3}日間?\([^()]*\d{1,2}日[^()]*\)")
+# 賞典停止(kind は戒告などのまま・印 prize_suspended だけ立てる)
+_PRIZE = re.compile(r"賞典停止|賞典を停止")
+# 馬への措置。⛔上から順(「出走を制限」と「再審査」が両方ある笠松の形は出走停止・理由に再審査)
+_HORSE_KINDS = ((re.compile(r"出走できない|出走停止|出走を停止|出走を制限|出走制限|番組除外"), "出走停止"),
+                (re.compile(r"再検査|再審査"), "再検査"))
+# 理由。⛔原文の語だけ: ①馬番より前の(…)(名古屋・笠松) ②「理由:…」(盛岡) ③下の語が文にあれば最初の 1 つ
+_CAUSE_LEAD = re.compile(r"^\(([^()]{1,40})\)(?=第?[0-9]+(?:番|号馬))")
+_CAUSE_REASON = re.compile(r"理由:([^。]{1,40})")
+_CAUSE_WORDS = ("タイムオーバー", "鼻出血", "発走調教不十分", "発走調教不良", "発走調教再審査",
+                "枠内駐立不良", "駐立不良", "馬体故障", "心房細動", "跛行")
 # 種類。⛔上から順に見る(「戒告され…賞典を停止された」は戒告)
 # §111b #2 「◯日間騎乗を停止された」も騎乗停止。⛔「賞典を停止」は別物= 戒告のまま
 _KINDS = ((re.compile(r"騎乗停止|騎乗を停止"), "騎乗停止"), (re.compile(r"過怠金"), "過怠金"),
@@ -309,8 +333,118 @@ def era_date(year, month, day):
         return None
 
 
+def _ymd(era, month, day, race_date, base_year=None):
+    """令和の年があればそれ・無ければ base_year(範囲の 2 つ目)か開催日の年。⛔日付として無理なら None。"""
+    try:
+        if era:
+            return dt.date(2018 + int(era), int(month), int(day))
+        if base_year:
+            return dt.date(int(base_year), int(month), int(day))
+        race = dt.date.fromisoformat(str(race_date)[:10])
+        got = dt.date(race.year, int(month), int(day))
+        if (race - got).days >= 180:
+            got = dt.date(race.year + 1, int(month), int(day))
+        return got
+    except (TypeError, ValueError):
+        return None
+
+
+def periods(sentence, race_date):
+    """文 → (from, through, days)。⛔書いてある形だけ(推測しない)。days は飛び日付のときだけの一覧。
+
+    順に ①範囲 ②飛び日付(from/through は最初と最後) ③期限(「◯日まで」= through だけ)。
+    どれにも当たらなければ全部 None。
+    """
+    s = str(sentence or "")
+    m = _RANGE2.search(s)
+    if m:
+        a = _ymd(m.group(1), m.group(2), m.group(3), race_date)
+        b = None
+        if a:
+            b = _ymd(m.group(4), m.group(5), m.group(6), race_date, None if m.group(4) else a.year)
+            if b and b < a and not m.group(4):
+                b = _ymd(None, m.group(5), m.group(6), race_date, a.year + 1)
+        if a and b and a <= b:
+            return a.isoformat(), b.isoformat(), None
+        return None, None, None
+    m = _LIST.search(s)
+    if m:
+        first = _ymd(m.group(1), m.group(2), m.group(3), race_date)
+        if first is None:
+            return None, None, None
+        days = [first]
+        year, month = first.year, first.month
+        for item in _LIST_ITEM.finditer(m.group(4)):
+            if item.group(1):
+                nm = int(item.group(1))
+                if nm < month:
+                    year += 1
+                month = nm
+            try:
+                days.append(dt.date(year, month, int(item.group(2))))
+            except ValueError:
+                return None, None, None
+        if len(days) >= 2 and days == sorted(set(days)):
+            iso = [d.isoformat() for d in days]
+            return iso[0], iso[-1], iso
+        return None, None, None
+    m = _UNTIL.search(s)
+    if m:
+        b = _ymd(m.group(1), m.group(2), m.group(3), race_date)
+        return None, (b.isoformat() if b else None), None
+    return None, None, None
+
+
+def attach_periods(sents):
+    """「。」の後ろに来た期間だけの文・頭を**前の文**へ戻す(高知・園田の書き方)。
+
+    ①文の頭の「2日(…)」「賞典停止2日(…)」「30日(…)」は前の文の続き。
+    ②役の語も馬番も無く、日付だけがある文(高知「令和8年10月11日から10月17日までの実効2日間賞典停止。」)も前の文へ。
+    ⛔戻す先が無ければその場に残す。
+    """
+    out = []
+    for s in sents:
+        m = _LEAD_PERIOD.match(s)
+        if m and out:
+            out[-1] += m.group(0)
+            s = s[m.end():].strip()
+            if not s:
+                continue
+        if (out and _HAS_DATE.search(s) and umaban_of(s) is None
+                and not any(role in s for role in _ROLE.values())):
+            out[-1] += s
+            continue
+        out.append(s)
+    return out
+
+
+def horse_kind_of(sentence):
+    for rx, label in _HORSE_KINDS:
+        if rx.search(sentence):
+            return label
+    return None
+
+
+def cause_of(sentence):
+    """馬への措置の理由(原文の語)。⛔原文に無ければ None(推測しない)。"""
+    s = str(sentence or "")
+    m = _CAUSE_LEAD.match(s)
+    if m:
+        return m.group(1)
+    m = _CAUSE_REASON.search(s)
+    if m:
+        return m.group(1)
+    best = None
+    for word in _CAUSE_WORDS:
+        at = s.find(word)
+        if at >= 0 and (best is None or at < best[0] or (at == best[0] and len(word) > len(best[1]))):
+            best = (at, word)
+    return best[1] if best else None
+
+
 def suspension(sentence):
-    """「令和8年8月21日から令和8年9月7日まで」だけを読む。⛔他の形は null(推測しない)。"""
+    """「令和8年8月21日から令和8年9月7日まで」だけを読む。⛔他の形は null(推測しない)。
+    ⚠2026-10-17 から行に入れるのは periods()。これは前の形の確かめ用に残す。"""
     m = _RANGE.search(sentence)
     if not m:
         return None, None
@@ -376,30 +510,46 @@ def find_person(sentence, names):
 
 
 def read_penalties(track, race_date, segments, names, source_url, source_hash):
-    """(レース番号, 本文)の一覧 → 制裁の行。⛔人(騎手・調教師)の文だけを取る。"""
+    """(レース番号, 本文)の一覧 → 制裁の行。人(騎手・調教師)の文と、馬への措置の文(2026-10-17)。
+
+    馬の行= 人に当たらず、出走停止・再検査の語があり、本文の馬番がその日の名簿の馬に当たる文。
+      person_kind='horse'・person_name=horse_name=名簿の馬名・理由は cause。⛔名簿に居ない馬番は出さない(数えるだけ)。
+    """
     rows = []
-    stats = {"blocks": 0, "sentences": 0, "no_person": 0, "name_unmatched": 0, "horse_named": 0}
+    stats = {"blocks": 0, "sentences": 0, "no_person": 0, "name_unmatched": 0, "horse_named": 0,
+             "horse_rows": 0, "horse_unmatched": 0}
     for race_no, text in segments:
+        no = race_no if isinstance(race_no, int) and 1 <= race_no <= 12 else None
         for block in penalty_blocks(text):
             stats["blocks"] += 1
-            for sentence in sentences(block):
+            for sentence in attach_periods(sentences(block)):
                 stats["sentences"] += 1
-                if not any(role in sentence for role in _ROLE.values()):
-                    stats["no_person"] += 1        # 馬の話(◯番◯◯号は…)= 数えるだけ
-                    continue
-                found = find_person(sentence, names)
-                if found is None:
-                    stats["name_unmatched"] += 1   # 役の語はあるが名簿の人に絞れない= 出さない
-                    continue
-                person_kind, name = found
+                has_role = any(role in sentence for role in _ROLE.values())
+                found = find_person(sentence, names) if has_role else None
                 detail = sentence[:DETAIL_MAX]
-                kind = kind_of(sentence)
-                since, through = suspension(sentence)
-                no = race_no if isinstance(race_no, int) and 1 <= race_no <= 12 else None
                 # §111c その制裁が指している馬。⛔馬番が読めない行・名簿に居ない馬番は None のまま
                 #   (⛔埋めない)。⛔penalty_id の材料には入れない= 既にある行の id を動かさない
                 umaban = umaban_of(detail)
                 horse = names.get("horse", {}).get((no, umaban)) if (no and umaban) else None
+                cause = None
+                if found is None:
+                    hkind = horse_kind_of(sentence)
+                    if hkind is None:
+                        if has_role:
+                            stats["name_unmatched"] += 1   # 役の語はあるが名簿の人に絞れない= 出さない
+                        else:
+                            stats["no_person"] += 1        # 措置の語の無い馬の話= 数えるだけ
+                        continue
+                    if not horse:
+                        stats["horse_unmatched"] += 1      # 馬番が読めない・名簿に居ない= 出さない
+                        continue
+                    person_kind, name, kind = "horse", horse, hkind
+                    cause = cause_of(sentence)
+                    stats["horse_rows"] += 1
+                else:
+                    person_kind, name = found
+                    kind = kind_of(sentence)
+                since, through, days = periods(sentence, race_date)
                 if horse:
                     stats["horse_named"] = stats.get("horse_named", 0) + 1
                 rows.append({
@@ -410,6 +560,8 @@ def read_penalties(track, race_date, segments, names, source_url, source_hash):
                     "horse_name": horse,
                     "kind": kind, "detail": detail,
                     "suspension_from": since, "suspension_through": through,
+                    "suspension_days": days, "cause": cause,
+                    "prize_suspended": bool(_PRIZE.search(sentence)),
                     "source_url": source_url, "source_hash": source_hash,
                     "parser_version": PARSER_VERSION,
                     "updated_at": dt.datetime.now(dt.timezone.utc).isoformat(),
@@ -443,8 +595,8 @@ def known_sources(client, start, end):
 def run(client, start, end, apply, show=0):
     limiter = HostLimiter()
     n = {"sources": 0, "pdf_missing": 0, "rows": 0, "unparsed": 0, "name_unmatched": 0,
-         "horse_named": 0, "upserted": 0, "errors": 0, "unchanged": 0}
-    by_kind, by_person = {}, {}
+         "horse_named": 0, "horse_unmatched": 0, "upserted": 0, "errors": 0, "unchanged": 0}
+    by_kind, by_person, by_cell = {}, {}, {}
     rows = []
     known = known_sources(client, start, end) if apply else {}   # ドライランは全部読む(検品用)
     parsed = []                                                   # 今回読んだ PDF の記録
@@ -479,9 +631,12 @@ def run(client, start, end, apply, show=0):
         n["unparsed"] += stats["no_person"]
         n["name_unmatched"] += stats["name_unmatched"]
         n["horse_named"] += stats.get("horse_named", 0)
+        n["horse_unmatched"] += stats.get("horse_unmatched", 0)
         for row in got:
             by_kind[row["kind"]] = by_kind.get(row["kind"], 0) + 1
             by_person[row["person_kind"]] = by_person.get(row["person_kind"], 0) + 1
+            cell = "%s|%s|%s" % (row["kind"], row["person_kind"], row["track"])
+            by_cell[cell] = by_cell.get(cell, 0) + 1
         rows.extend(got)
         if show and got:
             for row in got[:show]:
@@ -504,6 +659,10 @@ def run(client, start, end, apply, show=0):
         % (n["sources"], n["unchanged"], n["pdf_missing"], n["rows"], json.dumps(by_kind, ensure_ascii=False),
            json.dumps(by_person, ensure_ascii=False), n["unparsed"], n["name_unmatched"],
            n["horse_named"], n["upserted"], n["errors"]))
+    # 2026-10-17 新版の件数を 種類×人の別×場 で(dry_run の検品用・書き込みはしない)
+    log("version=%s horse_unmatched=%d" % (PARSER_VERSION, n["horse_unmatched"]))
+    for cell in sorted(by_cell):
+        log("  count %s %d" % (cell.replace("|", " "), by_cell[cell]))
     return rows, n
 
 

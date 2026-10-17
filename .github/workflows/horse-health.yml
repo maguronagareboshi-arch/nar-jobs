@@ -121,6 +121,18 @@ jobs:
             -v ON_ERROR_STOP=1 -X -f pipeline/sql/penalties_sources_20260908.sql
           # §193c オークションの分類 v2(CHECK 17 値・印 2 列・書く関数 v2)。⛔20260903 が公開の関数を古い本体で作り直すので毎回この後に流す。冪等
           psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/auction_groups_v2_20260916.sql | tail -n 3
+      # 2026-10-17 制裁の器に馬への措置(person_kind horse・kind 出走停止/再検査・cause・prize_suspended・suspension_days)。
+      #   ⛔上の段は健康の器が望む形だと途中で exit 0 するので別の段にした。冪等(足りないときだけ制約を作り直す)。
+      #   ⛔dry_run の便では流さない(dry_run の penalties.py は書かない= 新しい列が無くても動く)。
+      - name: migrate penalties schema
+        if: ${{ !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        env:
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+          PGSSLMODE: require
+        run: |
+          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 \
+            -U postgres.qgsnsdjvzzeazbazjlwa -d postgres \
+            -v ON_ERROR_STOP=1 -X -f pipeline/sql/penalties_horse_measures_20261017.sql
       - name: install health dependencies
         run: pip install -r cloud/requirements.txt
 
@@ -181,8 +193,14 @@ jobs:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
           DRY: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run || false }}
+          INPUT_START: ${{ inputs.start }}
+          INPUT_END: ${{ inputs.end }}
         run: |
-          if [ "$DRY" = "true" ]; then python cloud/penalties.py; else python cloud/penalties.py --apply; fi
+          # 2026-10-17 手押しの start/end を渡す(全期間の dry_run 用)。dry_run は 新版の件数を 種類×人の別×場 で出す(count 行)
+          args=()
+          if [ -n "$INPUT_START" ]; then args+=(--start "$INPUT_START"); fi
+          if [ -n "$INPUT_END" ]; then args+=(--end "$INPUT_END"); fi
+          if [ "$DRY" = "true" ]; then python cloud/penalties.py "${args[@]}"; else python cloud/penalties.py "${args[@]}" --apply; fi
 
       # 監査 A8(2026-09-24) 最終成功時刻(表 nar_job_heartbeat 'horse_health')。dry_run の便は書かない。⛔表が無くても落ちない
       - name: heartbeat
