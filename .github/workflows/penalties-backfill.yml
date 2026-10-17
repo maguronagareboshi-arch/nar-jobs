@@ -63,3 +63,19 @@ jobs:
         run: |
           args=(--start "$INPUT_START" --end "$INPUT_END")
           if [ "$DRY" = "true" ]; then python cloud/penalties.py "${args[@]}"; else python cloud/penalties.py "${args[@]}" --apply; fi
+
+      # 2026-10-17 制裁の X 用画像(cloud/penalty_image.py)。月ごとに上げて件数をログに出す。同じ中身は上げ直さない。⛔dry_run では上げない
+      - name: penalty image font cache
+        if: ${{ !inputs.dry_run }}
+        uses: actions/cache@v6
+        with:
+          path: fonts/BIZUDGothic-Bold.ttf
+          key: font-bizudgothic-bold-98a528b6b638463041968783cc0f63adaf4cdc26f5398afed68bab712d1113f3
+      - name: penalty image
+        if: ${{ !inputs.dry_run }}
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          INPUT_START: ${{ inputs.start }}
+          INPUT_END: ${{ inputs.end }}
+        run: python cloud/penalty_image.py --start "$INPUT_START" --end "$INPUT_END" --upload

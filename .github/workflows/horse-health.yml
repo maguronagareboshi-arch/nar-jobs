@@ -202,6 +202,28 @@ jobs:
           if [ -n "$INPUT_END" ]; then args+=(--end "$INPUT_END"); fi
           if [ "$DRY" = "true" ]; then python cloud/penalties.py "${args[@]}"; else python cloud/penalties.py "${args[@]}" --apply; fi
 
+      # 2026-10-17 制裁 1 件ごとの X 用画像(cloud/penalty_image.py)を公開バケット share の penalty/<id 先頭12字>.png へ。
+      #   既定= 直近 3 日・手押しの start/end があればその範囲。同じ中身は上げ直さない。⛔dry_run の便では上げない・落ちても便は赤くしない
+      - name: penalty image font cache
+        if: ${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        uses: actions/cache@v6
+        with:
+          path: fonts/BIZUDGothic-Bold.ttf
+          key: font-bizudgothic-bold-98a528b6b638463041968783cc0f63adaf4cdc26f5398afed68bab712d1113f3
+      - name: penalty image
+        if: ${{ !cancelled() && !(github.event_name == 'workflow_dispatch' && inputs.dry_run) }}
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          INPUT_START: ${{ inputs.start }}
+          INPUT_END: ${{ inputs.end }}
+        run: |
+          args=()
+          if [ -n "$INPUT_START" ]; then args+=(--start "$INPUT_START"); fi
+          if [ -n "$INPUT_END" ]; then args+=(--end "$INPUT_END"); fi
+          python cloud/penalty_image.py "${args[@]}" --upload
+
       # 監査 A8(2026-09-24) 最終成功時刻(表 nar_job_heartbeat 'horse_health')。dry_run の便は書かない。⛔表が無くても落ちない
       - name: heartbeat
         if: '!cancelled()'
