@@ -12,6 +12,7 @@
 
   python3 cloud/odds_drop.py --apply                 … 上げる
   python3 cloud/odds_drop.py --out latest.json       … 手元に書くだけ(上げない)
+  python3 cloud/odds_drop.py --today --apply         … 今日の分(最終 tick のあるレースだけ)を v1/odds-drop/today.json へ
   --date YYYY-MM-DD で実行日(JST)を指定。
 環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY(--out だけなら SUPABASE_ANON_KEY でも可)
 """
@@ -30,6 +31,7 @@ NS = (30, 20, 10, 5, 3)
 THRESH = 0.2
 SPARK_MIN = 40
 NAME = "odds-drop/latest.json"
+NAME_TODAY = "odds-drop/today.json"
 
 # nar-viewer js/data.js の VENUES の name→prefix と NAR_TRACK_ALIAS(帯広ば→obihiro)と同じ対応
 PREFIX = {"帯広": "obihiro", "門別": "monbetsu", "盛岡": "morioka", "水沢": "mizusawa", "浦和": "urawa",
@@ -184,6 +186,17 @@ def build(rest, today, now=None):
     return doc
 
 
+def build_today(rest, today, now=None):
+    """実行日だけ。build_day は最終 tick(f=true)のあるレースだけ数える。開催が無い日は races 0・horses []。"""
+    now = now or dt.datetime.now(JST)
+    ds = today.isoformat()
+    ticks, races, runs = fetch_day(rest, ds)
+    nr, nh, hs = build_day(ds, ticks, races, runs)
+    log("%s ticks=%d races=%d → %dR %d頭 載せる %d" % (ds, len(ticks), len(races), nr, nh, len(hs)))
+    return {"built": now.replace(microsecond=0).isoformat(),
+            "weeks": [{"key": "today", "from": ds, "to": ds, "races": nr, "runners": nh, "horses": hs}]}
+
+
 def count(week, n, x):
     k = str(n)
     return sum(1 for h in week["horses"] if k in h["b"] and drop(h["fo"], h["b"][k]) >= x - 1e-9)
@@ -193,6 +206,7 @@ def main(argv=None):
     ap = argparse.ArgumentParser()
     ap.add_argument("--apply", action="store_true", help="cond-stats/v1/odds-drop/latest.json へ上げる")
     ap.add_argument("--out", default="", help="手元に書くだけ(上げない)")
+    ap.add_argument("--today", action="store_true", help="今日の分だけ(v1/odds-drop/today.json)")
     ap.add_argument("--date", default="", help="実行日 JST(YYYY-MM-DD・既定= 今日)")
     a = ap.parse_args(argv)
     if not a.apply and not a.out:
@@ -203,7 +217,7 @@ def main(argv=None):
         raise SystemExit("SUPABASE_URL / SUPABASE_SERVICE_KEY が無い")
     today = dt.date.fromisoformat(a.date) if a.date else dt.datetime.now(JST).date()
     rest = cond_stats.Rest(base, key)
-    doc = build(rest, today)
+    doc = build_today(rest, today) if a.today else build(rest, today)
     data = json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
     for w in doc["weeks"]:
         log("%s %s〜%s %dR %d頭 載せる %d・10分前で25%%以上 %d" % (w["key"], w["from"], w["to"], w["races"],
@@ -214,7 +228,7 @@ def main(argv=None):
         log("書いた %s(%d bytes)" % (a.out, len(data)))
     if a.apply:
         cond_stats.ensure_bucket(rest)
-        cond_stats.upload(rest, NAME, data)
+        cond_stats.upload(rest, NAME_TODAY if a.today else NAME, data)
     return 0
 
 

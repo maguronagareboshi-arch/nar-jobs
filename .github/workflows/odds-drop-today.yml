@@ -1,0 +1,52 @@
+# 締め切り前にオッズが下がった馬の「今日」の分(2026-10-17)。実行日(JST)の最終 tick のあるレースだけで
+# 公開バケット cond-stats の v1/odds-drop/today.json へ上書きで上げる。開催が無い日も races 0 で書く。
+# 台本 cloud/odds_drop.py --today(計算は夜の odds-drop.yml の latest.json と同じ関数)。
+# ⛔本番 DB では REST の単純 select だけ。書くのは Storage の cond-stats だけ。
+# 既定= JST 11:05〜21:35 の 30 分おき(= UTC 2:05〜12:35)。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: odds-drop-today
+on:
+  schedule:
+    - cron: '5,35 2-12 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'dry run (no upload)'
+        required: false
+        default: false
+        type: boolean
+permissions:
+  contents: read
+concurrency:
+  group: odds-drop-today
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - name: unit tests
+        run: python3 -m unittest discover -s tests -p "test_odds_drop.py"
+      - name: odds drop today
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          DRY: ${{ github.event.inputs.dry_run }}
+        run: |
+          if [ "$DRY" = "true" ]; then
+            python3 cloud/odds_drop.py --today --out "$RUNNER_TEMP/odds-drop-today.json"
+            ls -l "$RUNNER_TEMP/odds-drop-today.json"
+          else
+            python3 cloud/odds_drop.py --today --apply
+            # 最終成功時刻(表 nar_job_heartbeat)。⛔表が無くても落ちない
+            python3 cloud/beat.py odds_drop_today ok
+          fi
+
+      # 失敗の印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py odds_drop_today fail 失敗

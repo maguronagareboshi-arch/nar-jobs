@@ -68,6 +68,37 @@ class TestBase(unittest.TestCase):
                          ("門別", "monbetsu", "ダ", 3, "ウマ", 1, 2, 3.0))
 
 
+class FakeRest:
+    def __init__(self, tables):
+        self.tables, self.calls = tables, []
+
+    def paged(self, path, order):
+        self.calls.append(path)
+        return list(self.tables.get(path.split("?")[0], []))
+
+
+class TestToday(unittest.TestCase):
+    def test_only_races_with_final_tick(self):
+        ticks = [tick(1, "15:20", {"3": "10.0"}), tick(2, "15:30", {"3": "5.0"}, True),
+                 {"id": 3, "track": "門別", "race_no": 6, "t": "15:50", "f": False, "w": {"1": "9.0"}}]
+        races = [{"track": "門別", "race_no": 5, "post_time": "1530"},
+                 {"track": "門別", "race_no": 6, "post_time": "1600"}]
+        rest = FakeRest({"nar_odds_ticks": ticks, "nar_races": races, "nar_runs": []})
+        doc = od.build_today(rest, dt.date(2026, 10, 17), now=dt.datetime(2026, 10, 17, 16, 0, tzinfo=od.JST))
+        self.assertEqual(len(doc["weeks"]), 1)
+        w = doc["weeks"][0]
+        self.assertEqual((w["key"], w["from"], w["to"], w["races"], w["runners"], len(w["horses"])),
+                         ("today", "2026-10-17", "2026-10-17", 1, 1, 1))
+        self.assertEqual(w["horses"][0]["r"], 5)
+        self.assertTrue(all("race_date=eq.2026-10-17" in c for c in rest.calls))
+
+    def test_no_races_day(self):
+        doc = od.build_today(FakeRest({}), dt.date(2026, 10, 19))
+        self.assertEqual(doc["weeks"], [{"key": "today", "from": "2026-10-19", "to": "2026-10-19",
+                                         "races": 0, "runners": 0, "horses": []}])
+        self.assertIn("built", doc)
+
+
 class TestWeeks(unittest.TestCase):
     def test_saturday(self):
         w = od.weeks(dt.date(2026, 10, 17))
