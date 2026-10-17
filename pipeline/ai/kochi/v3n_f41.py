@@ -59,6 +59,15 @@ def _asof_stats(key, day, x, W=365, nmin=20):
     return mu, np.where(sd > 0, sd, np.nan)
 
 
+def _seq(a):
+    """配列ならそのまま・空(None・NaN = 成績はあるがレースの表にまだ無い R のつなぎ)なら None"""
+    return a if isinstance(a, (list, tuple, np.ndarray)) else None
+
+
+def _ok(o):
+    return o is not None and not (isinstance(o, float) and o != o)
+
+
 def runs_frame(off):
     """公式の表 → 研究 v3n_f10k.build の R と同じ列の表(地方 14 場 + 中央・馬は 名前|生まれ年 でつなぐ)。"""
     import seq2_live as S2
@@ -67,9 +76,10 @@ def runs_frame(off):
     r = r[(r.track != '帯広ば') & ~r.finish_note.isin(CANCEL)].copy()
     ra = pd.read_parquet(off / 'races.parquet')
     ra = ra[ra.track != '帯広ば'].drop_duplicates(['track', 'race_date', 'race_no'])
-    ra['prize1'] = ra.prize_yen.map(lambda a: float(a[0]) / 100 if a is not None and len(a) else np.nan)   # KDS と同じ 100 円単位
+    ra['prize1'] = ra.prize_yen.map(lambda a: float(_seq(a)[0]) / 100 if _seq(a) is not None and len(_seq(a)) else np.nan)   # KDS と同じ 100 円単位
 
     def corner(c, k):   # 後ろから数えた角(k = 1 → 4 角・2 → 3 角・3 → 2 角・4 → 1 角)
+        c = _seq(c)
         if c is None or len(c) < k:
             return None
         return c[len(c) - k]['order']
@@ -84,9 +94,9 @@ def runs_frame(off):
     okf = fin.notna() & (fin > 0) & ~r.finish_note.isin(STOP | {'失格'})
     r['finish'] = fin.where(okf)
     r['prize'] = [np.nan if (a is None or len(a) == 0 or f != f) else (float(a[int(f) - 1]) / 100 if f <= len(a) else 0.0)
-                  for a, f in zip(r.prize_yen, r.finish)]
+                  for a, f in zip(r.prize_yen.map(_seq), r.finish)]
     for i in (1, 2, 3, 4):
-        r[f'c{i}'] = [S2.corner_pos(o, n) if o is not None else np.nan for o, n in zip(r[f'o{i}'], r.runner_number)]
+        r[f'c{i}'] = [S2.corner_pos(o, n) if _ok(o) else np.nan for o, n in zip(r[f'o{i}'], r.runner_number)]
     L = pd.DataFrame({'track': r.track, 'race_date': r.race_date, 'race': r.race_no.astype(float), 'umaban': r.runner_number.astype(float),
                       'hk': r.hk, 'src': 0.0, 'rid': r.track + '|' + r.race_date + '|' + r.race_no.astype(str),
                       'jockey': r.jockey.astype(str).str.strip().where(r.jockey.notna()), 'trainer': r.trainer.astype(str).str.strip().where(r.trainer.notna()),
