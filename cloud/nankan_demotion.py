@@ -11,7 +11,9 @@
       S0= 今日以前で最新の切替日(1/1 か 7/1)、S1= 今日より後の最初の切替日。
       馬の格付の基準日(asof)< S0 = まだ S0 の前の格= S0 に当てて pending(主催者の反映待ち)。
       asof >= S0 = S0 は反映済み= S1 に当てる。asof が S0 の一つ前の切替日より前(半年以上出ていない)の馬は出さない。
-  ⛔新しい線の適用が 7/1 の日付か「7月に始まる開催」からかは未確認(BACKTEST の外れの型)。
+  新しい線は「初日が 7/1(1/1)以後の開催」から効き、級はその開催の算定日(前々開催の最終日)の点で決まる
+  (2026-10-17 確認= docs/yarazu-nankan/check.md §2・この定義で 2024-07〜2026-07 の 5 回とも 96〜98% 一致)。
+  7 月にまたがる開催(6 月末に始まる大井・船橋)の 7/1 以後のレースは前の級のまま= ここでは pending(反映待ち)と出る。表示はそれで合っている。
 
   python cloud/nankan_demotion.py --dry-run [--out x.csv]   # DB を読む→CSV と場ごとの行数だけ(書かない)
   python cloud/nankan_demotion.py --apply                   # upsert→古い asof の行を消す→heartbeat 'nankan_demotion'
