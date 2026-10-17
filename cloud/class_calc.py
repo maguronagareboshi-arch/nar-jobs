@@ -433,7 +433,8 @@ def fetch_obihiro(url, key, since):
 #  加算率 ④: 新規馬(転入時)= 2・3歳の中央/海外 60%・4歳以上の中央/海外 30%・4歳以上の他場地方 50%(2・3歳の他場は 100%)。
 #           在籍馬= 佐賀のＪＲＡ認定 30%(他場の認定 50%)・重賞 50%(佐賀記念/サマーチャンピオン 10%・2歳3歳重賞 30%)・
 #           九州産重賞とステップ 20%・2歳新馬戦= 令和2・3年度 50%/令和4年度 30%/令和5年度 20%/令和6年度以降 50%(各年度の要領)・他場遠征 10%・協賛金競走 20%(SAGA_KYOSAN_NAMES の名前だけ)。
-#           2歳3歳重賞 30% は「その日 3歳以下の馬が出た重賞」で判定(ロータスクラウン賞など名前に「３歳」が無い 3歳重賞・2026-10-17 新聞で確認)。
+#           2歳3歳重賞 30% は「出走馬が全員 3歳以下の重賞」で判定(races の field_max_age= nar_runs の生年から・saga_field_ages)。
+#           ロータスクラウン賞など名前に「３歳」が無い 3歳重賞のため(2026-10-17 新聞で確認)。nar_runs に出走馬が無い古いレースだけ名前で判定。
 #  減額 ③: 8月競馬= 3歳 50%減額(一般格編入)・4歳5歳 −50万円。1月= 6歳が2歳時ぶん・7歳が3歳時ぶん・8歳が4歳時ぶん。
 #           新規馬(入厩時)= 4歳 8〜12月 −50万 / 5歳 1〜7月 −50万・8〜12月 −100万 / 6歳 2歳時+100万 / 7歳 2・3歳時+100万 / 8歳以上 2・3・4歳時+100万。
 #  格付 (1): Ａ1 1,000万以上 / Ａ2 600万以上 / Ｂ 300万以上 / Ｃ1 150万以上 / Ｃ2 150万未満。2歳格・3歳格(3歳は 300万超で編入・1〜3月を除く・8月に一斉編入)。
@@ -471,6 +472,24 @@ def _thou(v):
     return int(v) // 1000 * 1000
 
 
+def saga_field_ages(url, key, rmap):
+    """佐賀の重賞ごとに出走馬の最高年齢(レースの年−生年)を rmap[(日, R)]["field_max_age"] に入れる。生年の無い馬は数えない。"""
+    q = urllib.parse.quote
+    dates = sorted({k[0] for k, r in rmap.items() if r.get("race_kind") == "重賞"})
+    got = defaultdict(list)
+    for i in range(0, len(dates), 40):
+        rows = sb_all(url, key, f"nar_runs?select=race_date,race_no,birth_date&track=eq.{q('佐賀')}"
+                                f"&race_date=in.({','.join(dates[i:i + 40])})")
+        for r in rows:
+            k = (str(r["race_date"])[:10], int(r["race_no"]) if r.get("race_no") is not None else None)
+            b = _date(r.get("birth_date"))
+            if k in rmap and b:
+                got[k].append(int(k[0][:4]) - b.year)
+    for k, ages in got.items():
+        rmap[k]["field_max_age"] = max(ages)
+    return rmap
+
+
 def saga_rate_resident(run, race, age=None):
     name = str((race or {}).get("race_name") or run.get("name") or "")
     kind = str((race or {}).get("race_kind") or "")
@@ -482,7 +501,8 @@ def saga_rate_resident(run, race, age=None):
             return 0.10, "佐賀記念等"
         if "九州産" in name:
             return 0.20, "九州産重賞"
-        if re.search(r"[２３]歳", name) or (age is not None and age <= 3):
+        fmax = (race or {}).get("field_max_age")
+        if (fmax <= 3) if fmax is not None else bool(re.search(r"[２３]歳", name)):
             return 0.30, "2歳3歳重賞"
         return 0.50, "重賞"
     if "九州産" in name and (kind in ("準重賞", "特別") or "チャレンジ" in name):
@@ -743,7 +763,7 @@ def fetch_saga(url, key, since):
     births = fill_births({c["code"]: c.get("birth_date") for c in codes}, codes, runs)
     races = sb_all(url, key, f"nar_races?select=race_date,race_no,race_name,race_kind&track=eq.{q('佐賀')}"
                              f"&race_date=gte.2022-11-01")
-    return led, births, entered, race_map(races)
+    return led, births, entered, saga_field_ages(url, key, race_map(races))
 
 
 def main_saga(a):
