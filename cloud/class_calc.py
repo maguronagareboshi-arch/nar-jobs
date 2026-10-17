@@ -510,6 +510,11 @@ def saga_rate_resident(run, race, age=None):
     d = _date(run.get("d"))
     if "認定" in name or "Ｊ認" in name:                  # 台帳の短い名前は「Ｊ認 ２歳－１組」
         return 0.30, "認定"
+    if "一発逆転ファイナル" in name:
+        # 2026-08 の「一発逆転ファイナルレース×ＳＡＧＡリベンジャーズ記者選抜」(Ｃ級・1着 100万)は主催者が 50% で数えている。
+        # 要領に記載なし= 実際の級で裏付け(ケンブリッジナイト 10/11・オーケーエンジェル 8/29 が全額だと Ｂ なのに Ｃ１ 出走・
+        # タートルインメイ 10/18 Ｃ２ 出走= 新聞 142.2万と一致)
+        return 0.50, "記者選抜"
     if kind == "重賞" or "Ｊｐｎ" in name or "Jpn" in name:
         if any(k in name for k in SAGA_LOW):
             return 0.10, "佐賀記念等"
