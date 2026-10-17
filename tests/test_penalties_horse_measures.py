@@ -188,3 +188,16 @@ class PeriodsTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class RideHorseTest(unittest.TestCase):
+    """2026-10-17 本文に馬番が無い人の行は、名簿(nar_runs)の側からその人の馬を 1 頭だけのときに入れる。"""
+    def test_roster_ride(self):
+        class C:
+            def get(self, path):
+                return [{"jockey": "望月洵", "trainer": "藤ケ崎", "race_no": 1, "runner_number": 3, "horse_name": "スラッシュコード"},
+                        {"jockey": "加藤聡", "trainer": "藤ケ崎", "race_no": 1, "runner_number": 5, "horse_name": "ローレルアイビー"}]
+        names = pen.roster(C(), "名古屋", "2026-10-15")
+        self.assertEqual(pen.ride_horse(names, "jockey", 1, "望月洵"), "スラッシュコード")
+        self.assertIsNone(pen.ride_horse(names, "trainer", 1, "藤ケ崎"))   # 2 頭= 決めない
+        self.assertIsNone(pen.ride_horse(names, "jockey", 2, "望月洵"))

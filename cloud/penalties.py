@@ -235,7 +235,7 @@ def roster(client, track, race_date):
     """
     rows = client.get("nar_runs?select=jockey,trainer,race_no,runner_number,horse_name"
                       "&track=eq.%s&race_date=eq.%s&limit=1000" % (q(track), q(race_date)))
-    jockeys, trainers, horses = set(), set(), {}
+    jockeys, trainers, horses, ride = set(), set(), {}, {}
     for r in rows:
         if r.get("jockey"):
             jockeys.add(tight(r["jockey"]))
@@ -248,7 +248,17 @@ def roster(client, track, race_date):
         name = tight(r.get("horse_name"))
         if name:
             horses[key] = name
-    return {"jockey": jockeys, "trainer": trainers, "horse": horses}
+            # 2026-10-17 本文に馬番が無い行(「騎手◯◯は△△号に騎乗」)= そのレースでその人が乗った/出した馬を名簿の側から
+            for role in ("jockey", "trainer"):
+                if r.get(role):
+                    ride.setdefault((role, key[0], tight(r[role])), set()).add(name)
+    return {"jockey": jockeys, "trainer": trainers, "horse": horses, "ride": ride}
+
+
+def ride_horse(names, person_kind, race_no, person_name):
+    """そのレースでその人の馬が名簿に 1 頭だけなら馬名。⛔2 頭以上(調教師の複数出走)・居ない= None(推測しない)。"""
+    got = (names or {}).get("ride", {}).get((person_kind, race_no, person_name)) or set()
+    return next(iter(got)) if len(got) == 1 else None
 
 
 # ---------------------------------------------------------------- 読み取り(純関数)
@@ -556,6 +566,8 @@ def read_penalties(track, race_date, segments, names, source_url, source_hash):
                 else:
                     person_kind, name = found
                     kind = kind_of(sentence)
+                    if not horse and no:
+                        horse = ride_horse(names, person_kind, no, name)
                 since, through, days = periods(sentence, race_date)
                 if horse:
                     stats["horse_named"] = stats.get("horse_named", 0) + 1
