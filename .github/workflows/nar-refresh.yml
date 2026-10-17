@@ -267,6 +267,23 @@ jobs:
           H=$(TZ=Asia/Tokyo date +%H%M)
           if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/horse_homonyms.py --apply || echo "⚠ 同名表の追記に失敗(続行)"; else echo "horse homonyms は朝の便だけ(JST $H)=スキップ"; fi
 
+      # 2026-10-17 nar_horses の first_date・last_date・runs と profiles の first_seen・last_seen を nar_runs から数え直す。
+      #   8/23 に一度だけ埋めて以後どの便も書いていなかった(8/27 で止まり)。直近 3 日に走った馬+全馬を 30 組に分けた今日の 1 組(1 組 約 4 千頭・軽い)。
+      #   ⛔列は変えない(AI 便の \copy)。heartbeat 'horse_dates'。落ちても続行。初回の全組は手で回す便 horse-dates-backfill.yml
+      - name: horse dates (morning only)
+        if: '!cancelled()'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+          PGSSLMODE: require
+        run: |
+          H=$(TZ=Asia/Tokyo date +%H%M)
+          if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then
+            PART=$(( 10#$(TZ=Asia/Tokyo date +%j) % 30 ))
+            if psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -X -v days=3 -v parts=30 -v part=$PART -v apply=1 -f pipeline/sql/horse_dates.sql; then python3 cloud/beat.py horse_dates ok "組 $PART" || true; else python3 cloud/beat.py horse_dates fail "数え直しに失敗" || true; echo "⚠ 馬の日付の数え直しに失敗(続行)"; fi
+          else echo "horse dates は朝の便だけ(JST $H)=スキップ"; fi
+
       # §38 1-C 南関東4場の「格」「格付ポイント」(主催者 nankankeiba の馬ページ・1.5秒/本)。直近2日に走った馬だけ=
       # 日次 100〜300 本・数分。**朝の便だけ**(分予算)。他場PCの fetch_nankan_points.py(大井だけ・chihou_meta)の置き換え
       - name: nankan points (morning only)
