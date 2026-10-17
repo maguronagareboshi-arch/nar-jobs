@@ -113,8 +113,8 @@ def runs_frame(off):
     nmj = j['horse_name_h'] if 'horse_name_h' in j else j['horse_name']
     j['race_date'] = j.race_date.astype(str).str[:10]
     fj = pd.to_numeric(j.finish, errors='coerce')
-    ps = j.passing.astype(str).str.split('-')
-    pc = {i: pd.to_numeric(ps.map(lambda a, i=i: a[len(a) - (5 - i)] if len(a) >= 5 - i else None), errors='coerce') for i in (1, 2, 3, 4)}
+    ps = j.passing.fillna('').astype(str).str.split('-')   # pandas 3 は空を NaN のまま残す = 先に '' にする
+    pc = {i: pd.to_numeric(ps.map(lambda a, i=i: a[len(a) - (5 - i)] if isinstance(a, list) and len(a) >= 5 - i else None), errors='coerce') for i in (1, 2, 3, 4)}
     J = pd.DataFrame({'track': j.place.astype(str), 'race_date': j.race_date, 'race': pd.to_numeric(j.race_no, errors='coerce').astype(float), 'umaban': -1.0,
                       'hk': nmj.str.strip() + '|' + j.birth_year.astype(int).astype(str), 'src': 1.0, 'rid': 'J|' + j.kb_race_id.astype(str),
                       'jockey': 'J:' + j.jockey.astype(str).str.strip(), 'trainer': None, 'age': np.nan,
@@ -350,6 +350,12 @@ def apply3(q3, s, rcode):
 
 # ================================================================ 直前便
 def prep(off, day, tracks, out, log=print):
+    """pandas 3(本番の直前便は pandas>=2.2 で 3.x が入る)の新しい文字の扱いを切って、研究と同じ pandas 2 の振る舞いで作る(10/17)"""
+    with pd.option_context('future.infer_string', False):
+        return _prep(off, day, tracks, out, log)
+
+
+def _prep(off, day, tracks, out, log=print):
     """直前便の頭: 公式の表から今日の出走馬(tracks)の元の値を out(npz)に。書けたらそのパス・無理なら None"""
     need = [Path(off) / f for f in ('runs.parquet', 'races.parquet', 'jra.parquet', 'jrah.parquet')]
     if not all(p.exists() for p in need):
