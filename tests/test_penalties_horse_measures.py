@@ -49,6 +49,25 @@ class FixtureShapeTest(unittest.TestCase):
                 if r["suspension_from"] and r["suspension_through"]:
                     self.assertLessEqual(r["suspension_from"], r["suspension_through"])
 
+    def test_detail_tail_has_no_page_head(self):
+        # 頁の頭(開催回の見出し「2026年度第14回…第2日目10月14日(水曜日)」)が detail の末尾に付かない
+        want_tail = {("名古屋", 3): "令和8年11月3日まで出走できない。", ("名古屋", 7): "令和8年11月3日まで出走できない。",
+                     ("名古屋", 10): "令和8年11月3日まで出走できない。", ("帯広ば", 10): "能力再検査を指示された。",
+                     ("園田", 4): "調教再検査となった。"}
+        for d in FX["days"]:
+            rows, _ = read_day(d["track"], d["race_date"])
+            for r in rows:
+                self.assertNotIn("年度第", r["detail"], r["detail"])
+                self.assertNotIn("曜日)", r["detail"], r["detail"])
+                # 「。」か、期間・理由の括弧書き「)」で終わる(⛔括弧書きの末尾は消さない)
+                self.assertTrue(r["detail"].endswith(("。", ")")), r["detail"])
+                tail = want_tail.get((d["track"], r["race_no"]))
+                if tail and r["person_kind"] == "horse":
+                    self.assertTrue(r["detail"].endswith(tail), r["detail"])
+        # 園田の括弧書きの期間は末尾に残る
+        rows, _ = read_day("園田", "2026-10-15")
+        self.assertTrue(pick(rows, "horse", "チョウカンセイ")["detail"].endswith("30日(令和8年10月16日~11月14日)"))
+
     def test_doubled_page_head_is_dropped(self):
         # 「競競走走成成績績表表2026/10/1509:30作成」(太字で字が 2 重)は頁の飾り
         for d in FX["days"]:

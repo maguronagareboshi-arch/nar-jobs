@@ -71,6 +71,11 @@ _PENALTY_HEAD = re.compile(r"^制裁")
 # 2026-10-17 太字の頁の頭は字が 2 重になる(「競競走走成成績績表表2026/10/1509:30作成」名古屋・帯広 実物)
 _FOOTNOTE = re.compile(r"^(?:競競走走成成績績表表|競走成績表)?\d{4}/\d{1,2}/\d{1,2}\s*\d{1,2}:\d{2}\s*作成$")
 _PAGE_NO = re.compile(r"^\d+/\s*\d+$")
+# 2026-10-17 頁の頭の開催回の見出し 2 行(名古屋 10/14・帯広 10/11 実物):
+#   「2026年度第14回愛知県競馬組合営第14回名古屋競馬」「8名722第2日目10月14日(水曜日)」
+#   ⛔脚注・頁番号の**直後**のときだけ落とす(本文の中の同じ形は落とさない)
+_MEET_HEAD = re.compile(r"^\d{4}年度第\d+回\S*$")
+_MEET_DAY = re.compile(r"^\S*第\d+日目\d{1,2}月\d{1,2}日\([日月火水木金土]曜日\)$")
 # §111b #1 公式の飾り。先頭の【制裁】「」と、末尾の」を落とす。⛔(…)は公式の文言なので落とさない
 _LEAD_MARK = re.compile(r"^(?:【制裁】|「|」)+")
 _TAIL_BACK = re.compile(r"^((?:\([^()]*\))+)」「")
@@ -267,6 +272,8 @@ def penalty_blocks(text):
             continue
         if broke and _PAGE_NO.match(line):
             continue                    # 脚注の直後の頁番号だけ飾りとして落とす
+        if broke and (_MEET_HEAD.match(line) or _MEET_DAY.match(line)):
+            continue                    # 脚注の直後の開催回の見出しも飾り(broke のまま= 続きの「制裁」はつなぐ)
         if _PENALTY_HEAD.match(line):
             rest = line[len("制裁"):]
             if cur is not None and broke:

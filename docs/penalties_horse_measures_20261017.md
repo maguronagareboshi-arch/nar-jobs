@@ -15,15 +15,27 @@ detail(期間の戻し)と kind が変わると penalty_id が変わるので、
 id が新旧で同じ行は upsert で parser_version が 1.3 に上書き済みなので消えない。
 新版で 0 行になった (場, 日) の旧版の行も消える(sources の行はある)。
 
+埋め直しの便= `.github/workflows/penalties-backfill.yml`(手押し・start/end・dry_run 既定 true)。
+psql で `-v start=2026-01-01 -v end=2026-10-17` を付けて流す。⛔① の件数を見てから ② を流す(1 本の transaction で)。
+
 ```sql
--- :start / :end は埋め直した開催日の範囲(例 2026-01-01 / 2026-10-17)
+-- ① 消す前に数える(場ごと)
+select p.track, count(*) as old_rows
+  from public.nar_penalties p
+  join public.nar_penalty_sources s on s.track = p.track and s.race_date = p.race_date
+ where s.parser_version = 'penalties-1.3'
+   and p.parser_version <> 'penalties-1.3'
+   and p.race_date between :'start'::date and :'end'::date
+ group by p.track order by p.track;
+
+-- ② 消す(条件は ① と同じ・範囲は start/end で絞る)
+begin;
 delete from public.nar_penalties p
  using public.nar_penalty_sources s
  where s.track = p.track and s.race_date = p.race_date
    and s.parser_version = 'penalties-1.3'
    and p.parser_version <> 'penalties-1.3'
    and p.race_date between :'start'::date and :'end'::date;
+-- 消えた件数が ① の合計と同じなら commit・違えば rollback
+commit;
 ```
-
-先に件数だけ見るときは `delete` を `select count(*) from public.nar_penalties p using …` ではなく
-`select count(*) from public.nar_penalties p join public.nar_penalty_sources s on s.track = p.track and s.race_date = p.race_date where …`(条件は同じ)で。

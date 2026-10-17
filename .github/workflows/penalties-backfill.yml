@@ -1,0 +1,65 @@
+# 2026-10-17 制裁(cloud/penalties.py)の埋め直し専用の手押し便。⛔schedule なし。
+# 期間を決めて読み直す。dry_run(既定)は書かずに 新版の件数を 種類×人の別×場 で出す(count 行)。
+# 旧版の行の消し方は docs/penalties_horse_measures_20261017.md(⛔この便では消さない)。
+name: penalties-backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      start:
+        description: '開催日の下限（YYYY-MM-DD）'
+        required: true
+        type: string
+      end:
+        description: '開催日の上限（YYYY-MM-DD）'
+        required: true
+        type: string
+      dry_run:
+        description: '書かずに件数だけ出す（器の SQL も流さない）'
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  # horse-health とは別の group(毎日の便を止めない)。埋め直しどうしは 1 本ずつ
+  group: penalties-backfill
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    # PDF 1 本 十数秒。長い期間は月ごとに分けて押す
+    timeout-minutes: 330
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+
+      # 器(horse-health.yml の migrate penalties schema と同じ流し方)。冪等。⛔dry_run では流さない
+      - name: migrate penalties schema
+        if: ${{ !inputs.dry_run }}
+        env:
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+          PGSSLMODE: require
+        run: |
+          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 \
+            -U postgres.qgsnsdjvzzeazbazjlwa -d postgres \
+            -v ON_ERROR_STOP=1 -X -f pipeline/sql/penalties_horse_measures_20261017.sql
+
+      - name: install dependencies
+        run: pip install -r cloud/requirements.txt
+
+      - name: penalties backfill
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          DRY: ${{ inputs.dry_run }}
+          INPUT_START: ${{ inputs.start }}
+          INPUT_END: ${{ inputs.end }}
+        run: |
+          args=(--start "$INPUT_START" --end "$INPUT_END")
+          if [ "$DRY" = "true" ]; then python cloud/penalties.py "${args[@]}"; else python cloud/penalties.py "${args[@]}" --apply; fi
