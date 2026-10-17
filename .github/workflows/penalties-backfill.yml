@@ -19,6 +19,11 @@ on:
         required: true
         default: true
         type: boolean
+      images_only:
+        description: 'X 用の画像だけ作る（PDF を読み直さない・dry_run は false で）'
+        required: false
+        default: false
+        type: boolean
 
 concurrency:
   # horse-health とは別の group(毎日の便を止めない)。埋め直しどうしは 1 本ずつ
@@ -41,7 +46,7 @@ jobs:
 
       # 器(horse-health.yml の migrate penalties schema と同じ流し方)。冪等。⛔dry_run では流さない
       - name: migrate penalties schema
-        if: ${{ !inputs.dry_run }}
+        if: ${{ !inputs.dry_run && !inputs.images_only }}
         env:
           PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
           PGSSLMODE: require
@@ -54,6 +59,7 @@ jobs:
         run: pip install -r cloud/requirements.txt
 
       - name: penalties backfill
+        if: ${{ !inputs.images_only }}
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
