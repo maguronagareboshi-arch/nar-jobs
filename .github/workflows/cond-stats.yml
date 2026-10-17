@@ -2,6 +2,7 @@
 # 台本 cloud/cond_stats.py。約束の正本= nar-site research/site-boost-20261015/SPEC-condstats.md。
 # ⛔本番 DB では REST の単純 select だけ(場ごと)。書くのは Storage の cond-stats だけ(DB に書かない・無ければ初回に公開・JSON だけ・5MB までで作る= 10/15 ユーザー了承)。
 # 既定= 毎朝 JST 05:40(= UTC 20:40)。前日までの 1 年・3 年。
+# 後ろの手順で馬場差の全期間ファイル(cloud/baba_hist.py → cond-stats/v1/baba-hist/)も上げる(2026-10-17)。
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
 name: cond-stats
 on:
@@ -11,6 +12,11 @@ on:
     inputs:
       dry_run:
         description: 'dry run (no upload)'
+        required: false
+        default: false
+        type: boolean
+      baba_full:
+        description: 'baba-hist full history only (skip cond stats)'
         required: false
         default: false
         type: boolean
@@ -26,8 +32,11 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - name: unit tests
-        run: python3 -m unittest discover -s tests -p "test_cond_stats.py"
+        run: |
+          python3 -m unittest discover -s tests -p "test_cond_stats.py"
+          python3 -m unittest discover -s tests -p "test_baba_hist.py"
       - name: cond stats
+        if: github.event.inputs.baba_full != 'true'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -40,6 +49,21 @@ jobs:
             python3 cloud/cond_stats.py --apply
             # 最終成功時刻(表 nar_job_heartbeat)。⛔表が無くても落ちない
             python3 cloud/beat.py cond_stats ok
+          fi
+
+      # 馬場差の全期間ファイル(持ちタイム表の馬場差・補正タイム)。cond-stats/v1/baba-hist/<prefix>.json
+      # 毎朝は直近 14 日だけ組む(確定済みは据え置き)。手動便の baba_full で全期間(2014〜)を組む
+      - name: baba hist
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          FULL: ${{ github.event.inputs.baba_full }}
+        run: |
+          if [ "$FULL" = "true" ]; then
+            python3 cloud/baba_hist.py --apply --full
+          else
+            python3 cloud/baba_hist.py --apply
           fi
 
       # 失敗の印(表 nar_job_heartbeat)。⛔表が無くても落ちない
