@@ -432,14 +432,23 @@ def fetch_obihiro(url, key, since):
 # 番組賞金= 初出走からの通算(1〜5着本賞金・付加賞除く)に、次の率と減額を重ねた**状態機械**(馬ごとに時系列で再現)。
 #  加算率 ④: 新規馬(転入時)= 2・3歳の中央/海外 60%・4歳以上の中央/海外 30%・4歳以上の他場地方 50%(2・3歳の他場は 100%)。
 #           在籍馬= 佐賀のＪＲＡ認定 30%(他場の認定 50%)・重賞 50%(佐賀記念/サマーチャンピオン 10%・2歳3歳重賞 30%)・
-#           九州産重賞とステップ 20%・2歳新馬戦= 令和2・3年度 50%/令和4年度 30%/令和5年度 20%/令和6年度以降 50%(各年度の要領)・他場遠征 10%・協賛金競走 20%(⚠名前で判別できず=100%)。
+#           九州産重賞とステップ 20%・2歳新馬戦= 令和2・3年度 50%/令和4年度 30%/令和5年度 20%/令和6年度以降 50%(各年度の要領)・他場遠征 10%・協賛金競走 20%(SAGA_KYOSAN_NAMES の名前だけ)。
+#           2歳3歳重賞 30% は「その日 3歳以下の馬が出た重賞」で判定(ロータスクラウン賞など名前に「３歳」が無い 3歳重賞・2026-10-17 新聞で確認)。
 #  減額 ③: 8月競馬= 3歳 50%減額(一般格編入)・4歳5歳 −50万円。1月= 6歳が2歳時ぶん・7歳が3歳時ぶん・8歳が4歳時ぶん。
 #           新規馬(入厩時)= 4歳 8〜12月 −50万 / 5歳 1〜7月 −50万・8〜12月 −100万 / 6歳 2歳時+100万 / 7歳 2・3歳時+100万 / 8歳以上 2・3・4歳時+100万。
 #  格付 (1): Ａ1 1,000万以上 / Ａ2 600万以上 / Ｂ 300万以上 / Ｃ1 150万以上 / Ｃ2 150万未満。2歳格・3歳格(3歳は 300万超で編入・1〜3月を除く・8月に一斉編入)。
-#  ⚠近似: ①転出/遠征の区別= 佐賀の走の間が 150 日以内なら遠征 ②8月競馬= 8/1・1月= 1/1 ③3歳の 50% は 8/1 に在籍3歳全頭
+#  遠征/転出(チ)(ヌ): 他場の走の調教師(runs.trn)が直前の佐賀の走の調教師と同じなら遠征 10%・違えば転出(戻ったら新規馬)。
+#           trn が無い走だけ近似= 佐賀の走の間が 150 日以内なら遠征。
+#  3歳の一般編入 ②(ロ): 8/1 に在籍3歳全頭を 50%減額。8/1 より後に 3歳戦(cls に「３歳」)で得た分は、その年に 3歳戦でない級を
+#           初めて走る前に 50%減額(1頭1回)。8/1 より後の転入馬の転入前の換算分には掛けない(2026-10-17 新聞: ゲットザフェイム・ロジサビアーレ)。
+#  千円未満: SAGA_ROUND="run"= 1走ごと・減額ごとに切捨て / "total"= 円のまま足し引きし、格付と出力の時だけ切捨て(新聞 99 頭で決めた)。
+#  ⚠近似: ②8月競馬= 8/1・1月= 1/1
 #         ④重賞/認定/新馬/九州産は nar_races の名前と種別で判定(他場の走は台帳の短い名前だけ)
 SAGA_AWAY_DAYS = 150
 SAGA_LOW = ("佐賀記念", "サマーチャンピオン")
+# (ヘ) 協賛金拠出競走 20%: 原文に競走名は無い。新聞の値で確かめた名前だけ(2026-03-22 佐賀いちごさん賞・2026-10-17 新聞)
+SAGA_KYOSAN_NAMES = ("いちごさん",)
+SAGA_ROUND = "total"
 
 
 def saga_lines(system):
@@ -462,7 +471,7 @@ def _thou(v):
     return int(v) // 1000 * 1000
 
 
-def saga_rate_resident(run, race):
+def saga_rate_resident(run, race, age=None):
     name = str((race or {}).get("race_name") or run.get("name") or "")
     kind = str((race or {}).get("race_kind") or "")
     d = _date(run.get("d"))
@@ -473,7 +482,7 @@ def saga_rate_resident(run, race):
             return 0.10, "佐賀記念等"
         if "九州産" in name:
             return 0.20, "九州産重賞"
-        if re.search(r"[２３]歳", name):
+        if re.search(r"[２３]歳", name) or (age is not None and age <= 3):
             return 0.30, "2歳3歳重賞"
         return 0.50, "重賞"
     if "九州産" in name and (kind in ("準重賞", "特別") or "チャレンジ" in name):
@@ -481,6 +490,8 @@ def saga_rate_resident(run, race):
         return 0.20, "九州産ステップ"
     if "九州馬主協会" in name or "九州軽種馬協会" in name:
         # (ヘ) 九州馬主協会及び九州軽種馬協会の協賛金拠出競走 20%(名前に協会名があるものだけ。他の協賛は名前で判別できない)
+        return 0.20, "協賛金"
+    if any(k in name for k in SAGA_KYOSAN_NAMES):
         return 0.20, "協賛金"
     if "新馬" in name and d:
         # 2歳新馬戦の率は、その年度の要領どおり(2026-09-26 原文で確認・BACKTEST-demotion-saga-20260926.md):
@@ -537,11 +548,13 @@ def saga_state(runs, birth, asof, lag, races, trace=False):
     events.sort(key=lambda t: (t[1], 0 if t[0] != "run" else 1))
     value, by_age, removed = 0, Counter(), set()
     resident, pending, labels = False, [], Counter()
-    last_saga = None
+    last_saga, last_trn = None, None
+    y3_after, y3_done, aug3 = 0, False, set()   # 8/1 減額を受けずに 8 月以後の 3歳戦で得た分・一般編入の減額済み・8/1 減額を受けた年
+    rnd = _thou if SAGA_ROUND == "run" else (lambda v: v)
 
     def add(amount, a, label):
         nonlocal value
-        amount = _thou(amount)
+        amount = rnd(amount)
         if amount <= 0:
             return
         value += amount
@@ -550,7 +563,7 @@ def saga_state(runs, birth, asof, lag, races, trace=False):
 
     def cut(amount):
         nonlocal value
-        value = max(0, value - _thou(amount))
+        value = max(0, value - rnd(amount))
 
     def next_saga_after(d):
         for x in saga_dates:
@@ -568,6 +581,7 @@ def saga_state(runs, birth, asof, lag, races, trace=False):
         if kind == "aug":
             if resident and a == 3:
                 cut(value * 0.5)
+                aug3.add(d.year)
             elif resident and a in (4, 5):
                 cut(500_000)
             continue
@@ -588,12 +602,24 @@ def saga_state(runs, birth, asof, lag, races, trace=False):
                     cut(sum(by_age[x] for x in ages if x not in removed) + 1_000_000)
                     removed.update(ages)
                 resident = True
-            rate, label = saga_rate_resident(r, races.get(_rkey(r)))
+            is3 = "３歳" in str(r.get("cls") or "")
+            if y3_after and not is3 and r.get("cls") and not y3_done:
+                cut(y3_after * 0.5)                   # ②(ロ) 8/1 減額を受けていない 3歳の一般編入 50%減額(翌年の初戦でも)
+                y3_done = True
+                y3_after = 0
+            rate, label = saga_rate_resident(r, races.get(_rkey(r)), a)
+            before = value
             add(prize * rate, a, label)
+            if a == 3 and d.month >= 8 and is3 and d.year not in aug3 and not y3_done:
+                y3_after += value - before
             last_saga = d
+            last_trn = r.get("trn") or last_trn
         else:
-            nx = next_saga_after(d)
-            away = resident and last_saga and nx and (nx - last_saga).days <= SAGA_AWAY_DAYS
+            if r.get("trn") and last_trn:
+                away = resident and r.get("trn") == last_trn
+            else:
+                nx = next_saga_after(d)
+                away = resident and last_saga and nx and (nx - last_saga).days <= SAGA_AWAY_DAYS
             if away:
                 rate = 0.50 if "認定" in str(r.get("name") or "") else 0.10
                 add(prize * rate, a, "遠征")
@@ -617,6 +643,9 @@ def saga_state(runs, birth, asof, lag, races, trace=False):
             cut(sum(by_age[x] for x in ages if x not in removed) + 1_000_000)
         if trace:
             print(f"  (転入したら) value {value:>10,}")
+    if SAGA_ROUND != "run":
+        value = _thou(value)
+        by_age = Counter({k: _thou(v) for k, v in by_age.items()})
     return value, by_age, resident, labels
 
 
