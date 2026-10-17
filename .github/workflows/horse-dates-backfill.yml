@@ -1,0 +1,41 @@
+# 2026-10-17 nar_horses の first_date・last_date・runs と profiles の first_seen・last_seen を全馬ぶん数え直す初回便。⛔手で回すだけ(cron なし)。
+# SQL= pipeline/sql/horse_dates.sql を 30 組に分けて 1 組ずつ流す(1 組 約 4 千頭・組の間に 5 秒休む= 本番 DB に重くしない)。
+# 以後の毎朝は nar-refresh.yml の horse dates 段(直近 3 日+日替わりの 1 組)。
+# ・confirm が文字列 apply でなければ数を出すだけ(書かない= 各組 rollback)。
+name: horse-dates-backfill
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 本番へ書くときだけ apply と打つ(それ以外は数を出すだけ)
+        required: false
+        type: string
+        default: ''
+
+concurrency:
+  group: horse-dates
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: recount all parts
+        env:
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+          PGSSLMODE: require
+          IN_CONFIRM: ${{ inputs.confirm }}
+        run: |
+          set -o pipefail
+          APPLY=0; if [ "$IN_CONFIRM" = "apply" ]; then APPLY=1; fi
+          echo "apply=$APPLY"
+          for P in $(seq 0 29); do
+            psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -X -A -t -F ' ' -v days=3 -v parts=30 -v part=$P -v apply=$APPLY -f pipeline/sql/horse_dates.sql
+            sleep 5
+          done
