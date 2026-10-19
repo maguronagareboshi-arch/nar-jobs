@@ -13,7 +13,8 @@ _spec = importlib.util.spec_from_file_location("cond_stats", os.path.join(ROOT, 
 cs = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cs)
 
-PROTO_COLS = ["d", "r", "u", "h", "dist", "g", "w", "n", "f", "p", "j", "t", "s", "b", "st"]
+# 10/19 段2: 馬名の列 h と dict.h は抜いた(画面は rpc stats_horse_names で引く)
+PROTO_COLS = ["d", "r", "u", "dist", "g", "w", "n", "f", "p", "j", "t", "s", "b", "st"]
 PROTO_KEYS = ["v", "track", "from", "to", "n", "legend", "dict", "cols"]
 
 
@@ -61,6 +62,8 @@ class TestCondStats(unittest.TestCase):
         d1 = out["1y"][0]
         self.assertEqual(list(d1.keys()), PROTO_KEYS)
         self.assertEqual(list(d1["cols"].keys()), PROTO_COLS)
+        self.assertNotIn("h", d1["dict"])
+        self.assertNotIn("馬1-1", json.dumps(d1, ensure_ascii=False))
         self.assertEqual((d1["from"], d1["to"]), ("2025-10-15", "2026-10-14"))
         self.assertEqual(d1["n"], 4)                      # 2025-10-14(範囲外)と当日 2026-10-15 は入らない
         self.assertEqual(out["1y"][2], "2025-10-15")

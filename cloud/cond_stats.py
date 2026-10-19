@@ -6,7 +6,7 @@
   py -3.12 -X utf8 cloud/cond_stats.py --dry-run --out out/ --venue kochi   # 上げずに手元へ書く(読み取りだけ)
   python3 cloud/cond_stats.py --apply                                       # 便(cond-stats.yml)。全 15 場→cond-stats→照合
 
-約束の正本= nar-site research/site-boost-20261015/SPEC-condstats.md。形の元= proto/build_proto.py(列 d r u h dist g w n f p j t s b st)。
+約束の正本= nar-site research/site-boost-20261015/SPEC-condstats.md。形の元= proto/build_proto.py(列 d r u h dist g w n f p j t s b st・10/19 段2 で h を抜いた)。
 - 置き場: バケット cond-stats の v1/<prefix>_1y.json・<prefix>_3y.json・index.json(Cache-Control max-age=3600・上げたら取り直して sha256 照合)。
 - 期間: 1y= 前日から 365 日・3y= 前日から 1095 日(どちらも前日まで= 当日は入れない)。日付は JST。
 - 走数から外す: 出走取消・競走除外・1 着の無いレース(不成立)の全走。競走中止は入れる。
@@ -40,10 +40,11 @@ VENUES = [("obihiro", "帯広ば", "帯広"), ("monbetsu", "門別", "門別"), 
           ("ooi", "大井", "大井"), ("kawasaki", "川崎", "川崎"), ("kanazawa", "金沢", "金沢"),
           ("kasamatsu", "笠松", "笠松"), ("nagoya", "名古屋", "名古屋"), ("sonoda", "園田", "園田"),
           ("himeji", "姫路", "姫路"), ("kochi", "高知", "高知"), ("saga", "佐賀", "佐賀")]
-COLS = ["d", "r", "u", "h", "dist", "g", "w", "n", "f", "p", "j", "t", "s", "b", "st"]
+COLS = ["d", "r", "u", "dist", "g", "w", "n", "f", "p", "j", "t", "s", "b", "st"]
 DROP_NOTES = ("出走取消", "競走除外")
 LEGEND = {"d": "from からの日数", "f": ">0 着順 / -2-i = fn[i]", "st": "0逃げ 1先行 2差し 3追込 -1不明(horse.js LEG)",
-          "辞書列": "h,g,j,t,s,b は番号(-1=空)"}
+          "辞書列": "g,j,t,s,b は番号(-1=空)",
+          "馬名": "入れない(10/19 データ持ち出し対策 段2・画面は rpc stats_horse_names で引く)"}
 
 
 def log(msg):
@@ -134,7 +135,7 @@ def build_doc(track, d_from, d_to, races, runs, ped):
     rmap = {(r["race_date"], r["race_no"]): r for r in races}
     lc = {k: last_corner_map(r.get("corners")) for k, r in rmap.items()}
     base = d_from
-    dH, dJ, dT, dS, dB, dG, dN = Dic(), Dic(), Dic(), Dic(), Dic(), Dic(), Dic()
+    dJ, dT, dS, dB, dG, dN = Dic(), Dic(), Dic(), Dic(), Dic(), Dic()
     cols = {k: [] for k in COLS}
     for x in runs:
         key = (x["race_date"], x["race_no"])
@@ -143,7 +144,6 @@ def build_doc(track, d_from, d_to, races, runs, ped):
         cols["d"].append((dt.date.fromisoformat(x["race_date"]) - base).days)
         cols["r"].append(x["race_no"])
         cols["u"].append(x["runner_number"])
-        cols["h"].append(dH(x["horse_name"]))
         cols["dist"].append(rc["distance_m"] if rc else None)
         cols["g"].append(dG(rc["going"] if rc else None))
         cols["w"].append(x["gate"])
@@ -159,7 +159,7 @@ def build_doc(track, d_from, d_to, races, runs, ped):
         cols["st"].append(leg(p))
     return {"v": 1, "track": track, "from": d_from.isoformat(), "to": d_to.isoformat(), "n": len(runs),
             "legend": LEGEND,
-            "dict": {"h": dH.names, "g": dG.names, "j": dJ.names, "t": dT.names, "s": dS.names, "b": dB.names,
+            "dict": {"g": dG.names, "j": dJ.names, "t": dT.names, "s": dS.names, "b": dB.names,
                      "fn": dN.names},
             "cols": cols}
 
