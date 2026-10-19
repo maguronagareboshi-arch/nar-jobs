@@ -1023,6 +1023,11 @@ def tokai_jra_add(trk, when):
     return TOKAI_JADD_OLD if (trk == "名古屋" and when is not None and when < TOKAI_FY2026) else 700_000
 
 
+def tokai_cut_amt(trk, value, rate):
+    """3歳一斉編入の控除額。名古屋は千円未満切り上げ(公式の履歴で確認)・笠松は従来どおり切り捨て"""
+    return -(-math.ceil(value * rate) // 1000) * 1000 if trk == "名古屋" else _thou(value * rate)
+
+
 def tokai_cut_rate(trk, origin, when):
     if trk == "名古屋" and when < TOKAI_FY2026 and origin in TOKAI_CUT_RATE_OLD:
         return TOKAI_CUT_RATE_OLD[origin]
@@ -1308,8 +1313,8 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
         nonlocal value, gained, won
         skip = young if "y" in TOKAI_V else (young or last_young)
         if "q" in TOKAI_V and not skip and entry_date:
-            # 笠松 10(6)ケ「千円未満の端数が生じた場合は切り上げる」。名古屋の要綱に端数の定めは無い=切り捨て
-            adj = -(-math.ceil(value * 0.25) // 1000) * 1000 if trk == "笠松" else _thou(value * 0.25)
+            # 笠松 10(6)ケ「千円未満の端数が生じた場合は切り上げる」。名古屋は要綱に定めが無いが、公式の番組賞金額の履歴(2025-19〜2026-14)で切り上げと確認
+            adj = -(-math.ceil(value * 0.25) // 1000) * 1000
             if not won and gained < adj:
                 value = max(0, value - (adj - gained))
         gained, won = 0, False
@@ -1382,7 +1387,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
             if home is None and prev_home == "笠松":
                 deferred.append((d, "hen"))
             if home and young and a == 3:
-                cut = min(_thou(value * tokai_cut_rate(home, origin, d)), TOKAI_CUT[origin]) if "e" in TOKAI_V else 0
+                cut = min(tokai_cut_amt(home, value, tokai_cut_rate(home, origin, d)), TOKAI_CUT[origin]) if "e" in TOKAI_V else 0
                 value = max(0, value - cut)
                 young = False
             if trace:
@@ -1397,7 +1402,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
             if home:
                 adjust(d, home)
             if "u" not in TOKAI_V and d.month in (9, 10) and home and young and a == 3:
-                cut = min(_thou(value * tokai_cut_rate(home, origin, d)), TOKAI_CUT[origin]) if "e" in TOKAI_V else 0
+                cut = min(tokai_cut_amt(home, value, tokai_cut_rate(home, origin, d)), TOKAI_CUT[origin]) if "e" in TOKAI_V else 0
                 value = max(0, value - cut)
                 young = False
             continue

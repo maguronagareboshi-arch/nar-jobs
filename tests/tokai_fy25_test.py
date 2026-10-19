@@ -22,7 +22,13 @@ def test_cut_rate():
     assert cc.tokai_cut_rate("笠松", "jra", D(2025, 10, 4)) == 0.20
 
 
+def test_cut_amt():
+    assert cc.tokai_cut_amt("名古屋", 593_000, 0.15) == 89_000   # 88,950 → 89,000(公式 ルナフェイズ)
+    assert cc.tokai_cut_amt("笠松", 593_000, 0.15) == 88_000
+
+
 if __name__ == "__main__":
     test_jra_add()
     test_cut_rate()
+    test_cut_amt()
     print("ok")
