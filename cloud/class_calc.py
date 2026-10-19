@@ -990,6 +990,7 @@ TOKAI_A_STEP = ((30_000_000, 15_000_000), (18_000_000, 10_000_000), (9_000_000, 
 TOKAI_CUT = {"native": 2_000_000, "local": 1_000_000, "jra": 700_000}
 TOKAI_CUT_RATE = {"native": 0.50, "local": 0.30, "jra": 0.20}
 TOKAI_Y2, TOKAI_Y3 = 4_500_000, 4_400_000
+TOKAI_Y3_OLD = 4_400_000
 TOKAI_Y3_2027 = 4_500_000   # §285-B 要領(名古屋 R8「2歳(2027年1月以降3歳)450万円未満」・笠松 5(1)オ「令和9年1月から450万円未満」)
 TOKAI_Y3_FROM = dt.date(2027, 1, 1)
 
@@ -1285,8 +1286,10 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
             v += int(os.environ.get("TOKAI_JADD", str(tokai_jra_add(trk, when, a))))
         return v
 
-    def a_step(v):
+    def a_step(v, when=None):
         for lo, val in TOKAI_A_STEP:
+            if when and when < TOKAI_FY2026 and lo == 4_500_000:
+                lo, val = TOKAI_Y3_OLD, TOKAI_Y3_OLD         # 令和7年度の Ａ級の段の底= 440万(公式の第6回〜: ベストフラワー 440)
             if v >= lo:
                 return val
         return v
@@ -1404,7 +1407,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
             value = fresh_value(before, trk, a, d)
             young = cur_young(d, value)
             if not young and value >= 4_500_000:
-                value = a_step(value)
+                value = a_step(value, d)
         if trace:
             print(f"  {d} {how} → {trk} value {value:>10,} young={young}")
         home, prev_home = trk, trk
@@ -1498,7 +1501,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
             value = fresh_value(rs, trk, a, asof)
             young = cur_young(asof, value)
             if not young and value >= 4_500_000:
-                value = a_step(value)
+                value = a_step(value, asof)
         entry_track = trk
         if trace:
             print(f"  (転入したら) value {value:>10,} young={young}")
