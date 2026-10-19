@@ -1215,16 +1215,31 @@ TOKAI_AREA = {"愛知": "名古屋", "笠松": "笠松", "岐阜": "笠松"}   #
 TOKAI_KS_BACK = 273   # 笠松 6(2) 再転入= 最後の岐阜所属の出走の翌日から 9 か月未満(≒273 日)
 
 
+JRA_ENTRY_CLASS = re.compile(r"勝クラス|未勝利|新馬|[0-9]勝")
+
+
 def tokai_affs(rs):
     """§290 各走の所属(名古屋/笠松/"他")。nar_runs.trainer_area(run["ta"])で決める。
     ta の無い走(2022 年以前・ＪＲＡの走)だけ従来の推定: 東海の場の走= 直前の東海の所属(無ければ走った場)、
     東海の外の走= 直前が東海所属で、次の東海の走までが TOKAI_AWAY_DAYS 以内なら遠征(所属のまま)・それ以外は「他」。"""
     out, prev, last_tk = [], None, None
     tk_dates = [_date(r.get("d")) for r in rs if r.get("tr") in TOKAI_TRACKS]
-    for r in rs:
+    jra_idx = [j for j, r in enumerate(rs) if _is_jra(r) and not r.get("ta")
+               and JRA_ENTRY_CLASS.search(unicodedata.normalize("NFKC", str(r.get("name") or "")))]
+    jra_out, grp = set(), []
+    for j in jra_idx + [None]:                     # 120 日以内に 2 走以上の固まりを転出とみなす(公式の第14回 サラサラヘアー 1 勝クラス 3 走→ 再格付け・カワテンマックス 1 走→ 遠征)
+        if j is not None and grp and (_date(rs[j].get("d")) - _date(rs[grp[-1]].get("d"))).days <= 120:
+            grp.append(j)
+            continue
+        if len(grp) >= 2:
+            jra_out |= set(grp)
+        grp = [j] if j is not None else []
+    for i, r in enumerate(rs):
         d = _date(r.get("d"))
         ta = r.get("ta")
-        if ta:
+        if i in jra_out:
+            a = "他"                                   # 中央の条件戦(勝クラス・未勝利)に続けて出た= 中央へ転出(1 走だけの交流は遠征)。戻ったら転入と同じ再格付け
+        elif ta:
             a = TOKAI_AREA.get(ta, "他")
         elif r.get("tr") in TOKAI_TRACKS:
             a = prev if prev in TOKAI_TRACKS else r.get("tr")
