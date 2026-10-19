@@ -1644,6 +1644,21 @@ def main_tokai(a):
     TOKAI_ADJ.update(tokai_adj_dates(races))
     log("調整日:", {k: [x.isoformat() for x in v if x.year >= 2025] for k, v in TOKAI_ADJ.items()},
         "3歳の一斉編入:", {y: d.isoformat() for y, d in TOKAI_HEN.items()} if "u" in TOKAI_V else "所属場の調整日")
+    if os.environ.get("TRACE") and not a.apply:   # 調査用: 指定の馬の計算経過だけ出す(書き込みなし)
+        names = os.environ["TRACE"].split(",")
+        for r in rows:
+            if r.get("horse_name") not in names:
+                continue
+            os.environ["TRACE"] = r["horse_name"]
+            runs = r.get("runs") or []
+            b = _date(births.get(r["code"]))
+            local = [x for x in runs if not x.get("jra") and x.get("fin") is not None]
+            tr = local[0].get("tr") if local and local[0].get("tr") in TOKAI_TRACKS else "名古屋"
+            runs[0]["_name"] = r["horse_name"]
+            c = tokai_calc(lines, runs, _date(a.today) if a.today else dt.datetime.now(JST).date(), TOKAI_LAG, b,
+                           (lambda d, b=b: d.year - b.year), races, TOKAI_PREFIX[tr])
+            print("結果", r["horse_name"], c.get("value"), c.get("cls"))
+        return 0
     if a.verify:
         lags = [a.lag] if a.lag is not None else [0, 3, 7]
         rep = verify_tokai(lines, rows, births, races, since, lags)
