@@ -1012,6 +1012,23 @@ TOKAI_BLOCKS = {}     # 場 → [(開催初日, 最終日)](tokai_adj_dates で�
 TOKAI_HEN = {}        # 年 → 3 歳の一斉編入日(読み方 u・tokai_adj_dates で作る。10 月の開催が見えるまでは無い)
 
 
+TOKAI_FY2026 = dt.date(2026, 4, 1)
+# 名古屋の令和7年度(2025)要綱の値= 公式の番組賞金額の履歴(nagoyakeiba.com/info/program/file/2025-19-1.pdf〜)と突き合わせて決めた
+#   中央歴の加算 40万(令和8年度は 70万)・3歳一斉編入の控除 中央歴 15%(令和8年度は 20%)。他の出所の率は未確認= 令和8年度と同じ
+TOKAI_JADD_OLD = 400_000
+TOKAI_CUT_RATE_OLD = {"jra": 0.15}
+
+
+def tokai_jra_add(trk, when):
+    return TOKAI_JADD_OLD if (trk == "名古屋" and when is not None and when < TOKAI_FY2026) else 700_000
+
+
+def tokai_cut_rate(trk, origin, when):
+    if trk == "名古屋" and when < TOKAI_FY2026 and origin in TOKAI_CUT_RATE_OLD:
+        return TOKAI_CUT_RATE_OLD[origin]
+    return TOKAI_CUT_RATE[origin]
+
+
 def tokai_adj_dates(races):
     """(track, date, no) → row の辞書から、場ごとの調整日= 6/9/12/3 月の最終開催日+1 を作る。
     ⚠公式は名古屋= 第7/13/19/26回の終了後・笠松= 月末開催の終了後。開催回の数え方が公式と一致しないので月で読む。
@@ -1222,7 +1239,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
     def next_any_track(i):
         return rs[i + 1].get("tr") if i + 1 < len(rs) else None
 
-    def fresh_value(before, trk, a):
+    def fresh_value(before, trk, a, when=None):
         """転入馬格付け= それまでの全収得賞金を trk の換算表(年齢 a の列)で換算 + 中央歴 70万"""
         v = 0
         for p in before:
@@ -1230,7 +1247,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
             v += _thou(int(p.get("prize") or 0) * rate)
         if any(_is_jra(p) for p in before) and "j" in TOKAI_V and \
                 ("z" not in TOKAI_V or any(_is_jra(p) and int(p.get("prize") or 0) > 0 for p in before)):
-            v += int(os.environ.get("TOKAI_JADD", "700000"))
+            v += int(os.environ.get("TOKAI_JADD", str(tokai_jra_add(trk, when))))
         return v
 
     def a_step(v):
@@ -1347,7 +1364,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
             pass
         else:                                          # 転入・移籍= 全収得を所属先の換算表で換算し直す
             origin = set_origin()
-            value = fresh_value(before, trk, a)
+            value = fresh_value(before, trk, a, d)
             young = cur_young(d, value)
             if not young and value >= 4_500_000:
                 value = a_step(value)
@@ -1365,7 +1382,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
             if home is None and prev_home == "笠松":
                 deferred.append((d, "hen"))
             if home and young and a == 3:
-                cut = min(_thou(value * TOKAI_CUT_RATE[origin]), TOKAI_CUT[origin]) if "e" in TOKAI_V else 0
+                cut = min(_thou(value * tokai_cut_rate(home, origin, d)), TOKAI_CUT[origin]) if "e" in TOKAI_V else 0
                 value = max(0, value - cut)
                 young = False
             if trace:
@@ -1380,7 +1397,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
             if home:
                 adjust(d, home)
             if "u" not in TOKAI_V and d.month in (9, 10) and home and young and a == 3:
-                cut = min(_thou(value * TOKAI_CUT_RATE[origin]), TOKAI_CUT[origin]) if "e" in TOKAI_V else 0
+                cut = min(_thou(value * tokai_cut_rate(home, origin, d)), TOKAI_CUT[origin]) if "e" in TOKAI_V else 0
                 value = max(0, value - cut)
                 young = False
             continue
@@ -1437,7 +1454,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
             young = cur_young(asof, value)
         else:
             origin = set_origin()
-            value = fresh_value(rs, trk, a)
+            value = fresh_value(rs, trk, a, asof)
             young = cur_young(asof, value)
             if not young and value >= 4_500_000:
                 value = a_step(value)
