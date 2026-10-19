@@ -1152,6 +1152,8 @@ def tokai_rate_resident(run, race, venue=None):
     kind = str((race or {}).get("race_kind") or "")
     venue = venue or str(run.get("tr") or "")
     hit = tokai_grade(venue, name)
+    if hit and kind == "普通" and re.search(r"[ＡＢＣ][０-９]+[ａ-ｃ]?$", name):
+        hit = None                                     # 「くろゆり賞抽選会実施記念Ｂ６」は一般格の競走(重賞のくろゆり賞ではない)
     grade, young = (hit if hit else (None, bool(re.search(r"[２３]歳", name))))
     if hit and kind not in ("重賞", "準重賞"):
         kind = "準重賞" if grade == "P" else "重賞"
@@ -1166,6 +1168,9 @@ def tokai_rate_resident(run, race, venue=None):
         return 0.50, "新馬"
     if kind == "重賞":
         if young:
+            d = _date(run.get("d"))
+            if "駿蹄賞" in name and d and TOKAI_FY2025 <= d < TOKAI_FY2026 and venue == "名古屋":
+                return 0.50, "駿蹄賞(令和7年度)"      # カワテンマックス: 公式の値(10000→調整後 7500)に合うのは 50%。令和8年度の要綱は 2歳3歳SP 40%
             return 0.40, "2歳3歳重賞"
         if grade == 1:
             return 0.60, "古馬SPⅠ"
