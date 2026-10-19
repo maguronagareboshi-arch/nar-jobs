@@ -1141,11 +1141,12 @@ def tokai_rate_resident(run, race, venue=None):
     grade, young = (hit if hit else (None, bool(re.search(r"[２３]歳", name))))
     if hit and kind not in ("重賞", "準重賞"):
         kind = "準重賞" if grade == "P" else "重賞"
+    both = name + " " + str(run.get("name") or "")   # 走の名前にだけ「Ｊ認」が付くことがある(セレクトゴールドなど)
     if _dg(name):
         return 0.30, "ダートグレード"
     if "重賞級" in name:
         return 0.30, "重賞級認定"
-    if "認定" in name or "Ｊ認" in name:
+    if "認定" in both or "Ｊ認" in both:
         return 0.40, "認定"
     if "新馬" in name:
         return 0.50, "新馬"
