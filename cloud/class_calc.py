@@ -1019,8 +1019,14 @@ TOKAI_JADD_OLD = 400_000
 TOKAI_CUT_RATE_OLD = {"jra": 0.15}
 
 
-def tokai_jra_add(trk, when):
-    return TOKAI_JADD_OLD if (trk == "名古屋" and when is not None and when < TOKAI_FY2026) else 700_000
+TOKAI_JADD_FROM = dt.date(2026, 1, 1)
+
+
+def tokai_jra_add(trk, when, a=None):
+    """中央歴の加算。名古屋は 2025 年中の転入(2歳より上)だけ 40万・それ以外は 70万(公式の第6/7/12/13/14回の一覧との突き合わせ・2026-10-20)"""
+    if trk == "名古屋" and when is not None and when < TOKAI_JADD_FROM and (a is None or a > 2):
+        return TOKAI_JADD_OLD
+    return 700_000
 
 
 def tokai_cut_amt(trk, value, rate):
@@ -1028,9 +1034,16 @@ def tokai_cut_amt(trk, value, rate):
     return -(-math.ceil(value * rate) // 1000) * 1000 if trk == "名古屋" else _thou(value * rate)
 
 
+TOKAI_FY2025 = dt.date(2025, 4, 1)
+TOKAI_CUT_NATIVE_2025 = 0.60   # 令和7年度の生え抜きの一斉編入= 60%(2025-10-04)。公式の第14回の一覧と 突き合わせて決めた(タクティカ 685→274 など 9 頭が一致・2026-10-20)
+
+
 def tokai_cut_rate(trk, origin, when):
-    if trk == "名古屋" and when < TOKAI_FY2026 and origin in TOKAI_CUT_RATE_OLD:
-        return TOKAI_CUT_RATE_OLD[origin]
+    if trk == "名古屋" and when < TOKAI_FY2026:
+        if origin in TOKAI_CUT_RATE_OLD:
+            return TOKAI_CUT_RATE_OLD[origin]
+        if origin == "native" and when >= TOKAI_FY2025:
+            return TOKAI_CUT_NATIVE_2025
     return TOKAI_CUT_RATE[origin]
 
 
@@ -1250,10 +1263,11 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
         v = 0
         for p in before:
             rate, _label = tokai_rate_entry(p, a, trk)
-            v += _thou(int(p.get("prize") or 0) * rate)
+            v += int(p.get("prize") or 0) * rate
+        v = _thou(round(v, 6))                     # 換算は全部足してから千円未満を切り捨てる(公式の一覧と 1〜5 千円ずれていた)
         if any(_is_jra(p) for p in before) and "j" in TOKAI_V and \
                 ("z" not in TOKAI_V or any(_is_jra(p) and int(p.get("prize") or 0) > 0 for p in before)):
-            v += int(os.environ.get("TOKAI_JADD", str(tokai_jra_add(trk, when))))
+            v += int(os.environ.get("TOKAI_JADD", str(tokai_jra_add(trk, when, a))))
         return v
 
     def a_step(v):
@@ -1366,7 +1380,9 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
         if how.startswith("再転入(9"):
             ks_reentry(a)
             young = cur_young(d, value)
-        elif how.startswith("再転入") or how.startswith("移籍(3"):
+        elif how.startswith("移籍(3"):
+            origin = "jra" if has_jra else "local"       # 値は引き継ぐが 3歳の一斉編入の控除は転入馬の率(公式の第14回 エイシンヒアカムズ 笠松→名古屋 1,342→939= 30%)
+        elif how.startswith("再転入"):
             pass
         else:                                          # 転入・移籍= 全収得を所属先の換算表で換算し直す
             origin = set_origin()
@@ -1451,6 +1467,10 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
             pending.append(r)
         if trace:
             print(f"  {d} run  {str(r.get('tr')):4} {str(r.get('ta') or '-'):4} {prize:>9,} → value {value:>10,} home={home} young={young} pend={len(pending)}")
+    if track and rs and home is not None and home != track:
+        # 笠松所属のまま名古屋の競走へ出る馬(その逆も)。公式の編成は移籍後の格付け= 転入と同じに全収得を所属先の換算表で換算し直す
+        #   (名古屋 6(3)・笠松 5(1)オ)。例: 3歳 10 月に笠松→名古屋= 笠松での一斉編入の控除は付かず 収得 100% で一般格(公式の第14回 ヨザクラブルース 480)
+        enter(len(rs), asof, track, age(asof))
     resident = home is not None
     if not resident and pending:                   # 今は東海の外= 東海へ転入したらの値
         a = age(asof)

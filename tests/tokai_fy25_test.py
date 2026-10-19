@@ -13,12 +13,17 @@ def test_jra_add():
     assert cc.tokai_jra_add("名古屋", D(2025, 12, 18)) == 400_000
     assert cc.tokai_jra_add("名古屋", D(2026, 4, 1)) == 700_000
     assert cc.tokai_jra_add("笠松", D(2025, 12, 18)) == 700_000
+    # 2026-10-20 公式の第6〜14回の一覧との突き合わせ: 2026-01-01 以降の転入と 転入時 2歳の馬は 70万・2025 年中に 3歳以上で転入した馬は 40万
+    assert cc.tokai_jra_add("名古屋", D(2025, 12, 23), 3) == 400_000
+    assert cc.tokai_jra_add("名古屋", D(2025, 12, 23), 2) == 700_000
+    assert cc.tokai_jra_add("名古屋", D(2026, 1, 3), 4) == 700_000
 
 
 def test_cut_rate():
     assert cc.tokai_cut_rate("名古屋", "jra", D(2025, 10, 4)) == 0.15
     assert cc.tokai_cut_rate("名古屋", "jra", D(2026, 10, 3)) == 0.20
-    assert cc.tokai_cut_rate("名古屋", "native", D(2025, 10, 4)) == 0.50
+    assert cc.tokai_cut_rate("名古屋", "native", D(2025, 10, 4)) == 0.60   # 公式の第14回 タクティカ 685→274 ほか 9 頭
+    assert cc.tokai_cut_rate("名古屋", "native", D(2026, 10, 3)) == 0.50
     assert cc.tokai_cut_rate("笠松", "jra", D(2025, 10, 4)) == 0.20
 
 
