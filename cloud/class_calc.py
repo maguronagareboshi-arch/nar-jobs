@@ -1664,6 +1664,8 @@ def main_tokai(a):
                 continue
             tr = last_tr if last_tr in TOKAI_TRACKS else "名古屋"
             age_at = (lambda d, b=b: d.year - b.year)
+            if os.environ.get("TRACE") and runs and r.get("horse_name") == os.environ.get("TRACE"):
+                runs[0]["_name"] = r.get("horse_name")
             c = tokai_calc(lines, runs, today, lag, b, age_at, races, TOKAI_PREFIX[tr])
             if c:
                 out.append({"code": r["code"], "calc": c})
