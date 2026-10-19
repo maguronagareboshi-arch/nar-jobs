@@ -1,0 +1,28 @@
+# 名古屋・笠松の番組賞金の計算を 1 頭ずつ追う調査用(手押しだけ・書き込みなし)
+name: tokai-trace
+on:
+  workflow_dispatch:
+    inputs:
+      horse:
+        description: 馬名(カンマ区切りで複数可)
+        required: true
+jobs:
+  trace:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install -r cloud/requirements.txt
+      - name: trace
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          HORSES: ${{ inputs.horse }}
+        run: |
+          for h in $(echo "$HORSES" | tr ',' ' '); do
+            echo "=== $h"
+            TRACE="$h" python cloud/class_calc.py --prefix tokai --since 2026-10-01 2>&1 | grep -v '^\[' | head -150
+          done
