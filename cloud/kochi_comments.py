@@ -277,7 +277,8 @@ def main(argv=None):
     if a.env:
         load_env(a.env)
     base = os.environ.get("SUPABASE_URL", "").rstrip("/") or NAR_URL
-    read_key = os.environ.get("SUPABASE_ANON_KEY", "") or NAR_ANON
+    # 段3(10/19): nar_runs は公開キーで読めなくなる= 管理用の鍵があればそれで読む
+    read_key = os.environ.get("SUPABASE_SERVICE_KEY", "") or os.environ.get("SUPABASE_ANON_KEY", "") or NAR_ANON
     write_key = os.environ.get("SUPABASE_SERVICE_KEY", "")
     if a.apply and not write_key:
         log("--apply には SUPABASE_SERVICE_KEY が要る(--env pipeline/.env.nar)")

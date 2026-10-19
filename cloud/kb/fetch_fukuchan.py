@@ -297,8 +297,9 @@ def official_runs(date):
     """nar_runs(公開 anon・読むだけ)→ {(R, 馬番): 馬名}。取れなければ None。"""
     q = (f"{NAR_URL}/rest/v1/nar_runs?track=eq.{urllib.parse.quote(TRACK)}"
          f"&race_date=eq.{date}&select=race_no,runner_number,horse_name&limit=1000")
+    key = os.environ.get("SUPABASE_SERVICE_KEY", "") or NAR_ANON   # 段3(10/19): nar_runs は公開キーで読めなくなる
     req = urllib.request.Request(q, headers={
-        "apikey": NAR_ANON, "Authorization": f"Bearer {NAR_ANON}", "Accept": "application/json"})
+        "apikey": key, "Authorization": f"Bearer {key}", "Accept": "application/json"})
     try:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as res:
             rows = json.loads(res.read())

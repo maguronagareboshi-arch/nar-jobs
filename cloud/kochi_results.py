@@ -445,7 +445,7 @@ def main():
     if a.env:
         load_env(a.env)
     nar_base = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    nar_key = os.environ.get("SUPABASE_ANON_KEY", "") or os.environ.get("SUPABASE_SERVICE_KEY", "")
+    nar_key = os.environ.get("SUPABASE_SERVICE_KEY", "") or os.environ.get("SUPABASE_ANON_KEY", "")   # 段3(10/19): 管理用の鍵を先に
     token = os.environ.get("KOCHI_WRITE_TOKEN", "")
     if not nar_base or not nar_key:
         log("SUPABASE_URL / SUPABASE_ANON_KEY が要る"); return 2

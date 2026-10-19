@@ -67,6 +67,8 @@ jobs:
           EOF
       - name: fukuchan fetch
         if: steps.reach.outcome == 'success'
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: python cloud/kb/fetch_fukuchan.py
       - name: fukuchan push
         if: steps.reach.outcome == 'success' && !cancelled()

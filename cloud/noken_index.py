@@ -658,7 +658,7 @@ def main():
     base = os.environ.get("SUPABASE_URL", "").rstrip("/")
     anon = os.environ.get("SUPABASE_ANON_KEY", "")
     service = os.environ.get("SUPABASE_SERVICE_KEY", "")
-    read_key = anon or service                       # 読みは anon で足りる(RLS で select 可)
+    read_key = service or anon                       # 段3(10/19): nar_runs は公開キーで読めなくなる= 管理用の鍵を先に
     chihou_url = os.environ.get("CHIHOU_URL", CHIHOU_URL).rstrip("/")
     chihou_key = os.environ.get("CHIHOU_ANON_KEY", CHIHOU_ANON)
     if not base or not read_key:

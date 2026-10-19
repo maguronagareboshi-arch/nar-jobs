@@ -341,7 +341,7 @@ def main():
     if a.check:
         if not (base and (anon or service)):
             log("--check には SUPABASE_URL / SUPABASE_ANON_KEY が要る"); return 2
-        check_join(rows, base, anon or service)
+        check_join(rows, base, service or anon)   # 段3(10/19): nar_runs は管理用の鍵で
     if not a.apply:
         log("(dry) 書いていません。--apply で upsert")
         return 0

@@ -15,7 +15,7 @@ from pathlib import Path
 import pandas as pd
 D = 'C:/Users/kouki/nankan_ai/v3/official/'
 URL = os.environ.get('SUPABASE_URL', 'https://qgsnsdjvzzeazbazjlwa.supabase.co').rstrip('/')
-KEY = os.environ.get('SUPABASE_ANON_KEY', '') or os.environ.get('SUPABASE_SERVICE_KEY', '')
+KEY = os.environ.get('SUPABASE_SERVICE_KEY', '') or os.environ.get('SUPABASE_ANON_KEY', '')   # 段3(10/19): nar_runs は管理用の鍵で
 if not KEY:
     _t = (Path(__file__).resolve().parents[1] / 'f5_scripts' / 'week_backfill.py').read_text(encoding='utf-8')
     KEY = ''.join(re.findall(r"'([^']*)'", _t.split('KEY = (')[1].split(')')[0]))
