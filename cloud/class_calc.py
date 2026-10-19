@@ -1014,7 +1014,8 @@ TOKAI_HEN = {}        # 年 → 3 歳の一斉編入日(読み方 u・tokai_adj_
 
 def tokai_adj_dates(races):
     """(track, date, no) → row の辞書から、場ごとの調整日= 6/9/12/3 月の最終開催日+1 を作る。
-    ⚠公式は名古屋= 第7/13/19/26回の終了後・笠松= 月末開催の終了後。開催回の数え方が公式と一致しないので月で読む。"""
+    ⚠公式は名古屋= 第7/13/19/26回の終了後・笠松= 月末開催の終了後。開催回の数え方が公式と一致しないので月で読む。
+    開催の月は終了日でなく開始日で読む(2026-09-29〜10-02 を終了日で読むと 10 月になり 9 月の調整が丸ごと抜けた)。"""
     days = defaultdict(set)
     for (tr, d, _no) in races:
         days[tr].add(_date(d))
@@ -1028,9 +1029,11 @@ def tokai_adj_dates(races):
                 blocks.append([d, d])
         TOKAI_BLOCKS[tr] = [(a, b) for a, b in blocks]
         last = {}
-        for a, b in blocks:                        # 開催の月= **終了日**の月(3/31 始まりの開催は 4 月= 新年度の第1回)
-            if b.month in (6, 9, 12, 3):
-                k = (b.year, b.month)
+        for a, b in blocks:                        # 開催の月= **開始日**の月(月末に始まり翌月初めに終わる開催が四半期末の開催: 9/29〜10/2 など)
+            if a.month == 3 and b.month == 4:      # 3/30・3/31 始まりで 4 月に終わる開催は新年度の第1回
+                continue
+            if a.month in (6, 9, 12, 3):
+                k = (a.year, a.month)
                 if k not in last or b > last[k]:
                     last[k] = b
         out[tr] = sorted(v + dt.timedelta(days=1) for v in last.values())
