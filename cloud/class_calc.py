@@ -1311,16 +1311,16 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
         for y in range(first.year, cutoff.year + 1):
             for md in (1, 4, 7, 10):
                 e = dt.date(y, md, 1)
-                if first < e < cutoff:
+                if first < e <= cutoff:
                     events.append(("adj", e, None))
     else:
         for tr, ds in TOKAI_ADJ.items():
             for e in ds:
-                if first < e < cutoff:
+                if first < e <= cutoff:
                     events.append(("adj", e, tr))
     if "u" in TOKAI_V:
         for e in TOKAI_HEN.values():
-            if first < e < cutoff:
+            if first < e <= cutoff:
                 events.append(("hen", e, None))
     events.sort(key=lambda t: (t[1], 0 if t[0] != "run" else 1))
     value = 0
