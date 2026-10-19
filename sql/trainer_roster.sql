@@ -54,6 +54,8 @@ create index if not exists nar_roster_moves_to_area on nar_roster_moves (to_area
 alter table nar_roster_moves enable row level security;
 drop policy if exists nar_roster_moves_read on nar_roster_moves;
 create policy nar_roster_moves_read on nar_roster_moves for select using (true);
+-- 画面が読む 3 表は合鍵の許可をここで書く(2026-10-19 段1c で新しい表に自動で付かなくなったため)
+grant select on nar_trainers, nar_trainer_roster, nar_roster_moves to anon, authenticated;
 
 -- 略称の確定(便が毎日 rpc で呼ぶ)。当て推量しない:
 --   ① 名前から作った候補 short_guess が、同じ地区の他の人と重ならない
