@@ -1039,6 +1039,19 @@ TOKAI_FY2025 = dt.date(2025, 4, 1)
 TOKAI_CUT_NATIVE_2025 = 0.60   # 令和7年度の生え抜きの一斉編入= 60%(2025-10-04)。公式の第14回の一覧と 突き合わせて決めた(タクティカ 685→274 など 9 頭が一致・2026-10-20)
 
 
+TOKAI_CUT_CAP_NATIVE_2025 = 1_870_000   # 令和7年度の生え抜きの控除限度額= 公式の値に 1,870 だけが合う(テレヴァカ 3745→1875 など 18 件)
+
+
+def tokai_cut_cap(origin, when):
+    if TOKAI_FY2025 <= when < TOKAI_FY2026:
+        e = os.environ.get("CAP_" + origin)
+        if e:
+            return int(e)
+        if origin == "native":
+            return TOKAI_CUT_CAP_NATIVE_2025
+    return TOKAI_CUT[origin]
+
+
 def tokai_cut_rate(trk, origin, when):
     if trk == "名古屋" and when < TOKAI_FY2026:
         if origin in TOKAI_CUT_RATE_OLD:
@@ -1427,7 +1440,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
             if home is None and prev_home == "笠松":
                 deferred.append((d, "hen"))
             if home and young and a == 3:
-                cut = min(tokai_cut_amt(home, value, tokai_cut_rate(home, origin, d)), TOKAI_CUT[origin]) if "e" in TOKAI_V else 0
+                cut = min(tokai_cut_amt(home, value, tokai_cut_rate(home, origin, d)), tokai_cut_cap(origin, d)) if "e" in TOKAI_V else 0
                 value = max(0, value - cut)
                 young = False
             if trace:
@@ -1442,7 +1455,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
             if home:
                 adjust(d, home)
             if "u" not in TOKAI_V and d.month in (9, 10) and home and young and a == 3:
-                cut = min(tokai_cut_amt(home, value, tokai_cut_rate(home, origin, d)), TOKAI_CUT[origin]) if "e" in TOKAI_V else 0
+                cut = min(tokai_cut_amt(home, value, tokai_cut_rate(home, origin, d)), tokai_cut_cap(origin, d)) if "e" in TOKAI_V else 0
                 value = max(0, value - cut)
                 young = False
             continue
