@@ -1040,7 +1040,7 @@ def tokai_adj_dates(races):
     TOKAI_HEN.clear()
     later = max((d for ds in days.values() for d in ds), default=None)
     for y in sorted({d.year for ds in out.values() for d in ds}):
-        sep = [d for ds in out.values() for d in ds if d.year == y and d.month in (9, 10) and d <= dt.date(y, 10, 1)]
+        sep = [d for ds in out.values() for d in ds if d.year == y and d.month in (9, 10) and d <= dt.date(y, 10, 10)]
         if sep and later and later >= dt.date(y, 10, 1):   # 10 月の開催が見えて初めて 9 月の最後が確定
             TOKAI_HEN[y] = max(sep)
     return out
