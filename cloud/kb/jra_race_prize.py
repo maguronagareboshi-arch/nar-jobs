@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """中央のレースの本賞金(1〜5着・付加賞抜き)を競馬ブック スマホ版の成績頁から取り、表 nar_jra_race_prize へ(2026-10-17)。
 
-対象= 佐賀を走った馬(nar_runs・--days 日以内)の中央の走(nar_jra_runs)で 5着以内・まだ表に無いレース。
+対象= 佐賀・高知を走った馬(nar_runs・--days 日以内)の中央の走(nar_jra_runs)で 5着以内・まだ表に無いレース。
 頁はログイン不要(s.keibabook.co.jp/cyuou/seiseki/<kb_race_id> の table.syokin)。1 本ごとに書くので途中で止まっても次は続きから。
   python cloud/kb/jra_race_prize.py --days 400 --max 60          # 既定= dry-run(取って数えるだけ)
   python cloud/kb/jra_race_prize.py --days 400 --max 60 --apply  # 表へ upsert
@@ -35,7 +35,9 @@ def parse(html):
 def targets(url, key, days):
     q = urllib.parse.quote
     since = (dt.datetime.now(JST).date() - dt.timedelta(days=days)).isoformat()
-    runs = sb_all(url, key, f"nar_runs?select=horse_name,birth_date&track=eq.{q('佐賀')}&race_date=gte.{since}")
+    runs = []
+    for trk in ("佐賀", "高知"):   # 2026-10-20 高知も本賞金に差し替えるので同じ表を使う
+        runs += sb_all(url, key, f"nar_runs?select=horse_name,birth_date&track=eq.{q(trk)}&race_date=gte.{since}")
     want = {}
     for r in runs:
         want.setdefault(r["horse_name"], set()).add((r.get("birth_date") or "")[:10])

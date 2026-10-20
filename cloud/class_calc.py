@@ -2486,6 +2486,9 @@ def sb_all(url, key, path, page=1000):
         lo += page
 
 
+KOCHI_JRA_HONSHO = True   # 高知も中央の走を本賞金(付加賞抜き)に差し替える(2026-10-20 福ちゃん新聞 115 頭の照合で付加賞込みのずれを確認)
+
+
 def fetch_kochi(url, key, since):
     """高知の台帳= ①最後の地方の走が高知の馬 ②今日以降に高知の出馬表に載っている馬(転入)。"""
     today = dt.datetime.now(JST).date()
@@ -2503,6 +2506,8 @@ def fetch_kochi(url, key, since):
     for i in range(0, len(cs), 100):
         led += sb_all(url, key, f"{T_PRIZE}?select=code,horse_name,age,last_cls,local_prize,runs,calc&code=in.({','.join(cs[i:i + 100])})")
     births = fill_births({c["code"]: c.get("birth_date") for c in codes}, codes, runs)
+    if KOCHI_JRA_HONSHO:
+        saga_jra_honsho(url, key, led, births)   # 佐賀と同じ差し替え(関数名は佐賀のまま・馬の結び方は共通)
     return led, births, entered
 
 
