@@ -64,6 +64,28 @@ class Parse(unittest.TestCase):
     def test_no_table(self):
         self.assertIsNone(P.parse("<html></html>"))
 
+class ShutokuTest(unittest.TestCase):
+    """2026-10-20 高知= 付加賞抜きの収得賞金(shutoku_of)。福ちゃん 10/11 号 ヒビキ 1111万。"""
+
+    def test_fuka_only(self):                  # 台帳 ≥ 本賞金= 付加賞ぶんを除く
+        self.assertEqual(C.shutoku_of(18_750_000, 18_400_000), 18_400_000)
+        self.assertEqual(C.shutoku_of(11_076_000, 11_000_000), 11_000_000)
+
+    def test_reduced_by_jra(self):             # 台帳 < 本賞金= JRA が減らした収得賞金
+        self.assertEqual(C.shutoku_of(4_423_000, 5_500_000), 4_400_000)   # 越後Ｓ OP 3着
+        self.assertEqual(C.shutoku_of(775_000, 1_550_000), 775_000)       # 鴨川特別 5着
+
+    def test_unknown_keeps_ledger(self):
+        self.assertEqual(C.shutoku_of(300_000, 1_000_000), 300_000)
+        self.assertEqual(C.shutoku_of(None, 100), 100)
+
+    def test_merge_flag(self):
+        runs = [led("2025-05-04", 3, 4_423_000)]
+        out = C.jra_honsho_merge(runs, [jr("2025-05-04", 3, [22_000_000, 8_800_000, 5_500_000, 3_300_000, 2_200_000])], True)
+        self.assertEqual(out[0]["prize"], 4_400_000)
+        out = C.jra_honsho_merge(runs, [jr("2025-05-04", 3, [22_000_000, 8_800_000, 5_500_000, 3_300_000, 2_200_000])])
+        self.assertEqual(out[0]["prize"], 5_500_000)   # 佐賀は従来どおり本賞金
+
 
 if __name__ == "__main__":
     unittest.main()

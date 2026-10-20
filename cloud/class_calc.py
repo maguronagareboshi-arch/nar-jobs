@@ -577,7 +577,18 @@ def saga_rate_entry(run, age_entry):
     return (0.30, "転入前中央") if jra else (0.50, "転入前地方")
 
 
-def jra_honsho_merge(runs, jra_rows):
+def shutoku_of(ledger, honsho):
+    """台帳の中央の prize(= 収得賞金+付加賞)と本賞金から、付加賞を除いた収得賞金を決める(高知用・2026-10-20)。
+    台帳 ≥ 本賞金= 差は付加賞 → 本賞金。台帳 < 本賞金= JRA が収得賞金を減らした走(2025 年の 越後Ｓ OP 3着= 本賞金 550万→ 440万(80%)・鴨川特別 5着= 155万→ 77.5万(50%))
+    → 本賞金×80%・×50% のうち台帳を超えない大きい方(付加賞ぶんを除く)。どれにも当たらなければ台帳のまま。
+    根拠= 福ちゃん新聞 10/11 号 ヒビキ 1111万(本賞金そのままだと 1144.5万)。"""
+    if not ledger or ledger <= 0 or ledger >= honsho:
+        return honsho
+    cand = [int(honsho * f) for f in (0.8, 0.5) if int(honsho * f) <= ledger]
+    return max(cand) if cand else ledger
+
+
+def jra_honsho_merge(runs, jra_rows, shutoku=False):
     """台帳の中央の走の prize(付加賞込み)を 本賞金(1〜5着・付加賞抜き)に差し替え、台帳に無い中央の走を足す。
     jra_rows= nar_jra_runs の行 {race_date, place, race_no, finish, race_name, field_size, honsho: [1着..5着 円] | None}。
     本賞金が取れていないレースは台帳の値のまま(足す走は 6着以下だけ= 0 円)。(2026-10-17 コスモジンバック わらび賞 3着 2,747,000→2,700,000)"""
@@ -601,6 +612,8 @@ def jra_honsho_merge(runs, jra_rows):
         j = next((x for x in js if x.get("finish") == r.get("fin")), None)
         v = honsho(j) if j else None
         if v is not None:
+            if shutoku:
+                v = shutoku_of(r.get("prize"), v)
             r["prize"] = v
     have = {str(r.get("d"))[:10] for r in out}
     for d, js in by_d.items():
@@ -871,7 +884,7 @@ def fetch_saga(url, key, since):
 SAGA_JRA_HONSHO = True   # 中央の走を本賞金(付加賞抜き・nar_jra_race_prize)に差し替え・台帳に無い中央の走を足す(2026-10-17)
 
 
-def saga_jra_honsho(url, key, led, births):
+def saga_jra_honsho(url, key, led, births, shutoku=False):
     """台帳の各馬の runs を jra_honsho_merge で直す(馬は 名前+生年月日で nar_jra_horses に結ぶ)。"""
     q = urllib.parse.quote
     names = sorted({r["horse_name"] for r in led})
@@ -903,7 +916,7 @@ def saga_jra_honsho(url, key, led, births):
         if len(cand) != 1:
             continue
         before = row.get("runs") or []
-        after = jra_honsho_merge(before, by_h.get(cand[0]["kb_horse_id"]))
+        after = jra_honsho_merge(before, by_h.get(cand[0]["kb_horse_id"]), shutoku)
         add = sum(1 for x in after if x.get("src") == "jra_runs")
         chg = sum(x.get("prize") or 0 for x in before if x.get("jra")) != sum(x.get("prize") or 0 for x in after if x.get("jra") and not x.get("src"))
         if add or chg:
@@ -2510,7 +2523,7 @@ def fetch_kochi(url, key, since):
         led += sb_all(url, key, f"{T_PRIZE}?select=code,horse_name,age,last_cls,local_prize,runs,calc&code=in.({','.join(cs[i:i + 100])})")
     births = fill_births({c["code"]: c.get("birth_date") for c in codes}, codes, runs)
     if KOCHI_JRA_HONSHO:
-        saga_jra_honsho(url, key, led, births)   # 佐賀と同じ差し替え(関数名は佐賀のまま・馬の結び方は共通)
+        saga_jra_honsho(url, key, led, births, shutoku=True)   # 佐賀と同じ結び方・値は収得賞金(shutoku_of)
     return led, births, entered
 
 
