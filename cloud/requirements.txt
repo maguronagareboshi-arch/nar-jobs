@@ -5,3 +5,4 @@ anthropic>=0.40   # §140 news_writer.py(記事の下書きを書く)/ §146 san
 pytesseract>=0.3.10   # §146 sand_depth.py(名古屋の砂厚は 1 断面が画像= 文字認識で読む。⚠便には apt-get install -y tesseract-ocr も要る)
 pywebpush>=2.0   # §291 push_notify.py(チェック馬のお知らせ・web push)
 yt-dlp>=2025.1   # 10/2 noken_public.py 金沢・名古屋の能検の映像(チャンネルの動画一覧だけ・映像は落とさない)
+pymupdf>=1.24   # 10/20 tokai_official.py 名古屋の編成馬一覧 PDF(pdfplumber は日本語が化ける)

@@ -1735,6 +1735,16 @@ def main_tokai(a):
         lag = a.lag if a.lag is not None else TOKAI_LAG
         today = dt.datetime.now(JST).date()
         out = []
+        official, off_tag = {}, ""
+        if os.environ.get("TOKAI_OFFICIAL", "1") == "1":     # 公式の編成馬一覧(最新の回)の値を正にする。取れなければ計算のまま
+            try:
+                import tokai_official
+                official, cyc = tokai_official.fetch_official()
+                off_tag = f"({cyc[0]}年 第{cyc[1]}回 編成馬一覧)" if cyc else ""
+                log(f"公式の編成馬一覧 {cyc}: {len(official)} 頭")
+            except Exception as e:                           # 公式サイトの不調で便を落とさない
+                log("公式の編成馬一覧が取れない→計算のまま:", repr(e)[:200])
+        n_off = n_diff = 0
         for r in rows:
             runs = r.get("runs") or []
             local = [x for x in runs if not x.get("jra") and x.get("fin") is not None]
@@ -1750,8 +1760,13 @@ def main_tokai(a):
                 runs[0]["_name"] = r.get("horse_name")
             c = tokai_calc(lines, runs, today, lag, b, age_at, races, TOKAI_PREFIX[tr])
             if c:
+                ov = official.get((r.get("horse_name"), age_at(today)))
+                if ov is not None:
+                    n_off += 1
+                    n_diff += (c.get("value") or 0) != ov * 1000
+                    c = tokai_official.apply_official(c, ov, lines, classify, next_line, off_tag)
                 out.append({"code": r["code"], "calc": c})
-        log(f"東海 calc を書く: {len(out)} 頭(lag={lag})")
+        log(f"東海 calc を書く: {len(out)} 頭(lag={lag})・うち公式の値 {n_off} 頭(計算と違った {n_diff} 頭)")
         for i in range(0, len(out), 200):
             st, msg = upsert(url, key, T_PRIZE, "code", out[i:i + 200])
             if st not in (200, 201):
