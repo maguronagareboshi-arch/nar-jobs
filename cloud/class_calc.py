@@ -577,15 +577,21 @@ def saga_rate_entry(run, age_entry):
     return (0.30, "転入前中央") if jra else (0.50, "転入前地方")
 
 
-def shutoku_of(ledger, honsho):
-    """台帳の中央の prize(= 収得賞金+付加賞)と本賞金から、付加賞を除いた収得賞金を決める(高知用・2026-10-20)。
-    台帳 ≥ 本賞金= 差は付加賞 → 本賞金。台帳 < 本賞金= JRA が収得賞金を減らした走(2025 年の 越後Ｓ OP 3着= 本賞金 550万→ 440万(80%)・鴨川特別 5着= 155万→ 77.5万(50%))
-    → 本賞金×80%・×50% のうち台帳を超えない大きい方(付加賞ぶんを除く)。どれにも当たらなければ台帳のまま。
-    根拠= 福ちゃん新聞 10/11 号 ヒビキ 1111万(本賞金そのままだと 1144.5万)。"""
-    if not ledger or ledger <= 0 or ledger >= honsho:
-        return honsho
-    cand = [int(honsho * f) for f in (0.8, 0.5) if int(honsho * f) <= ledger]
-    return max(cand) if cand else ledger
+def shutoku_of(ledger, hon, fin):
+    """台帳の中央の prize(= 本賞金+付加賞)と、そのレースの本賞金表 hon=[1着..5着]・着順 fin から、付加賞を除いた賞金を決める(高知用・2026-10-20)。
+    ⛔同着= 賞金は同着の頭数 n で等分(関わる着順の本賞金を足して n で割る・6着以下は 0)。例: 3着同着 2 頭= (3着+4着)/2・5着同着 2 頭= (5着+0)/2。
+    台帳に同着の頭数は無いので、n=1,2,3,… のうち 台帳の値を超えない最大の額を採る(付加賞は上乗せなので 台帳 ≥ 正しい額)。
+    確認= ヒビキ 越後Ｓ 3着同着 (550万+330万)/2=440万・イーサンアイ 鴨川特別 5着同着 (155万+0)/2=77.5万(競馬ブック成績頁の同着の表示で確認)。
+    表 hon が 5 着ぶん無ければ None(= 差し替えない)。"""
+    if not hon or len(hon) < 5 or fin is None or fin < 1 or fin > 5:
+        return None
+    pad = list(hon) + [0] * 8
+    best = None
+    for n in range(1, 7):
+        v = sum(pad[fin - 1:fin - 1 + n]) // n
+        if not ledger or ledger <= 0 or v <= ledger:
+            best = v if best is None else max(best, v)
+    return best
 
 
 def jra_honsho_merge(runs, jra_rows, shutoku=False):
@@ -613,7 +619,8 @@ def jra_honsho_merge(runs, jra_rows, shutoku=False):
         v = honsho(j) if j else None
         if v is not None:
             if shutoku:
-                v = shutoku_of(r.get("prize"), v)
+                v2 = shutoku_of(r.get("prize"), j.get("honsho"), j.get("finish"))
+                v = v if v2 is None else v2
             r["prize"] = v
     have = {str(r.get("d"))[:10] for r in out}
     for d, js in by_d.items():
