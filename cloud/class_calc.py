@@ -1168,6 +1168,8 @@ def tokai_rate_resident(run, race, venue=None):
     if hit and kind == "普通" and re.search(r"[ＡＢＣ][０-９]+[ａ-ｃ]?$", name):
         hit = None                                     # 「くろゆり賞抽選会実施記念Ｂ６」は一般格の競走(重賞のくろゆり賞ではない)
     grade, young = (hit if hit else (None, bool(re.search(r"[２３]歳", name))))
+    if hit and not young and re.search(r"[２３]歳(?!上|以上)", name):
+        young = True                                   # 表では古馬扱いの名前でも「弥富記念３歳オープン」のように 3歳限定の回がある
     if hit and kind not in ("重賞", "準重賞"):
         kind = "準重賞" if grade == "P" else "重賞"
     both = name + " " + str(run.get("name") or "")   # 走の名前にだけ「Ｊ認」が付くことがある(セレクトゴールドなど)
@@ -1192,6 +1194,9 @@ def tokai_rate_resident(run, race, venue=None):
         return 0.60, "古馬重賞"
     if kind == "準重賞" and young:
         if venue == "名古屋":
+            d = _date(run.get("d"))
+            if d and d < TOKAI_FY2026:
+                return 0.50, "2歳3歳P(令和7年度以前)"      # 令和8年度は 60%。公式の履歴は 50% で 6035→6113 件が合う(アップショウグン 弥富記念)
             return 0.60, "2歳3歳P"
         return 0.50, "2歳3歳準重賞"
     return 1.00, "東海"
