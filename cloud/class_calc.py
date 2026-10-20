@@ -915,6 +915,13 @@ def saga_jra_honsho(url, key, led, births, shutoku=False):
     by_h = defaultdict(list)
     for r in jr:
         by_h[r["kb_horse_id"]].append(dict(r, honsho=hon.get(r.get("kb_race_id"))))
+    miss = {}   # 本賞金が取れていないレース(表に無い・頁が見つからない)を ログに出す(2026-10-20)
+    for r in jr:
+        k = r.get("kb_race_id")
+        if k and (r.get("finish") or 99) <= 5 and not hon.get(k):
+            miss[k] = f"{str(r.get('race_date'))[:10]} {r.get('place')}{r.get('race_no')}R {r.get('race_name')}"
+    for k, v in sorted(miss.items(), key=lambda x: x[1])[:60]:
+        log("本賞金なし", k, v)
     n_h = n_add = n_chg = 0
     for row in led:
         b = str(births.get(row["code"]) or "")[:10]
