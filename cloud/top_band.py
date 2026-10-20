@@ -112,8 +112,6 @@ def count_band(date, runs, races, prevs, prev_dist, changes):
         chg = best.get((str(r.get("horse_name") or ""), str(r.get("birth_date") or "")))   # 今日が移籍後の初戦なら その種類
         if str(r.get("trainer_area") or "") == "JRA":
             chg = "jra_horse"                      # 今日の調教師が中央= 中央の馬の交流出走(転入ではない・10/20 ビーコング・ラヴァグロウ)
-        elif not chg and p.get("jra"):
-            chg = "jra_in"                         # 前走が中央で今日は地方の調教師= 移籍の表に無くても「中央から」
         if days >= LAYOFF_DAYS:
             out["layoff"].append(head + [days, fin, pop, chg])
         now_m = race.get("distance_m")
