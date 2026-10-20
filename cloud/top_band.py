@@ -5,7 +5,7 @@
                           transfer:{jra, area, stable}}          … トップ(getTopMeta の相乗り)が読む件数だけ
   top_band:YYYY-MM-DD  = {v:1, date, built, rows:{layoff:[[HHMM, 場, R, 馬番, 馬名, 日数]],
                           dist:[[…, 前走m, 今回m, 前走の着順, 前走の人気, 移籍]], venue:[[…, 前走の場, 前走の着順, 前走の人気, 移籍]]}} … 一覧 /today/facts/:kind が読む
-                          (10/20 末尾を足した: layoff=[日数, 着順, 人気, 移籍] dist=[…, 着順, 人気, 移籍]。着順・人気は数字か null・移籍= 今日が移籍後の初戦なら jra_in/transfer_in/stable_change・無ければ null。⛔夜の回(--no-transfer)は移籍の表が未着= 移籍は null になる)
+                          (10/20 末尾を足した: layoff=[日数, 着順, 人気, 移籍] dist=[…, 着順, 人気, 移籍]。着順・人気は数字か null・移籍= 今日が移籍後の初戦なら jra_in/transfer_in/stable_change・今日の調教師が中央なら jra_horse(中央の馬の交流出走= 転入ではない)・無ければ null。⛔夜の回(--no-transfer)は移籍の表が未着= 移籍は null になる)
 新馬(noken_debuts)とオークション(auction_today)の件数は画面が既存の行から数える= ここでは書かない。
 10/16 前の晩の分: 夜の回(JST 22:10)が `--date 翌日 --key top_band_next` で翌日分を別の鍵に書く(10/16 から移籍も= 先に horse_changes を夜にも流す。--no-transfer は便が止まったとき用に残す)
   (翌日の出馬表は前日までに入っている。⛔移籍の表は当日朝 05:33 の便で半分ほど足される= 実測 10/14〜16 で
@@ -110,8 +110,10 @@ def count_band(date, runs, races, prevs, prev_dist, changes):
         days = (d0 - dt.date.fromisoformat(str(p["race_date"]))).days
         fin, pop = to_int(p.get("finish")), to_int(p.get("popularity"))
         chg = best.get((str(r.get("horse_name") or ""), str(r.get("birth_date") or "")))   # 今日が移籍後の初戦なら その種類
-        if not chg and p.get("jra"):
-            chg = "jra_in"                                                                   # 前走が中央= 移籍の表に無くても「中央から」(10/20 ラヴァグロウ)
+        if str(r.get("trainer_area") or "") == "JRA":
+            chg = "jra_horse"                      # 今日の調教師が中央= 中央の馬の交流出走(転入ではない・10/20 ビーコング・ラヴァグロウ)
+        elif not chg and p.get("jra"):
+            chg = "jra_in"                         # 前走が中央で今日は地方の調教師= 移籍の表に無くても「中央から」
         if days >= LAYOFF_DAYS:
             out["layoff"].append(head + [days, fin, pop, chg])
         now_m = race.get("distance_m")
@@ -189,7 +191,7 @@ def fetch(base, key, date):
     races = {(str(r["track"]), int(r["race_no"])): {"post_time": r.get("post_time"), "distance_m": to_int(r.get("distance_m"))}
              for r in races_l}
     runs = all_rows(base, key, "/rest/v1/nar_runs?select=track,race_date,race_no,runner_number,horse_name,birth_date,"
-                               f"finish_note,margin&race_date=eq.{date}", "track.asc,race_no.asc,runner_number.asc")
+                               f"finish_note,margin,trainer_area&race_date=eq.{date}", "track.asc,race_no.asc,runner_number.asc")
     names = sorted({str(r.get("horse_name") or "") for r in runs} - {""})
     lo = str(dt.date.fromisoformat(date) - dt.timedelta(days=WINDOW_DAYS))
     cols = "track,race_date,race_no,runner_number,horse_name,birth_date,finish,popularity"

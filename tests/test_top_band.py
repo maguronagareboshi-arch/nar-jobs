@@ -54,12 +54,23 @@ class TopBandTest(unittest.TestCase):
         self.assertFalse(tb.jra_newer(r, p, dict(h, last_jra_date=None)))
 
     def test_jra_prev_gives_week_count(self):
-        runs = [dict(run("浦和", 11, 11, "L"), birth_date="2020-05-09")]
+        runs = [dict(run("浦和", 11, 11, "L"), birth_date="2020-05-09", trainer_area="大井")]
         races = {("浦和", 11): {"post_time": "1745", "distance_m": 1400}}
         prevs = {("浦和", 11, 11): {"track": "中山", "race_date": "2026-09-06", "race_no": 9, "finish": 14, "popularity": 15, "jra": True}}
         got = tb.count_band(D, runs, races, prevs, {("中山", "2026-09-06", 9): 1200}, [])
         self.assertEqual(got["rows"]["layoff"], [])                      # 44 日= 休み明け(70 日)ではない
         self.assertEqual(got["rows"]["venue"][0][5:], ["中山", 14, 15, "jra_in"])    # 移籍の表に無くても前走が中央なら「中央から」
+
+    def test_jra_horse_is_not_a_transfer(self):
+        # 10/20 ビーコング・ラヴァグロウ: 今日の調教師が中央= 交流の出走。移籍の表に行があっても「中央の馬」(転入・転厩の印にしない)
+        runs = [dict(run("浦和", 11, 1, "B"), birth_date="2021-03-17", trainer_area="JRA"),
+                dict(run("浦和", 11, 2, "C"), birth_date="2020-05-09", trainer_area="JRA")]
+        races = {("浦和", 11): {"post_time": "1745", "distance_m": 1400}}
+        prevs = {("浦和", 11, 1): {"track": "札幌", "race_date": "2026-08-23", "race_no": 3, "jra": True},
+                 ("浦和", 11, 2): {"track": "中山", "race_date": "2026-09-06", "race_no": 9, "jra": True}}
+        ch = [{"horse_name": "B", "birth_date": "2021-03-17", "kind": "stable_change"}]
+        got = tb.count_band(D, runs, races, prevs, {}, ch)
+        self.assertEqual([r[-1] for r in got["rows"]["venue"]], ["jra_horse", "jra_horse"])
 
     def test_transfer_mark_on_rows(self):
         # 今日が移籍後の初戦の馬は、行の末尾に移籍の種類が付く(遠征ではなく所属替えと分けるため・10/20)
