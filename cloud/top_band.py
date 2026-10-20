@@ -4,7 +4,8 @@
   top_band             = {v:1, date, built, n:{transfer, layoff, dist, venue},
                           transfer:{jra, area, stable}}          … トップ(getTopMeta の相乗り)が読む件数だけ
   top_band:YYYY-MM-DD  = {v:1, date, built, rows:{layoff:[[HHMM, 場, R, 馬番, 馬名, 日数]],
-                          dist:[[…, 前走m, 今回m]], venue:[[…, 前走の場]]}} … 一覧 /today/facts/:kind が読む
+                          dist:[[…, 前走m, 今回m, 前走の着順, 前走の人気]], venue:[[…, 前走の場]]}} … 一覧 /today/facts/:kind が読む
+                          (10/20 dist の末尾 2 つを足した。着順・人気は数字か null= 画面は無くても読める)
 新馬(noken_debuts)とオークション(auction_today)の件数は画面が既存の行から数える= ここでは書かない。
 10/16 前の晩の分: 夜の回(JST 22:10)が `--date 翌日 --key top_band_next` で翌日分を別の鍵に書く(10/16 から移籍も= 先に horse_changes を夜にも流す。--no-transfer は便が止まったとき用に残す)
   (翌日の出馬表は前日までに入っている。⛔移籍の表は当日朝 05:33 の便で半分ほど足される= 実測 10/14〜16 で
@@ -89,7 +90,7 @@ def count_band(date, runs, races, prevs, prev_dist, changes):
         now_m = race.get("distance_m")
         prev_m = prev_dist.get((str(p["track"]), str(p["race_date"]), int(p["race_no"])))
         if isinstance(now_m, int) and isinstance(prev_m, int) and abs(now_m - prev_m) >= DIST_DIFF_M:
-            out["dist"].append(head + [prev_m, now_m])
+            out["dist"].append(head + [prev_m, now_m, to_int(p.get("finish")), to_int(p.get("popularity"))])
         if str(p["track"]) != k[0]:
             out["venue"].append(head + [str(p["track"])])
     rank = {"jra_in": 0, "transfer_in": 1, "stable_change": 2}
@@ -137,7 +138,7 @@ def fetch(base, key, date):
                                f"finish_note,margin&race_date=eq.{date}", "track.asc,race_no.asc,runner_number.asc")
     names = sorted({str(r.get("horse_name") or "") for r in runs} - {""})
     lo = str(dt.date.fromisoformat(date) - dt.timedelta(days=WINDOW_DAYS))
-    cols = "track,race_date,race_no,runner_number,horse_name,birth_date"
+    cols = "track,race_date,race_no,runner_number,horse_name,birth_date,finish,popularity"
 
     def past(names_, lower):
         got = {}

@@ -29,7 +29,7 @@ class TopBandTest(unittest.TestCase):
                  ("川崎", 1, 2): {"track": "浦和", "race_date": "2026-08-07", "race_no": 1},   # 69 日= 休み明けでない・別の場
                  ("川崎", 1, 3): None,                                                    # 前走なし= どれにも入らない
                  ("川崎", 1, 4): {"track": "大井", "race_date": "2026-01-01", "race_no": 1},   # 取消= 数えない
-                 ("園田", 2, 5): {"track": "園田", "race_date": "2026-10-01", "race_no": 2}}
+                 ("園田", 2, 5): {"track": "園田", "race_date": "2026-10-01", "race_no": 2, "finish": "3", "popularity": 2}}
         prev_dist = {("川崎", "2026-08-06", 3): 1000, ("浦和", "2026-08-07", 1): 1001, ("大井", "2026-01-01", 1): 2000,
                      ("園田", "2026-10-01", 2): 1230}
         got = tb.count_band(D, runs, races, prevs, prev_dist, [])
@@ -37,7 +37,8 @@ class TopBandTest(unittest.TestCase):
         self.assertEqual(got["rows"]["layoff"], [["1445", "川崎", 1, 1, "A", 70]])
         # 発走順(11:10 の園田が先)・399m 差は入らない・400m ちょうどは入る
         self.assertEqual([r[4] for r in got["rows"]["dist"]], ["E", "A"])
-        self.assertEqual(got["rows"]["dist"][0][5:], [1230, 820])
+        self.assertEqual(got["rows"]["dist"][0][5:], [1230, 820, 3, 2])   # 末尾= 前走の着順・人気(10/20)
+        self.assertEqual(got["rows"]["dist"][1][7:], [None, None])        # 前走の行に無い値は null
         self.assertEqual(got["rows"]["venue"], [["1445", "川崎", 1, 2, "B", "浦和"]])
 
     def test_transfer_breakdown_one_per_horse(self):
