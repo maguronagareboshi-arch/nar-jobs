@@ -59,7 +59,7 @@ class TopBandTest(unittest.TestCase):
         prevs = {("浦和", 11, 11): {"track": "中山", "race_date": "2026-09-06", "race_no": 9, "finish": 14, "popularity": 15, "jra": True}}
         got = tb.count_band(D, runs, races, prevs, {("中山", "2026-09-06", 9): 1200}, [])
         self.assertEqual(got["rows"]["layoff"], [])                      # 44 日= 休み明け(70 日)ではない
-        self.assertEqual(got["rows"]["venue"][0][5:], ["中山", 14, 15, None])
+        self.assertEqual(got["rows"]["venue"][0][5:], ["中山", 14, 15, "jra_in"])    # 移籍の表に無くても前走が中央なら「中央から」
 
     def test_transfer_mark_on_rows(self):
         # 今日が移籍後の初戦の馬は、行の末尾に移籍の種類が付く(遠征ではなく所属替えと分けるため・10/20)

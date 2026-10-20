@@ -110,6 +110,8 @@ def count_band(date, runs, races, prevs, prev_dist, changes):
         days = (d0 - dt.date.fromisoformat(str(p["race_date"]))).days
         fin, pop = to_int(p.get("finish")), to_int(p.get("popularity"))
         chg = best.get((str(r.get("horse_name") or ""), str(r.get("birth_date") or "")))   # 今日が移籍後の初戦なら その種類
+        if not chg and p.get("jra"):
+            chg = "jra_in"                                                                   # 前走が中央= 移籍の表に無くても「中央から」(10/20 ラヴァグロウ)
         if days >= LAYOFF_DAYS:
             out["layoff"].append(head + [days, fin, pop, chg])
         now_m = race.get("distance_m")
