@@ -1,0 +1,37 @@
+# 研究用・1 回きり(wip/odds-final-combo-20261020・master には出さない)。最終予測に 馬連・ワイド・3連複 の売れ方を足せるか。
+# ⛔本番 DB は REST の単純 select だけ(日ごと)。書き込みなし。結果は成果物 odds-combo(rows.csv・meta.json・result.md)。
+name: research-odds-combo
+on:
+  push:
+    branches: ['wip/odds-final-combo-20261020']
+    paths: ['research/odds_combo/**', '.github/workflows/research-odds-combo.yml']
+  workflow_dispatch:
+concurrency:
+  group: research-odds-combo
+  cancel-in-progress: false
+jobs:
+  combo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: rows from db
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: node research/odds_combo/rows.mjs --from 2026-09-08 --to 2026-10-19
+      - name: eval
+        run: |
+          pip install -q numpy pandas lightgbm
+          python research/odds_combo/eval.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: odds-combo
+          path: out/
