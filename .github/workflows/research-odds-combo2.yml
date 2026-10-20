@@ -1,0 +1,36 @@
+# 研究用・1 回きり(wip/odds-final-combo-20261020・master には出さない)。前便 run 39411417972 の rows.csv で 対照 D と k の取り直し。
+# ⛔本番 DB には触らない(前便の成果物だけ使う)。結果は成果物 odds-combo2(result2.md)。
+name: research-odds-combo2
+on:
+  push:
+    branches: ['wip/odds-final-combo-20261020']
+    paths: ['research/odds_combo2/**', '.github/workflows/research-odds-combo2.yml']
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: read
+concurrency:
+  group: research-odds-combo2
+  cancel-in-progress: false
+jobs:
+  combo2:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: rows from previous run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download 39411417972 -n odds-combo -D out -R "${GITHUB_REPOSITORY}"
+      - name: eval2
+        run: |
+          pip install -q numpy pandas lightgbm
+          python research/odds_combo2/eval2.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: odds-combo2
+          path: out2/
