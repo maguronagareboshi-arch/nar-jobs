@@ -882,7 +882,7 @@ def fetch_saga(url, key, since):
         led += sb_all(url, key, f"{T_PRIZE}?select=code,horse_name,age,last_cls,local_prize,runs,calc&code=in.({','.join(cs[i:i + 100])})")
     births = fill_births({c["code"]: c.get("birth_date") for c in codes}, codes, runs)
     if SAGA_JRA_HONSHO:
-        saga_jra_honsho(url, key, led, births)
+        saga_jra_honsho(url, key, led, births, shutoku=True)   # 同着は賞金を等分(shutoku_of・2026-10-20 高知のヒビキで確認)
     races = sb_all(url, key, f"nar_races?select=race_date,race_no,race_name,race_kind&track=eq.{q('佐賀')}"
                              f"&race_date=gte.2022-11-01")
     return led, births, entered, saga_field_ages(url, key, race_map(races))
