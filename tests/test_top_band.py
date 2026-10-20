@@ -34,12 +34,22 @@ class TopBandTest(unittest.TestCase):
                      ("園田", "2026-10-01", 2): 1230}
         got = tb.count_band(D, runs, races, prevs, prev_dist, [])
         self.assertEqual(got["n"], {"transfer": 0, "layoff": 1, "dist": 2, "venue": 1})
-        self.assertEqual(got["rows"]["layoff"], [["1445", "川崎", 1, 1, "A", 70]])
+        self.assertEqual(got["rows"]["layoff"], [["1445", "川崎", 1, 1, "A", 70, None, None, None]])
         # 発走順(11:10 の園田が先)・399m 差は入らない・400m ちょうどは入る
         self.assertEqual([r[4] for r in got["rows"]["dist"]], ["E", "A"])
-        self.assertEqual(got["rows"]["dist"][0][5:], [1230, 820, 3, 2])   # 末尾= 前走の着順・人気(10/20)
-        self.assertEqual(got["rows"]["dist"][1][7:], [None, None])        # 前走の行に無い値は null
-        self.assertEqual(got["rows"]["venue"], [["1445", "川崎", 1, 2, "B", "浦和"]])
+        self.assertEqual(got["rows"]["dist"][0][5:], [1230, 820, 3, 2, None])   # 末尾= 前走の着順・人気(10/20)
+        self.assertEqual(got["rows"]["dist"][1][7:], [None, None, None])        # 前走の行に無い値は null
+        self.assertEqual(got["rows"]["venue"], [["1445", "川崎", 1, 2, "B", "浦和", None, None, None]])
+
+    def test_transfer_mark_on_rows(self):
+        # 今日が移籍後の初戦の馬は、行の末尾に移籍の種類が付く(遠征ではなく所属替えと分けるため・10/20)
+        runs = [dict(run("川崎", 1, 1, "A"), birth_date="2022-01-01"), run("川崎", 1, 2, "B")]
+        races = {("川崎", 1): {"post_time": "14:45", "distance_m": 1400}}
+        prevs = {("川崎", 1, 1): {"track": "船橋", "race_date": "2026-08-06", "race_no": 3, "finish": 2, "popularity": 5},
+                 ("川崎", 1, 2): {"track": "船橋", "race_date": "2026-08-06", "race_no": 3}}
+        ch = [{"horse_name": "A", "birth_date": "2022-01-01", "kind": "transfer_in"}]
+        got = tb.count_band(D, runs, races, prevs, {}, ch)
+        self.assertEqual([r[5:] for r in got["rows"]["venue"]], [["船橋", 2, 5, "transfer_in"], ["船橋", None, None, None]])
 
     def test_transfer_breakdown_one_per_horse(self):
         ch = [{"horse_name": "X", "birth_date": "2022-04-01", "kind": "transfer_in"},
