@@ -896,7 +896,8 @@ def saga_jra_honsho(url, key, led, births):
     n_h = n_add = n_chg = 0
     for row in led:
         b = str(births.get(row["code"]) or "")[:10]
-        cand = [h for h in kb.get(row["horse_name"], []) if not b or not h.get("birth_date") or str(h["birth_date"])[:10] == b]
+        # ⛔生年月日が両方そろって同じ馬だけ結ぶ(2026-10-20 高知ダイヤモンドフジ= 生年の無い 2015 年の別馬 30072404975 に 2019 年生の中央の走 315万が付いた)
+        cand = [h for h in kb.get(row["horse_name"], []) if b and h.get("birth_date") and str(h["birth_date"])[:10] == b]
         if len(cand) != 1:
             continue
         before = row.get("runs") or []
