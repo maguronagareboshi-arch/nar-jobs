@@ -26,7 +26,8 @@ V3 = Path(__import__('os').environ.get('V3_DATA', 'C:/Users/kouki/nankan_ai/v3')
 RAW = Path(__import__('os').environ.get('V3_RAW', 'C:/Users/kouki/nankan_ai/raw')) / 'archive'
 REPO = Path(__file__).resolve().parent.parent
 B = 'https://qgsnsdjvzzeazbazjlwa.supabase.co/rest/v1/'
-KEY = 'sb_publishable_dLgCkz1_yt_e9YhAJRAyhQ_oAqAUU1a'
+# 段3(2026-10-19): nar_runs・nar_run_facts は公開キーで読めなくなった= 便では管理用の鍵(SUPABASE_SERVICE_KEY)で読む
+KEY = __import__('os').environ.get('SUPABASE_SERVICE_KEY', '') or 'sb_publishable_dLgCkz1_yt_e9YhAJRAyhQ_oAqAUU1a'
 NANKAN = ['浦和', '船橋', '大井', '川崎']
 PARTS = {'confirm': ('2022-01', '2025-08'), 'sealed': ('2025-09', '2026-08')}
 SPEC = {'runs': ('nar_runs', ['track', 'race_date', 'race_no', 'runner_number']),
@@ -37,7 +38,7 @@ SPEC = {'runs': ('nar_runs', ['track', 'race_date', 'race_no', 'runner_number'])
 
 def req(table, q, count=False):
     url = B + table + '?' + urllib.parse.urlencode(q)
-    h = {'apikey': KEY, **({'Prefer': 'count=exact'} if count else {})}
+    h = {'apikey': KEY, **({} if KEY.startswith('sb_') else {'Authorization': f'Bearer {KEY}'}), **({'Prefer': 'count=exact'} if count else {})}
     for k in range(6):
         try:
             with urllib.request.urlopen(urllib.request.Request(url, headers=h), timeout=90) as r:
