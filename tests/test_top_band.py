@@ -41,6 +41,26 @@ class TopBandTest(unittest.TestCase):
         self.assertEqual(got["rows"]["dist"][1][7:], [None, None, None])        # 前走の行に無い値は null
         self.assertEqual(got["rows"]["venue"], [["1445", "川崎", 1, 2, "B", "浦和", None, None, None]])
 
+    def test_jra_newer(self):
+        # 10/20 ラヴァグロウ: 地方の最後は 2024-07-31(門別)・中央の最後は 2026-09-06 → 中央が前走(中 5 週)
+        r = {"race_date": "2026-10-20", "birth_date": "2020-05-09"}
+        p = {"race_date": "2024-07-31"}
+        h = {"last_jra_date": "2026-09-06", "birth_date": "2020-05-09"}
+        self.assertTrue(tb.jra_newer(r, p, h))
+        self.assertTrue(tb.jra_newer(r, None, h))                                          # 地方の前走なし
+        self.assertFalse(tb.jra_newer(r, {"race_date": "2026-10-01"}, h))                  # 地方の前走のほうが新しい
+        self.assertFalse(tb.jra_newer(r, p, dict(h, birth_date="2019-01-01")))             # 生年月日が違えば別の馬
+        self.assertFalse(tb.jra_newer(r, p, dict(h, last_jra_date="2026-10-20")))          # 今日以後は前走でない
+        self.assertFalse(tb.jra_newer(r, p, dict(h, last_jra_date=None)))
+
+    def test_jra_prev_gives_week_count(self):
+        runs = [dict(run("浦和", 11, 11, "L"), birth_date="2020-05-09")]
+        races = {("浦和", 11): {"post_time": "1745", "distance_m": 1400}}
+        prevs = {("浦和", 11, 11): {"track": "中山", "race_date": "2026-09-06", "race_no": 9, "finish": 14, "popularity": 15, "jra": True}}
+        got = tb.count_band(D, runs, races, prevs, {("中山", "2026-09-06", 9): 1200}, [])
+        self.assertEqual(got["rows"]["layoff"], [])                      # 44 日= 休み明け(70 日)ではない
+        self.assertEqual(got["rows"]["venue"][0][5:], ["中山", 14, 15, None])
+
     def test_transfer_mark_on_rows(self):
         # 今日が移籍後の初戦の馬は、行の末尾に移籍の種類が付く(遠征ではなく所属替えと分けるため・10/20)
         runs = [dict(run("川崎", 1, 1, "A"), birth_date="2022-01-01"), run("川崎", 1, 2, "B")]

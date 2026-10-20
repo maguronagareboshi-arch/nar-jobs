@@ -16,6 +16,7 @@
   休み明け= 前走から 70 日以上 / 距離= 前走から 400m 以上の差 / 前走と別の場= 前走の場が今日の場と違う
   移籍後の初出走= nar_horse_changes のその日の行(馬ごと 1 頭・内訳は 中央から > 他地区から > 転厩 の順に 1 つ)
   ⛔取消・除外(finish_note か margin に字)は数えない。⛔前走= 同じ馬名(生年月日があれば一致)で今日より前の一番新しい走。
+  10/20 中央から来た馬: 地方の前走より新しい中央の走(nar_jra_horses.last_jra_date)があれば、それを前走にする(場= 中央の場名・距離= 中央の距離)。
 
 ⛔本番 DB では REST の単純 select だけ(その日の出走+前走 1 本)。前走は 120 日の窓で引き、窓に無い馬だけ全期間で引き直す。
 ⛔読み取りに失敗したら書かない(前の値が残る= 画面は date が今日でなければ使わない)。
@@ -44,6 +45,7 @@ KEEP_DAYS = 7
 LAYOFF_DAYS = 70
 DIST_DIFF_M = 400
 CHUNK = 80
+JRA_LOOK_DAYS = 30   # 地方の前走が無い・30 日より古い馬だけ中央の走を探す(中央から来た馬の前走は中央)
 CANCEL_RE = re.compile(r"(取消|除外)")
 
 
@@ -54,6 +56,18 @@ def hhmm(v):
 
 def is_cancel(run):
     return bool(CANCEL_RE.search(str(run.get("finish_note") or "") + str(run.get("margin") or "")))
+
+
+def jra_newer(run, p, h):
+    """中央の馬の行 h が、この出走馬の「地方の前走 p」より新しい中央の走を持つか(10/20 ラヴァグロウ= 地方の最後は 2024 年・前走は中央 9/6= 中 5 週)。
+    生年月日が両方にあって違えば別の馬。p が None(地方の前走なし)なら中央の走があれば採る。"""
+    last = str(h.get("last_jra_date") or "")
+    if not last or last >= str(run["race_date"]):
+        return False
+    bd, hb = run.get("birth_date"), h.get("birth_date")
+    if bd and hb and str(bd) != str(hb):
+        return False
+    return p is None or last > str(p["race_date"])
 
 
 def pick_prev(run, cands):
@@ -131,6 +145,42 @@ def quote_in(names):
     return enc(",".join('"' + n.replace('"', "") + '"' for n in names))
 
 
+def fetch_jra_prevs(base, key, runs, prevs, date):
+    """→ {(場, R, 馬番): 前走の行(場= 中央の場名・distance_m 付き)}。地方の前走より新しい中央の走がある馬だけ。通信は nar_jra_horses と nar_jra_runs の単純 select。"""
+    d0 = dt.date.fromisoformat(date)
+    todo = {}
+    for r in runs:
+        k = (str(r["track"]), int(r["race_no"]), int(r["runner_number"]))
+        p = prevs.get(k)
+        if p and (d0 - dt.date.fromisoformat(str(p["race_date"]))).days < JRA_LOOK_DAYS:
+            continue
+        nm = str(r.get("horse_name") or "")
+        if nm:
+            todo.setdefault(nm, []).append((k, r, p))
+    names = sorted(todo)
+    out = {}
+    memo = {}
+    for i in range(0, len(names), CHUNK):
+        hs = all_rows(base, key, "/rest/v1/nar_jra_horses?select=kb_horse_id,horse_name,birth_date,last_jra_date"
+                                 f"&horse_name=in.({quote_in(names[i:i + CHUNK])})&last_jra_date=lt.{date}",
+                      "horse_name.asc,kb_horse_id.asc")
+        for h in hs:
+            for k, r, p in todo.get(str(h["horse_name"]), []):
+                if not jra_newer(r, p, h):
+                    continue
+                mk = (str(h["kb_horse_id"]), str(h["last_jra_date"]))
+                if mk not in memo:
+                    got = all_rows(base, key, "/rest/v1/nar_jra_runs?select=race_date,place,race_no,finish,popularity,distance,finish_note"
+                                              f"&kb_horse_id=eq.{enc(mk[0])}&race_date=eq.{mk[1]}", "race_no.desc")
+                    memo[mk] = got[0] if got else None
+                j = memo[mk]
+                if not j or CANCEL_RE.search(str(j.get("finish_note") or "")):
+                    continue
+                out[k] = {"track": str(j["place"]), "race_date": str(j["race_date"]), "race_no": int(j["race_no"]),
+                          "finish": j.get("finish"), "popularity": j.get("popularity"), "distance_m": to_int(j.get("distance")), "jra": True}
+    return out
+
+
 def fetch(base, key, date):
     races_l = all_rows(base, key, f"/rest/v1/nar_races?select=track,race_no,post_time,distance_m&race_date=eq.{date}",
                        "track.asc,race_no.asc")
@@ -163,8 +213,10 @@ def fetch(base, key, date):
             k = (str(r["track"]), int(r["race_no"]), int(r["runner_number"]))
             if prevs[k] is None:
                 prevs[k] = pick_prev(r, cand2.get(str(r.get("horse_name") or ""), []))
-    pairs = sorted({(str(p["track"]), str(p["race_date"])) for p in prevs.values() if p})
-    prev_dist = {}
+    jra = fetch_jra_prevs(base, key, runs, prevs, date)
+    prevs.update(jra)
+    pairs = sorted({(str(p["track"]), str(p["race_date"])) for p in prevs.values() if p and not p.get("jra")})
+    prev_dist = {(p["track"], p["race_date"], p["race_no"]): p["distance_m"] for p in jra.values()}
     for i in range(0, len(pairs), 30):
         ors = ",".join(f"and(track.eq.{t},race_date.eq.{d})" for t, d in pairs[i:i + 30])
         for x in all_rows(base, key, f"/rest/v1/nar_races?select=track,race_date,race_no,distance_m&or=({enc(ors)})",
@@ -174,7 +226,7 @@ def fetch(base, key, date):
                                   f"&race_date=eq.{date}&kind=in.(transfer_in,stable_change,jra_in)",
                        "horse_name.asc,birth_date.asc,kind.asc")
     log(f"{date} レース {len(races)}・出走 {len(runs)}行・馬名 {len(names)}頭・前走なし {sum(1 for p in prevs.values() if not p)}"
-        f"・前走の開催 {len(pairs)}・移籍の行 {len(changes)}")
+        f"・前走の開催 {len(pairs)}・前走が中央 {len(jra)}頭・移籍の行 {len(changes)}")
     return runs, races, prevs, prev_dist, changes
 
 
