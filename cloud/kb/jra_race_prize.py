@@ -32,6 +32,41 @@ def parse(html):
     return vals or None
 
 
+JRA_PLACE = {"01": "札幌", "02": "函館", "03": "福島", "04": "新潟", "05": "東京", "06": "中山", "07": "中京", "08": "京都", "09": "阪神", "10": "小倉"}
+_KB_VENUE = {}   # JRA の場コード → 競馬ブックの場コード(0〜9)。1 度当たったら覚える(2026-10-20 京都=00・東京=04・中山=05 を確認)
+
+
+def kd_candidates(k):
+    """kd+yyyymmdd+場+回+日目+R → 競馬ブック頁の番号の候補(yyyy+回+場(0〜9)+日目+R)。"""
+    m = re.fullmatch(r"kd(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})", k)
+    if not m:
+        return []
+    y, mo, d, pl, kai, nichi, rr = m.groups()
+    known = _KB_VENUE.get(pl)
+    vs = [known] if known is not None else range(10)
+    return [(f"{y}{kai}{v:02d}{nichi}{rr}", v) for v in vs]
+
+
+def kd_to_page(k, wait):
+    """kd の番号 → (頁の番号, html)。頁の題(日付+場+R)が合うものだけ採る(合わなければ None)。"""
+    m = re.fullmatch(r"kd(\d{4})(\d{2})(\d{2})(\d{2})\d{2}\d{2}(\d{2})", k)
+    y, mo, d, pl, rr = m.groups()
+    want = f"{int(y)}年{int(mo)}月{int(d)}日{JRA_PLACE.get(pl, '?')}{int(rr)}R"
+    for pid, v in kd_candidates(k):
+        try:
+            req = urllib.request.Request(URL + pid, headers={"User-Agent": "Mozilla/5.0"})
+            h = urllib.request.urlopen(req, timeout=60).read().decode("utf-8", "ignore")
+        except Exception:
+            time.sleep(wait)
+            continue
+        time.sleep(wait)
+        t = re.search(r"<title>(.*?)</title>", h, re.S)
+        if t and want in t.group(1):
+            _KB_VENUE[pl] = v
+            return pid, h
+    return None, None
+
+
 def targets(url, key, days):
     q = urllib.parse.quote
     since = (dt.datetime.now(JST).date() - dt.timedelta(days=days)).isoformat()
@@ -51,8 +86,8 @@ def targets(url, key, days):
     races = set()
     for i in range(0, len(ids), 100):
         rs = sb_all(url, key, f"nar_jra_runs?select=kb_race_id&finish=lte.5&kb_horse_id=in.({','.join(ids[i:i + 100])})")
-        # 数字 12 桁だけが成績頁の番号(「kd…」は別の出どころの番号で頁が無い)
-        races |= {r["kb_race_id"] for r in rs if re.fullmatch(r"\d{12}", r.get("kb_race_id") or "")}
+        # 数字 12 桁= 成績頁の番号。「kd+日付8+場2+回2+日目2+R2」(KDSCOPE の番号)は頁の番号に直して取る(kd_to_page)
+        races |= {r["kb_race_id"] for r in rs if re.fullmatch(r"\d{12}|kd\d{16}", r.get("kb_race_id") or "")}
     have = set()
     rl = sorted(races)
     for i in range(0, len(rl), 150):
@@ -73,8 +108,14 @@ def main():
     got = none = err = 0
     for k in todo[:a.max]:
         try:
-            req = urllib.request.Request(URL + k, headers={"User-Agent": "Mozilla/5.0"})
-            v = parse(urllib.request.urlopen(req, timeout=60).read().decode("utf-8", "ignore"))
+            if k.startswith("kd"):
+                pid, html = kd_to_page(k, a.wait)
+                v = parse(html) if html else None   # 頁が見つからないときも honsho=null で残す(毎日やり直さない・差し替えは台帳の値のまま)
+                if not html:
+                    print("kd の頁が見つからない", k, flush=True)
+            else:
+                req = urllib.request.Request(URL + k, headers={"User-Agent": "Mozilla/5.0"})
+                v = parse(urllib.request.urlopen(req, timeout=60).read().decode("utf-8", "ignore"))
         except Exception as e:
             err += 1
             print("取れない", k, str(e)[:80], flush=True)
