@@ -1060,7 +1060,8 @@ TOKAI_KS_OLD = set(filter(None, os.environ.get("TOKAI_KS_OLD", "jadd,cut15,cut60
 
 def tokai_jra_add(trk, when, a=None):
     """中央歴の加算。名古屋は 2025 年中の転入(2歳より上)だけ 40万・それ以外は 70万(公式の第6/7/12/13/14回の一覧との突き合わせ・2026-10-20)"""
-    if (trk == "名古屋" or (trk == "笠松" and "jadd" in TOKAI_KS_OLD)) and when is not None and when < TOKAI_JADD_FROM             and (a is None or a > 2):
+    if (trk == "名古屋" or (trk == "笠松" and "jadd" in TOKAI_KS_OLD)) and when is not None and when < TOKAI_JADD_FROM \
+            and (a is None or a > 2):
         return TOKAI_JADD_OLD
     return 700_000
 
@@ -1719,6 +1720,24 @@ def tokai_attach_ta(url, key, led):
     log(f"§290 所属(trainer_area)を付けた走 {n}")
 
 
+KS_OFF = None
+
+
+def ks_official_once():
+    """笠松の最新の回の出走投票準備一覧 → ({馬名: 千円}, 回, 開催日)。1 便で 1 回だけ取る。取れなければ空(計算のまま)"""
+    global KS_OFF
+    if KS_OFF is None:
+        KS_OFF = ({}, None, set())
+        if os.environ.get("TOKAI_OFFICIAL", "1") == "1":
+            try:
+                import tokai_official
+                KS_OFF = tokai_official.fetch_kasamatsu(dt.datetime.now(JST).date())
+                log(f"笠松の出走投票準備一覧 第{KS_OFF[1]}回: {len(KS_OFF[0])} 頭・開催日 {sorted(x.isoformat() for x in KS_OFF[2])}")
+            except Exception as e:                           # 公式サイトの不調で便を落とさない
+                log("笠松の出走投票準備一覧が取れない→計算のまま:", repr(e)[:200])
+    return KS_OFF
+
+
 def main_tokai(a):
     consts = load_consts(a.node)
     system = next(s for s in consts["SYSTEMS"] if s["id"] == "nagoya")
@@ -1768,7 +1787,8 @@ def main_tokai(a):
         print_report(rep, f"東海(笠松・名古屋) 検算(オラクル= 次に走った普通競走の格・{since} 以降)")
         return 0
     if not a.apply and hist_wanted(a):
-        return hist_stage(a, 'tokai', {"lines": lines, "lag": a.lag if a.lag is not None else TOKAI_LAG, "races": races}, rows, births)
+        return hist_stage(a, 'tokai', {"lines": lines, "lag": a.lag if a.lag is not None else TOKAI_LAG, "races": races,
+                                       "local": bool(a.local)}, rows, births)
     if a.apply:
         if TOKAI_PARKED and os.environ.get("TOKAI_FORCE") != "1":
             log("東海は検算が 95% 未満(Ｂ級 86.9%)なので calc を書かない(docs/s79_p3_verify_tokai_20260903.md)")
@@ -1786,13 +1806,8 @@ def main_tokai(a):
                 log(f"公式の編成馬一覧 {cyc}: {len(official)} 頭")
             except Exception as e:                           # 公式サイトの不調で便を落とさない
                 log("公式の編成馬一覧が取れない→計算のまま:", repr(e)[:200])
-            try:                                             # 笠松= 最新の回の出走投票準備一覧(馬名だけで引く)
-                import tokai_official
-                ks_official, ks_cyc = tokai_official.fetch_kasamatsu()
-                ks_tag = f"(笠松 第{ks_cyc}回 出走投票準備一覧)" if ks_cyc else ""
-                log(f"笠松の出走投票準備一覧 第{ks_cyc}回: {len(ks_official)} 頭")
-            except Exception as e:
-                log("笠松の出走投票準備一覧が取れない→計算のまま:", repr(e)[:200])
+            ks_official, ks_cyc, _days = ks_official_once()  # 笠松= 最新の回の出走投票準備一覧(馬名だけで引く)
+            ks_tag = f"(笠松 第{ks_cyc}回 出走投票準備一覧)" if ks_cyc else ""
         n_off = n_diff = 0
         for r in rows:
             runs = r.get("runs") or []
@@ -1825,7 +1840,8 @@ def main_tokai(a):
                 log("upsert 失敗", st, msg)
                 return 1
         log("完了")
-        return hist_stage(a, 'tokai', {"lines": lines, "lag": a.lag if a.lag is not None else TOKAI_LAG, "races": races}, rows, births)
+        return hist_stage(a, 'tokai', {"lines": lines, "lag": a.lag if a.lag is not None else TOKAI_LAG, "races": races,
+                                       "local": bool(a.local)}, rows, births)
     return 0
 
 
@@ -2734,7 +2750,14 @@ def hist_calc(kind, ctx, r, b, d, track):
         c = saga_calc(ctx["lines"], runs, d, lag, b, age_at, ctx["races"])
         return c if c and c["cls"] != "２歳" else None
     if kind == "tokai":
-        return tokai_calc(ctx["lines"], runs, d, lag, b, age_at, ctx["races"], TOKAI_PREFIX[track])
+        c = tokai_calc(ctx["lines"], runs, d, lag, b, age_at, ctx["races"], TOKAI_PREFIX[track])
+        if c and track == "笠松" and not ctx.get("local"):     # その回の開催日の朝の値= 公式の出走投票準備一覧
+            off, cyc, days = ks_official_once()
+            ov = off.get(r.get("horse_name")) if d in days else None
+            if ov is not None:
+                import tokai_official
+                c = tokai_official.apply_official(c, ov, ctx["lines"], classify, next_line, f"(笠松 第{cyc}回 出走投票準備一覧)")
+        return c
     c = hyogo_calc(ctx["lines"], runs, d, lag, b, age_at, ctx["races"], HYOGO_PREFIX[track], hyogo_entry_label(ctx, r, d, track))
     if not c:
         return None

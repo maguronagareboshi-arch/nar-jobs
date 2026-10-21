@@ -106,15 +106,41 @@ def ks_parse_pdf(data):
     return out
 
 
-def fetch_kasamatsu():
-    """笠松 /raceprogram の最新の回(ページの先頭)の出走投票準備一覧 → ({馬名: 千円}, 回)。同名で値が違うものは外す"""
+def ks_dates(text, today):
+    """回の見出し「【１２回前半】１０月２１日、２２日、２３日」「４月１４～１７日」→ 開催日の集合。
+    年= きょうの年(きょうより 6 か月以上先の月は前の年)・「令和８年」があればそれ"""
+    import datetime as dt
+    import unicodedata
+    t = re.sub(r"【[^】]*】", " ", unicodedata.normalize("NFKC", text))
+    out, year, month = set(), None, None
+    for m in re.finditer(r"令和(\d+)年|(\d+)月|(\d+)日(?:\s*[~〜-]\s*(\d+)日)?|(\d+)\s*[~〜-]\s*(\d+)日", t):
+        if m.group(1):
+            year = 2018 + int(m.group(1))
+        elif m.group(2):
+            month = int(m.group(2))
+        elif month:
+            a, b = (int(m.group(3)), int(m.group(4) or m.group(3))) if m.group(3) else (int(m.group(5)), int(m.group(6)))
+            y = year or (today.year - 1 if month - today.month > 6 else today.year)
+            for d in range(a, b + 1):
+                try:
+                    out.add(dt.date(y, month, d))
+                except ValueError:
+                    pass
+    return out
+
+
+def fetch_kasamatsu(today=None):
+    """笠松 /raceprogram の最新の回(ページの先頭)の出走投票準備一覧 → ({馬名: 千円}, 回, 開催日の集合)。同名で値が違うものは外す"""
+    import datetime as dt
     html = http_get(f"{KS_BASE}/raceprogram").decode("utf-8", "ignore")
     mc = KS_CYC.search(html)
     if not mc:
-        return {}, None
+        return {}, None, set()
+    head = re.match(r"\s*</span>([^<]*)", html[mc.end():])
+    days = ks_dates(head.group(1) if head else "", today or dt.date.today())
     ml = KS_LINK.search(html, mc.end())
     if not ml:
-        return {}, None
+        return {}, None, set()
     seen, bad = {}, set()
     for name, prize in ks_parse_pdf(http_get(KS_BASE + ml.group(1))):
         if name in seen and seen[name] != prize:
@@ -122,7 +148,7 @@ def fetch_kasamatsu():
         seen[name] = prize
     for k in bad:
         seen.pop(k, None)
-    return seen, int(mc.group(1))
+    return seen, int(mc.group(1)), days
 
 
 def apply_official(c, prize_k, lines, classify, next_line, tag=""):
