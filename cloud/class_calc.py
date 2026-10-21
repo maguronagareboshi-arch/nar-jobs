@@ -1054,7 +1054,8 @@ TOKAI_JADD_FROM = dt.date(2026, 1, 1)
 # 笠松にも効かせる令和7年度の決まり(公式の出走投票準備一覧と突き合わせて一致が増えたものだけ・2026-10-21)
 #   jadd= 中央歴の加算 40万(デアルーチェ 第3/4/5/12回が全部合う) cut15= 中央歴の一斉編入 15% cut60= 生え抜き 60%
 #   ceil= 控除の千円未満切り上げ cap200= 生え抜きの控除限度を 187万でなく 200万に
-TOKAI_KS_OLD = set(filter(None, os.environ.get("TOKAI_KS_OLD", "jadd").split(",")))
+#   第12回の一覧 350 頭: 差0 150→jadd 179→+cut15 199→+cut60 204→+ceil 280(差3千以内 218→287)。cap200 は変わらず= 採らない
+TOKAI_KS_OLD = set(filter(None, os.environ.get("TOKAI_KS_OLD", "jadd,cut15,cut60,ceil").split(",")))
 
 
 def tokai_jra_add(trk, when, a=None):
