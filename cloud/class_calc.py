@@ -1370,6 +1370,11 @@ def tokai_affs(rs):
     return out
 
 
+def _started(r):
+    """出走したか= 着順がある走か 競走中止(発走した)。取消・除外・取止は出走でない(チャレッソ 名古屋 10/28 中止→ 調整あり 340→255)"""
+    return r.get("fin") is not None or r.get("note") == "中止"
+
+
 def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=None):
     """→ (value, resident, origin, young, entry_track)
     §290 所属= nar_runs.trainer_area(tokai_affs)。要綱(名古屋 R8・笠松 R8)の所属替えの扱い:
@@ -1612,14 +1617,14 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
                 enter(i, d, aff, a)
             if r.get("tr") in TOKAI_TRACKS:
                 rate, label = tokai_rate_resident(r, races.get((r.get("tr"),) + _rkey(r)) if races else None, r.get("tr"))
-                if not (r.get("fin") is None and r.get("tr") == "名古屋"):
+                if not (not _started(r) and r.get("tr") == "名古屋"):
                     last_young = young             # 名古屋 10(7)ア「最終出走時の階級」に除外・取消の走は入れない(リラキトス 3歳戦のあと除外→ 調整なし 660)
             else:
                 rate, label = tokai_rate_away(r)
                 last_young = young_race(r)         # 最終出走時の階級= 遠征先の競走の条件(2歳・3歳限定か)
             got = _thou(prize * rate)
             value += got
-            if r.get("fin") is not None:
+            if _started(r):
                 ran = True
             if young and not cur_young(d, value):                        # 線に達した→ 編入(控除)
                 value = max(0, value - (TOKAI_CUT[origin] if "e" in TOKAI_V else 0))
