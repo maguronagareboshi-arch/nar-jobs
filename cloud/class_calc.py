@@ -1224,6 +1224,10 @@ def tokai_grade(venue, name):
     return None
 
 
+TOKAI_CLASS_NAME = re.compile(r"[ＡＢＣ][０-９]+[ａ-ｃ]?(組)?$")          # 一般の組の競走の名前の末尾(Ｃ２２・Ｂ１ａ・Ｃ２２組)
+TOKAI_YOUNG_NAME = re.compile(r"(?<![0-9０-９])[２３23]歳(?!上|以上)")   # 2歳・3歳の競走(「祝２３歳」は年齢でない・「３歳以上」は古馬)
+
+
 def tokai_rate_resident(run, race, venue=None):
     """在籍馬の換算率。venue= レースの場(名古屋/笠松)。§285-B 要領 R8(名古屋 (2)・笠松 10(2))で場ごとに分ける。
     格は TOKAI_GRADE(名前表)で引く。Ｐ競走= race_kind「準重賞」(要領の「Ｐ=東海地区準重賞」)。
@@ -1232,11 +1236,11 @@ def tokai_rate_resident(run, race, venue=None):
     name = str((race or {}).get("race_name") or run.get("name") or "")
     kind = str((race or {}).get("race_kind") or "")
     venue = venue or str(run.get("tr") or "")
+    if TOKAI_CLASS_NAME.search(name) and "重賞級" not in name:
+        return 1.00, "東海"                          # 末尾が級と組= 一般の競走(「ＪＢＣ２０２５船橋・門別Ｃ２２」「くろゆり賞抽選会実施記念Ｂ６」は冠だけ)
     hit = tokai_grade(venue, name)
-    if hit and kind == "普通" and re.search(r"[ＡＢＣ][０-９]+[ａ-ｃ]?$", name):
-        hit = None                                     # 「くろゆり賞抽選会実施記念Ｂ６」は一般格の競走(重賞のくろゆり賞ではない)
-    grade, young = (hit if hit else (None, bool(re.search(r"[２３]歳", name))))
-    if hit and not young and re.search(r"[２３]歳(?!上|以上)", name):
+    grade, young = (hit if hit else (None, bool(TOKAI_YOUNG_NAME.search(name))))
+    if hit and not young and TOKAI_YOUNG_NAME.search(name):
         young = True                                   # 表では古馬扱いの名前でも「弥富記念３歳オープン」のように 3歳限定の回がある
     if hit and kind not in ("重賞", "準重賞"):
         kind = "準重賞" if grade == "P" else "重賞"
@@ -1301,8 +1305,32 @@ def before_day(run, day):
     return d is not None and d < day
 
 
+TOKAI_PUB = int(os.environ.get("TOKAI_PUB", "5"))   # 編成発表= 開催初日の 5 日前(笠松 10(9)「初日の前日から起算して 5 日前」)。0= 従来の lag/BLOCKLAG
+
+
+def tokai_pub(asof, track=None):
+    """asof の番組の編成発表日= asof を含む track の開催の初日(開催の外なら asof)の TOKAI_PUB 日前"""
+    f = asof
+    for a, b in TOKAI_BLOCKS.get(track, []):
+        if a <= asof <= b:
+            f = a
+            break
+    return f - dt.timedelta(days=TOKAI_PUB)
+
+
+def tokai_block_end(tr, d):
+    """その走の開催の最終日(東海の外の走は その日)"""
+    for a, b in TOKAI_BLOCKS.get(tr, []):
+        if a <= d <= b:
+            return b
+    return d
+
+
 def list_cut(track, first, k=None):
-    """公式の一覧(初日 first の回)の締め= first の k 日以上前に終わった直近の track の開催の最終日+1。開催が分からなければ None"""
+    """公式の一覧(初日 first の回)の締め= first の k 日以上前に終わった直近の track の開催の最終日+1。開催が分からなければ None
+    TOKAI_PUB のとき= その一覧の編成発表日(この日より前に終わった開催の走が入る)"""
+    if TOKAI_PUB and k is None:
+        return tokai_pub(first, track) if first and track in TOKAI_BLOCKS else None
     k = TOKAI_KS_BLOCKLAG if k is None else k
     if not first or track not in TOKAI_BLOCKS:
         return None
@@ -1318,7 +1346,10 @@ def official_usable(track, list_first, today):
 
 
 def tokai_cutoff(asof, lag, track=None):
-    """編成に使う成績の締め。TOKAI_BLOCKLAG=K なら「asof の K 日以上前に終わった直近の開催の最終日+1」(場= track)。"""
+    """編成に使う成績の締め。TOKAI_PUB なら 編成発表日(tokai_pub。この日より前に終わった開催の走だけ数える= tokai_state で開催の最終日も見る)。
+    TOKAI_BLOCKLAG=K なら「asof の K 日以上前に終わった直近の開催の最終日+1」(場= track)。"""
+    if TOKAI_PUB and TOKAI_BLOCKS:
+        return tokai_pub(asof, track)
     k = os.environ.get("TOKAI_BLOCKLAG") or (TOKAI_KS_BLOCKLAG if track == "笠松" and TOKAI_KS_BLOCKLAG else None)
     if k and track in TOKAI_BLOCKS:
         lim = asof - dt.timedelta(days=int(k))
@@ -1386,7 +1417,9 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
       ・25% の調整= 所属先の見直しの日だけ(名古屋 10(7)イ・笠松 10(6)イ)。所属替え前の収得は数えない(名古屋オ・笠松ク)。
         最後の出走が 2 歳格・3 歳格の馬は調整しない(名古屋 10(7)ア・笠松 10(6)ア(ア))"""
     cutoff = tokai_cutoff(asof, lag, track)
-    rs = sorted([r for r in runs if (d := _date(r.get("d"))) and d < cutoff], key=lambda r: str(r.get("d")))
+    pubm = bool(TOKAI_PUB and TOKAI_BLOCKS)
+    rs = sorted([r for r in runs if (d := _date(r.get("d"))) and d < cutoff
+                 and (not pubm or tokai_block_end(r.get("tr"), d) < cutoff)], key=lambda r: str(r.get("d")))
     if not rs:
         return 0, False, "native", True, None
     age = (lambda d: (d.year - birth.year) if birth else None)
@@ -1427,7 +1460,8 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
         return False
 
     first = _date(rs[0].get("d"))
-    events = [("run", _date(r.get("d")), i) for i, r in enumerate(rs)]
+    events = [("run", (tokai_block_end(r.get("tr"), _date(r.get("d"))) + dt.timedelta(days=1)) if pubm else _date(r.get("d")), i)
+              for i, r in enumerate(rs)]
     if "m" in TOKAI_V or not TOKAI_ADJ:
         for y in range(first.year, cutoff.year + 1):
             for md in (1, 4, 7, 10):
@@ -1453,7 +1487,10 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
     sd = max((x for x in seeds if first < x[0] <= cutoff), default=None, key=lambda x: x[0])
     if sd:
         events.append(("seed", sd[0], sd[1]))
-    events.sort(key=lambda t: (t[1], 0 if t[0] not in ("run", "seed") else (0.5 if t[0] == "seed" else 1)))
+    if pubm:   # 同じ日= 走り(その日に数えに入る)→ 調整・編入 → 出発点(公式の一覧の値は その日までの調整・編入を済ませた値= 1/6 の一覧は 12 月の調整後)
+        events.sort(key=lambda t: (t[1], 0 if t[0] == "run" else (1 if t[0] == "seed" else 0.5), str(rs[t[2]].get("d")) if t[0] == "run" else ""))
+    else:
+        events.sort(key=lambda t: (t[1], 0 if t[0] not in ("run", "seed") else (0.5 if t[0] == "seed" else 1)))
     value = 0
     home, prev_home = None, None                   # 今の所属(名古屋/笠松/None= 東海の外)・最後の東海の所属
     pending, last_tk_aff, entry_track, entry_date = [], None, None, None
@@ -1470,7 +1507,9 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
     def young_race(p):
         """東海の外の走が 2歳・3歳限定の競走か(「３歳上」「３歳以上」は古馬)。名前で読む"""
         n = unicodedata.normalize("NFKC", str(p.get("name") or ""))
-        return bool(re.search(r"[23]歳(?!上|以上)", n))
+        if TOKAI_CLASS_NAME.search(str(p.get("name") or "")):
+            return False                               # 末尾が級と組= 一般の競走(「りんご２歳のお誕生日記念Ｃ６」)
+        return bool(TOKAI_YOUNG_NAME.search(n))
 
     def adjust(d, trk):
         """25% の調整(名古屋 10(7)・笠松 10(6))。最後の出走が 2歳格・3歳格の馬は除く(読み方 y= 今の格だけで見る)"""
@@ -1502,7 +1541,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
                     young = False
                 continue
             rate, _label = tokai_rate_entry(p, age(e), "笠松")
-            got = _thou(int(p.get("prize") or 0) * rate)
+            got = _thou(int(p.get("prize") or 0) * round(rate * 100) // 100)
             last_young = young_race(p)
             value += got
             if young and not cur_young(e, value):
@@ -1532,11 +1571,16 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
             ks_reentry(a)
             young = cur_young(d, value)
         elif how.startswith("移籍(3"):
-            origin = "jra" if has_jra else "local"       # 値は引き継ぐが 3歳の一斉編入の控除は転入馬の率(公式の第14回 エイシンヒアカムズ 笠松→名古屋 1,342→939= 30%)
+            if trk == "名古屋":                        # 値は引き継ぐが 3歳の一斉編入の控除は転入馬の率(公式の第14回 エイシンヒアカムズ 笠松→名古屋 1,342→939= 30%)
+                origin = "jra" if has_jra else "local"
+            else:                                      # 笠松は東海の中の移籍を転出と数えない(スエ 名古屋→笠松 1,410→705= 50%)
+                origin = set_origin()
         elif how.startswith("再転入"):
             pass
         else:                                          # 転入・移籍= 全収得を所属先の換算表で換算し直す
             origin = set_origin()
+            if how == "移籍" and trk == "名古屋" and origin == "native":
+                origin = "local"                       # 名古屋は笠松からの移籍も転入馬(初出走が東海で転出歴のない馬でない)
             value = fresh_value(before, trk, a, d)
             young = cur_young(d, value)
             if not young and value >= 4_500_000:
@@ -1552,6 +1596,8 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
 
     ran = False                                    # 転入(所属替え)のあと東海所属で実際に走ったか(着順のある走。取消・除外・取止は入れない)
     for kind, d, i in events:
+        if kind == "run":
+            d = _date(rs[i].get("d"))              # 並びは数えに入る日・年齢や格は走った日で
         a = age(d)
         if kind == "seed":
             if track != "笠松" and home != "笠松":
@@ -1622,7 +1668,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
             else:
                 rate, label = tokai_rate_away(r)
                 last_young = young_race(r)         # 最終出走時の階級= 遠征先の競走の条件(2歳・3歳限定か)
-            got = _thou(prize * rate)
+            got = _thou(prize * round(rate * 100) // 100)
             value += got
             if _started(r):
                 ran = True
