@@ -19,6 +19,7 @@ for r in D["rows"]:
     byname[r["horse_name"]].append(r)
 LAG = C.TOKAI_LAG
 KS_ADJ = C.TOKAI_ADJ.get("笠松", [])
+C.tokai_a1_build(D["rows"])   # 令和6〜8年度 10(2)「Ａ級１組と同額」の試し(TOKAI_R6=Q)
 
 
 def pick(name, tracks):
