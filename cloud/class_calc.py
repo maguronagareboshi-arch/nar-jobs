@@ -1041,6 +1041,26 @@ TOKAI_PARKED = False
 TOKAI_ADJ = {}        # 場 → 調整日の一覧(四半期末の月の最終開催日の翌日。tokai_adj_dates で作る)
 TOKAI_BLOCKS = {}     # 場 → [(開催初日, 最終日)](tokai_adj_dates で作る)
 TOKAI_HEN = {}        # 年 → 3 歳の一斉編入日(読み方 u・tokai_adj_dates で作る。10 月の開催が見えるまでは無い)
+TOKAI_HEN_KS = {}     # 年 → 笠松所属の 3 歳の一斉編入日= 笠松の 9 月の見直しの日(TOKAI_KS_HEN_OWN のとき)
+# 笠松の出走投票準備一覧(2025-11〜2026-10 の 24 回)と突き合わせて決めた 5 則(2026-10-21)。
+#   照合 A= 前の一覧の公式の値から次の一覧を当てる(7,115 組)・照合 B= 計算だけで各一覧を当てる(9,060 件)。採らない→採る:
+#   A 差0 6,512→7,097(91.5→99.7%)・B 6,098→6,537・名古屋の編成馬一覧 10,262→10,268(落ちない)
+#   TOKAI_KS_BLOCKLAG= 笠松の一覧の値= 「開催初日の K 日以上前に終わった直近の笠松の開催」までの成績と見直し(3日前投票)。
+#     lag 7 日では 12/29〜31 の走・1/1 の見直しが 1/6 の一覧から漏れた(アンサングヒロイン 3611→2825・ジョリーメモリー 2736→2916)。K=1〜5 は同じ
+#   TOKAI_KS_HEN_OWN= 3 歳の一斉編入= 笠松の 9 月の見直しの日(2026-09-26)。名古屋の日(10/3)では 10/6 の一覧に間に合わない
+#     (ベラジオノユメ 1478→739・リコーレッドアイ 137→95)。笠松の一覧の値は名古屋所属の馬も同じ日(ポルタシャーンス 1233→986)
+#   TOKAI_KS_CARRY= 笠松の一覧に載る名古屋所属の馬= 名古屋の値に笠松の走を 100% で足す(換算し直さない・Ａ級の段も付けない)
+#     (マカーリオ 2847→3027・ケルンコンサート 9885→12185・スキピオ 7822→9822 ほか 33 組)
+#   TOKAI_KS_ENT= まだ東海で走っていない転入馬= 笠松の換算表(名古屋の表で換算していた: グッドロマンス 中央 8800→2160・
+#     ミルキープリンセス 840→652・アバンチュリエ→ 4400)
+#   TOKAI_KS_SP60= ⚠推定(令和7年度の要綱は未確認)。令和7年度(2026-03 まで)の笠松の古馬 SPⅡ・Ⅲ= 60%
+#     (グスタール マーチカップ 3/20 4000→+2400・スターサンドビーチ 白銀争覇 1/22 720→+432)
+#   試して落としたもの: 名古屋→笠松の移籍を換算し直さず引き継ぐ(B 6,525→6,166)
+TOKAI_KS_BLOCKLAG = int(os.environ.get("TOKAI_KS_BLOCKLAG", "3"))
+TOKAI_KS_HEN_OWN = os.environ.get("TOKAI_KS_HEN_OWN", "1") == "1"
+TOKAI_KS_CARRY = os.environ.get("TOKAI_KS_CARRY", "1") == "1"
+TOKAI_KS_ENT = os.environ.get("TOKAI_KS_ENT", "1") == "1"
+TOKAI_KS_SP60 = os.environ.get("TOKAI_KS_SP60", "1") == "1"
 
 
 TOKAI_FY2026 = dt.date(2026, 4, 1)
@@ -1129,11 +1149,15 @@ def tokai_adj_dates(races):
                     last[k] = b
         out[tr] = sorted(v + dt.timedelta(days=1) for v in last.values())
     TOKAI_HEN.clear()
+    TOKAI_HEN_KS.clear()
     later = max((d for ds in days.values() for d in ds), default=None)
     for y in sorted({d.year for ds in out.values() for d in ds}):
         sep = [d for ds in out.values() for d in ds if d.year == y and d.month in (9, 10) and d <= dt.date(y, 10, 10)]
         if sep and later and later >= dt.date(y, 10, 1):   # 10 月の開催が見えて初めて 9 月の最後が確定
             TOKAI_HEN[y] = max(sep)
+            ks = [d for d in out.get("笠松", []) if d.year == y and d.month in (9, 10) and d <= dt.date(y, 10, 10)]
+            if ks:
+                TOKAI_HEN_KS[y] = max(ks)
     return out
 
 
@@ -1232,6 +1256,9 @@ def tokai_rate_resident(run, race, venue=None):
         if grade == 1:
             return 0.60, "古馬SPⅠ"
         if grade == 2 or (grade == 3 and venue == "笠松"):
+            d = _date(run.get("d"))
+            if venue == "笠松" and TOKAI_KS_SP60 and d and d < TOKAI_FY2026:
+                return 0.60, "古馬SPⅡⅢ(令和7年度)"   # 笠松の一覧: グスタール マーチカップ 4000→+2400・スターサンドビーチ 白銀争覇 720→+432
             return 0.70, "古馬SPⅡⅢ"
         return 0.60, "古馬重賞"
     if kind == "準重賞" and young:
@@ -1268,7 +1295,7 @@ def tokai_rate_entry(run, age_entry, track):
 
 def tokai_cutoff(asof, lag, track=None):
     """編成に使う成績の締め。TOKAI_BLOCKLAG=K なら「asof の K 日以上前に終わった直近の開催の最終日+1」(場= track)。"""
-    k = os.environ.get("TOKAI_BLOCKLAG")
+    k = os.environ.get("TOKAI_BLOCKLAG") or (TOKAI_KS_BLOCKLAG if track == "笠松" and TOKAI_KS_BLOCKLAG else None)
     if k and track in TOKAI_BLOCKS:
         lim = asof - dt.timedelta(days=int(k))
         ends = [b for _a, b in TOKAI_BLOCKS[track] if b <= lim]
@@ -1319,7 +1346,7 @@ def tokai_affs(rs):
     return out
 
 
-def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
+def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=None):
     """→ (value, resident, origin, young, entry_track)
     §290 所属= nar_runs.trainer_area(tokai_affs)。要綱(名古屋 R8・笠松 R8)の所属替えの扱い:
       ・東海に初めて入る= 転入馬格付け(全収得を所属先の換算表で・中央歴 +70万・450万以上は Ａ級の段)
@@ -1364,7 +1391,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
         if a == 2:
             return v < TOKAI_Y2
         if a == 3 and "u" in TOKAI_V:
-            hen = TOKAI_HEN.get(d.year)
+            hen = (TOKAI_HEN_KS if TOKAI_KS_HEN_OWN and (home or prev_home) == "笠松" else TOKAI_HEN).get(d.year)
             return v < tokai_y3(d) and (d < hen if hen else d.month <= 9)
         if a == 3 and d.month <= 9:
             return v < tokai_y3(d)
@@ -1387,7 +1414,13 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
         for e in TOKAI_HEN.values():
             if first < e <= cutoff:
                 events.append(("hen", e, None))
-    events.sort(key=lambda t: (t[1], 0 if t[0] != "run" else 1))
+        if TOKAI_KS_HEN_OWN:
+            for e in TOKAI_HEN_KS.values():
+                if first < e <= cutoff:
+                    events.append(("hen", e, "笠松"))
+    if seed and first < seed[0] <= cutoff:          # 照合用: seed=(日, 値)= その日の値を公式の値に置き換えて続きを計算する
+        events.append(("seed", seed[0], seed[1]))
+    events.sort(key=lambda t: (t[1], 0 if t[0] not in ("run", "seed") else (0.5 if t[0] == "seed" else 1)))
     value = 0
     home, prev_home = None, None                   # 今の所属(名古屋/笠松/None= 東海の外)・最後の東海の所属
     pending, last_tk_aff, entry_track, entry_date = [], None, None, None
@@ -1483,7 +1516,23 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
 
     for kind, d, i in events:
         a = age(d)
+        if kind == "seed":
+            if home is None:                       # 東海の外・転入前= 公式の一覧に載った時点で所属(載った値が転入の格付けの値)
+                home = prev_home = prev_home or track or "笠松"
+                pending = []
+                deferred.clear()
+                if entry_date is None:
+                    origin = set_origin()
+                    entry_track, entry_date = home, d
+            value = i
+            if young and not cur_young(d, value):
+                young = False
+            continue
         if kind == "hen":                          # u: 3 歳の一斉編入(東海 2 場共通の日)
+            if i == "笠松":                          # TOKAI_KS_HEN_OWN: 笠松所属のまま次も笠松で走る馬だけ笠松の日に(他は従来の日)
+                nx = next((k for k, x in enumerate(rs) if _date(x.get("d")) >= d), None)
+                if track != "笠松" and ((home or prev_home) != "笠松" or (nx is not None and affs[nx] != "笠松")):
+                    continue                       # 笠松の一覧の値(track=笠松)は名古屋所属の馬も笠松の日に編入済み(ポルタシャーンス 1233→986 が 10/6 の一覧)
             if home is None and prev_home == "笠松":
                 deferred.append((d, "hen"))
             if home and young and a == 3:
@@ -1550,14 +1599,14 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
             pending.append(r)
         if trace:
             print(f"  {d} run  {str(r.get('tr')):4} {str(r.get('ta') or '-'):4} {prize:>9,} → value {value:>10,} home={home} young={young} pend={len(pending)}")
-    if track and rs and home is not None and home != track:
+    if track and rs and home is not None and home != track and not (track == "笠松" and TOKAI_KS_CARRY):
         # 笠松所属のまま名古屋の競走へ出る馬(その逆も)。公式の編成は移籍後の格付け= 転入と同じに全収得を所属先の換算表で換算し直す
         #   (名古屋 6(3)・笠松 5(1)オ)。例: 3歳 10 月に笠松→名古屋= 笠松での一斉編入の控除は付かず 収得 100% で一般格(公式の第14回 ヨザクラブルース 480)
         enter(len(rs), asof, track, age(asof))
     resident = home is not None
     if not resident and pending:                   # 今は東海の外= 東海へ転入したらの値
         a = age(asof)
-        trk = prev_home or "名古屋"
+        trk = prev_home or (track if TOKAI_KS_ENT and track in TOKAI_TRACKS else "名古屋")   # まだ東海で走っていない馬= 一覧の場の換算表
         if prev_home == "笠松" and last_tk_aff and (_date(pending[-1].get("d")) - last_tk_aff).days < TOKAI_KS_BACK:
             ks_reentry(a)
             young = cur_young(asof, value)
