@@ -145,5 +145,18 @@ class Regression(unittest.TestCase):
         self.assertLessEqual(len(k12), 2)       # stage3 12->13 の外れ 2(同着の端数の揺れ)以下
 
 
+
+class PreRaceOnly(unittest.TestCase):
+    def test_default_upto_is_yesterday(self):
+        import datetime as dt
+        now = dt.datetime(2026, 10, 21, 23, 50, tzinfo=C.JST)
+        self.assertEqual(C.default_upto(now), "2026-10-20")
+
+    def test_today_run_not_counted(self):
+        import datetime as dt
+        today = "2026-10-21"
+        upto = C.default_upto(dt.datetime(2026, 10, 21, 9, 0, tzinfo=C.JST))
+        self.assertLess(upto, today)
+
 if __name__ == "__main__":
     unittest.main()

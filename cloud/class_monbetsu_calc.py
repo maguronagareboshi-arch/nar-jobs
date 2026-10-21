@@ -527,6 +527,12 @@ def load_kais(d):
     return {"fy": fy, "kais": kais}
 
 
+def default_upto(now=None):
+    """数えるのは前日までの走だけ(開催日の便でその日の結果を発走前の値に入れない)"""
+    now = now or dt.datetime.now(JST)
+    return f"{now.date() - dt.timedelta(days=1):%Y-%m-%d}"
+
+
 def run(apply=False, out=None, upto=None, kais=None):
     base = os.environ.get("SUPABASE_URL", "").rstrip("/")
     key = os.environ.get("SUPABASE_SERVICE_KEY", "")
@@ -559,7 +565,7 @@ def run(apply=False, out=None, upto=None, kais=None):
     except Exception as e:                              # noqa: BLE001
         CM.log(f"走歴が読めない {type(e).__name__}: {str(e)[:150]}")
         return 2, None
-    upto = upto or f"{dt.datetime.now(JST):%Y-%m-%d}"
+    upto = upto or default_upto()
     value = build(official, hist, prev, nar, jra, races, upto, redo)
     ok, note, _ = note_of(value)
     CM.log(f"走 {len(nar)} / 競走 {len(races)} / 中央の馬 {len(jra)} → {note}")
@@ -586,7 +592,7 @@ def main():
     ap.add_argument("--apply", action="store_true", help="nar_meta へ入れて heartbeat を書く(既定はドライラン)")
     ap.add_argument("--env")
     ap.add_argument("--out", help="value を JSON で書き出す先")
-    ap.add_argument("--upto", help="加算の最終日(既定= JST の今日)")
+    ap.add_argument("--upto", help="加算の最終日(既定= JST の昨日・今日の走は入れない)")
     ap.add_argument("--kais", help="照合のやり直しに使う過去回の JSON(class_monbetsu.py --backfill --out の"
                     f"kaiNN.json)。無ければ nar_meta/{CM.HIST_KEY}")
     args = ap.parse_args()
