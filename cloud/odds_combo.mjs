@@ -153,3 +153,78 @@ export function judgeRace24(lib, model, ticks, post, track, raceNo, cf, k) {
   const mins = post - obs[idx].m;
   return { st: mins <= lib.REC_MAX ? 'ok' : 'gap', idx, m: obs[idx].m, mins, res, dev: lib.meanDev(res.rows) };
 }
+
+// ---------------------------------------------------------------- 28 特徴(2026-10-21)= 24 特徴+馬単1着・3連単1着の 4 特徴(du ds cdu cds)
+// ⛔4 特徴の作り方は研究の台本 research/odds_combo4/rows.mjs(枝 wip/odds-final-combo4-20261021)と**同じ**。
+//   u1/s1= nar_odds_ticks の刻み(確定を除く・u1 と s1 がそろう刻み・lim 以前で最新・lim−10 分より古ければ欠け・同じ分なら後の刻み)。
+//   du/ds= log(単勝の取り分 ÷ 馬単1着/3連単1着の取り分)・cdu/cds= 10 分前からの変化。模型は cloud/odds_combo28_model.json(公開しない)。
+//   試験 tests/odds_combo28_test.mjs が本物の 10/19 の刻みで研究の rows.csv(art4)と照合する。
+const hm2 = (t) => { const x = /^(\d{2}):?(\d{2})/.exec(String(t)); return x ? Number(x[1]) * 60 + Number(x[2]) : null; };
+const inv = (mp) => new Map([...mp].map(([u, v]) => [u, 1 / v]));
+// ticks(odds_record の形・u1/s1 は Map)→ 使える刻み [{m, u1, s1}]
+export function exTicks(ticks) {
+  return (ticks || []).filter((t) => !t.f && t.u1 && t.s1 && t.u1.size && t.s1.size).map((t) => ({ m: hm2(t.t), u1: t.u1, s1: t.s1 })).filter((t) => t.m !== null);
+}
+export function pickE(ex, lim) {
+  let best = null;
+  for (const o of ex || []) if (o.m <= lim && o.m >= lim - CGAP && (!best || o.m >= best.m)) best = o;
+  return best;
+}
+// cur= 馬番 → 今の単勝・ex= exTicks・pm= 発走・T= 時点 → 馬番 → [du, ds, cdu, cds](欠け・有限でない値は NaN)
+export function exFeats(cur, ex, pm, T) {
+  const ea = pickE(ex, pm - T);
+  const eb = pickE(ex, pm - T - 10);
+  const d = {};
+  for (const [nm, f2] of [['u', 'u1'], ['s', 's1']]) d[nm] = [ea ? devOf(cur, inv(ea[f2])) : null, eb ? devOf(cur, inv(eb[f2])) : null];
+  const fin = (v) => (Number.isFinite(v) ? v : NaN);
+  const out = new Map();
+  for (const u of cur.keys()) {
+    const ev = ['u', 's'].map((nm) => (d[nm][0] ? fin(d[nm][0].get(u)) : NaN));
+    const ec = ['u', 's'].map((nm) => (d[nm][0] && d[nm][1] ? fin(d[nm][0].get(u) - d[nm][1].get(u)) : NaN));
+    out.set(u, [...ev, ...ec]);
+  }
+  return out;
+}
+
+// 28 特徴の見込み(forecast24 と同じ形の行)。ex= exTicks(ticks)
+export function forecast28(lib, model, obs, hobs, idx, post, track, raceNo, cf, k, T, ex) {
+  const ti = model && Array.isArray(model.cats) ? model.cats.indexOf(track) : -1;
+  if (ti < 0) return null;
+  const kk = Number.isFinite(Number(model.k)) ? Number(model.k) : 1;
+  const m = idx >= 0 && idx < obs.length ? obs[idx].m : null;
+  const base = lib.featuresAt(obs, hobs, idx, post, ti, raceNo);
+  if (!base.length) return [];
+  const cur = new Map(base.map((r) => [r.u, r.cur]));
+  const sel = cf ? cf.sel(k, T) : null;
+  const cx = sel ? comboFeats(cur, sel, cf.sums) : null;
+  const xx = exFeats(cur, ex, post, T);
+  return base.map((r) => {
+    const x = [...r.x, ...(cx ? cx.get(r.u) : [NaN, NaN, NaN, NaN, NaN, NaN]), ...xx.get(r.u)];
+    const [q10, q50, q90] = lib.predictQ(model, x);
+    return {
+      ...r, x, m, q: [q10, q50, q90],
+      mid: r.cur * Math.exp(q50),
+      low: r.cur * Math.exp(q50 - kk * (q50 - q10)),
+      high: r.cur * Math.exp(q50 + kk * (q90 - q50)),
+    };
+  });
+}
+
+// judgeRace24 と同じ流れで 28 特徴の模型を引く(ticks の u1/s1 を使う)
+export function judgeRace28(lib, model, ticks, post, track, raceNo, cf, k) {
+  if (!Number.isFinite(post)) return { st: 'no_post' };
+  const obs = lib.obsOf(ticks);
+  const hobs = lib.hobsOf(ticks);
+  const ex = exTicks(ticks);
+  const T = lib.REC_T;
+  const run = (i) => (i < 0 ? [] : forecast28(lib, model, obs, hobs, i, post, track, raceNo, cf, k, T, ex));
+  if (run(obs.length - 1) === null) return { st: 'no_track' };
+  const fin = lib.finOf(ticks);
+  if (!fin) return { st: 'no_final' };
+  const idx = lib.pickAt(obs, post, T);
+  const rows = run(idx);
+  if (!rows.length) return { st: 'no_10min' };
+  const res = lib.checkHits(rows, fin);
+  const mins = post - obs[idx].m;
+  return { st: mins <= lib.REC_MAX ? 'ok' : 'gap', idx, m: obs[idx].m, mins, res, dev: lib.meanDev(res.rows) };
+}
