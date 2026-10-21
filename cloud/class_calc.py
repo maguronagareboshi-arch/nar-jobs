@@ -1511,18 +1511,35 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
             return False                               # 末尾が級と組= 一般の競走(「りんご２歳のお誕生日記念Ｃ６」)
         return bool(TOKAI_YOUNG_NAME.search(n))
 
+    def reentry_gain(d):
+        """笠松 10(6)ク ただし書き= 本要綱 6 の再転入馬(最後の笠松所属の出走から 9 か月未満で笠松所属に戻った)は
+        前の調整日より後の転出中の収得(転入馬の換算表 5(1)オ)も 期間の収得に数える(ニシノココ 門別 1 着ほか 512 千円 ≥ 調整額 486 → 調整なし)"""
+        ks = [k for k, x in enumerate(rs) if (last_adj is None or _date(x.get("d")) > last_adj) and _date(x.get("d")) <= d]
+        away = [k for k in ks if affs[k] not in TOKAI_TRACKS]
+        if not away:
+            return 0
+        prevg = [k for k in range(away[0]) if affs[k] == "笠松"]
+        nxt = [k for k in range(away[-1] + 1, len(rs)) if affs[k] == "笠松" and _date(rs[k].get("d")) <= d]
+        if not prevg or not nxt or (_date(rs[nxt[0]].get("d")) - _date(rs[prevg[-1]].get("d"))).days >= TOKAI_KS_BACK:
+            return 0
+        a = age(_date(rs[nxt[0]].get("d")))
+        return sum(_thou(int(rs[k].get("prize") or 0) * round(tokai_rate_entry(rs[k], a, "笠松")[0] * 100) // 100)
+                   for k in away if (rs[k].get("fin") or 99) <= 5)
+
     def adjust(d, trk):
         """25% の調整(名古屋 10(7)・笠松 10(6))。最後の出走が 2歳格・3歳格の馬は除く(読み方 y= 今の格だけで見る)"""
-        nonlocal value, gained, won
+        nonlocal value, gained, won, last_adj
         skip = young if "y" in TOKAI_V else (young or last_young)
         if trk == "名古屋" and not ran:
             skip = True                            # 名古屋 10(7)ア「一般格付馬として競走に出走した馬」= 転入後まだ走っていない馬は調整しない(メイショウヨリキリ 除外だけ 400→300 を止める・照合 B 名古屋 +42 件)。笠松は取消・除外の馬も調整される(グッドロマンス)
         if "q" in TOKAI_V and not skip and entry_date:
             # 笠松 10(6)ケ「千円未満の端数が生じた場合は切り上げる」。名古屋は要綱に定めが無いが、公式の番組賞金額の履歴(2025-19〜2026-14)で切り上げと確認
             adj = -(-math.ceil(value * 0.25) // 1000) * 1000
-            if not won and gained < adj:
-                value = max(0, value - (adj - gained))
+            g = gained + (reentry_gain(d) if trk == "笠松" and home == "笠松" else 0)
+            if not won and g < adj:
+                value = max(0, value - (adj - g))
         gained, won = 0, False
+        last_adj = d
         if trace:
             print(f"  {d} adj  → value {value:>10,} young={young}")
 
@@ -1594,6 +1611,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
         gained, won = 0, False
         ran = False
 
+    last_adj = None                                # 前の調整日(再転入馬の転出中の収得を数える範囲)
     ran = False                                    # 転入(所属替え)のあと東海所属で実際に走ったか(着順のある走。取消・除外・取止は入れない)
     for kind, d, i in events:
         if kind == "run":
