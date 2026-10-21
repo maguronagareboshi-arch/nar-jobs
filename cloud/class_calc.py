@@ -1136,7 +1136,7 @@ TOKAI_FY2023 = dt.date(2023, 4, 1)
 #   5L= 格の線 2歳 360万・3歳 330万  5X= 線越えの控除 3歳 150/60/20万・2歳 160/80/40万
 #   5C= 一斉編入 75%/30%/15%(限度 150/60/20万)  5E= 名古屋の転入換算 2023年12月まで 中央25/20/15・南関等40/30/25(1月から 35/25/20・50/40/30)
 #   5A= 名古屋の転入の Ａ級の段 330〜500万→330・〜800→450・〜1,500→600・〜2,500→900・〜4,000→1,300・以上 2,000
-#   5G= 2歳の SP 50%・新馬 60%
+#   5G= 2歳の SP 50%・新馬 60%  5Ak= 5A を笠松にも(笠松の令和5年度の要綱 youko_r5_kasamatsu.pdf= kasamatsu-keiba.com/resources/pdfs/news/2023/1680655528_c0d2f374a7808d909e02.pdf も同じ値)
 TOKAI_CUT_R5_3 = {"native": 1_500_000, "local": 600_000, "jra": 200_000}
 TOKAI_CUT_R5_2 = {"native": 1_600_000, "local": 800_000, "jra": 400_000}
 TOKAI_CUT_RATE_R5 = {"native": 0.75, "local": 0.30, "jra": 0.15}
@@ -1581,7 +1581,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
         return v
 
     def a_step(v, when=None, trk=None):
-        if trk == "名古屋" and tokai_r5(when, "5A"):
+        if tokai_r5(when, "5A" if trk == "名古屋" else "5Ak"):
             return next((val for lo, val in TOKAI_A_STEP_R5 if v >= lo), v)
         if tokai_r6_a(trk, when):
             return next((val for lo, val in TOKAI_A_STEP_R6 if v >= lo), v)
@@ -1753,7 +1753,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
                 origin = "local"                       # 名古屋は笠松からの移籍も転入馬(初出走が東海で転出歴のない馬でない)
             value = fresh_value(before, trk, a, d)
             young = cur_young(d, value)
-            if not young and value >= (3_300_000 if trk == "名古屋" and tokai_r5(d, "5A") else 3_800_000 if tokai_r6_a(trk, d) else 4_500_000):
+            if not young and value >= (3_300_000 if tokai_r5(d, "5A" if trk == "名古屋" else "5Ak") else 3_800_000 if tokai_r6_a(trk, d) else 4_500_000):
                 value = a_step(value, d, trk)
         if trace:
             print(f"  {d} {how} → {trk} value {value:>10,} young={young}")
@@ -1879,7 +1879,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
             origin = set_origin()
             value = fresh_value(rs, trk, a, asof)
             young = cur_young(asof, value)
-            if not young and value >= (3_300_000 if trk == "名古屋" and tokai_r5(asof, "5A") else 3_800_000 if tokai_r6_a(trk, asof) else 4_500_000):
+            if not young and value >= (3_300_000 if tokai_r5(asof, "5A" if trk == "名古屋" else "5Ak") else 3_800_000 if tokai_r6_a(trk, asof) else 4_500_000):
                 value = a_step(value, asof, trk)
         entry_track = trk
         if trace:
