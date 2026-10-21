@@ -1,4 +1,4 @@
-# 名古屋・笠松の番組賞金の計算を 1 頭ずつ追う調査用(手押しだけ・書き込みなし)
+# 一時(照合用): 東海の台帳を書き出して artifact に置く(書き込みなし)。照合が済んだら元の trace に戻す
 name: tokai-trace
 on:
   workflow_dispatch:
@@ -16,10 +16,17 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install -r cloud/requirements.txt
-      - name: trace
+      - name: dump
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-          HORSES: ${{ inputs.horse }}
         run: |
-          TRACE="$HORSES" python cloud/class_calc.py --prefix tokai --since 2026-10-01 2>&1 | grep -a -v '^\[' | head -400
+          python cloud/ks_dump.py 2>&1 | grep -a "^DUMP"
+          python cloud/tokai_demotion.py --dry-run --out dem.csv 2>&1 | grep -a -v "^\[" | tail -20
+      - uses: actions/upload-artifact@v7
+        with:
+          name: tokai-dump
+          path: |
+            tokai_dump.json.gz
+            dem.csv
+          retention-days: 1
