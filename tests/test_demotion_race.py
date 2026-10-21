@@ -33,5 +33,14 @@ class LiveRows(unittest.TestCase):
         self.assertEqual(rows[1]["asof"], "2026-09-30")
 
 
+
+class PreRaceLists(unittest.TestCase):
+    def test_meta_needs_list_before_d(self):
+        meta = {"KS": {"2026-09": "2026-09-24", "2026-06": "2026-06-20"}}
+        days = ["2026-06-15", "2026-06-25", "2026-09-20", "2026-10-05"]
+        # 9 月の見直しの日 9/24 を決めた一覧は 10/5= 10/1 の行には使わない
+        self.assertEqual(DR.ks_meta_upto(meta, days, "2026-10-01"), {"2026-06": "2026-06-20"})
+        self.assertEqual(DR.ks_meta_upto(meta, days, "2026-10-05"), meta["KS"])
+
 if __name__ == "__main__":
     unittest.main()

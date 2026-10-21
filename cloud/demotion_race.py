@@ -245,6 +245,16 @@ def bf_saga(url, key, ents, dfrom, node=None):
     return out
 
 
+def ks_meta_upto(meta_all, ks_list_days, d):
+    """nar_meta の笠松の見直しの日 v のうち、v を決めた一覧(v より後の最初の一覧)の日が d 以前のものだけ(後の一覧で決めた日を使わない)"""
+    out = {}
+    for k, v in (((meta_all or {}).get("KS")) or {}).items():
+        j = bisect.bisect_right(ks_list_days, v)
+        if v < d and j < len(ks_list_days) and ks_list_days[j] <= d:
+            out[k] = v
+    return out
+
+
 def bf_tokai(url, key, ents, dfrom, dto):
     import tokai_demotion as TK
     real_today = dt.datetime.now(JST).date()
@@ -283,18 +293,38 @@ def bf_tokai(url, key, ents, dfrom, dto):
                                   f"&race_date=gte.{since}&trainer_area=not.is.null&order=race_date,race_no,horse_name,track"):
             t = {"愛知": "NG", "笠松": "KS", "岐阜": "KS"}.get(x["trainer_area"])
             aff[TK.NF(x["horse_name"])].append((x["race_date"][:10], t))
-    cnt = collections.Counter((r["name"], r["trk"]) for r in ks_rows + ng_rows)
+    # 所属の予備= d 以前に出ていた一覧の行の数(d より後の一覧は使わない)
+    cnt_rows = collections.defaultdict(list)
+    for r in ks_rows + ng_rows:
+        cnt_rows[(r["name"], r["trk"])].append(r["date"])
+    for v in cnt_rows.values():
+        v.sort()
+
+    def cnt_upto(n, t, d):
+        return bisect.bisect_right(cnt_rows.get((n, t)) or [], d)
 
     def home(n, t, d):
         L = aff.get(TK.NF(n)) or []
         i = bisect.bisect_left([x[0] for x in L], d) - 1
         if i >= 0:
             return L[i][1] == t
-        return cnt[(n, t)] > cnt[(n, "NG" if t == "KS" else "KS")]
+        return cnt_upto(n, t, d) > cnt_upto(n, "NG" if t == "KS" else "KS", d)
     ks_days = TK.ks_race_days(url, key, since)
     ng_days = TK.ng_race_days(url, key, since)
     meta_all = TK.load_adj_meta(url, key)
-    detected = TK.ks_detect_adj(ks_rows)
+    ks_list_days = sorted({r["date"] for r in ks_rows})
+    det_memo = {}
+
+    def detected_upto(d):
+        """d 以前に出ていた笠松の一覧だけで特定した見直しの日(d より後の一覧で決めない)"""
+        i = bisect.bisect_right(ks_list_days, d)
+        if i not in det_memo:
+            upto = ks_list_days[i - 1] if i else ""
+            det_memo[i] = TK.ks_detect_adj([r for r in ks_rows if r["date"] <= upto]) if i else {}
+        return det_memo[i]
+
+    def meta_upto(d):
+        return ks_meta_upto(meta_all, ks_list_days, d)
     ern_all = TK.load_earn_all(url, key, (dt.date.fromisoformat(dfrom) - dt.timedelta(days=200)).isoformat(), day_before(dto))
     log(f"東海: 所属の記録 {len(aff)} 頭・収得の馬 {len(ern_all)}")
     out, fails = [], collections.Counter()
@@ -312,8 +342,8 @@ def bf_tokai(url, key, ents, dfrom, dto):
             try:
                 TK.log = lambda *a: None
                 if trk == "KS":
-                    known, _ = TK.ks_known_adj({"KS": {k: v for k, v in ((meta_all or {}).get("KS") or {}).items() if v < d}},
-                                               {k: v for k, v in detected.items() if v < d})
+                    known, _ = TK.ks_known_adj({"KS": meta_upto(d)},
+                                               {k: v for k, v in detected_upto(d).items() if v < d})
                     cands = TK.ks_candidates(today, [x for x in ks_days if x < d], known)
                 else:
                     cands = TK.ng_candidates(today, ls, ng_days)
