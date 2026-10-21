@@ -79,6 +79,52 @@ def fetch_official(year=None, cyc=None, days=(1, 2, 3, 4, 5)):
     return seen, (year, cyc)
 
 
+KS_BASE = "https://www.kasamatsu-keiba.com"
+KS_CYC = re.compile(r'class="l_number">\s*第\s*(\d+)\s*回')
+KS_LINK = re.compile(r'href="(/resources/pdfs/raceprogram/[^"]+\.pdf)"[^>]*>\s*<p[^>]*>\s*出走投票準備一覧')
+KS_PRIZE = re.compile(r"^(?:\d{1,2}R)?\s*(?:補欠)?(?:希望)?\s*[①-⑳]?\s*(\d{1,5})(\s+\D.*)?$")
+KS_NAME = re.compile(r"[゠-ヿ]{2,9}")
+
+
+def ks_parse_pdf(data):
+    """笠松の出走投票準備一覧 PDF → [(馬名, 番組賞金[千円])]。馬名の行の次の行の頭の数字
+    (「9R補欠①1930 藤田正」「12R ①4559 伊藤好56」のように頭に希望・補欠の印が付くことがある)"""
+    try:
+        import pymupdf
+    except ImportError:
+        import fitz as pymupdf
+    out = []
+    doc = pymupdf.open(stream=data, filetype="pdf")
+    for page in doc:
+        ls = [x.strip() for x in page.get_text().splitlines()]
+        for i in range(1, len(ls)):
+            m = KS_PRIZE.match(ls[i])
+            if not m or (not m.group(2) and len(m.group(1)) < 3):
+                continue
+            if KS_NAME.fullmatch(ls[i - 1]):
+                out.append((ls[i - 1], int(m.group(1))))
+    return out
+
+
+def fetch_kasamatsu():
+    """笠松 /raceprogram の最新の回(ページの先頭)の出走投票準備一覧 → ({馬名: 千円}, 回)。同名で値が違うものは外す"""
+    html = http_get(f"{KS_BASE}/raceprogram").decode("utf-8", "ignore")
+    mc = KS_CYC.search(html)
+    if not mc:
+        return {}, None
+    ml = KS_LINK.search(html, mc.end())
+    if not ml:
+        return {}, None
+    seen, bad = {}, set()
+    for name, prize in ks_parse_pdf(http_get(KS_BASE + ml.group(1))):
+        if name in seen and seen[name] != prize:
+            bad.add(name)
+        seen[name] = prize
+    for k in bad:
+        seen.pop(k, None)
+    return seen, int(mc.group(1))
+
+
 def apply_official(c, prize_k, lines, classify, next_line, tag=""):
     """計算結果 c の値を公式の値に差し替える(級・次の線も作り直す)。c は書き換えずに新しい辞書を返す"""
     out = dict(c)

@@ -22,4 +22,4 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
           HORSES: ${{ inputs.horse }}
         run: |
-          TRACE="$HORSES" python cloud/class_calc.py --prefix tokai --since 2026-10-01 2>&1 | grep -a -v '^\[' | head -400
+          python cloud/ks_compare.py 2>&1 | grep -a "^KS"

@@ -1051,18 +1051,23 @@ TOKAI_CUT_RATE_OLD = {"jra": 0.15}
 
 
 TOKAI_JADD_FROM = dt.date(2026, 1, 1)
+# 笠松にも効かせる令和7年度の決まり(公式の出走投票準備一覧と突き合わせて一致が増えたものだけ・2026-10-21)
+#   jadd= 中央歴の加算 40万(デアルーチェ 第3/4/5/12回が全部合う) cut15= 中央歴の一斉編入 15% cut60= 生え抜き 60%
+#   ceil= 控除の千円未満切り上げ cap200= 生え抜きの控除限度を 187万でなく 200万に
+TOKAI_KS_OLD = set(filter(None, os.environ.get("TOKAI_KS_OLD", "jadd").split(",")))
 
 
 def tokai_jra_add(trk, when, a=None):
     """中央歴の加算。名古屋は 2025 年中の転入(2歳より上)だけ 40万・それ以外は 70万(公式の第6/7/12/13/14回の一覧との突き合わせ・2026-10-20)"""
-    if trk == "名古屋" and when is not None and when < TOKAI_JADD_FROM and (a is None or a > 2):
+    if (trk == "名古屋" or (trk == "笠松" and "jadd" in TOKAI_KS_OLD)) and when is not None and when < TOKAI_JADD_FROM             and (a is None or a > 2):
         return TOKAI_JADD_OLD
     return 700_000
 
 
 def tokai_cut_amt(trk, value, rate):
     """3歳一斉編入の控除額。名古屋は千円未満切り上げ(公式の履歴で確認)・笠松は従来どおり切り捨て"""
-    return -(-math.ceil(value * rate) // 1000) * 1000 if trk == "名古屋" else _thou(value * rate)
+    up = trk == "名古屋" or (trk == "笠松" and "ceil" in TOKAI_KS_OLD)
+    return -(-math.ceil(value * rate) // 1000) * 1000 if up else _thou(value * rate)
 
 
 TOKAI_FY2025 = dt.date(2025, 4, 1)
@@ -1072,17 +1077,22 @@ TOKAI_CUT_NATIVE_2025 = 0.60   # 令和7年度の生え抜きの一斉編入= 60
 TOKAI_CUT_CAP_NATIVE_2025 = 1_870_000   # ⚠逆算の推定(要綱の裏付けなし)。令和7年度の生え抜きの控除限度額= 公式の値に 1,870 だけが合う(テレヴァカ 3745→1875 など約18件)。200万に戻すと一致 6035→6017。控除額の千円→万円切捨て説でも同値
 
 
-def tokai_cut_cap(origin, when):
+def tokai_cut_cap(origin, when, trk=None):
     if TOKAI_FY2025 <= when < TOKAI_FY2026:
         e = os.environ.get("CAP_" + origin)
         if e:
             return int(e)
-        if origin == "native":
+        if origin == "native" and not (trk == "笠松" and "cap200" in TOKAI_KS_OLD):
             return TOKAI_CUT_CAP_NATIVE_2025
     return TOKAI_CUT[origin]
 
 
 def tokai_cut_rate(trk, origin, when):
+    if trk == "笠松" and when < TOKAI_FY2026:
+        if origin == "jra" and "cut15" in TOKAI_KS_OLD:
+            return TOKAI_CUT_RATE_OLD["jra"]
+        if origin == "native" and when >= TOKAI_FY2025 and "cut60" in TOKAI_KS_OLD:
+            return TOKAI_CUT_NATIVE_2025
     if trk == "名古屋" and when < TOKAI_FY2026:
         if origin in TOKAI_CUT_RATE_OLD:
             return TOKAI_CUT_RATE_OLD[origin]
@@ -1475,7 +1485,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
             if home is None and prev_home == "笠松":
                 deferred.append((d, "hen"))
             if home and young and a == 3:
-                cut = min(tokai_cut_amt(home, value, tokai_cut_rate(home, origin, d)), tokai_cut_cap(origin, d)) if "e" in TOKAI_V else 0
+                cut = min(tokai_cut_amt(home, value, tokai_cut_rate(home, origin, d)), tokai_cut_cap(origin, d, home)) if "e" in TOKAI_V else 0
                 value = max(0, value - cut)
                 young = False
             if trace:
@@ -1490,7 +1500,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None):
             if home:
                 adjust(d, home)
             if "u" not in TOKAI_V and d.month in (9, 10) and home and young and a == 3:
-                cut = min(tokai_cut_amt(home, value, tokai_cut_rate(home, origin, d)), tokai_cut_cap(origin, d)) if "e" in TOKAI_V else 0
+                cut = min(tokai_cut_amt(home, value, tokai_cut_rate(home, origin, d)), tokai_cut_cap(origin, d, home)) if "e" in TOKAI_V else 0
                 value = max(0, value - cut)
                 young = False
             continue
@@ -1766,6 +1776,7 @@ def main_tokai(a):
         today = dt.datetime.now(JST).date()
         out = []
         official, off_tag = {}, ""
+        ks_official, ks_tag = {}, ""
         if os.environ.get("TOKAI_OFFICIAL", "1") == "1":     # 公式の編成馬一覧(最新の回)の値を正にする。取れなければ計算のまま
             try:
                 import tokai_official
@@ -1774,6 +1785,13 @@ def main_tokai(a):
                 log(f"公式の編成馬一覧 {cyc}: {len(official)} 頭")
             except Exception as e:                           # 公式サイトの不調で便を落とさない
                 log("公式の編成馬一覧が取れない→計算のまま:", repr(e)[:200])
+            try:                                             # 笠松= 最新の回の出走投票準備一覧(馬名だけで引く)
+                import tokai_official
+                ks_official, ks_cyc = tokai_official.fetch_kasamatsu()
+                ks_tag = f"(笠松 第{ks_cyc}回 出走投票準備一覧)" if ks_cyc else ""
+                log(f"笠松の出走投票準備一覧 第{ks_cyc}回: {len(ks_official)} 頭")
+            except Exception as e:
+                log("笠松の出走投票準備一覧が取れない→計算のまま:", repr(e)[:200])
         n_off = n_diff = 0
         for r in rows:
             runs = r.get("runs") or []
@@ -1790,11 +1808,14 @@ def main_tokai(a):
                 runs[0]["_name"] = r.get("horse_name")
             c = tokai_calc(lines, runs, today, lag, b, age_at, races, TOKAI_PREFIX[tr])
             if c:
-                ov = official.get((r.get("horse_name"), age_at(today)))
+                if tr == "笠松":
+                    ov, tag = ks_official.get(r.get("horse_name")), ks_tag
+                else:
+                    ov, tag = official.get((r.get("horse_name"), age_at(today))), off_tag
                 if ov is not None:
                     n_off += 1
                     n_diff += (c.get("value") or 0) != ov * 1000
-                    c = tokai_official.apply_official(c, ov, lines, classify, next_line, off_tag)
+                    c = tokai_official.apply_official(c, ov, lines, classify, next_line, tag)
                 out.append({"code": r["code"], "calc": c})
         log(f"東海 calc を書く: {len(out)} 頭(lag={lag})・うち公式の値 {n_off} 頭(計算と違った {n_diff} 頭)")
         for i in range(0, len(out), 200):
