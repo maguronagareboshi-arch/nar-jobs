@@ -1082,6 +1082,8 @@ TOKAI_KS_OLD = set(filter(None, os.environ.get("TOKAI_KS_OLD", "jadd,cut15,cut60
 
 def tokai_jra_add(trk, when, a=None):
     """中央歴の加算。名古屋は 2025 年中の転入(2歳より上)だけ 40万・それ以外は 70万(公式の第6/7/12/13/14回の一覧との突き合わせ・2026-10-20)"""
+    if tokai_r4(when, "4J") or tokai_r3(when, "3J"):
+        return 200_000                             # 令和3・4年度の要綱(笠松)= 中央歴 20万(2歳も)
     if "J5" in TOKAI_R6 and when is not None and dt.date(2023, 4, 1) <= when < dt.date(2024, 1, 1) and a != 2:
         return 200_000                             # 令和5年度の 2023 年中の転入(2 歳を除く)= 20万(笠松の令和4年度の要綱・名古屋の公式一覧 2023-04〜12 の転入 シュタイナー・ペルソナ など。2024-01 からは 40万)
     if (trk == "名古屋" or (trk == "笠松" and "jadd" in TOKAI_KS_OLD)) and when is not None and when < TOKAI_JADD_FROM \
@@ -1149,6 +1151,34 @@ def tokai_r5(d, key):
     return key in TOKAI_R6 and d is not None and TOKAI_FY2023 <= d < TOKAI_FY2024
 
 
+TOKAI_FY2022 = dt.date(2022, 4, 1)
+TOKAI_FY2021 = dt.date(2021, 4, 1)
+# 令和4年度(2022/4〜2023/3)・令和3年度(2021/4〜2022/3)。名古屋の要綱は公開なし= 笠松の要綱の東海統一の部分で代える
+#   (youko_r4_kasamatsu.pdf= 2022-09 差し替え版・dl_ks_jim/youko_r4_kasamatsu_202203.pdf= 当初版・dl_ks_r3/youko_r3_kasamatsu.pdf)。鍵は TOKAI_R6 に入れる:
+#   4L= 格の線 2歳・3歳とも 330万  4X= 線越えの控除 生え抜き 150万・地方 60万・中央 20万
+#   4C= 3歳の 10 月の編入= 定額の控除 150/60/20万(控除額以下は 0)  4E= 名古屋の転入換算 中央25/20/15・南関等40/30/25(令和5年度の前半と同じ)
+#   4J= 中央歴の加算 20万(2歳も)  4A= 転入の Ａ級の段 300〜400万→300・〜500→350・〜600→400・〜800→500・〜1,000→600・〜1,500→700・〜2,000→900・〜3,000→1,200・〜4,000→1,600・以上 2,000
+#   4G= 2歳3歳の SP・P 50%・新馬 60%(令和5年度と同じ)
+#   3L= 2歳 330万・3歳 300万(2022年1月から 330万)  3X= 生え抜き 3歳 140万・2歳 150万・地方 60万・中央 20万  3C= 定額 140/60/20万
+#   3E= 2021年12月までの転入換算 中央 20/15/10・南関等 30/25/20・北海道兵庫 80/70/60・その他(高知も) 100/90/80(2022年1月から令和4年度と同じ)
+#   3J・3A・3G= 4J・4A・4G を令和3年度にも
+TOKAI_CUT_R4 = {"native": 1_500_000, "local": 600_000, "jra": 200_000}
+TOKAI_CUT_R3_3 = {"native": 1_400_000, "local": 600_000, "jra": 200_000}
+TOKAI_CUT_R3_2 = {"native": 1_500_000, "local": 600_000, "jra": 200_000}
+TOKAI_ENTRY_R3 = {"jra": (0.20, 0.15, 0.10), "mid": (0.30, 0.25, 0.20), "hk": (0.80, 0.70, 0.60), "nar": (1.00, 0.90, 0.80)}
+TOKAI_A_STEP_R4 = ((40_000_000, 20_000_000), (30_000_000, 16_000_000), (20_000_000, 12_000_000), (15_000_000, 9_000_000),
+                   (10_000_000, 7_000_000), (8_000_000, 6_000_000), (6_000_000, 5_000_000), (5_000_000, 4_000_000),
+                   (4_000_000, 3_500_000), (3_000_000, 3_000_000))
+
+
+def tokai_r4(d, key):
+    return key in TOKAI_R6 and d is not None and TOKAI_FY2022 <= d < TOKAI_FY2023
+
+
+def tokai_r3(d, key):
+    return key in TOKAI_R6 and d is not None and d < TOKAI_FY2022
+
+
 def tokai_r6_a(trk, d):
     """令和6年度の転入の Ａ級の段(笠松 A・名古屋 An)"""
     return (trk == "笠松" and tokai_r6(d, "A")) or (trk == "名古屋" and tokai_r6(d, "An"))
@@ -1182,6 +1212,10 @@ def tokai_a1_same(run, label, got):
 
 def tokai_line(a, d):
     """2歳格・3歳格の上限(円)。令和7年度= 2歳 440万・3歳 400万(2026年1〜3月は 440万)/令和8年度〜= 2歳 450万・3歳 tokai_y3"""
+    if tokai_r4(d, "4L"):
+        return 3_300_000
+    if tokai_r3(d, "3L"):
+        return 3_300_000 if a == 2 or d.month <= 3 else 3_000_000
     if tokai_r5(d, "5L"):
         return 3_600_000 if a == 2 or d.month <= 3 else 3_300_000
     if tokai_r6(d, "L"):
@@ -1193,6 +1227,10 @@ def tokai_line(a, d):
 
 def tokai_line_cut(origin, by, d, trk=None):
     """線越えの控除(円)。令和7年度の 2022年生(3歳)= 180/90/40万・それ以外 200/100/70万"""
+    if tokai_r4(d, "4X"):
+        return TOKAI_CUT_R4[origin]
+    if tokai_r3(d, "3X") and by is not None:
+        return (TOKAI_CUT_R3_3 if by <= (d.year if d.month >= 4 else d.year - 1) - 3 else TOKAI_CUT_R3_2)[origin]
     if tokai_r5(d, "5X") and by is not None:
         return (TOKAI_CUT_R5_3 if by <= (d.year if d.month >= 4 else d.year - 1) - 3 else TOKAI_CUT_R5_2)[origin]
     if (tokai_r6(d, "X") or (trk == "笠松" and tokai_r6(d, "Xk"))) and by is not None:
@@ -1206,6 +1244,10 @@ TOKAI_CUT_CAP_NATIVE_2025 = 1_870_000   # ⚠逆算の推定(要綱の裏付け�
 
 
 def tokai_cut_cap(origin, when, trk=None):
+    if tokai_r4(when, "4C"):
+        return TOKAI_CUT_R4[origin]
+    if tokai_r3(when, "3C"):
+        return TOKAI_CUT_R3_3[origin]
     if tokai_r5(when, "5C"):
         return TOKAI_CUT_R5_3[origin]
     if tokai_r6(when, "C" if trk == "笠松" else "Cn"):
@@ -1222,6 +1264,8 @@ def tokai_cut_cap(origin, when, trk=None):
 
 
 def tokai_cut_rate(trk, origin, when):
+    if tokai_r4(when, "4C") or tokai_r3(when, "3C"):
+        return 1.00                                # 令和3・4年度= 定額の控除(控除額以下の馬は 0)
     if tokai_r5(when, "5C"):
         return TOKAI_CUT_RATE_R5[origin]
     if tokai_r6(when, "C" if trk == "笠松" else "Cn"):
@@ -1366,16 +1410,17 @@ def tokai_rate_resident(run, race, venue=None, age_at=None):
     if "認定" in both or "Ｊ認" in both:
         return 0.40, "認定"
     if "新馬" in name:
-        if tokai_r5(_date(run.get("d")), "5G"):
-            return 0.60, "新馬(令和5年度)"
+        d = _date(run.get("d"))
+        if tokai_r5(d, "5G") or tokai_r4(d, "4G") or tokai_r3(d, "3G"):
+            return 0.60, "新馬(令和5年度以前)"
         return 0.50, "新馬"
     if kind == "重賞":
         if young:
             d = _date(run.get("d"))
             if "駿蹄賞" in name and d and TOKAI_FY2025 <= d < TOKAI_FY2026 and venue == "名古屋" and "Sx" not in TOKAI_R6:
                 return 0.50, "駿蹄賞(令和7年度)"      # カワテンマックス: 公式の値(10000→調整後 7500)に合うのは 50%。令和8年度の要綱は 2歳3歳SP 40%
-            if tokai_r5(d, "5G"):
-                return 0.50, "2歳3歳SP(令和5年度)"
+            if tokai_r5(d, "5G") or tokai_r4(d, "4G") or tokai_r3(d, "3G"):
+                return 0.50, "2歳3歳SP(令和5年度以前)"
             if age_at == 3 and (tokai_r6(d, "G") or (venue == "笠松" and tokai_r6(d, "Gk"))
                                 or (venue == "名古屋" and tokai_r6(d, "Gn"))):
                 return 0.50, "3歳重賞(令和6年度)"
@@ -1411,6 +1456,11 @@ def tokai_rate_entry(run, age_entry, track, when=None):
     tbl = TOKAI_ENTRY_R6 if track == "笠松" and tokai_r6(when, "E") else TOKAI_ENTRY[track]
     if track == "名古屋" and tokai_r5(when, "5E") and when < dt.date(2024, 1, 1):
         tbl = TOKAI_ENTRY_R5
+    if track == "名古屋" and (tokai_r4(when, "4E") or tokai_r3(when, "4E")):
+        tbl = TOKAI_ENTRY_R5
+    old = tokai_r3(when, "3E") and when < dt.date(2022, 1, 1)
+    if old:
+        tbl = TOKAI_ENTRY_R3
     col = 0 if age_entry is None or age_entry <= 4 else (1 if age_entry <= 6 else 2)
     tr = str(run.get("tr") or "")
     name = str(run.get("name") or "")
@@ -1419,6 +1469,8 @@ def tokai_rate_entry(run, age_entry, track, when=None):
         return tbl["jra"][col] * mul, "転入前中央"
     if tr in NANKAN_TRACKS or "認定" in name or "Ｊ認" in name or _dg(name):
         return tbl["mid"][col], "転入前南関等"
+    if old:
+        return (tbl["hk"][col], "転入前兵庫高知") if tr in ("園田", "姫路", "門別", "帯広") else (tbl["nar"][col], "転入前地方")
     if tr in HYOGO_KOCHI or (tr == "門別" and tokai_r6(when, "H" if track == "笠松" else "Hn")):
         return tbl["hk"][col], "転入前兵庫高知"
     return tbl["nar"][col], "転入前地方"
@@ -1581,6 +1633,8 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
         return v
 
     def a_step(v, when=None, trk=None):
+        if tokai_r4(when, "4A") or tokai_r3(when, "3A"):
+            return next((val for lo, val in TOKAI_A_STEP_R4 if v >= lo), v)
         if tokai_r5(when, "5A" if trk == "名古屋" else "5Ak"):
             return next((val for lo, val in TOKAI_A_STEP_R5 if v >= lo), v)
         if tokai_r6_a(trk, when):

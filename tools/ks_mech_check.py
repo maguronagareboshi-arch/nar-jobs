@@ -5,7 +5,7 @@ A= 前の一覧の公式の値から次の一覧を当てる・B= tokai_state �
 引数: 候補の名前(カンマ区切り)。候補は環境変数 KS_RULES に入れて class_calc に効かせる。"""
 import datetime as dt, gzip, json, os, sys, unicodedata, re
 from collections import Counter, defaultdict
-S = r"C:\Users\kouki\AppData\Local\Temp\claude\C--Users-kouki-nar-site\6ec6fe4f-561d-4388-87fe-dbb7d57d3fea\scratchpad"
+S = os.environ.get("KS_S", r"C:\Users\kouki\nar-site\research\tokai-prize\r6check\work")
 sys.path.insert(0, r"C:\Users\kouki\wt\nar-jobs-ks-mech\cloud")
 import class_calc as C  # noqa: E402
 
