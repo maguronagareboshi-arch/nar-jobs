@@ -632,7 +632,8 @@ def forecast(trk, lists, cands, today, url, key, ern_all=None, cutoff=None):
         st, D, D2 = Cl, future[0], (future[1] if len(future) > 1 else None)
     log(f"{TRACK[trk]}: 直近の見直し {Cl}(またぐ組 {npair}・減った割合 {ratio if ratio is None else round(ratio, 2)})"
         f"・最新の一覧の開催 {last_meet} は {start[last_meet]} 始まり→ {'発表待ち' if pending else '反映済み'}・期間 {st}〜{D}・その次 {D2}")
-    until = min(D, today.isoformat(), cutoff or "9999-12-31")
+    # 数えるのは前日までの走だけ= 開催日の便(月・木 10:00・手押し)でも、その日のレースの結果を発走前の見込みに入れない
+    until = min(D, (today - dt.timedelta(days=1)).isoformat(), cutoff or "9999-12-31")
     cand = {}
     for n, d in tl.items():
         pre = [t for t in sorted(d) if st < t <= D]
