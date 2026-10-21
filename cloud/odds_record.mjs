@@ -7,12 +7,15 @@
 // 並走(2026-10-20)= 組の 6 特徴を足した 24 特徴の模型(cloud/odds_combo_model.json・公開しない)も同じ答え合わせをして
 //   value.shadow = { models, cols, rows, popCols, pop } に書く。⛔既存の行・列・数字は 1 つも変えない(画面は shadow を読まない)。
 //   並走が失敗した・期間が 7 日を超える・--no-shadow のときは前の shadow をそのまま残す。--combo-model で模型を差し替え
+// 並走 2 本目(2026-10-21)= 馬単1着・3連単1着の 4 特徴も足した 28 特徴の模型(cloud/odds_combo28_model.json・公開しない)。
+//   shadow.rows の mi で分ける(models に 'combo28:<built_on>')・k は shadow.k28・人気の順ごとは shadow.pop28。⛔N24 の行・k は今まで通り。
+//   片方が失敗したら、その模型の行だけ前の shadow のまま残す(もう片方は書く)。--combo28-model で差し替え・--no-shadow28 で止める
 // env: SUPABASE_URL / SUPABASE_SERVICE_KEY(書く)。読むだけの試験は NAR_ANON_KEY でもよい。
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve, dirname } from 'node:path';
 import { pathToFileURL, fileURLToPath } from 'node:url';
-import { comboDay, judgeRace24 } from './odds_combo.mjs';
+import { comboDay, judgeRace24, judgeRace28 } from './odds_combo.mjs';
 
 const args = process.argv.slice(2);
 const opt = (name, def) => { const i = args.indexOf(name); return i >= 0 && i + 1 < args.length ? args[i + 1] : def; };
@@ -33,6 +36,7 @@ const OUT = opt('--out', null);
 const FORCE = flag('--force');
 const META_KEY = 'odds_final_record';
 const COMBO_MODEL = opt('--combo-model', join(dirname(fileURLToPath(import.meta.url)), 'odds_combo_model.json'));
+const COMBO28_MODEL = opt('--combo28-model', join(dirname(fileURLToPath(import.meta.url)), 'odds_combo28_model.json'));
 const SHADOW_MAX_DAYS = 7;
 
 const die = (msg) => { console.error('停止: ' + msg); process.exit(1); };
@@ -83,6 +87,16 @@ if (shadowOn) {
     if (!model24 || !Array.isArray(model24.models) || !Array.isArray(model24.feats) || model24.feats.length !== 24) throw new Error('形が違う');
   } catch (e) { shadowOn = false; console.log('並走なし(模型が読めない): ' + e.message); }
 }
+// 並走 2 本目(28 特徴)。⛔N24 とは別に止まる
+let model28 = null;
+let on28 = !flag('--no-shadow') && !flag('--no-shadow28');
+if (on28) {
+  try {
+    for (const n of ['featuresAt', 'predictQ', 'obsOf', 'hobsOf', 'finOf', 'pickAt', 'checkHits', 'meanDev', 'REC_T', 'REC_MAX']) if (!(n in lib)) throw new Error('lib に ' + n + ' が無い');
+    model28 = JSON.parse(readFileSync(resolve(COMBO28_MODEL), 'utf8'));
+    if (!model28 || !Array.isArray(model28.models) || !Array.isArray(model28.feats) || model28.feats.length !== 28) throw new Error('形が違う');
+  } catch (e) { on28 = false; console.log('並走 28 なし(模型が読めない): ' + e.message); }
+}
 // §259 券種補正の一覧(since ≤ 日付 の最新の 1 件をその日に使う= 判定は lib の中)
 let adj;
 try {
@@ -98,6 +112,9 @@ const models = Array.isArray(old?.models) ? [...old.models] : [];
 const oldShadow = old && old.shadow && typeof old.shadow === 'object' ? old.shadow : null;
 const sModels = Array.isArray(oldShadow?.models) ? [...oldShadow.models] : [];
 const sMiOf = () => { const lb = 'combo24:' + model24.built_on; let i = sModels.indexOf(lb); if (i < 0) { sModels.push(lb); i = sModels.length - 1; } return i; };
+const sMiOf28 = () => { const lb = 'combo28:' + model28.built_on; let i = sModels.indexOf(lb); if (i < 0) { sModels.push(lb); i = sModels.length - 1; } return i; };
+// 前の shadow の行がどちらの模型か(mi の名前が combo28: なら 28・ほかは 24)
+const famOf = (a) => (String(sModels[a[a.length - 1]] || '').startsWith('combo28:') ? 28 : 24);
 // §257 mi= その日の見込みの名前(modelLabel= その日に使う補正があれば「built_on+券種(from〜to)」)の番号
 const miOf = (d) => { const lb = modelLabel(model, d, adj); let i = models.indexOf(lb); if (i < 0) { models.push(lb); i = models.length - 1; } return i; };
 
@@ -110,7 +127,9 @@ const synthNum = (x) => { const o = num(x); return o !== null && o > 0 ? o : nul
 const days = []; for (let d = FROM; d <= TO; d = addDays(d, 1)) days.push(d);
 const newRows = []; const newPop = []; const keepDays = new Set();
 if (shadowOn && days.length > SHADOW_MAX_DAYS) { shadowOn = false; console.log(`並走なし(${days.length} 日 > ${SHADOW_MAX_DAYS} 日)= 前の shadow を残す`); }
+if (on28 && days.length > SHADOW_MAX_DAYS) { on28 = false; console.log(`並走 28 なし(${days.length} 日 > ${SHADOW_MAX_DAYS} 日)= 前の行を残す`); }
 const sRows = []; const sPop = [];
+const sRows28 = []; const sPop28 = [];
 for (const d of days) {
   const races = await get(`nar_races?select=track,race_no,post_time&race_date=eq.${d}&limit=1000`);
   const post = new Map(races.map((r) => [r.track + '|' + r.race_no, r.post_time]));
@@ -140,9 +159,14 @@ for (const d of days) {
     items.push({ d, tr: track, j: pm === null ? { st: 'no_post' } : judgeRace(model, ticks, pm, track, Number(no), d, adj), mi });
   }
   // 並走(24 特徴)。⛔失敗しても既存の行には触らない(並走だけ止めて前の shadow を残す)
+  let cf = null;
+  if (shadowOn || on28) {
+    try { cf = await comboDay(get, d, [...pmBy].map(([k, pm]) => ({ k, pm })), [lib.REC_T]); } catch (e) {
+      console.log(`並走なし(${d} の組の刻みで失敗)= 前の shadow を残す: ` + e.message); shadowOn = false; on28 = false;
+    }
+  }
   if (shadowOn) {
     try {
-      const cf = await comboDay(get, d, [...pmBy].map(([k, pm]) => ({ k, pm })), [lib.REC_T]);
       const smi = sMiOf();
       const sItems = [];
       for (const [k, ticks] of by) {
@@ -157,6 +181,25 @@ for (const d of days) {
       for (const a of sr) { rc += a[2]; n += a[3]; hit += a[4]; }
       console.log(`${d} 並走 組の刻み ${cf.heads}(読んだ ${cf.need})レース ${rc} 幅 ${n ? ((hit / n) * 100).toFixed(1) : '-'}% (${hit}/${n})`);
     } catch (e) { shadowOn = false; console.log(`並走なし(${d} で失敗)= 前の shadow を残す: ` + e.message); }
+  }
+  // 並走 2 本目(28 特徴)。⛔失敗したら 28 の行だけ前のまま(N24 と既存の行には触らない)
+  if (on28) {
+    try {
+      const smi = sMiOf28();
+      const sItems = [];
+      for (const [k, ticks] of by) {
+        const [track, no] = k.split('|');
+        const pm = pmBy.get(k);
+        sItems.push({ d, tr: track, j: pm === null ? { st: 'no_post' } : judgeRace28(lib, model28, ticks, pm, track, Number(no), cf, k), mi: smi });
+      }
+      const sr = recordRows(sItems);
+      const sp = recordPopRows(sItems);
+      sRows28.push(...sr);
+      sPop28.push(...sp);
+      let rc = 0, n = 0, hit = 0;
+      for (const a of sr) { rc += a[2]; n += a[3]; hit += a[4]; }
+      console.log(`${d} 並走28 レース ${rc} 幅 ${n ? ((hit / n) * 100).toFixed(1) : '-'}% (${hit}/${n})`);
+    } catch (e) { on28 = false; console.log(`並走 28 なし(${d} で失敗)= 前の行を残す: ` + e.message); }
   }
   const dr = recordRows(items);
   newRows.push(...dr);
@@ -176,12 +219,20 @@ const all = kept.concat(newRows).sort((p, q) => (p[0] < q[0] ? -1 : p[0] > q[0] 
 const built = new Date(Date.now() + 9 * 3600e3).toISOString().replace('Z', '+09:00');
 const value = { v: 1, built, models, k: model.k, T: 10, max: 14, cols: REC_COLS, rows: all, popCols: POP_COLS, pop };
 const srt = (p, q) => (p[0] < q[0] ? -1 : p[0] > q[0] ? 1 : p[1] < q[1] ? -1 : p[1] > q[1] ? 1 : 0);
-if (shadowOn) {
-  const sk = (Array.isArray(oldShadow?.rows) ? oldShadow.rows : []).filter((a) => Array.isArray(a) && !inRange(a[0]));
-  const skp = (Array.isArray(oldShadow?.pop) ? oldShadow.pop : []).filter((a) => Array.isArray(a) && !inRange(a[0]));
-  const sp = skp.concat(sPop).sort(srt);
-  value.shadow = { models: sModels, k: model24.k, cols: REC_COLS, rows: sk.concat(sRows).sort(srt), popCols: POP_COLS, pop: sp };
-  console.log(`並走の行 ${value.shadow.rows.length}(新 ${sRows.length}・残し ${sk.length})人気の行 ${sp.length} models ${JSON.stringify(sModels)}`);
+if (shadowOn || on28) {
+  // 入れ替えるのは「今回書けた模型」の from〜to の行だけ。書けなかった模型の行は前のまま
+  const on = (a) => (famOf(a) === 28 ? on28 : shadowOn);
+  const sk = (Array.isArray(oldShadow?.rows) ? oldShadow.rows : []).filter((a) => Array.isArray(a) && !(inRange(a[0]) && on(a)));
+  // 人気の順ごと(pop)には mi が無い= N24 は shadow.pop(今まで通り)・N28 は shadow.pop28 に分ける
+  const keepP = (l, isOn) => (Array.isArray(l) ? l : []).filter((a) => Array.isArray(a) && !(inRange(a[0]) && isOn));
+  const nr = (shadowOn ? sRows : []).concat(on28 ? sRows28 : []);
+  const sp = keepP(oldShadow?.pop, shadowOn).concat(shadowOn ? sPop : []).sort(srt);
+  const sp28 = keepP(oldShadow?.pop28, on28).concat(on28 ? sPop28 : []).sort(srt);
+  value.shadow = { models: sModels, k: model24 ? model24.k : oldShadow?.k, cols: REC_COLS, rows: sk.concat(nr).sort(srt), popCols: POP_COLS, pop: sp };
+  const k28 = on28 ? model28.k : oldShadow?.k28;
+  if (k28 !== undefined) value.shadow.k28 = k28;
+  if (sp28.length || oldShadow?.pop28) value.shadow.pop28 = sp28;
+  console.log(`並走の行 ${value.shadow.rows.length}(新 ${nr.length}= 24 ${shadowOn ? sRows.length : '-'}・28 ${on28 ? sRows28.length : '-'}・残し ${sk.length})人気の行 ${sp.length}・28 ${sp28.length} models ${JSON.stringify(sModels)}`);
 } else if (oldShadow) value.shadow = oldShadow;
 if (OUT) writeFileSync(OUT, JSON.stringify(value));
 console.log(`行 ${all.length}(新 ${newRows.length}・残し ${kept.length})人気の行 ${pop.length} models ${JSON.stringify(models)}`);

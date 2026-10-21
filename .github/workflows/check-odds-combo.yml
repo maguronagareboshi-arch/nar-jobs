@@ -1,12 +1,13 @@
-# 並走(最終予測+組の 6 特徴・24 特徴の模型)の照合便。wip 枝 wip/odds-final-combo3-20261020 に push すると回る。
+# 並走(最終予測+組の 6 特徴・24 特徴の模型 N24/+馬単3連単の 4 特徴・28 特徴の模型 N28)の照合便。wip 枝 wip/odds-final-combo5-20261021 に push すると回る。
 # ⛔本番 DB は読むだけ(odds_record.mjs は --dry-run)。書き込みなし。
 # 1) tests/odds_combo_test.mjs= 模型の引き方と組の 6 特徴を 10/19 の本物のデータ(研究 run 39411417972 の rows.csv)と照合
-# 2) odds_record.mjs --dry-run で 10/19 を回し、既存の鍵が今の nar_meta と全部同じ・shadow が出ることを確かめる
+# 2) tests/odds_combo28_test.mjs= N28 の模型の引き方と 28 特徴を 10/19 の本物のデータ(研究 run 39520929300 の rows.csv)と照合
+# 3) odds_record.mjs --dry-run で 10/19〜10/21 を回し、既存の鍵・N24 の shadow 行が今の nar_meta と全部同じ・N28 の行が出ることを確かめる
 name: check-odds-combo
 on:
   push:
-    branches: ['wip/odds-final-combo3-20261020']
-    paths: ['cloud/odds_combo*', 'cloud/odds_record.mjs', 'tests/odds_combo_test.mjs', 'tests/odds_record_diff.mjs', '.github/workflows/check-odds-combo.yml']
+    branches: ['wip/odds-final-combo5-20261021']
+    paths: ['cloud/odds_combo*', 'cloud/odds_record.mjs', 'tests/odds_combo_test.mjs', 'tests/odds_record_diff.mjs', 'tests/odds_combo28_test.mjs', 'tests/odds_record_diff28.mjs', '.github/workflows/check-odds-combo.yml']
   workflow_dispatch:
 permissions:
   actions: read
@@ -32,10 +33,19 @@ jobs:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: node tests/odds_combo_test.mjs --csv out/rows.csv --day 2026-10-19
+      - name: rows from research run combo4
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh run download 39520929300 -n odds-combo4 -D out4 -R "${GITHUB_REPOSITORY}"
+      - name: combo28 features test
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: node tests/odds_combo28_test.mjs --csv out4/rows.csv --day 2026-10-19
       - name: odds record dry run
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
-          node cloud/odds_record.mjs --from 2026-10-19 --to 2026-10-19 --dry-run --out out/rec.json
-          node tests/odds_record_diff.mjs out/rec.json 2026-10-19
+          node cloud/odds_record.mjs --from 2026-10-19 --to 2026-10-21 --dry-run --out out/rec.json
+          node tests/odds_record_diff28.mjs out/rec.json 2026-10-19 2026-10-21
