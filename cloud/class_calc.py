@@ -1109,7 +1109,7 @@ TOKAI_R7 = set(filter(None, os.environ.get("TOKAI_R7", "L,X,C,Ck,S").split(","))
 TOKAI_CUT_R7 = {"native": 1_800_000, "local": 900_000, "jra": 400_000}
 
 TOKAI_FY2024 = dt.date(2024, 4, 1)
-TOKAI_R6 = set(filter(None, os.environ.get("TOKAI_R6", "E,H,A,Cn,PE,PH,L,Xk,Gk,Hn,An,PHn,PAn").split(",")))
+TOKAI_R6 = set(filter(None, os.environ.get("TOKAI_R6", "E,H,A,Cn,PE,PH,L,Xk,Gk,Hn,An,PHn,PAn,X,Gn,Sx,J5,5L,5X,5C,5E,5A,5G,5Ak,4J,4E,4G,4X,4A,4L,4C,3J,3A,3G,3L,3X,3C,3E").split(",")))
 # 笠松の令和6年度(2024/4〜2025/3)の番組要綱(research/tokai-prize/youko_r6_kasamatsu.txt)
 #   L= 格の線 2歳 400万・3歳 360万(1〜3月は 400万)  X= 線越えの控除 3歳 160/80/40万・2歳 180/90/40万
 #   C= 一斉編入 70%/30%/15%(限度 160/80/40万)を笠松に  Cn= 同じを名古屋に
