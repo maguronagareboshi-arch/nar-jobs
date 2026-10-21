@@ -88,12 +88,13 @@ if len(sys.argv) > 3:
     adj = dt.date(2027, 1, 1)
     C.TOKAI_ADJ.setdefault("笠松", []).append(adj)
     same, diff = 0, []
+    extra = json.load(open(os.environ["EXTRA"], encoding="utf-8")) if os.environ.get("EXTRA") else {}   # 台帳にまだ無い走(きょうの走)
     for x in rows:
         name = x["horse_name"]
         r = m.pick(name, ("笠松",))
         if not r:
             continue
-        v = C.tokai_state(r["runs"], C._date(m.births[r["code"]]), dt.date(2027, 1, 2), 1, m.races, track=None,
+        v = C.tokai_state(r["runs"] + extra.get(name, []), C._date(m.births[r["code"]]), dt.date(2027, 1, 2), 1, m.races, track=None,
                           seed=seeds_of(name))[0] // 1000
         p1 = int(float(x["p1"]))
         if v == p1:
