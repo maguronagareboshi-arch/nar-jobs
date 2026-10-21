@@ -1114,7 +1114,7 @@ TOKAI_R6 = set(filter(None, os.environ.get("TOKAI_R6", "E,H,A,Cn,PE,PH,L,Xk,Gk,H
 #   B= 笠松の再転入= 6 か月未満  G= 3歳重賞 50%(Gk= 笠松の競走だけ)  Xk= X を笠松所属の馬だけ
 #   P= 上の値を令和5年度以前にも(P<鍵>= その鍵だけ。令和4年度の笠松の要綱は E・H が同じ・A の段は違う)
 #   名古屋の令和6年度の要綱(youko_r6_nagoya.pdf・Web Archive 2024-09-19 a2407e96….pdf)で名古屋にも: Hn= 北海道 80% の組・An= Ａ級の段(笠松と同じ)
-#     Gn= 3歳の SP 50%(4〜12月の 3歳= その年度の 3歳)・Bn= 再転入 6 か月未満= 他場の収得を換算して前の値に足す(7)。Cn・X・L も名古屋の要綱と同じ値
+#     Gn= 3歳の SP 50%(1〜3月の 3歳も= 公式 2025-01 の一覧 カワテンマックス 2,900 の後 新春の SP を 50%)・Sx= 令和7年度の駿蹄賞 50% の当てはめをやめる(要綱は 40%)・Bn= 再転入 6 か月未満= 他場の収得を換算して前の値に足す(7)。Cn・X・L も名古屋の要綱と同じ値
 #   Q= 笠松の古馬重賞で Ａ級１組の加算額以下・古馬準重賞で超える= Ａ級１組と同額(令和6〜8年度の 10(2)・全年度)  Qn= 同じを名古屋に
 TOKAI_CUT_R6_3 = {"native": 1_600_000, "local": 800_000, "jra": 400_000}
 TOKAI_CUT_R6_2 = {"native": 1_800_000, "local": 900_000, "jra": 400_000}
@@ -1342,10 +1342,10 @@ def tokai_rate_resident(run, race, venue=None, age_at=None):
     if kind == "重賞":
         if young:
             d = _date(run.get("d"))
-            if "駿蹄賞" in name and d and TOKAI_FY2025 <= d < TOKAI_FY2026 and venue == "名古屋":
+            if "駿蹄賞" in name and d and TOKAI_FY2025 <= d < TOKAI_FY2026 and venue == "名古屋" and "Sx" not in TOKAI_R6:
                 return 0.50, "駿蹄賞(令和7年度)"      # カワテンマックス: 公式の値(10000→調整後 7500)に合うのは 50%。令和8年度の要綱は 2歳3歳SP 40%
             if age_at == 3 and (tokai_r6(d, "G") or (venue == "笠松" and tokai_r6(d, "Gk"))
-                                or (venue == "名古屋" and tokai_r6(d, "Gn") and d.month >= 4)):
+                                or (venue == "名古屋" and tokai_r6(d, "Gn"))):
                 return 0.50, "3歳重賞(令和6年度)"
             return 0.40, "2歳3歳重賞"
         if grade == 1:
