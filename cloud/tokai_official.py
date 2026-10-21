@@ -151,6 +151,80 @@ def fetch_kasamatsu(today=None):
     return seen, int(mc.group(1)), days
 
 
+KS_PAGE_DAY = re.compile(r"第\s*\d+\s*日目\s*(\d+)月\s*(\d+)日")
+
+
+def ks_pages(data):
+    """出走投票準備一覧 PDF → {開催日: {馬名: 千円}}。1 ページ= 1 開催日(「第4日目 7月 8日(水)」「令和8年度」から日付)。
+    前半・後半を 1 つの PDF に入れた回(第1・4・5回)は ページごとに値が違う(後半は見直し後)ので日ごとに分ける"""
+    import datetime as dt
+    import unicodedata
+    try:
+        import pymupdf
+    except ImportError:
+        import fitz as pymupdf
+    out = {}
+    for page in pymupdf.open(stream=data, filetype="pdf"):
+        raw = page.get_text()
+        t = unicodedata.normalize("NFKC", raw)
+        fy, md = re.search(r"令和(\d+)年度", t), KS_PAGE_DAY.search(t)
+        if not fy or not md:
+            continue
+        m, d = int(md.group(1)), int(md.group(2))
+        try:
+            day = dt.date(2018 + int(fy.group(1)) + (1 if m < 4 else 0), m, d)
+        except ValueError:
+            continue
+        got = out.setdefault(day, {})
+        ls = [x.strip() for x in raw.splitlines()]
+        for i in range(1, len(ls)):
+            mm = KS_PRIZE.match(ls[i])
+            if not mm or (not mm.group(2) and len(mm.group(1)) < 3):
+                continue
+            if KS_NAME.fullmatch(ls[i - 1]):
+                got.setdefault(ls[i - 1], set()).add(int(mm.group(1)))
+    return out
+
+
+def fetch_kasamatsu_all(cut_of=None):
+    """笠松 /raceprogram に載っている全部の回の出走投票準備一覧 → [(回, 開催日の集合, 締めの日, {馬名: 千円})](古い順)。
+    続けて開いた日(空き 5 日以内)で値の食い違いが無いものを 1 つの一覧にまとめる(12/26 と 12/29〜31 は同じ値)。
+    締めの日= cut_of(初日)(class_calc の tokai_cutoff= 初日の 3 日以上前に終わった直近の笠松の開催の最終日+1)。
+    同じ一覧の中で同名で値の違う馬は外す"""
+    html = http_get(f"{KS_BASE}/raceprogram").decode("utf-8", "ignore")
+    ms = list(KS_CYC.finditer(html))
+    days = {}
+    for i, mc in enumerate(ms):
+        seg = html[mc.end(): ms[i + 1].start() if i + 1 < len(ms) else len(html)]
+        ml = KS_LINK.search(seg)
+        if not ml:
+            continue
+        for d, v in ks_pages(http_get(KS_BASE + ml.group(1))).items():
+            cur = days.setdefault(d, (int(mc.group(1)), {}))[1]
+            for n, ps in v.items():
+                cur.setdefault(n, set()).update(ps)
+    blocks = []
+    for d in sorted(days):
+        cyc, v = days[d]
+        one = {n: next(iter(ps)) for n, ps in v.items() if len(ps) == 1}
+        bad = {n for n, ps in v.items() if len(ps) > 1}
+        if blocks and (d - blocks[-1]["last"]).days <= 5 and                 not any(n in blocks[-1]["off"] and blocks[-1]["off"][n] != p for n, p in one.items()):
+            b = blocks[-1]
+        else:
+            b = {"cyc": cyc, "days": set(), "off": {}, "bad": set(), "last": d}
+            blocks.append(b)
+        b["days"].add(d)
+        b["last"] = d
+        b["bad"] |= bad
+        b["off"].update(one)
+    out = []
+    for b in blocks:
+        off = {n: p for n, p in b["off"].items() if n not in b["bad"]}
+        first = min(b["days"])
+        out.append((b["cyc"], b["days"], cut_of(first) if cut_of else first, off))
+    return out
+
+
 def apply_official(c, prize_k, lines, classify, next_line, tag=""):
     """計算結果 c の値を公式の値に差し替える(級・次の線も作り直す)。c は書き換えずに新しい辞書を返す"""
     out = dict(c)

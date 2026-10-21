@@ -1418,8 +1418,12 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
             for e in TOKAI_HEN_KS.values():
                 if first < e <= cutoff:
                     events.append(("hen", e, "笠松"))
-    if seed and first < seed[0] <= cutoff:          # 照合用: seed=(日, 値)= その日の値を公式の値に置き換えて続きを計算する
-        events.append(("seed", seed[0], seed[1]))
+    # 出発点 seed=(日, 値) か その並び= 締めの日に value を公式の一覧の値に置き換えて、その後の走・見直し・編入は仕組みで進める
+    #   (笠松の出走投票準備一覧= KS_SEEDS)。cutoff までの一番新しいもの 1 つだけ使う
+    seeds = [seed] if isinstance(seed, tuple) else (seed or [])
+    sd = max((x for x in seeds if first < x[0] <= cutoff), default=None, key=lambda x: x[0])
+    if sd:
+        events.append(("seed", sd[0], sd[1]))
     events.sort(key=lambda t: (t[1], 0 if t[0] not in ("run", "seed") else (0.5 if t[0] == "seed" else 1)))
     value = 0
     home, prev_home = None, None                   # 今の所属(名古屋/笠松/None= 東海の外)・最後の東海の所属
@@ -1517,6 +1521,8 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
     for kind, d, i in events:
         a = age(d)
         if kind == "seed":
+            if track != "笠松" and home != "笠松":
+                continue                           # 笠松の一覧の値は 笠松の一覧の計算か 笠松所属の馬だけに当てる
             if home is None:                       # 東海の外・転入前= 公式の一覧に載った時点で所属(載った値が転入の格付けの値)
                 home = prev_home = prev_home or track or "笠松"
                 pending = []
@@ -1622,10 +1628,11 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
     return value, resident, origin, young, entry_track
 
 
-def tokai_calc(lines, runs, asof, lag, birth, age_at, races, prefix):
+def tokai_calc(lines, runs, asof, lag, birth, age_at, races, prefix, name=None):
     tr_on = os.environ.get("TRACE") and runs and runs[0].get("_name") == os.environ.get("TRACE")
     value, resident, origin, young, entry_track = tokai_state(runs, birth, asof, lag, races, trace=bool(tr_on),
-                                                              track={v: k for k, v in TOKAI_PREFIX.items()}.get(prefix))
+                                                              track={v: k for k, v in TOKAI_PREFIX.items()}.get(prefix),
+                                                              seed=KS_SEEDS.get(name) if name else None)
     age = age_at(asof)
     out = {"prefix": prefix, "src": "calc", "asof": asof.isoformat(), "basis": "prize", "value": value,
            "window": "東海転入〜", "lag": lag}
@@ -1770,6 +1777,29 @@ def tokai_attach_ta(url, key, led):
 
 
 KS_OFF = None
+KS_SEEDS = {}       # 馬名 → [(締めの日, 値[円])]= 笠松の全部の回の出走投票準備一覧(tokai_state の出発点)
+KS_SEEDS_DONE = False
+
+
+def ks_lists_once():
+    """笠松 /raceprogram の全部の回の一覧 → KS_SEEDS。1 便で 1 回だけ取る(TOKAI_ADJ を作った後に呼ぶ)。取れなければ空(計算のまま)"""
+    global KS_SEEDS_DONE
+    if KS_SEEDS_DONE:
+        return KS_SEEDS
+    KS_SEEDS_DONE = True
+    if os.environ.get("TOKAI_OFFICIAL", "1") != "1" or os.environ.get("TOKAI_KS_SEED", "1") != "1":
+        return KS_SEEDS
+    try:
+        import tokai_official
+        lists = tokai_official.fetch_kasamatsu_all(lambda d: tokai_cutoff(d, 0, "笠松"))
+        for _cyc, _days, cut, off in lists:
+            for n, k in off.items():
+                KS_SEEDS.setdefault(n, []).append((cut, int(k) * 1000))
+        log(f"笠松の出走投票準備一覧 全部 {len(lists)} 件(回 {sorted({x[0] for x in lists})})・出発点のある馬 {len(KS_SEEDS)}")
+    except Exception as e:                                   # 公式サイトの不調で便を落とさない
+        KS_SEEDS.clear()
+        log("笠松の出走投票準備一覧(全部)が取れない→出発点なしの計算:", repr(e)[:200])
+    return KS_SEEDS
 
 
 def ks_official_once():
@@ -1813,6 +1843,8 @@ def main_tokai(a):
         rows, births, entered, races = fetch_tokai(url, key, since)
     log(f"台帳 {len(rows)} 頭(東海の走が {since} 以降にある馬)・レース {len(races)}")
     TOKAI_ADJ.update(tokai_adj_dates(races))
+    if not a.local:
+        ks_lists_once()
     log("調整日:", {k: [x.isoformat() for x in v if x.year >= 2025] for k, v in TOKAI_ADJ.items()},
         "3歳の一斉編入:", {y: d.isoformat() for y, d in TOKAI_HEN.items()} if "u" in TOKAI_V else "所属場の調整日")
     if os.environ.get("TRACE") and not a.apply:   # 調査用: 指定の馬の計算経過だけ出す(書き込みなし)
@@ -1871,7 +1903,7 @@ def main_tokai(a):
             age_at = (lambda d, b=b: d.year - b.year)
             if os.environ.get("TRACE") and runs and r.get("horse_name") == os.environ.get("TRACE"):
                 runs[0]["_name"] = r.get("horse_name")
-            c = tokai_calc(lines, runs, today, lag, b, age_at, races, TOKAI_PREFIX[tr])
+            c = tokai_calc(lines, runs, today, lag, b, age_at, races, TOKAI_PREFIX[tr], r.get("horse_name"))
             if c:
                 if tr == "笠松":
                     ov, tag = ks_official.get(r.get("horse_name")), ks_tag
@@ -2799,7 +2831,8 @@ def hist_calc(kind, ctx, r, b, d, track):
         c = saga_calc(ctx["lines"], runs, d, lag, b, age_at, ctx["races"])
         return c if c and c["cls"] != "２歳" else None
     if kind == "tokai":
-        c = tokai_calc(ctx["lines"], runs, d, lag, b, age_at, ctx["races"], TOKAI_PREFIX[track])
+        c = tokai_calc(ctx["lines"], runs, d, lag, b, age_at, ctx["races"], TOKAI_PREFIX[track],
+                       None if ctx.get("local") else r.get("horse_name"))
         if c and track == "笠松" and not ctx.get("local"):     # その回の開催日の朝の値= 公式の出走投票準備一覧
             off, cyc, days = ks_official_once()
             ov = off.get(r.get("horse_name")) if d in days else None
