@@ -1098,6 +1098,27 @@ TOKAI_FY2025 = dt.date(2025, 4, 1)
 TOKAI_CUT_NATIVE_2025 = 0.60   # 令和7年度の生え抜きの一斉編入= 60%(2025-10-04)。公式の第14回の一覧と 突き合わせて決めた(タクティカ 685→274 など 9 頭が一致・2026-10-20)
 
 
+TOKAI_R7 = set(filter(None, os.environ.get("TOKAI_R7", "L,X,C,Ck,S").split(",")))
+# 名古屋の令和7年度の番組要綱(nagoyakeiba.com/info/program/file/84f7f82b7b2e1e7e55a5cfedf1e5906915f72cf8.pdf・Web Archive 2025-04-01)。格の線は東海地区統一
+#   L= 格の線 2歳 440万・3歳 400万(2026年1〜3月の 2023年生は 440万)  X= 線越えの控除 2022年生(3歳) 180/90/40万
+#   C= 一斉編入の控除の限度 生え抜き 180万・地方 90万・中央 40万(名古屋)  Ck= 同じ限度を笠松にも  S= 名古屋の古馬 SP 一律 60%
+TOKAI_CUT_R7 = {"native": 1_800_000, "local": 900_000, "jra": 400_000}
+
+
+def tokai_line(a, d):
+    """2歳格・3歳格の上限(円)。令和7年度= 2歳 440万・3歳 400万(2026年1〜3月は 440万)/令和8年度〜= 2歳 450万・3歳 tokai_y3"""
+    if "L" in TOKAI_R7 and TOKAI_FY2025 <= d < TOKAI_FY2026:
+        return 4_400_000 if a == 2 or d.year >= 2026 else 4_000_000
+    return TOKAI_Y2 if a == 2 else tokai_y3(d)
+
+
+def tokai_line_cut(origin, by, d):
+    """線越えの控除(円)。令和7年度の 2022年生(3歳)= 180/90/40万・それ以外 200/100/70万"""
+    if "X" in TOKAI_R7 and TOKAI_FY2025 <= d < TOKAI_FY2026 and by is not None and by <= 2022:
+        return TOKAI_CUT_R7[origin]
+    return TOKAI_CUT[origin]
+
+
 TOKAI_CUT_CAP_NATIVE_2025 = 1_870_000   # ⚠逆算の推定(要綱の裏付けなし)。令和7年度の生え抜きの控除限度額= 公式の値に 1,870 だけが合う(テレヴァカ 3745→1875 など約18件)。200万に戻すと一致 6035→6017。控除額の千円→万円切捨て説でも同値
 
 
@@ -1106,6 +1127,8 @@ def tokai_cut_cap(origin, when, trk=None):
         e = os.environ.get("CAP_" + origin)
         if e:
             return int(e)
+        if ("C" in TOKAI_R7 and trk != "笠松") or ("Ck" in TOKAI_R7 and trk == "笠松"):
+            return TOKAI_CUT_R7[origin]                # 名古屋の令和7年度の要綱 6(6)= 60%(180万)/30%(90万)/15%(40万)
         if origin == "native" and not (trk == "笠松" and "cap200" in TOKAI_KS_OLD):
             return TOKAI_CUT_CAP_NATIVE_2025
     return TOKAI_CUT[origin]
@@ -1263,7 +1286,7 @@ def tokai_rate_resident(run, race, venue=None):
             return 0.60, "古馬SPⅠ"
         if grade == 2 or (grade == 3 and venue == "笠松"):
             d = _date(run.get("d"))
-            if venue == "笠松" and TOKAI_KS_SP60 and d and d < TOKAI_FY2026:
+            if d and d < TOKAI_FY2026 and ((venue == "笠松" and TOKAI_KS_SP60) or (venue == "名古屋" and "S" in TOKAI_R7)):
                 return 0.60, "古馬SPⅡⅢ(令和7年度)"   # 笠松の一覧: グスタール マーチカップ 4000→+2400・スターサンドビーチ 白銀争覇 720→+432
             return 0.70, "古馬SPⅡⅢ"
         return 0.60, "古馬重賞"
@@ -1451,12 +1474,12 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
     def cur_young(d, v):
         a = age(d)
         if a == 2:
-            return v < TOKAI_Y2
+            return v < tokai_line(2, d)
         if a == 3 and "u" in TOKAI_V:
             hen = (TOKAI_HEN_KS if TOKAI_KS_HEN_OWN and (home or prev_home) == "笠松" else TOKAI_HEN).get(d.year)
-            return v < tokai_y3(d) and (d < hen if hen else d.month <= 9)
+            return v < tokai_line(3, d) and (d < hen if hen else d.month <= 9)
         if a == 3 and d.month <= 9:
-            return v < tokai_y3(d)
+            return v < tokai_line(3, d)
         return False
 
     first = _date(rs[0].get("d"))
@@ -1562,7 +1585,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
             last_young = young_race(p)
             value += got
             if young and not cur_young(e, value):
-                value = max(0, value - (TOKAI_CUT[origin] if "e" in TOKAI_V else 0))
+                value = max(0, value - (tokai_line_cut(origin, birth.year if birth else None, e) if "e" in TOKAI_V else 0))
                 young = False
             elif not young:
                 gained += got
@@ -1691,7 +1714,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
             if _started(r):
                 ran = True
             if young and not cur_young(d, value):                        # 線に達した→ 編入(控除)
-                value = max(0, value - (TOKAI_CUT[origin] if "e" in TOKAI_V else 0))
+                value = max(0, value - (tokai_line_cut(origin, birth.year if birth else None, d) if "e" in TOKAI_V else 0))
                 young = False
             elif not young:
                 gained += got
