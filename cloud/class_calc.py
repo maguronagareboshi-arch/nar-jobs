@@ -1082,6 +1082,8 @@ TOKAI_KS_OLD = set(filter(None, os.environ.get("TOKAI_KS_OLD", "jadd,cut15,cut60
 
 def tokai_jra_add(trk, when, a=None):
     """中央歴の加算。名古屋は 2025 年中の転入(2歳より上)だけ 40万・それ以外は 70万(公式の第6/7/12/13/14回の一覧との突き合わせ・2026-10-20)"""
+    if "J5" in TOKAI_R6 and when is not None and dt.date(2023, 4, 1) <= when < dt.date(2024, 1, 1) and a != 2:
+        return 200_000                             # 令和5年度の 2023 年中の転入(2 歳を除く)= 20万(笠松の令和4年度の要綱・名古屋の公式一覧 2023-04〜12 の転入 シュタイナー・ペルソナ など。2024-01 からは 40万)
     if (trk == "名古屋" or (trk == "笠松" and "jadd" in TOKAI_KS_OLD)) and when is not None and when < TOKAI_JADD_FROM \
             and (a is None or a > 2 or when < TOKAI_JADD_A2_FROM):
         return TOKAI_JADD_OLD
@@ -1129,6 +1131,24 @@ def tokai_r6(d, key):
     return key in TOKAI_R6 and d is not None and d < TOKAI_FY2025 and (d >= TOKAI_FY2024 or "P" in TOKAI_R6 or "P" + key in TOKAI_R6)
 
 
+TOKAI_FY2023 = dt.date(2023, 4, 1)
+# 名古屋の令和5年度(2023/4〜2024/3)の要綱(youko_r5_nagoya.pdf・Web Archive 2023-04-11 2e79268a….pdf)。鍵は TOKAI_R6 に入れる:
+#   5L= 格の線 2歳 360万・3歳 330万  5X= 線越えの控除 3歳 150/60/20万・2歳 160/80/40万
+#   5C= 一斉編入 75%/30%/15%(限度 150/60/20万)  5E= 名古屋の転入換算 2023年12月まで 中央25/20/15・南関等40/30/25(1月から 35/25/20・50/40/30)
+#   5A= 名古屋の転入の Ａ級の段 330〜500万→330・〜800→450・〜1,500→600・〜2,500→900・〜4,000→1,300・以上 2,000
+#   5G= 2歳の SP 50%・新馬 60%
+TOKAI_CUT_R5_3 = {"native": 1_500_000, "local": 600_000, "jra": 200_000}
+TOKAI_CUT_R5_2 = {"native": 1_600_000, "local": 800_000, "jra": 400_000}
+TOKAI_CUT_RATE_R5 = {"native": 0.75, "local": 0.30, "jra": 0.15}
+TOKAI_ENTRY_R5 = {"jra": (0.25, 0.20, 0.15), "mid": (0.40, 0.30, 0.25), "hk": (0.80, 0.60, 0.50), "nar": (1.00, 0.80, 0.60)}
+TOKAI_A_STEP_R5 = ((40_000_000, 20_000_000), (25_000_000, 13_000_000), (15_000_000, 9_000_000),
+                   (8_000_000, 6_000_000), (5_000_000, 4_500_000), (3_300_000, 3_300_000))
+
+
+def tokai_r5(d, key):
+    return key in TOKAI_R6 and d is not None and TOKAI_FY2023 <= d < TOKAI_FY2024
+
+
 def tokai_r6_a(trk, d):
     """令和6年度の転入の Ａ級の段(笠松 A・名古屋 An)"""
     return (trk == "笠松" and tokai_r6(d, "A")) or (trk == "名古屋" and tokai_r6(d, "An"))
@@ -1162,6 +1182,8 @@ def tokai_a1_same(run, label, got):
 
 def tokai_line(a, d):
     """2歳格・3歳格の上限(円)。令和7年度= 2歳 440万・3歳 400万(2026年1〜3月は 440万)/令和8年度〜= 2歳 450万・3歳 tokai_y3"""
+    if tokai_r5(d, "5L"):
+        return 3_600_000 if a == 2 or d.month <= 3 else 3_300_000
     if tokai_r6(d, "L"):
         return 4_000_000 if a == 2 or d.month <= 3 else 3_600_000
     if "L" in TOKAI_R7 and TOKAI_FY2025 <= d < TOKAI_FY2026:
@@ -1171,6 +1193,8 @@ def tokai_line(a, d):
 
 def tokai_line_cut(origin, by, d, trk=None):
     """線越えの控除(円)。令和7年度の 2022年生(3歳)= 180/90/40万・それ以外 200/100/70万"""
+    if tokai_r5(d, "5X") and by is not None:
+        return (TOKAI_CUT_R5_3 if by <= (d.year if d.month >= 4 else d.year - 1) - 3 else TOKAI_CUT_R5_2)[origin]
     if (tokai_r6(d, "X") or (trk == "笠松" and tokai_r6(d, "Xk"))) and by is not None:
         return (TOKAI_CUT_R6_3 if by <= (d.year if d.month >= 4 else d.year - 1) - 3 else TOKAI_CUT_R6_2)[origin]
     if "X" in TOKAI_R7 and TOKAI_FY2025 <= d < TOKAI_FY2026 and by is not None and by <= 2022:
@@ -1182,6 +1206,8 @@ TOKAI_CUT_CAP_NATIVE_2025 = 1_870_000   # ⚠逆算の推定(要綱の裏付け�
 
 
 def tokai_cut_cap(origin, when, trk=None):
+    if tokai_r5(when, "5C"):
+        return TOKAI_CUT_R5_3[origin]
     if tokai_r6(when, "C" if trk == "笠松" else "Cn"):
         return TOKAI_CUT_R6_3[origin]
     if TOKAI_FY2025 <= when < TOKAI_FY2026:
@@ -1196,6 +1222,8 @@ def tokai_cut_cap(origin, when, trk=None):
 
 
 def tokai_cut_rate(trk, origin, when):
+    if tokai_r5(when, "5C"):
+        return TOKAI_CUT_RATE_R5[origin]
     if tokai_r6(when, "C" if trk == "笠松" else "Cn"):
         return TOKAI_CUT_RATE_R6[origin]
     if trk == "笠松" and when < TOKAI_FY2026:
@@ -1338,12 +1366,16 @@ def tokai_rate_resident(run, race, venue=None, age_at=None):
     if "認定" in both or "Ｊ認" in both:
         return 0.40, "認定"
     if "新馬" in name:
+        if tokai_r5(_date(run.get("d")), "5G"):
+            return 0.60, "新馬(令和5年度)"
         return 0.50, "新馬"
     if kind == "重賞":
         if young:
             d = _date(run.get("d"))
             if "駿蹄賞" in name and d and TOKAI_FY2025 <= d < TOKAI_FY2026 and venue == "名古屋" and "Sx" not in TOKAI_R6:
                 return 0.50, "駿蹄賞(令和7年度)"      # カワテンマックス: 公式の値(10000→調整後 7500)に合うのは 50%。令和8年度の要綱は 2歳3歳SP 40%
+            if tokai_r5(d, "5G"):
+                return 0.50, "2歳3歳SP(令和5年度)"
             if age_at == 3 and (tokai_r6(d, "G") or (venue == "笠松" and tokai_r6(d, "Gk"))
                                 or (venue == "名古屋" and tokai_r6(d, "Gn"))):
                 return 0.50, "3歳重賞(令和6年度)"
@@ -1377,6 +1409,8 @@ def tokai_rate_away(run):
 
 def tokai_rate_entry(run, age_entry, track, when=None):
     tbl = TOKAI_ENTRY_R6 if track == "笠松" and tokai_r6(when, "E") else TOKAI_ENTRY[track]
+    if track == "名古屋" and tokai_r5(when, "5E") and when < dt.date(2024, 1, 1):
+        tbl = TOKAI_ENTRY_R5
     col = 0 if age_entry is None or age_entry <= 4 else (1 if age_entry <= 6 else 2)
     tr = str(run.get("tr") or "")
     name = str(run.get("name") or "")
@@ -1526,16 +1560,29 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
     def fresh_value(before, trk, a, when=None):
         """転入馬格付け= それまでの全収得賞金を trk の換算表(年齢 a の列)で換算 + 中央歴 70万"""
         v = 0
-        for p in before:
-            rate, _label = tokai_rate_entry(p, a, trk, when)
-            v += int(p.get("prize") or 0) * rate
-        v = _thou(round(v, 6))                     # 換算は全部足してから千円未満を切り捨てる(公式の一覧と 1〜5 千円ずれていた)
+        if "K" in TOKAI_R6:                        # 所属ごと(競走成績証明書ごと)に換算して千円未満を切り捨てる(スカイオージ 門別 842+船橋 1,779= 2,621 など公式と 1 千円違いの 17 頭)
+            grp, key = [], object()
+            for p in before:
+                k = "JRA" if _is_jra(p) else (p.get("ta") or p.get("tr"))
+                if k != key:
+                    grp.append(0)
+                    key = k
+                rate, _label = tokai_rate_entry(p, a, trk, when)
+                grp[-1] += int(p.get("prize") or 0) * rate
+            v = sum(_thou(round(x, 6)) for x in grp)
+        else:
+            for p in before:
+                rate, _label = tokai_rate_entry(p, a, trk, when)
+                v += int(p.get("prize") or 0) * rate
+            v = _thou(round(v, 6))                 # 換算は全部足してから千円未満を切り捨てる(公式の一覧と 1〜5 千円ずれていた)
         if any(_is_jra(p) for p in before) and "j" in TOKAI_V and \
                 ("z" not in TOKAI_V or any(_is_jra(p) and int(p.get("prize") or 0) > 0 for p in before)):
             v += int(os.environ.get("TOKAI_JADD", str(tokai_jra_add(trk, when, a))))
         return v
 
     def a_step(v, when=None, trk=None):
+        if trk == "名古屋" and tokai_r5(when, "5A"):
+            return next((val for lo, val in TOKAI_A_STEP_R5 if v >= lo), v)
         if tokai_r6_a(trk, when):
             return next((val for lo, val in TOKAI_A_STEP_R6 if v >= lo), v)
         for lo, val in TOKAI_A_STEP:
@@ -1706,7 +1753,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
                 origin = "local"                       # 名古屋は笠松からの移籍も転入馬(初出走が東海で転出歴のない馬でない)
             value = fresh_value(before, trk, a, d)
             young = cur_young(d, value)
-            if not young and value >= (3_800_000 if tokai_r6_a(trk, d) else 4_500_000):
+            if not young and value >= (3_300_000 if trk == "名古屋" and tokai_r5(d, "5A") else 3_800_000 if tokai_r6_a(trk, d) else 4_500_000):
                 value = a_step(value, d, trk)
         if trace:
             print(f"  {d} {how} → {trk} value {value:>10,} young={young}")
@@ -1832,7 +1879,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
             origin = set_origin()
             value = fresh_value(rs, trk, a, asof)
             young = cur_young(asof, value)
-            if not young and value >= (3_800_000 if tokai_r6_a(trk, asof) else 4_500_000):
+            if not young and value >= (3_300_000 if trk == "名古屋" and tokai_r5(asof, "5A") else 3_800_000 if tokai_r6_a(trk, asof) else 4_500_000):
                 value = a_step(value, asof, trk)
         entry_track = trk
         if trace:
