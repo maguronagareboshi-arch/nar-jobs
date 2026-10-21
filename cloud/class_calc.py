@@ -971,7 +971,7 @@ def main_saga(a):
         out = []
         for r in rows:
             runs = r.get("runs") or []
-            local = [x for x in runs if not x.get("jra") and x.get("fin") is not None]
+            local = [x for x in runs if not x.get("jra") and x.get("fin") is not None and before_day(x, today)]
             last_tr = local[0].get("tr") if local else None
             if last_tr != "佐賀" and r.get("horse_name") not in entered:
                 continue
@@ -1291,6 +1291,28 @@ def tokai_rate_entry(run, age_entry, track):
     if tr in HYOGO_KOCHI:
         return tbl["hk"][col], "転入前兵庫高知"
     return tbl["nar"][col], "転入前地方"
+
+
+def before_day(run, day):
+    """その走が day より前か(レース画面の値は発走前の出来事だけで作る= 今日の走を入れない)。日付の無い走は入れない"""
+    d = _date(run.get("d"))
+    return d is not None and d < day
+
+
+def list_cut(track, first, k=None):
+    """公式の一覧(初日 first の回)の締め= first の k 日以上前に終わった直近の track の開催の最終日+1。開催が分からなければ None"""
+    k = TOKAI_KS_BLOCKLAG if k is None else k
+    if not first or track not in TOKAI_BLOCKS:
+        return None
+    lim = first - dt.timedelta(days=int(k))
+    ends = [b for _a, b in TOKAI_BLOCKS[track] if b <= lim]
+    return max(ends) + dt.timedelta(days=1) if ends else None
+
+
+def official_usable(track, list_first, today):
+    """§後の出来事 一覧の締めが今日の締め以下のときだけ公式の値を当てる(今日以後の結果を含む一覧を使わない)"""
+    lc, tc = list_cut(track, list_first), list_cut(track, today)
+    return lc is not None and tc is not None and lc <= tc
 
 
 def tokai_cutoff(asof, lag, track=None):
@@ -1885,14 +1907,22 @@ def main_tokai(a):
                 official, cyc = tokai_official.fetch_official()
                 off_tag = f"({cyc[0]}年 第{cyc[1]}回 編成馬一覧)" if cyc else ""
                 log(f"公式の編成馬一覧 {cyc}: {len(official)} 頭")
+                ngy_first = tokai_official.next_program_first_day() if official else None
+                if official and not official_usable("名古屋", ngy_first, today):
+                    log(f"名古屋の編成馬一覧(初日 {ngy_first})の締めが今日の締めより後か不明→当てない(計算のまま)")
+                    official = {}
             except Exception as e:                           # 公式サイトの不調で便を落とさない
                 log("公式の編成馬一覧が取れない→計算のまま:", repr(e)[:200])
-            ks_official, ks_cyc, _days = ks_official_once()  # 笠松= 最新の回の出走投票準備一覧(馬名だけで引く)
+            ks_official, ks_cyc, ks_days = ks_official_once()  # 笠松= 最新の回の出走投票準備一覧(馬名だけで引く)
             ks_tag = f"(笠松 第{ks_cyc}回 出走投票準備一覧)" if ks_cyc else ""
+            ks_first = min(ks_days) if ks_days else None
+            if ks_official and not official_usable("笠松", ks_first, today):
+                log(f"笠松の出走投票準備一覧(初日 {ks_first})の締めが今日の締めより後か不明→当てない(出発点つきの計算のまま)")
+                ks_official = {}
         n_off = n_diff = 0
         for r in rows:
             runs = r.get("runs") or []
-            local = [x for x in runs if not x.get("jra") and x.get("fin") is not None]
+            local = [x for x in runs if not x.get("jra") and x.get("fin") is not None and before_day(x, today)]
             last_tr = local[0].get("tr") if local else None
             if last_tr not in TOKAI_TRACKS and r.get("horse_name") not in entered:
                 continue
@@ -2500,7 +2530,7 @@ def main_hyogo(a):
         out = []
         for r in rows:
             runs = r.get("runs") or []
-            local = [x for x in runs if not x.get("jra") and x.get("fin") is not None]
+            local = [x for x in runs if not x.get("jra") and x.get("fin") is not None and before_day(x, today)]
             last_tr = local[0].get("tr") if local else None
             if last_tr not in HYOGO_TRACKS and r.get("horse_name") not in entered:
                 continue
@@ -2514,7 +2544,8 @@ def main_hyogo(a):
                 continue
             # 公式の直近の格組(last_cls)と計算の級が違う馬は出さない(表示方針)
             # §286 型A: 前走で線を越えて上がった馬は食い違いとしない(hyogo_official_mismatch)
-            last = {"cls": r.get("last_cls"), "fin": runs[0].get("fin") if runs else None}
+            prior = [x for x in runs if before_day(x, today)]   # 今日より前の一番新しい走(runs は新しい順)
+            last = {"cls": r.get("last_cls"), "fin": prior[0].get("fin") if prior else None}
             if c.get("hide") or hyogo_official_mismatch(tables, c, last):
                 c["hide"] = True
                 c["next"] = None
@@ -2718,7 +2749,7 @@ def main():
         out = []
         for r in rows:
             runs = r.get("runs") or []
-            local = [x for x in runs if not x.get("jra") and x.get("fin") is not None]
+            local = [x for x in runs if not x.get("jra") and x.get("fin") is not None and before_day(x, today)]
             last_tr = local[0].get("tr") if local else None
             if last_tr != "高知" and r.get("horse_name") not in entered:
                 continue
@@ -2772,7 +2803,7 @@ def main_obihiro(a):
         out = []
         for r in rows:
             runs = r.get("runs") or []
-            local = [x for x in runs if not x.get("jra") and x.get("fin") is not None]
+            local = [x for x in runs if not x.get("jra") and x.get("fin") is not None and before_day(x, today)]
             last_tr = local[0].get("tr") if local else None
             if last_tr != "帯広" and r.get("horse_name") not in entered:
                 continue

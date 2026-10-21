@@ -24,6 +24,23 @@ def latest_cycle():
     return max(cs, key=lambda t: (t[0], t[1])) if cs else None
 
 
+NEXT_PERIOD = re.compile(r"第\s*(\d+)\s*回名古屋競馬編成馬一覧\s*[（(]\s*(\d{4})\.(\d{1,2})\.(\d{1,2})")
+
+
+def next_program_first_day(html=None):
+    """次開催番組のページの見出し「第15回名古屋競馬編成馬一覧（2026.10.27～30）」→ 初日(date)。読めなければ None"""
+    import datetime as dt
+    if html is None:
+        html = http_get(f"{BASE}/next_program/index.html").decode("utf-8", "ignore")
+    m = NEXT_PERIOD.search(re.sub(r"<[^>]+>", "", html))
+    if not m:
+        return None
+    try:
+        return dt.date(int(m.group(2)), int(m.group(3)), int(m.group(4)))
+    except ValueError:
+        return None
+
+
 def parse_pdf(data):
     """PDF のバイト列 → [(馬名, 馬齢, 番組賞金額[千円])]。性別(牡・牝・セ)の語を目印に同じ行から読む"""
     try:
