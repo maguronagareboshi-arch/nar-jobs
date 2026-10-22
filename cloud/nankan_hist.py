@@ -378,12 +378,32 @@ def num(v):
     return int(v) if v not in (None, "") else None
 
 
-def build(pts, runs, races, prize, anchors, tie, args, today):
+def official_dates():
+    """公式の開催日程(nankankeiba /calendar/000000.do= 前後 約 2 か月・先の開催日も載る)→ {場名: {日付}}。読めなければ None。
+    ⛔2026-10-23 DB(nar_races)の日付だけで開催を組むと、開催の途中で回った日はその日が「最終日」になり、
+      meet_end が途中の日の行が残った(9/24〜10/22 で 1,056 行)。先の開催日まで入れて本当の最終日で書く"""
+    try:
+        import nankan_points as NP
+        inv = {v: k for k, v in NK.items()}
+        out = collections.defaultdict(set)
+        for (ba, d) in NP.calendar_map(set()):
+            if ba in inv:
+                out[inv[ba]].add(d)
+        return out or None
+    except Exception as e:
+        log(f"公式の開催日程が読めない: {type(e).__name__}: {str(e)[:120]}")
+        return None
+
+
+def build(pts, runs, races, prize, anchors, tie, args, today, extra_dates=None):
     rmap = {(r["track"], r["race_date"], int(r["race_no"])): r for r in races}
     dates = collections.defaultdict(set)
     for (tr, d, _) in rmap:
         dates[tr].add(d)
+    for tr, ds in (extra_dates or {}).items():
+        dates[tr] |= ds
     idx = meetings(dates)
+    args._idx = idx
     sidx = santei_index(idx)
     runs_by = collections.defaultdict(list)
     for r in runs:
@@ -450,6 +470,25 @@ def build(pts, runs, races, prize, anchors, tie, args, today):
     return out, why
 
 
+def clean_mid(url, key, idx, today, days=60):
+    """直近 days 日の開催で、最終日でない日を meet_end にした行を消す(どの場の最終日でもない日だけ)"""
+    lo = (today - dt.timedelta(days=days)).isoformat()
+    ends = {v[0] for v in idx.values()}
+    bad = sorted({d for (_, d), v in idx.items() if lo <= d <= today.isoformat() and d not in ends})
+    if not bad:
+        return True
+    req = urllib.request.Request(f"{url}/rest/v1/{TABLE}?meet_end=in.({','.join(bad)})", method="DELETE", headers={
+        "apikey": key, "Authorization": f"Bearer {key}", "Prefer": "return=representation", "Accept": "application/json"})
+    try:
+        with urllib.request.urlopen(req, timeout=90) as r:
+            n = len(json.loads(r.read().decode("utf-8") or "[]"))
+        log(f"途中の日の行を消した {n} 行(日付 {len(bad)}: {bad[0]}〜{bad[-1]})")
+        return True
+    except Exception as e:
+        log(f"途中の日の行を消せない: {type(e).__name__}: {str(e)[:200]}")
+        return False
+
+
 def upsert(url, key, rows):
     from load_nar_official import upsert as up
     for i in range(0, len(rows), 500):
@@ -490,7 +529,11 @@ def main():
         return 2
     pts, runs, races, prize, anchors, tie = data
     log(f"馬 {len(pts)} / 走 {len(runs)} / レース {len(races)} / official の行 {len(anchors)}")
-    rows, why = build(*data, args, today)
+    extra = None if args.from_csv else official_dates()
+    rows, why = build(*data, args, today, extra)
+    if not args.from_csv and extra is None:
+        # 日程が読めない日は、終わっていないかもしれない開催(最終日がきょう以後)の行を書かない
+        rows = [r for r in rows if r["meet_end"] < today.isoformat()]
     nn = sum(1 for r in rows if r["points"] is None)
     log("級の決め方: " + " ".join(f"{k}={v}" for k, v in collections.Counter(str(r["kaku_src"]) for r in rows).most_common()))
     log(f"行 {len(rows)}(馬 {len({r['code'] for r in rows})}・points null {nn}・official {sum(r['src'] == 'official' for r in rows)}"
@@ -509,6 +552,8 @@ def main():
             return 2
     ok = upsert(url, key, [dict(r, updated_at=dt.datetime.now(dt.timezone.utc).isoformat()) for r in rows])
     log(f"投入 {len(rows)} 行 -> {TABLE}" if ok else "投入失敗")
+    if ok and not args.from_csv and extra is not None:
+        ok = clean_mid(url, key, args._idx, today)
     return 0 if ok else 1
 
 
