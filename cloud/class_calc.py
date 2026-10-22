@@ -1214,7 +1214,12 @@ def tokai_a1_same(run, label, got):
         return got
     if d < TOKAI_FY2023:
         return got
-    a1 = next((p for day, p in reversed(TOKAI_A1.get(tr, [])) if day <= d and 1 in p and fin in p), None)
+    if tr == "笠松":   # 笠松= 年度の要綱の賞金表のＡ級１組(千円)。台帳から取れない日がある(アルバーシャ)
+        a1 = {k: v * 1000 for k, v in zip((1, 2, 3, 4, 5), (2200, 880, 550, 330, 220) if d >= TOKAI_FY2026 else ((2000, 800, 500, 300, 200) if d >= TOKAI_FY2025 else (2000, 700, 400, 200, 100)))}
+    else:              # 1 着と その着を、それぞれ その日までで一番新しい回から別々に引く(同じ日に両方そろう回が無いことがある)
+        q1 = next((p[1] for day, p in reversed(TOKAI_A1.get(tr, [])) if day <= d and 1 in p), None)
+        qf = next((p[fin] for day, p in reversed(TOKAI_A1.get(tr, [])) if day <= d and fin in p), None)
+        a1 = {1: q1, fin: qf} if q1 and qf else None
     rp = TOKAI_RP.get((tr,) + _rkey(run), {})
     prize = int(run.get("prize") or 0)
     p1 = rp.get(1)
