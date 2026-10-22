@@ -1575,6 +1575,17 @@ TOKAI_AREA = {"愛知": "名古屋", "笠松": "笠松", "岐阜": "笠松"}   #
 TOKAI_KS_BACK = 273   # 笠松 6(2) 再転入= 最後の岐阜所属の出走の翌日から 9 か月未満(≒273 日)
 
 
+def tokai_a_floor(trk, d):
+    """転入の格付けで Ａ級の段(a_step)に入る線。令和5年度 330万・令和6年度 380万・令和7年度 440万(名古屋 R7 6(3) 転入馬格付け表= a_step の中と同じ・マキャベリー 2026-01-01 4445→4400)・令和8年度〜 450万"""
+    if tokai_r5(d, "5A" if trk == "名古屋" else "5Ak"):
+        return 3_300_000
+    if tokai_r6_a(trk, d):
+        return 3_800_000
+    if d < TOKAI_FY2026:
+        return TOKAI_Y3_OLD
+    return 4_500_000
+
+
 def tokai_ks_back_e(last_tk, last_away, d):
     """笠松 6(2) 再転入か= 入きゅう日(推定= max(転出先の最後の走の翌日, 戻って最初の走の 21 日前))が
     最後の東海の走の翌日から N か月未満(令和5年度 2023 年中 12・2024-01〜令和6年度 6・令和7年度〜 9)。
@@ -1879,7 +1890,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
                     we = d
             value = fresh_value(before, trk, a, we)
             young = cur_young(d, value)
-            if not young and value >= (3_300_000 if tokai_r5(we, "5A" if trk == "名古屋" else "5Ak") else 3_800_000 if tokai_r6_a(trk, we) else 4_500_000):
+            if not young and value >= tokai_a_floor(trk, we):
                 value = a_step(value, we, trk)
         if trace:
             print(f"  {d} {how} → {trk} value {value:>10,} young={young}")
@@ -2032,7 +2043,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
                     we = asof
             value = fresh_value(rs, trk, a, we)
             young = cur_young(asof, value)
-            if not young and value >= (3_300_000 if tokai_r5(we, "5A" if trk == "名古屋" else "5Ak") else 3_800_000 if tokai_r6_a(trk, we) else 4_500_000):
+            if not young and value >= tokai_a_floor(trk, we):
                 value = a_step(value, we, trk)
         entry_track = trk
         if trace:
