@@ -1877,6 +1877,8 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
             continue
         if kind == "hen":                          # u: 3 歳の一斉編入(東海 2 場共通の日)
             if i == "笠松":                          # TOKAI_KS_HEN_OWN: 笠松所属のまま次も笠松で走る馬だけ笠松の日に(他は従来の日)
+                if track == "笠松" and (home or prev_home) == "名古屋" and d < TOKAI_FY2026:
+                    continue                       # 令和7年度以前は 名古屋所属の馬は笠松の一覧でも名古屋の日に編入(公式= 名古屋の値。パープルルージュ 2025-10-04 の調整の日はまだ 3 歳格)。令和8年度は笠松の日のまま(ポルタシャーンス)
                 nx = next((k for k, x in enumerate(rs) if _date(x.get("d")) >= d), None)
                 if track != "笠松" and ((home or prev_home) != "笠松" or (nx is not None and affs[nx] != "笠松")):
                     continue                       # 笠松の一覧の値(track=笠松)は名古屋所属の馬も笠松の日に編入済み(ポルタシャーンス 1233→986 が 10/6 の一覧)
