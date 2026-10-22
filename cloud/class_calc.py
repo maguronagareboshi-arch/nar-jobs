@@ -1974,6 +1974,10 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
         trk = prev_home or (track if TOKAI_KS_ENT and track in TOKAI_TRACKS else "名古屋")   # まだ東海で走っていない馬= 一覧の場の換算表
         if track in TOKAI_TRACKS and prev_home and prev_home != track:
             trk = track                            # 東海の外から 前と違う場の一覧に載った= その場への転入(シヴァールバーニ 笠松→中央→名古屋 1,821 が一致)
+        if not prev_home and track == "笠松":       # まだ東海で走っていない転入馬で 締めの後の最初の走(この一覧の走)が愛知所属= 名古屋で格付け済み(名古屋の換算表・公式 ゴールデンリング・ベラジオチャンネル)
+            nx = sorted([r for r in runs if (dd := _date(r.get("d"))) and dd >= cutoff], key=lambda r: str(r.get("d")))
+            if nx and nx[0].get("ta") == "愛知":
+                trk = "名古屋"
         if trk == "笠松" and prev_home == "笠松" and last_tk_aff and (_date(pending[-1].get("d")) - last_tk_aff).days < tokai_ks_back(asof):
             ks_reentry(a, asof)
             young = cur_young(asof, value)
