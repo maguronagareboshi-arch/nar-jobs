@@ -399,9 +399,8 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: |
-          H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/baba.py --apply; else echo "baba diff は monthly と朝の便だけ(JST $H)=スキップ"; fi
+        # 2026-10-22 「今日ここまで」の時計の速さ= 当日の暫定値(p)が要る→ 日中の便でも毎回回す(過去の確定日は据え置き)
+        run: python cloud/baba.py --apply
 
       # §100 馬場傾向(時計=baba_diff・前後=1角順位×着順ρ・内外=枠×着順ρ)。朝の便は 90 日組み直し、日中の便は当日だけ
       - name: baba trend
