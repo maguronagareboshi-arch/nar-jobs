@@ -1569,6 +1569,19 @@ TOKAI_AREA = {"愛知": "名古屋", "笠松": "笠松", "岐阜": "笠松"}   #
 TOKAI_KS_BACK = 273   # 笠松 6(2) 再転入= 最後の岐阜所属の出走の翌日から 9 か月未満(≒273 日)
 
 
+def tokai_ks_back_e(last_tk, last_away, d):
+    """笠松 6(2) 再転入か= 入きゅう日(推定= max(転出先の最後の走の翌日, 戻って最初の走の 21 日前))が
+    最後の東海の走の翌日から N か月未満(令和5年度 2023 年中 12・2024-01〜令和6年度 6・令和7年度〜 9)。
+    例: カヤドーブラック 最後の笠松 2023-11-08→2024-06-05 戻り= 6 か月以上= 転入"""
+    import calendar
+    ent = max(last_away + dt.timedelta(days=1), d - dt.timedelta(days=21))
+    n = 12 if d < dt.date(2024, 1, 1) else (6 if d < TOKAI_FY2025 else 9)
+    b = last_tk + dt.timedelta(days=1)
+    y, mo = b.year + (b.month - 1 + n) // 12, (b.month - 1 + n) % 12 + 1
+    lim = dt.date(y, mo, min(b.day, calendar.monthrange(y, mo)[1]))
+    return ent < lim
+
+
 def tokai_ks_back(d):
     return 182 if tokai_r6(d, "B") else TOKAI_KS_BACK   # 令和6年度は 6 か月未満
 
@@ -1807,7 +1820,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
                     and tokai_r6(d, "Bn") and (d - last_tk_aff).days < 182:
                 how = "再転入(6か月未満・加算)"              # 名古屋 令和6年度 7
             elif trk == "笠松" and prev_home == "笠松" and last_tk_aff and pending \
-                    and (_date(pending[-1].get("d")) - last_tk_aff).days < tokai_ks_back(d):
+                    and tokai_ks_back_e(last_tk_aff, _date(pending[-1].get("d")), d):
                 how = "再転入(9か月未満・加算)"              # 笠松 6(2)
             elif not pending and prev_home != trk:
                 how = "移籍"                                  # 東海の外で走らずに相手の県へ
