@@ -139,6 +139,13 @@ jobs:
           else
             echo "短評の層の模型なし(足さない)"
           fi
+          # 2026-10-22 決め 49: 平らな模型 F3 の木(種 3 本 × 3 着内・1 着・V3_ASSET_KEY)。無ければ当日版は F3 を混ぜない
+          mkdir -p gapm/f3
+          if gh release download v3-f3-20261022 -p 'v3_f3.tar.gz.enc' -D in; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_f3.tar.gz.enc | tar -C gapm/f3 -xzf - || echo "F3 の模型を開けない"
+          else
+            echo "F3 の模型なし(混ぜない)"
+          fi
           # 2026-10-15 決め 38-1: 直前版の勝つ率で学んだ買いの模型(種 3 本・V3_ASSET_KEY)。無ければ全部 v31 で決める
           if gh release download v3-buy38-20261015 -p 'v3_buy38.tar.gz.enc' -D in; then
             openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_buy38.tar.gz.enc | tar -C gapm -xzf - || echo "買いの模型 決め38-1 を開けない(v31 のまま)"
@@ -148,7 +155,7 @@ jobs:
           ls gapm; wc -l in/v29_base.csv
           echo "ok=yes" >> "$GITHUB_OUTPUT"
 
-      # 2026-10-15 予想の学んだ定数・表(勝つ率の直し・談話の印・他場の曲線など)= 暗号化したリリース v3-consts-20261017(公開のコードに置かない)。
+      # 2026-10-15 予想の学んだ定数・表(勝つ率の直し・談話の印・他場の曲線など)= 暗号化したリリース v3-consts-20261022(公開のコードに置かない)。
       #   取れない・開けない・中身が欠けている時は止める(黙って別の値で予想を出さない)。中身の確かめ = pipeline/ai/sealed.py check
       - name: download sealed constants
         id: sc
@@ -162,8 +169,8 @@ jobs:
           : "${V3_ASSET_KEY:?secrets.V3_ASSET_KEY が無い}"
           mkdir -p in sealed_consts
           for i in 1 2 3; do
-            gh release download v3-consts-20261017 -p 'v3_consts.tar.gz.enc' -D in --clobber && break
-            [ "$i" = 3 ] && { echo "::error::⛔ 予想の定数(v3-consts-20261017)を 3 回取れなかった"; exit 1; }
+            gh release download v3-consts-20261022 -p 'v3_consts.tar.gz.enc' -D in --clobber && break
+            [ "$i" = 3 ] && { echo "::error::⛔ 予想の定数(v3-consts-20261022)を 3 回取れなかった"; exit 1; }
             sleep 20
           done
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_consts.tar.gz.enc | tar -C sealed_consts -xzf -

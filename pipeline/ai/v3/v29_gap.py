@@ -48,6 +48,8 @@ MODEL_FILE, META_FILE = 'v29_gap_y1.txt', 'v29_gap.json'
 DAY_META = 't11_day.json'  # 当日版の印の上乗せ(51 本 + 当日の体重 15 本・研究 nankan-ai-v3 src/f5_scripts/t11_day.py)
 SEQ2 = None  # 並び読み(決め 24・seq2_live.load の戻り)。live() が読む。無ければ当日版は第12版のまま
 TPLM = None  # 全馬の短評の層(決め 30・tanpyo_live.load の戻り)。live() が mdir/tanpyo から読む。無ければ足さない
+F3M, F3W = None, None  # 平らな模型 F3 の混ぜ(決め 49・f3_live.load の戻りと混ぜの重み)。live() が mdir/f3 から読む。無ければ足さない
+PREB = {}  # (場, R) → {馬番: (p1, p3′)} = F3 の混ぜの前の直前版(買いの模型 決め38-1 はこの率で学んだので、買いにはこれを渡す)
 DAY_MIN = 30      # 当日版の印は発走 30 分前から出す(体重はもう出ている・ユーザー 2026-10-01)
 DAY_LAST_MIN = 16  # 発走 15 分前を過ぎた印は DB のトリガーが捨てるので、その手前まで
 DECIDE_MIN = 10   # 発走 10 分前 = 締め切り(発走 2 分前)の 8 分前を過ぎたら決める
@@ -209,7 +211,7 @@ def day_marks(Bk, odds, w, going, dm, day):
     t3 = np.maximum(t3, p1)
     t3 = _sum3(t3) if len(b) > 3 else np.minimum(t3, 1.0)
     # 第12版の束(前日の便が土台に書いた足し分・研究 nankan-ai-v3 own_day.py・2026-10-12): t14 → f10k の順に足し、そのたび p3 = max(·, p1)・合計 3
-    used = []
+    used, u = [], None
     for c in ('b14_u', 'b19_u'):
         if c not in b.columns or b[c].isna().all() or (c == 'b19_u' and 'b14_u' not in used):
             break
@@ -248,11 +250,23 @@ def day_marks(Bk, odds, w, going, dm, day):
                 used.append('tpl')
         except Exception as e:  # noqa: BLE001  短評の層が落ちても印は出す
             log('短評の層 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
-    stamp = 'v3-9 当日版(第10版 + 当日の体重 15 本・t11 + 談話の印 3 定数)' if not [c for c in used if c != 'p1f'] else \
+    PREB[(Bk.track.iloc[0], int(Bk.race_no.iloc[0]))] = dict(zip(b.umaban.astype(int), zip(np.asarray(p1, float), np.asarray(p3p, float))))
+    if F3M is not None and 'seq2' in used and 'tpl' in used and getattr(sys.modules.get('tanpyo_live'), 'LAST_VER', None) == 'day8' and len(b) > 3:
+        try:  # 平らな模型 F3 の混ぜ + 並び読みの足し戻し(決め 49・研究 nankan-ai-v3 blend_f3_polish3.py・2026-10-22): 状況の印の後の最後の段
+            import f3_live
+            r_ = f3_live.apply_day(F3M, b, p1, p3p, u, F3W)
+            if r_ is not None:
+                p1, p3 = r_
+                p3p = _sum3(p3)
+                used.append('f3')
+        except Exception as e:  # noqa: BLE001  混ぜが落ちても前の段の印は出す
+            log('F3 の混ぜ 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
+    stamp ='v3-9 当日版(第10版 + 当日の体重 15 本・t11 + 談話の印 3 定数)' if not [c for c in used if c != 'p1f'] else \
         'v3-9 当日版(第12版 = 当日の体重 15 本と馬場・t11 + 談話の印 + 束 ' + '・'.join({'b14_u': 't14', 'b19_u': 'f10k'}[c] for c in used if c in ('b14_u', 'b19_u')) + \
         (' + 並び読み' if 'seq2' in used else '') + (' + 初出走の層' if 'debut' in used else '') + ')'
     stamp += ' + 勝つ率の直し' if 'p1f' in used else ''
     stamp += ' + 短評の層' if 'tpl' in used else ''
+    stamp += ' + F3 の混ぜ' if 'f3' in used else ''
     d = pd.DataFrame({'num': b.umaban.astype(int).to_numpy(), 'p1': p1, 'p3': p3p, 'p3_raw': p3})
     d = d.sort_values(['p3', 'p1', 'num'], ascending=[False, False, True], kind='mergesort').reset_index(drop=True)
     marks = [{'num': int(x.num), 'mark': MARKS[i], 'score': round(float(x.p3) * 100, 1)} for i, x in enumerate(d.itertuples()) if i < 5]
@@ -269,6 +283,8 @@ def day_marks(Bk, odds, w, going, dm, day):
         meta['tpl'] = 'tpl 決め30 短評の層'  # tanpyo_live.TAG と同じ字
         if getattr(sys.modules.get('tanpyo_live'), 'LAST_VER', None) == 'day8':
             meta['sitb'] = '決め36 状況の印'  # tanpyo_live.TAG8 と同じ字(8 列入りの模型を使った)
+    if 'f3' in used:
+        meta['f3'] = f3_live.TAG
     return {'track': tr, 'race_date': day, 'race_no': rno, 'marks': marks, 'meta': meta}
 
 
@@ -616,6 +632,14 @@ def live(day, base_csv, mdir, write, until):
     except Exception as e:  # noqa: BLE001
         TPLM = None
         log('短評の層 読めない(足さない)', type(e).__name__, str(e)[:200])
+    global F3M, F3W
+    try:  # 平らな模型 F3 の混ぜ(決め 49): 模型 = mdir/f3(便がリリース v3-f3-20261022 を開ける)・重み = 暗号化の定数。無ければ足さない
+        import f3_live
+        F3M, F3W = f3_live.load_all(Path(mdir) / 'f3')
+        log('F3 の混ぜ', '読めた' if F3M else '無し(足さない)', 'F3: 材料', 'あり' if F3M and f3_live.has_cols(F3M, B) else 'なし')
+    except Exception as e:  # noqa: BLE001
+        F3M, F3W = None, None
+        log('F3 の混ぜ 読めない(足さない)', type(e).__name__, str(e)[:200])
     global NEW
     try:  # 決め 38-1: 直前版の勝つ率で学んだ買いの模型(mdir/buy38_new.json・種 3 本)。無ければ全部 v31
         NEW = load_new(mdir)
@@ -687,7 +711,9 @@ def live(day, base_csv, mdir, write, until):
                     else:
                         took = write_day(row, day) if write else 'dry'
                         n_day += 1
-                        DAYP[(tr, rno)] = {'p': {int(x['num']): (float(x['p1']), float(x['p3'])) for x in row['meta']['runners']},
+                        pb = PREB.get((tr, rno)) if row['meta'].get('f3') else None  # F3 を混ぜた行は、買いには混ぜの前の率(決め 49 は予想だけ)
+                        DAYP[(tr, rno)] = {'p': {int(x['num']): ((round(float(pb[int(x['num'])][0]), 4), round(float(pb[int(x['num'])][1]), 4)) if pb else
+                                                                 (float(x['p1']), float(x['p3']))) for x in row['meta']['runners']},
                                            'meta': {**{k: row['meta'][k] for k in ('p1f', 'tpl', 'sitb') if k in row['meta']},
                                                     'at': now.strftime('%H:%M:%S')}}
                         log(f'{tr}{rno}R: 当日版の印 発走 {at:%H:%M}・{now:%H:%M:%S}・体重 {row["meta"]["weights"]}/{row["meta"]["n"]} 頭'

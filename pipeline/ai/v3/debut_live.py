@@ -57,6 +57,7 @@ FLAG = {'gaik': ['外厩', 'トレセン', 'プール', '牧場'], 'norik': ['�
 AXN = list(AXR) + list(FLAG) + ['concede', 'total']
 TP = [p + a for p in ('w_', 'h_') for a in AXN]
 TM = ['crs_pct3', 'crs_pct5', 'crs_pcth', 'n_w', 'span']
+LASTD = {}  # 日 → 前日の便の材料の表 D(決め 49 の F3 が読む)
 
 
 def norm(s):
@@ -301,6 +302,7 @@ def run(day, T, F, csv_path, base_csv, parsed, W, log=log0):
     if len(R):
         R = crs_pct(R, pool(W))
     D = feats(x, T, F, R)
+    LASTD[day] = D  # 決め 49: F3 の材料(時計の比べ crs_pct3/5/h・f3_live が読む)
     D['u_pre'], D['u_day'] = resid(D, 'pre'), resid(D, 'day')
     deb = D[D.deb]
     log('初出走', len(deb), '頭', deb[KEY].drop_duplicates().shape[0], 'R・寸評あり', int(deb.has_tp.sum()),

@@ -228,6 +228,19 @@ def main():
             nt = tanpyo_live.run(day, cap['T'], cap.get('F'), csv_path, out / f'{day}_v29_base.csv', t8._W.get('parsed'), log=log)
         except Exception as e:  # noqa: BLE001
             log('短評の層 失敗(前の段のまま)', type(e).__name__, str(e)[:200])
+    if nt:  # 平らな模型 F3 の混ぜ(決め 49・研究 nankan-ai-v3 blend_f3_polish3.py・f3_prod_fit.py・ユーザー承認 2026-10-22): 直前版だけ。
+        #   部品(束 t14・f10k・短評の層・初出走の層)が作った表から 284 列を v29 の土台へ。当日の便が状況の印の後に混ぜる。前日版は変えない
+        try:
+            import f3_live
+            import t14_bundle
+            import f10k_bundle
+            import debut_live
+            import tanpyo_live
+            f3_live.LAST.update(t14=t14_bundle.LASTF.get(day), f10k=f10k_bundle.LASTF.get(day), tanpyo=tanpyo_live.LASTD.get(day),
+                                debut=debut_live.LASTD.get(day))
+            f3_live.run(day, cap['h'], out / f'{day}_v29_base.csv', log=log)
+        except Exception as e:  # noqa: BLE001
+            log('F3 の材料 失敗(当日は前の段のまま)', type(e).__name__, str(e)[:200])
     notes = {}
     try:  # ひとこと(表示だけ・予想の計算には使わない・失敗しても予想の表と書き込みは止めない)
         import v3_notes

@@ -58,6 +58,7 @@ R_K, QD = V0 * 0.5, V0 * 0.002
 # 見張りの線(その日の南関の出走馬のうち値のある割合。研究の確かめの期間の 1 日ごとの最小より低めに置く)
 WATCH = {'lg_g_mu': 0.60, 'lg_k_mu': 0.50, 'fc_n30': 0.20, 'dw_dir': 0.50}  # 確かめの期間の 1 日ごとの最低 0.76・0.74・0.25・1.0
 CACHE = {}
+LASTF = {}  # 日 → その日の 37 列(決め 49 の F3 が読む)
 
 
 def log0(*a):
@@ -538,6 +539,7 @@ def run(day, h, races, T, csv_path, log=log0):
     lo = (pd.Timestamp(cut) + pd.Timedelta(days=1)).strftime('%Y-%m-%d')
     hist = danwa_rows(danwa_db(lo, day, log=log))
     F, fill = feats37(day, h, U, T, W, danwa_rows(tday), hist, log=log)
+    LASTF[day] = F  # 決め 49: F3 の材料(f3_live が読む)
     log('束 37 列 値のある割合', fill)
     bad = {k: fill[k] for k, v in WATCH.items() if fill[k] < v}
     if bad:

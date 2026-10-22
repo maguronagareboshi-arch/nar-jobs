@@ -103,7 +103,7 @@ jobs:
           rm -f in/v3_fixed.tar.gz.enc
           du -sh v3/*; df -h / | tail -n 1
 
-      # 2026-10-15 予想の学んだ定数・表(勝つ率の直し・談話の印・他場の曲線など)= 暗号化したリリース v3-consts-20261017(公開のコードに置かない)。
+      # 2026-10-15 予想の学んだ定数・表(勝つ率の直し・談話の印・他場の曲線など)= 暗号化したリリース v3-consts-20261022(公開のコードに置かない)。
       #   取れない・開けない・中身が欠けている時は止める(黙って別の値で予想を出さない)。中身の確かめ = pipeline/ai/sealed.py check
       - name: download sealed constants
         id: sc
@@ -117,8 +117,8 @@ jobs:
           : "${V3_ASSET_KEY:?secrets.V3_ASSET_KEY が無い}"
           mkdir -p in sealed_consts
           for i in 1 2 3; do
-            gh release download v3-consts-20261017 -p 'v3_consts.tar.gz.enc' -D in --clobber && break
-            [ "$i" = 3 ] && { echo "::error::⛔ 予想の定数(v3-consts-20261017)を 3 回取れなかった"; exit 1; }
+            gh release download v3-consts-20261022 -p 'v3_consts.tar.gz.enc' -D in --clobber && break
+            [ "$i" = 3 ] && { echo "::error::⛔ 予想の定数(v3-consts-20261022)を 3 回取れなかった"; exit 1; }
             sleep 20
           done
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_consts.tar.gz.enc | tar -C sealed_consts -xzf -
@@ -234,6 +234,21 @@ jobs:
           rm -f in/v3_tanpyo.tar.gz.enc
           ls -l v3/tanpyo
 
+      # 2026-10-22 決め 49: 平らな模型 F3 の列の一覧と短評の意味の札の表(直前版の材料を v29 の土台へ書くのに使う)。無ければ書かない
+      - name: download f3 files
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-f3-20261022 -p 'v3_f3.tar.gz.enc' -D in
+          mkdir -p v3/f3
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_f3.tar.gz.enc | tar -C v3/f3 -xzf -
+          rm -f in/v3_f3.tar.gz.enc
+          ls -l v3/f3
+
       # 談話の札を BERT で読む(2026-10-14)= tohoku-nlp/bert-base-japanese-v3 を談話の札で仕込んだ模型(16 ビット・約 220 MB)。
       # 無い・読めない便は規則の版(dw_pat)で要約を出す(予想の表と書き込みは止めない)
       - name: download dwbert files
@@ -295,6 +310,7 @@ jobs:
           V3_DEBUT: v3/debut  # 初出走の層の模型(上の download debut files)
           V3_TANPYO: v3/tanpyo  # 全馬の短評の層の模型・前走の元(上の download tanpyo files)
           V3_DWBERT: v3/dwbert  # 談話の札の BERT(上の download dwbert files)
+          V3_F3: v3/f3  # 決め 49 F3 の列の一覧・意味の札の表(上の download f3 files)
         run: |
           set -o pipefail
           mkdir -p out

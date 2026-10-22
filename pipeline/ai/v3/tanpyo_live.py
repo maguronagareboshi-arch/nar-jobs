@@ -38,6 +38,7 @@ MK = {1: '◎', 2: '○', 3: '▲', 4: '△', 5: '△'}
 TAG = 'tpl 決め30 短評の層'
 TAG8 = '決め36 状況の印'  # 当日の便が 8 列入りの模型を使った時に記録へ足す字
 LAST_VER = None  # apply_day が最後に使った模型('day8' = 決め 36・'day' = 決め 30 のまま)
+LASTD = {}  # 日 → 前日の便の材料の表 D(決め 49 の F3 が読む)
 
 
 def log0(*a):
@@ -272,6 +273,7 @@ def run(day, T, F, csv_path, base_csv, parsed, log=log0):
     H = history(M, parsed, day)
     D = add_feats(D, C, M, H, day)
     D = add6(D, T)
+    LASTD[day] = D  # 決め 49: F3 の材料(寸評の軸・段・型・状況の印・f3_live が読む)
     log('状況の印(決め 36)休み明け初戦', int((D.f_rest1 == 1).sum()), '・日数あり', int(D.d_rest.notna().sum()), '/', len(D),
         '・転入 中央', int((D.f_jra1 == 1).sum()), '・他地区', int((D.f_nar1 == 1).sum()), '・転厩', int((D.f_move1 == 1).sum()),
         '・材料表に無い列', [c for c in SRC6 if c not in T.columns])

@@ -37,6 +37,7 @@ WIN = {'l1': (1, 'v'), 'm2': (2, 'mean'), 'm3': (3, 'mean'), 'x3': (3, 'max'), '
        'n5': (5, 'min'), 's5': (5, 'std'), 'm10': (10, 'mean'), 'x10': (10, 'max'), 'n10': (10, 'min'), 's10': (10, 'std')}
 # 見張りの線(その日の南関の出走馬のうち値のある割合。研究の確かめの期間はどれも 0.66 以上)
 WATCH = {'h|distance_m|up_i|x5#raw': 0.40, 'h|none|body_weight|x10#rk': 0.50, 'e|trainer|track|1095|lift#raw': 0.80}
+LASTF = {}  # 日 → その日の 60 列(決め 49 の F3 が読む)
 DB0 = '2020-01-01'
 
 
@@ -279,6 +280,7 @@ def run(day, h, races, csv_path, log=log0):
         log('束 f10k: 土台 U を作り直す')
         U = t4_open.base_of(h[h.race_date.astype(str).str[:10] <= day], races[races.race_date.astype(str).str[:10] <= day])
     F, fill = feats(day, h, U, log=log)
+    LASTF[day] = F  # 決め 49: F3 の材料(f3_live が読む)
     log('束 f10k 60 列 値のある割合', fill, '・全列の平均', round(float(F.drop(columns=Q4).notna().mean().mean()), 3), '・秒', round(time.time() - t0))
     bad = {k: fill[k] for k, v in WATCH.items() if fill[k] < v}
     if bad:
