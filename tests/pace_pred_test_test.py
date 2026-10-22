@@ -36,6 +36,27 @@ class FeatureLeak(unittest.TestCase):
         self.assertEqual(a0, "速い")
 
 
+class DTenLeak(unittest.TestCase):
+    def test_d_ten_ignores_future_runs(self):
+        d = "2026-03-10"
+        tracks = ("大井", "金沢", "大井", "盛岡")
+        past = [dict(run("2026-01-%02d" % (i + 1), 1, 1), track=tr) for i, tr in enumerate(tracks)]
+        future = [run("2026-03-10", 2, 1), run("2026-04-01", 1, 1), run("2026-05-01", 1, 1)]
+        dval = {(r["track"], r["race_date"], 1, 1): (37.0, 1400) for r in past}
+        for r in future:   # 未来の走(同じ日の後の R も)は極端に速い
+            dval[(r["track"], r["race_date"], r["race_no"], 1)] = (30.0, 1400)
+        std = {("大井", 1400): 36.0, ("金沢", 1400): 37.5, ("盛岡", 1400): 36.5}   # 他場はその場の平年値との差
+        rows = [run(d, 5, 1)]
+        sty = {1: "逃げ"}
+        hist_only = {"馬": sorted(past, key=lambda x: x["race_date"], reverse=True)}
+        hist_all = {"馬": sorted(past + future, key=lambda x: (x["race_date"], x["race_no"]), reverse=True)}
+        f0 = pp.race_features_d(d, rows, hist_only, sty, dval, std)
+        f1 = pp.race_features_d(d, rows, hist_all, sty, dval, std)
+        self.assertEqual(f0, f1)
+        self.assertEqual(f0["f1"], 0.5)          # (1.0 − 0.5 + 1.0 + 0.5) / 4
+        self.assertIsNone(pp.d_ten(hist_only["馬"][:2], d, dval, std))     # 2 走では出さない
+
+
 class ConstModeLast12(unittest.TestCase):
     def test_c_is_mode_of_previous_12_months(self):
         recs = []
