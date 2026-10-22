@@ -1723,6 +1723,11 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
             loc = any(p.get("ta") and p.get("ta") != "JRA" and not _is_jra(p) for p in before[:jr[0]])
             if not cond and loc:
                 jra_aff = False
+            if when and when >= TOKAI_FY2026 and not _is_jra(before[0]) and before[0].get("ta") and birth and _date(before[0].get("d")).year - birth.year <= 2 and all(
+                    0 < k < len(before) - 1 and not _is_jra(before[k2]) and before[k2].get("ta") == before[0].get("ta")
+                    for k in jr for k2 in (max(x for x in range(k) if not _is_jra(before[x])),
+                                           min((x for x in range(k + 1, len(before)) if not _is_jra(before[x])), default=k))):
+                jra_aff = False                    # 2 歳で地方でデビューし(台帳に中央のデビューが無いだけの馬を除く) 中央の走が全部 同じ地方の所属の走に前後を挟まれている= 地方所属での中央の出走・令和8年度からの転入(令和7年度の笠松は加算= シュネルカガ 2025-11)(サトノランデヴー 兵庫→中央 2 走→兵庫→中央 2 走→兵庫・公式 3,364= 加算なし)
         if jra_aff and "j" in TOKAI_V and \
                 ("z" not in TOKAI_V or any(_is_jra(p) and int(p.get("prize") or 0) > 0 for p in before)):
             v += int(os.environ.get("TOKAI_JADD", str(tokai_jra_add(trk, when, a))))
