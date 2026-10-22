@@ -1,0 +1,29 @@
+# 研究用・前半3F で流れ(速い/平均/遅い)を当てる試し(手押しだけ)。⛔本番 DB には書かない(読むだけ)。
+# 出すのは集計の数字だけ(result.md / result.json・artifact 保存 3 日)。⛔走ごと・馬ごとの行は出さない(repo は PUBLIC)。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: pace-pred-test
+on:
+  workflow_dispatch:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install -r cloud/requirements.txt scikit-learn
+      - name: unit tests
+        run: python -m unittest tests.pace_pred_test_test
+      - name: pace pred walk forward
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/pace_pred_test.py --out out
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: pace-pred-test
+          path: out/
+          retention-days: 3
