@@ -77,10 +77,7 @@ def race_features(t, d, rows, by_horse, style_at_race, ten_of, std, band):
             lead.append(u)
         elif st == "先行":
             front.append(u)
-    fs = sorted(tens.values())
-    feat = {"f1": fs[0] if len(fs) > 0 else None, "f2": fs[1] if len(fs) > 1 else None,
-            "f3": fs[2] if len(fs) > 2 else None, "n_ten": len(fs),
-            "n_lead": len(lead), "n_front": len(front), "solo": 1 if len(lead) == 1 else 0}
+    feat = tk.pace_feat(tens, lead, front)      # ⛔本番(tenkai の全頭版)と同じ関数
     # A= add_pace と同じ: 逃げ候補(0 頭なら先行)の中でテンのいちばん速い馬 → pace_word
     cands = sorted(lead) or sorted(front)
     best = None
@@ -91,12 +88,7 @@ def race_features(t, d, rows, by_horse, style_at_race, ten_of, std, band):
     return feat, a
 
 
-def vec(f):
-    """特徴量 → 数の並び。⛔欠ける値は 0 と欠損フラグ(1= 欠け)"""
-    out = []
-    for k in ("f1", "f2", "f3"):
-        out += [0.0, 1.0] if f[k] is None else [float(f[k]), 0.0]
-    return out + [float(f["n_ten"]), float(f["n_lead"]), float(f["n_front"]), float(f["solo"])]
+vec = tk.pace_vec   # ⛔本番(tenkai の全頭版)と同じ関数
 
 
 def mode_label(labels):
@@ -109,18 +101,29 @@ def mode_label(labels):
     return max(WORDS, key=lambda w: (c[w], -WORDS.index(w)))
 
 
-def fit_predict(train, test):
-    """B= 標準化つき多項ロジスティック回帰。⛔正則化は既定のまま(調整しない)"""
+def fit_model(train):
+    """B の学習。None(行が足りない)/ ("const", 語)/ sklearn の pipeline。⛔正則化は既定のまま(調整しない)。
+    ⛔本番の係数(cloud/pace_model.py)もこの関数で作る"""
     ys = [r["y"] for r in train]
     if len(train) < B_MIN_TRAIN:
-        return [None] * len(test)
+        return None
     if len(set(ys)) == 1:
-        return [ys[0]] * len(test)
+        return ("const", ys[0])
     from sklearn.linear_model import LogisticRegression
     from sklearn.pipeline import make_pipeline
     from sklearn.preprocessing import StandardScaler
     m = make_pipeline(StandardScaler(), LogisticRegression(max_iter=2000))
     m.fit([vec(r["f"]) for r in train], ys)
+    return m
+
+
+def fit_predict(train, test):
+    """B= 標準化つき多項ロジスティック回帰"""
+    m = fit_model(train)
+    if m is None:
+        return [None] * len(test)
+    if isinstance(m, tuple):
+        return [m[1]] * len(test)
     return list(m.predict([vec(r["f"]) for r in test])) if test else []
 
 
@@ -258,18 +261,10 @@ def to_md(rows, meta, mc=None):
     return "\n".join(out) + "\n"
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument("--out", default="out")
-    a = ap.parse_args()
-    base = os.environ.get("SUPABASE_URL", "").rstrip("/")
-    key = os.environ.get("SUPABASE_SERVICE_KEY", "")
-    if not base or not key:
-        tk.log("SUPABASE_URL / SUPABASE_SERVICE_KEY が無い")
-        return 2
-    feat_months = months(ym_add(TEST_FROM, -TRAIN_MONTHS), TEST_TO)      # 特徴量を作る月(学習ぶん込み)
+def load_recs(base, key, feat_months):
+    """feat_months の各月のレース → [{t, ym, y, f, a}]。⛔本番の係数(cloud/pace_model.py)も同じ材料で作る"""
     f_lo = feat_months[0] + "-01"
-    f_hi = (dt.date.fromisoformat(ym_add(TEST_TO, 1) + "-01") - dt.timedelta(days=1)).isoformat()
+    f_hi = (dt.date.fromisoformat(ym_add(feat_months[-1], 1) + "-01") - dt.timedelta(days=1)).isoformat()
     far = (dt.date.fromisoformat(f_lo) - dt.timedelta(days=tk.PAST_DAYS + 1)).isoformat()
     tk.log("特徴量 %s〜%s・過去走は %s から" % (f_lo, f_hi, far))
 
@@ -313,6 +308,20 @@ def main():
                                   sty_by_race.get(k, {}), ten_all, std, band)
             recs.append({"t": r["track"], "ym": ym, "y": r["pace"], "f": f, "a": av})
         tk.log("  %s レース %d 本・標準 %d 組・帯 %d 場" % (ym, len(by_month.get(ym, [])), len(std), len(band)))
+    return recs
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument("--out", default="out")
+    a = ap.parse_args()
+    base = os.environ.get("SUPABASE_URL", "").rstrip("/")
+    key = os.environ.get("SUPABASE_SERVICE_KEY", "")
+    if not base or not key:
+        tk.log("SUPABASE_URL / SUPABASE_SERVICE_KEY が無い")
+        return 2
+    feat_months = months(ym_add(TEST_FROM, -TRAIN_MONTHS), TEST_TO)      # 特徴量を作る月(学習ぶん込み)
+    recs = load_recs(base, key, feat_months)
     stat = walk_forward(recs, months(TEST_FROM, TEST_TO))
     rows = summarize(stat)
     mc = {"b_vs_c": mcnemar_rows(stat, MC_TRACKS_BC, "bc_b", "bc_c"),

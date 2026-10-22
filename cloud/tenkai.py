@@ -90,6 +90,12 @@ TEN_TRACKS = ("高知", "門別", "大井", "船橋", "川崎", "浦和")
 #   情報量が無い(n=34・8/3〜9/4 休催で標本が薄い)。高知の開催が 60 日たまったら --backtest --pace で測り直して戻す。
 #   テンの小バッジは高知でも出る(PACE_TRACKS はペース見込みだけ)
 PACE_TRACKS = {"monbetsu", "ooi", "funabashi"}
+# 全頭の前半3F で流れを当てる(多項ロジスティック回帰・月 1 の便 cloud/pace_model.py が係数を nar_meta に書く)。
+# ⛔この場では add_pace の代わりに係数で出す。係数が読めない場・日は add_pace に戻す。絞り込みは検定(pace_pred_test)の後
+PACE_MODEL_TRACKS = ("門別", "金沢", "船橋", "大井", "高知", "川崎", "盛岡")
+PACE_MODEL_KEY = "pace_model:v1"
+PACE_WORDS = ("速い", "平均", "遅い")
+PACE_FEATURES = ("f1", "f2", "f3", "miss1", "miss2", "miss3", "n_ten", "n_lead", "n_front", "solo")
 TEN_MIN_RUNS = 3        # テンを出す最少走数(⛔3走未満は出さない)
 TEN_STD_MIN = 30        # 場×距離の標準を出す最少標本(小サンプルから基準を作らない)
 KOCHI_BAND = 0.4        # 高知は ±0.4 秒(kochi-pace-definition)。他場は場ごとの四分位
@@ -360,7 +366,7 @@ def positions(runs, pos_of):
     return ps
 
 
-def build_races(day_races, day_runs, past_by_horse, style_of_row, ten=None):
+def build_races(day_races, day_runs, past_by_horse, style_of_row, ten=None, pace_model=None):
     """1日ぶんの races ブロックを組む。
 
     ⛔`ten`(§99b・(ten_of, std, band, day_off))を渡したときだけ `h[馬番].ten/tn` と `pace/pace_by/pace_ten`
@@ -369,6 +375,9 @@ def build_races(day_races, day_runs, past_by_horse, style_of_row, ten=None):
     ⛔§238a2: 型(s/p/m)は派生表 nar_run_facts の style/style_p/style_n をそのまま写す
       (`style_of_row` = {(場, R, 馬番): (style, style_p, style_n)})。⛔ここで型を出し直さない。
       過去走(`past_by_horse`)はテン(前半3F)の材料としてだけ使う。
+    `pace_model`= nar_meta pace_model:v1 の tracks({場: 係数})。PACE_MODEL_TRACKS の場で係数があれば
+      pace/pace_p/pace_why を係数で出す(⛔特徴量は型の無い馬も含めた全頭= pace_pred_test の B と同じ)。
+      無ければ add_pace(今の見立て)。
     """
     ten_of, std, band, day_off = ten if ten else ({}, {}, {}, None)
     runs_by_race = {}
@@ -384,6 +393,7 @@ def build_races(day_races, day_runs, past_by_horse, style_of_row, ten=None):
             continue
         buckets = {s: [] for s in STYLES}
         none, hh = [], {}
+        m_tens, m_lead, m_front = {}, [], []
         for e in rows:
             u = e.get("runner_number")
             if u is None:
@@ -393,6 +403,14 @@ def build_races(day_races, day_runs, past_by_horse, style_of_row, ten=None):
                     if same_horse(e.get("birth_date"), x.get("birth_date"))]
             picked = pick_runs(hist, t)
             s, m, mn = style_of_row.get((t, no, u)) or (None, None, None)
+            if pace_model is not None:          # 全頭版の材料(型の無い馬のテンも入れる)
+                tv0 = ten_values(picked, ten_of, std, None) if ten_of else []
+                if len(tv0) >= TEN_MIN_RUNS:
+                    m_tens[u] = round(statistics.median([v for v, _a in tv0]), 2)
+                if s == "逃げ":
+                    m_lead.append(u)
+                elif s == "先行":
+                    m_front.append(u)
             if not s or m is None:
                 none.append(u)             # ⛔派生表に型が無い馬(初出走・走数が足りない)は推定しない
                 continue
@@ -420,7 +438,10 @@ def build_races(day_races, day_runs, past_by_horse, style_of_row, ten=None):
         }
         # §169 段 3 逃げそうな馬 1 頭と隊列の見込み(⛔手元の h から作る= 通信 +0・既存の鍵は変えない)
         rec["pick"], rec["order"] = pick_order(hh)
-        if ten_of:
+        mp = (pace_model or {}).get(t) if t in PACE_MODEL_TRACKS else None
+        if mp and add_pace_model(rec, mp, m_tens, m_lead, m_front):
+            pass                                # 全頭版で出せた
+        elif ten_of:
             add_pace(rec, t, hh, band)          # §99b(出せないレースはキーごと置かない)
         out["%s-%d" % (TRACK2PREFIX[t], no)] = rec
     return out, k_ratios
@@ -457,7 +478,7 @@ def day_block(base, key, date):
     style_of_row = fetch_style(base, key, date)
     # §99b テン。⛔前半3F のある6場の日だけ旧DBへ行く(他9場は今までどおり通信ゼロ)
     ten = fetch_ten(base, key, {(t, d) for t, d in need if t in TEN_TRACKS} | ten_year_days(base, key, date))
-    out, k_ratios = build_races(races, runs, by_horse, style_of_row, ten)
+    out, k_ratios = build_races(races, runs, by_horse, style_of_row, ten, fetch_pace_model(base, key))
     n_ten = sum(1 for r in out.values() for h in r["h"].values() if h.get("ten") is not None)
     n_pace = sum(1 for r in out.values() if r.get("pace"))
     memo = ("レース %d / 出走 %d / 過去走 %d(馬 %d)・派生表の型 %d 頭 / 見立てを出す %d 本"
@@ -656,6 +677,75 @@ def add_pace(rec, track, hh, band):
     w = pace_word(track, best[1], band)
     if w:
         rec["pace"], rec["pace_by"], rec["pace_ten"] = w, best[0], best[1]
+
+
+def pace_feat(tens, lead, front):
+    """全頭版の特徴量。tens= {馬番: テン}・lead/front= 逃げ・先行の馬番。⛔pace_pred_test の B と共用"""
+    fs = sorted(tens.values())
+    return {"f1": fs[0] if len(fs) > 0 else None, "f2": fs[1] if len(fs) > 1 else None,
+            "f3": fs[2] if len(fs) > 2 else None, "n_ten": len(fs),
+            "n_lead": len(lead), "n_front": len(front), "solo": 1 if len(lead) == 1 else 0}
+
+
+def pace_vec(f):
+    """特徴量 → 数の並び(PACE_FEATURES の順)。⛔欠ける値は 0 と欠損フラグ(1= 欠け)"""
+    out = []
+    for k in ("f1", "f2", "f3"):
+        out += [0.0, 1.0] if f[k] is None else [float(f[k]), 0.0]
+    return out + [float(f["n_ten"]), float(f["n_lead"]), float(f["n_front"]), float(f["solo"])]
+
+
+def pace_apply(mp, f):
+    """係数 1 場ぶん → (語, {語: 確率})。mp= {"kind": "lr", classes, mean, scale, coef, intercept} か
+    {"kind": "const", "label"}。⛔標準化 → 線形 → softmax(2 クラスはシグモイド)= sklearn の predict と同じ"""
+    import math
+    if mp.get("kind") == "const":
+        w = mp["label"]
+        return w, {x: (1.0 if x == w else 0.0) for x in PACE_WORDS}
+    cls, mean, sc = mp["classes"], mp["mean"], mp["scale"]
+    z = [(x - mu) / (s if s else 1.0) for x, mu, s in zip(pace_vec(f), mean, sc)]
+    lin = [sum(c * v for c, v in zip(row, z)) + b for row, b in zip(mp["coef"], mp["intercept"])]
+    if len(cls) == 2:
+        p1 = 1.0 / (1.0 + math.exp(-lin[0]))
+        pr = [1.0 - p1, p1]
+    else:
+        top = max(lin)
+        ex = [math.exp(v - top) for v in lin]
+        pr = [v / sum(ex) for v in ex]
+    best = max(range(len(cls)), key=lambda i: pr[i])
+    p = {x: 0.0 for x in PACE_WORDS}
+    for c, v in zip(cls, pr):
+        p[c] = v
+    return cls[best], p
+
+
+def add_pace_model(rec, mp, tens, lead, front):
+    """全頭版で pace/pace_p/pace_why を足す。出せたら True(⛔係数が壊れていたら False= add_pace に戻す)"""
+    try:
+        w, p = pace_apply(mp, pace_feat(tens, lead, front))
+    except (KeyError, TypeError, ValueError, ZeroDivisionError, OverflowError, IndexError):
+        return False
+    if w not in PACE_WORDS:
+        return False
+    fast = sorted(tens.items(), key=lambda kv: (kv[1], kv[0]))[:3]
+    rec["pace"] = w
+    rec["pace_p"] = {x: round(p[x], 3) for x in PACE_WORDS}
+    rec["pace_why"] = {"ten": [[u, v] for u, v in fast], "lead": len(lead), "front": len(front)}
+    return True
+
+
+def fetch_pace_model(base, key):
+    """nar_meta pace_model:v1 → {場: 係数}。⛔読めない・形が違うときは {}(= 全場 add_pace のまま)"""
+    try:
+        rows = rows_all(base, key, "/rest/v1/nar_meta?select=value&key=eq." + PACE_MODEL_KEY)
+        v = rows[0]["value"] if rows else None
+        if not isinstance(v, dict) or list(v.get("features") or []) != list(PACE_FEATURES):
+            return {}
+        tr = v.get("tracks") or {}
+        return {t: m for t, m in tr.items() if isinstance(m, dict) and m.get("kind") in ("lr", "const")}
+    except Exception as ex:  # noqa: BLE001 — 係数が無くても便は止めない
+        log("   pace_model を読めない(今の見立てで出す): %s" % ex)
+        return {}
 
 
 # ---------------------------------------------------------------- §169 段 2 隊列の見込み

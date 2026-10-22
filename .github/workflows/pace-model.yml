@@ -1,0 +1,56 @@
+# 全頭の前半3F で流れ(速い/平均/遅い)を当てる係数を月 1 で作る便。書き先は nar_meta 'pace_model:v1' の 1 行だけ。
+# tenkai.py が PACE_MODEL_TRACKS の場でこの係数を使う(読めなければ今の見立てに戻る)。
+# 入力 mode= dry(既定・書かずに log に出す)/ apply(書く)。to は YYYY-MM(空= 前の月まで 12 か月で学習)。
+# 数えるのはこの runner の中(⛔本番 DB では集計しない)。出すのは集計の数字だけ(repo は PUBLIC)。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: pace-model
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'dry (no write) or apply (write)'
+        required: true
+        default: 'dry'
+        type: choice
+        options:
+          - dry
+          - apply
+      to:
+        description: 'last training month YYYY-MM (empty = previous month)'
+        required: false
+        default: ''
+  schedule:
+    - cron: '20 1 1 * *'         # 毎月 1 日 10:20 JST(= 1 日 01:20 UTC)
+jobs:
+  model:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install -r cloud/requirements.txt scikit-learn
+      - name: unit tests
+        run: python -m unittest tests.pace_pred_test_test tests.pace_model_test
+      - name: pace model
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          MODE: ${{ github.event.inputs.mode }}
+          M_TO: ${{ github.event.inputs.to }}
+        run: |
+          set --
+          if [ "$MODE" = "dry" ]; then set -- "$@" --dry; else set -- "$@" --apply; fi
+          if [ -n "$M_TO" ]; then set -- "$@" --to "$M_TO"; fi
+          python cloud/pace_model.py "$@"
+          # 最終成功時刻(表 nar_job_heartbeat)。⛔表が無くても落ちない
+          if [ "$MODE" != "dry" ]; then python3 cloud/beat.py pace_model ok; fi
+
+      # 失敗の印(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py pace_model fail 失敗
