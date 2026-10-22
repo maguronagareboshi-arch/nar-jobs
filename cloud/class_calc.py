@@ -1669,7 +1669,14 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
                 rate, _label = tokai_rate_entry(p, a, trk, when)
                 v += int(p.get("prize") or 0) * rate
             v = _thou(round(v, 6))                 # 換算は全部足してから千円未満を切り捨てる(公式の一覧と 1〜5 千円ずれていた)
-        if any(_is_jra(p) for p in before) and "j" in TOKAI_V and \
+        jra_aff = any(_is_jra(p) for p in before)
+        if jra_aff:                                # 中央の走が全部 交流(条件戦でない)で前が地方所属= 地方所属の交流= 中央所属の出走歴でない→ 加算なし
+            jr = [k for k, p in enumerate(before) if _is_jra(p)]   # (令和8年度 5(1)オ ※・キャトルブランシュ 2026-08-15 コスモス賞 北海道所属)
+            cond = any(JRA_ENTRY_CLASS.search(unicodedata.normalize("NFKC", str(before[k].get("name") or ""))) for k in jr)
+            loc = any(p.get("ta") and p.get("ta") != "JRA" and not _is_jra(p) for p in before[:jr[0]])
+            if not cond and loc:
+                jra_aff = False
+        if jra_aff and "j" in TOKAI_V and \
                 ("z" not in TOKAI_V or any(_is_jra(p) and int(p.get("prize") or 0) > 0 for p in before)):
             v += int(os.environ.get("TOKAI_JADD", str(tokai_jra_add(trk, when, a))))
         return v
