@@ -1958,7 +1958,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
                 young = False
             elif not young:
                 gained += got
-                if r.get("fin") == 1 and r.get("tr") in TOKAI_TRACKS:
+                if r.get("fin") == 1 and (r.get("tr") in TOKAI_TRACKS or aff == "笠松"):   # 笠松は岐阜県所属で出た地方・中央の遠征の勝ちも「期間内の勝馬」(令和7年度 10(6)ア・ウ(ウ)・マルカラピッド 2025-11-16 金沢)
                     won = True
             last_tk_aff = d
         else:
