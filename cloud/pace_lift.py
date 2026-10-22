@@ -27,6 +27,13 @@
 
 ⛔1000行キャップ: 全取得はページング(tenkai.rows_window)。⛔offset の order= は一意に。
 ⛔updated_at を必ず送る。⛔200KB を超えたら場ごとの鍵に分ける(索引の 1 行を pace_lift:v1 に残す)。
+
+  ■ 脚質 × 逃げ馬の頭数(2026-10-23・nar_meta `style_nige:v1`・pace_lift:v1 は残す)
+    流れ(ペース)は発走前に分からないので使わない= ペースの行が無いレースも数える。
+    base  = {"場|帯|脚質": {n, top3, rate}}            脚質ごとのふだん
+    cells = {"場|帯|脚質|頭数": {n, top3, rate}}       頭数= そのレースの走った馬のうち
+            発走前脚質が逃げの頭数(3 以上は 3)。20 走未満は rate を null。
+    --only style_nige で style_nige:v1 だけ書く(pace_lift:v1 に触らない)。
 """
 import argparse
 import datetime as dt
@@ -52,6 +59,7 @@ from tenkai import TRACK2PREFIX, rows_window, CHIHOU_MIN_DIST      # noqa: E402
 
 UA = "nar-jobs/1.0"
 META_KEY = "pace_lift:v1"
+NIGE_KEY = "style_nige:v1"
 JST = dt.timezone(dt.timedelta(hours=9))
 MONTHS = 12                # 窓(既定)= 直前の月で終わる 12 か月
 CELL_MIN = 20              # この走数未満の枡は rate / lift を出さない(⛔1.0 で埋めない)
@@ -207,6 +215,59 @@ def count(paces, races, facts, runs, acc=None):
     return base, cells
 
 
+def count_nige(races, facts, runs, acc=None):
+    """逃げ馬の頭数で分ける数え方。⛔ペースは使わない(発走前に分からない)。
+
+    → ({(場, 帯, 脚質): [n, top3]}, {(場, 帯, 脚質, 頭数): [n, top3]})
+    頭数= そのレースの走った馬のうち発走前脚質が逃げの頭数(3 以上は 3)。
+    """
+    base, cells = acc if acc else ({}, {})
+    race_of = {}
+    for r in races:
+        tr = r.get("track")
+        if tr not in TRACK2PREFIX or r.get("distance_m") is None:
+            continue
+        b = band_of(r["distance_m"])
+        if b is not None:
+            race_of[(tr, r["race_date"], int(r["race_no"]))] = (TRACK2PREFIX[tr], b)
+    style_of = {(r["track"], r["race_date"], int(r["race_no"]), int(r["umaban"])): r.get("style")
+                for r in facts if r.get("style") in STYLES}
+    by_race = {}
+    for r in runs:
+        u = r.get("runner_number")
+        if u is None:
+            continue
+        rk = (r["track"], r["race_date"], int(r["race_no"]))
+        if rk not in race_of:
+            continue
+        style = style_of.get(rk + (int(u),))
+        fin = r.get("finish")
+        f = int(fin) if isinstance(fin, int) or (isinstance(fin, str) and str(fin).isdigit()) else None
+        by_race.setdefault(rk, []).append((style, 1 if f is not None and f <= 3 else 0))
+    for rk, lst in by_race.items():
+        cell = race_of[rk]
+        nige = min(3, sum(1 for st, _t in lst if st == "逃げ"))
+        for style, top3 in lst:
+            if not style:
+                continue
+            b = base.setdefault(cell + (style,), [0, 0])
+            b[0] += 1
+            b[1] += top3
+            c = cells.setdefault(cell + (style, nige), [0, 0])
+            c[0] += 1
+            c[1] += top3
+    return base, cells
+
+
+def pack_nige(base, cells, months, asof):
+    """逃げ馬の頭数の値 → nar_meta の形。⛔20 走未満は rate を null"""
+    def one(n, t):
+        return {"n": n, "top3": t, "rate": round(t / float(n), 4) if n >= CELL_MIN else None}
+    return {"months": [months[0][0], months[-1][0]], "asof": asof, "min_n": CELL_MIN,
+            "base": {"%s|%d|%s" % k: one(*v) for k, v in sorted(base.items())},
+            "cells": {"%s|%d|%s|%d" % k: one(*v) for k, v in sorted(cells.items())}}
+
+
 def pack(base, cells, months, asof):
     """数 → nar_meta に入れる形。⛔20 走未満は rate/lift を null(1.0 で埋めない)"""
     out_base, out_cells = {}, {}
@@ -224,7 +285,7 @@ def pack(base, cells, months, asof):
             "min_n": CELL_MIN, "base": out_base, "cells": out_cells}
 
 
-def split_by_track(value):
+def split_by_track(value, meta_key=META_KEY):
     """200KB 超のとき= 場ごとの鍵に分ける。索引の 1 行を pace_lift:v1 に残す"""
     parts = {}
     for name in ("base", "cells"):
@@ -234,8 +295,8 @@ def split_by_track(value):
     for prefix in sorted(parts):
         one = {"months": value["months"], "asof": value["asof"], "min_n": value["min_n"]}
         one.update(parts[prefix])
-        out.append((META_KEY + ":" + prefix, one))
-    out.append((META_KEY, {"months": value["months"], "asof": value["asof"],
+        out.append((meta_key + ":" + prefix, one))
+    out.append((meta_key, {"months": value["months"], "asof": value["asof"],
                            "min_n": value["min_n"], "split": True, "tracks": sorted(parts)}))
     return out
 
@@ -256,20 +317,21 @@ def upsert(api, key, meta_key, value):
 
 def build(api, key, months):
     """月ごとに 4 つの表を読み、手元で数える。⛔本番に計算させない"""
-    acc = ({}, {})
+    acc, nacc = ({}, {}), ({}, {})
     for name, lo, hi in months:
         t0 = time.time()
         paces = window(api, key, PACE_TMPL, lo, hi)
-        if not paces:
-            log("  %s  ペースの行なし= この月は数えない" % name)
-            continue
         races = window(api, key, RACE_TMPL, lo, hi)
         facts = window(api, key, FACT_TMPL, lo, hi)
         runs = window(api, key, RUN_TMPL, lo, hi)
-        acc = count(paces, races, facts, runs, acc)
+        nacc = count_nige(races, facts, runs, nacc)     # ⛔ペースの行が無い月も数える
+        if paces:
+            acc = count(paces, races, facts, runs, acc)
+        else:
+            log("  %s  ペースの行なし= 倍率の方はこの月を数えない" % name)
         log("  %s  pace %5d / race %5d / facts %6d / run %6d  %.1f 秒"
             % (name, len(paces), len(races), len(facts), len(runs), time.time() - t0))
-    return acc
+    return acc, nacc
 
 
 def main():
@@ -279,6 +341,7 @@ def main():
     ap.add_argument("--from", dest="m_from", help="始めの月 YYYY-MM")
     ap.add_argument("--to", dest="m_to", help="終わりの月 YYYY-MM")
     ap.add_argument("--out", help="組んだ値を JSON ファイルにも書く(検品・画面のモック用)")
+    ap.add_argument("--only", choices=["style_nige"], help="style_nige:v1 だけ書く(pace_lift:v1 に触らない)")
     ap.add_argument("--env")
     a = ap.parse_args()
     if a.env:
@@ -294,7 +357,28 @@ def main():
     months = month_range(a.m_from or d_from, a.m_to or d_to)
     log("■ 脚質 × ペースの倍率 %s〜%s(%d か月)" % (months[0][0], months[-1][0], len(months)))
     t0 = time.time()
-    base, cells = build(api, key, months)
+    (base, cells), (nbase, ncells) = build(api, key, months)
+    rc = 0
+    if ncells:
+        nv = pack_nige(nbase, ncells, months, today.isoformat())
+        up = TRACK2PREFIX.get("浦和")
+        for k, v in sorted(nv["base"].items()):
+            if up and k.startswith("%s|1600|" % up):
+                log("  浦和 1600 ふだん %s n=%d rate=%s" % (k, v["n"], v["rate"]))
+        nrows = [(NIGE_KEY, nv)] if size_of(nv) <= SIZE_MAX else split_by_track(nv, NIGE_KEY)
+        log("  逃げ頭数: 脚質のふだん %d・枡 %d・%d バイト・書く先= %s"
+            % (len(nv["base"]), len(nv["cells"]), size_of(nv), " / ".join(k for k, _v in nrows)))
+        if a.apply:
+            for meta_key, v in nrows:
+                st = upsert(api, key, meta_key, v)
+                log("  → nar_meta/%s %s(%d バイト)" % (meta_key, st, size_of(v)))
+                if st not in (200, 201):
+                    rc = 1
+    else:
+        log("⛔逃げ頭数: 数えられた走が 1 つも無い= 書かない")
+        rc = 2
+    if a.only == "style_nige":
+        return rc
     if not cells:
         log("⛔数えられた走が 1 つも無い= 書かない")
         return 2
@@ -312,7 +396,6 @@ def main():
     if not a.apply:
         log("  ← ドライラン(--apply なし)。書く先= " + " / ".join(k for k, _v in rows))
         return 0
-    rc = 0
     for meta_key, v in rows:
         st = upsert(api, key, meta_key, v)
         log("  → nar_meta/%s %s(%d バイト)" % (meta_key, st, size_of(v)))

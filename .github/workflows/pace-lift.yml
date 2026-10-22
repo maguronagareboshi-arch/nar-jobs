@@ -1,4 +1,4 @@
-# §224 段 2a 脚質 × ペースの「3 着内率の倍率」を月 1 で焼く便。書き先は nar_meta 'pace_lift:v1' の 1 行だけ。
+# §224 段 2a 脚質 × ペースの「3 着内率の倍率」を月 1 で焼く便。書き先は nar_meta 'pace_lift:v1' と 'style_nige:v1'(脚質 × 逃げ馬の頭数・10/23)。
 # 入力 mode= dry(既定・書かずに log に出す)/ apply(書く)。from / to は YYYY-MM(空= 直前の月で終わる 12 か月)。
 # 数えるのはこの runner の中(⛔本番 DB では集計しない)。1 回およそ 5 分・月 1 なので無料枠への影響はほぼ無い。
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
@@ -22,6 +22,10 @@ on:
         description: 'last month YYYY-MM (empty = previous month)'
         required: false
         default: ''
+      only:
+        description: 'empty = both / style_nige = write style_nige v1 only'
+        required: false
+        default: ''
   schedule:
     - cron: '40 19 1 * *'        # 毎月 2 日 04:40 JST(= 前月 1 日 19:40 UTC)
 jobs:
@@ -41,14 +45,16 @@ jobs:
           MODE: ${{ github.event.inputs.mode }}
           M_FROM: ${{ github.event.inputs.from }}
           M_TO: ${{ github.event.inputs.to }}
+          ONLY: ${{ github.event.inputs.only }}
         run: |
           set --
           if [ "$MODE" = "dry" ]; then set -- "$@" --dry; else set -- "$@" --apply; fi
           if [ -n "$M_FROM" ]; then set -- "$@" --from "$M_FROM"; fi
           if [ -n "$M_TO" ]; then set -- "$@" --to "$M_TO"; fi
+          if [ -n "$ONLY" ]; then set -- "$@" --only "$ONLY"; fi
           python cloud/pace_lift.py "$@"
           # 監査 A8(2026-09-24) 最終成功時刻(表 nar_job_heartbeat)。⛔表が無くても落ちない
-          if [ "$MODE" != "dry" ]; then python3 cloud/beat.py pace_lift ok; fi
+          if [ "$MODE" != "dry" ] && [ -z "$ONLY" ]; then python3 cloud/beat.py pace_lift ok; fi
 
       # 監査 A8(2026-09-24) 失敗の印(表 nar_job_heartbeat)。⛔表が無くても落ちない
       - name: heartbeat fail
