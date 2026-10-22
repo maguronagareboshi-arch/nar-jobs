@@ -92,7 +92,8 @@ TEN_TRACKS = ("高知", "門別", "大井", "船橋", "川崎", "浦和")
 PACE_TRACKS = {"monbetsu", "ooi", "funabashi"}
 # 全頭の前半3F で流れを当てる(多項ロジスティック回帰・月 1 の便 cloud/pace_model.py が係数を nar_meta に書く)。
 # ⛔この場では add_pace の代わりに係数で出す。係数が読めない場・日は add_pace に戻す。絞り込みは検定(pace_pred_test)の後
-PACE_MODEL_TRACKS = ("門別", "金沢", "船橋", "大井", "高知", "川崎", "盛岡")
+# 2026-10-22 検定(McNemar・Holm)で「いつも同じ答え」に勝った 5 場。川崎・盛岡は不合格(補正後 p 0.11・0.16)
+PACE_MODEL_TRACKS = ("門別", "金沢", "船橋", "大井", "高知")
 PACE_MODEL_KEY = "pace_model:v1"
 PACE_WORDS = ("速い", "平均", "遅い")
 PACE_FEATURES = ("f1", "f2", "f3", "miss1", "miss2", "miss3", "n_ten", "n_lead", "n_front", "solo")
