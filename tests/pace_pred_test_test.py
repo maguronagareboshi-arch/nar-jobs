@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""cloud/pace_pred_test.py の 2 則(⛔ネット・DB なし)。
+"""cloud/pace_pred_test.py の 3 則(⛔ネット・DB なし)。
 実行: py -3.12 -X utf8 -m unittest tests.pace_pred_test_test"""
 import sys
 import unittest
@@ -55,6 +55,24 @@ class ConstModeLast12(unittest.TestCase):
         self.assertEqual(st["c_hit"], 4)    # 「速い」と言い続けて 4 本当たる
         self.assertEqual(pp.mode_label(["平均", "速い"]), "速い")
         self.assertIsNone(pp.mode_label([]))
+
+
+class McNemarCount(unittest.TestCase):
+    def test_pairs_and_p(self):
+        # 同じレースの (B 当たり, C 当たり)。両方当たり・両方外れは数えない
+        pairs = [(True, False)] * 7 + [(False, True)] * 2 + [(True, True)] * 30 + [(False, False)] * 11
+        self.assertEqual(pp.mc_count(pairs), (7, 2))
+        self.assertAlmostEqual(pp.mc_p(7, 2), 0.1796875)     # 2×P(X≤2), X~Bin(9, 1/2)= 2×46/512
+        self.assertEqual(pp.mc_p(0, 0), 1.0)
+        self.assertAlmostEqual(pp.mc_p(10, 0), 2 / 1024)
+        adj = pp.holm({"甲": 0.01, "乙": 0.04, "丙": 0.03})
+        self.assertAlmostEqual(adj["甲"], 0.03)
+        self.assertAlmostEqual(adj["丙"], 0.06)
+        self.assertAlmostEqual(adj["乙"], 0.06)               # 単調にそろえる(0.04×1 より前の 0.06)
+        st = {"大井": {"bc_b": 10, "bc_c": 0}, "高知": {"bc_b": 0, "bc_c": 10}}
+        r = pp.mcnemar_rows(st, ("大井", "高知"), "bc_b", "bc_c")
+        self.assertTrue(r["大井"]["pass"])
+        self.assertFalse(r["高知"]["pass"])                    # 有意でも C が多い向きは合格にしない
 
 
 if __name__ == "__main__":

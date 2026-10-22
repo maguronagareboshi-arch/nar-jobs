@@ -28,6 +28,11 @@ WORDS = ("速い", "平均", "遅い")
 TEST_FROM, TEST_TO = "2025-09", "2026-08"   # 当てる月
 TRAIN_MONTHS = 12                             # 学習に使う前の月数
 B_MIN_TRAIN = 30                              # B の学習行がこれ未満の場・月は B を出さない(小標本で回帰しない)
+# 偶然でないかの検定(McNemar・正確二項・Holm 補正)。⛔場は決め打ち(結果を見て足し引きしない)
+MC_TRACKS_BC = ("門別", "金沢", "船橋", "大井", "高知", "川崎", "盛岡")   # B と C を比べる 7 場
+MC_TRACKS_BA = ("大井", "門別", "船橋", "川崎", "浦和", "高知")          # 今の見立て A が出ている場
+MC_ALPHA = 0.05
+MC_KEYS = ("bc_b", "bc_c", "ba_b", "ba_a")    # bc_b= B だけ当たり / bc_c= C だけ / ba_b= B だけ / ba_a= A だけ
 
 
 def ym_add(ym, k):
@@ -127,6 +132,7 @@ def walk_forward(recs, test_months, use_b=True):
     stat = {}
     for t, rs in sorted(by_t.items()):
         s = {k: 0 for k in ("n", "a_n", "a_hit", "b_n", "b_hit", "b_on_a", "c_n", "c_hit")}
+        bc, ba = [], []                     # McNemar の組(同じレースの当たり外れ)
         for m in test_months:
             test = [r for r in rs if r["ym"] == m]
             if not test:
@@ -147,9 +153,55 @@ def walk_forward(recs, test_months, use_b=True):
                 if c is not None:
                     s["c_n"] += 1
                     s["c_hit"] += 1 if c == r["y"] else 0
+                if b is not None and c is not None:
+                    bc.append((b == r["y"], c == r["y"]))
+                if b is not None and r["a"] is not None:
+                    ba.append((b == r["y"], r["a"] == r["y"]))
+        s["bc_b"], s["bc_c"] = mc_count(bc)
+        s["ba_b"], s["ba_a"] = mc_count(ba)
         if s["n"]:
             stat[t] = s
     return stat
+
+
+def mc_count(pairs):
+    """[(x 当たり, y 当たり)] → (x だけ当たり, y だけ当たり)。両方当たり・両方外れは数えない"""
+    xo = sum(1 for x, y in pairs if x and not y)
+    yo = sum(1 for x, y in pairs if y and not x)
+    return xo, yo
+
+
+def mc_p(xo, yo):
+    """McNemar の正確二項(両側)。n= xo+yo が 0 なら 1"""
+    import math
+    n = xo + yo
+    if n == 0:
+        return 1.0
+    k = min(xo, yo)
+    tail = sum(math.comb(n, i) for i in range(k + 1)) / (2 ** n)
+    return min(1.0, 2 * tail)
+
+
+def holm(ps):
+    """{名: p} → {名: 補正後 p}(Holm・単調にそろえる)"""
+    items = sorted(ps.items(), key=lambda kv: kv[1])
+    m, out, run = len(items), {}, 0.0
+    for i, (k, p) in enumerate(items):
+        run = max(run, min(1.0, (m - i) * p))
+        out[k] = run
+    return out
+
+
+def mcnemar_rows(stat, tracks, xk, yk):
+    """場ごとの (x だけ, y だけ, p, 補正後 p, 合格)。合格= 補正後 p < MC_ALPHA かつ x だけ > y だけ"""
+    raw = {}
+    for t in tracks:
+        s = stat.get(t) or {}
+        xo, yo = s.get(xk, 0), s.get(yk, 0)
+        raw[t] = (xo, yo, mc_p(xo, yo))
+    adj = holm({t: v[2] for t, v in raw.items()})
+    return {t: {"x_only": v[0], "y_only": v[1], "p": v[2], "p_holm": adj[t],
+                "pass": bool(adj[t] < MC_ALPHA and v[0] > v[1])} for t, v in raw.items()}
 
 
 def rate(a, b):
@@ -179,7 +231,16 @@ def pct(x):
     return "-" if x is None else "%.1f%%" % (100 * x)
 
 
-def to_md(rows, meta):
+def mc_md(mc, title, xn, yn):
+    out = ["", "## " + title, "", "| 場 | %s だけ当たり | %s だけ当たり | p | 補正後 p(Holm) | 合格 |" % (xn, yn),
+           "|---|---|---|---|---|---|"]
+    for t, r in mc.items():
+        out.append("| %s | %d | %d | %.4g | %.4g | %s |" % (t, r["x_only"], r["y_only"], r["p"], r["p_holm"],
+                                                         "合格" if r["pass"] else "-"))
+    return out
+
+
+def to_md(rows, meta, mc=None):
     head = ("| 場 | レース | A 出せた | A 一致(出せた) | A 一致(全) | B 出せた | B 一致(出せた) | B 一致(全) "
             "| B 一致(A と同じ範囲) | C 一致(出せた) | C 一致(全) |")
     out = ["# 前半3F で流れを当てる試し", "", "期間 %s〜%s・月ごとのウォークフォワード(前 %d か月で学習)"
@@ -190,6 +251,10 @@ def to_md(rows, meta):
             t, r["races"], pct(r["a_cover"]), pct(r["a_hit_cover"]), pct(r["a_hit_all"]),
             pct(r["b_cover"]), pct(r["b_hit_cover"]), pct(r["b_hit_all"]), pct(r["b_hit_on_a"]),
             pct(r["c_hit_cover"]), pct(r["c_hit_all"])))
+    if mc:
+        out += mc_md(mc["b_vs_c"], "偶然でないか(B と C・McNemar 正確二項・7 場で Holm・合格= 補正後 p<%.2f かつ B が多い)"
+                     % MC_ALPHA, "B", "C")
+        out += mc_md(mc["b_vs_a"], "偶然でないか(B と A・A が出せたレースだけ・6 場で Holm)", "B", "A")
     return "\n".join(out) + "\n"
 
 
@@ -250,13 +315,15 @@ def main():
         tk.log("  %s レース %d 本・標準 %d 組・帯 %d 場" % (ym, len(by_month.get(ym, [])), len(std), len(band)))
     stat = walk_forward(recs, months(TEST_FROM, TEST_TO))
     rows = summarize(stat)
+    mc = {"b_vs_c": mcnemar_rows(stat, MC_TRACKS_BC, "bc_b", "bc_c"),
+          "b_vs_a": mcnemar_rows(stat, MC_TRACKS_BA, "ba_b", "ba_a")}
     meta = {"built": dt.datetime.now(tk.JST).isoformat(timespec="minutes"), "test": [TEST_FROM, TEST_TO],
             "train_months": TRAIN_MONTHS, "b_min_train": B_MIN_TRAIN, "requests": tk.N_REQ[0],
             "features": ["f1", "f2", "f3", "miss1", "miss2", "miss3", "n_ten", "n_lead", "n_front", "solo"]}
     os.makedirs(a.out, exist_ok=True)
     with open(os.path.join(a.out, "result.json"), "w", encoding="utf-8") as fp:
-        json.dump({"meta": meta, "tracks": rows}, fp, ensure_ascii=False, indent=1)
-    md = to_md(rows, meta)
+        json.dump({"meta": meta, "tracks": rows, "mcnemar": mc}, fp, ensure_ascii=False, indent=1)
+    md = to_md(rows, meta, mc)
     with open(os.path.join(a.out, "result.md"), "w", encoding="utf-8") as fp:
         fp.write(md)
     print(md)
