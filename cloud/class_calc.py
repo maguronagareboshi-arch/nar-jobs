@@ -1471,7 +1471,7 @@ def tokai_rate_resident(run, race, venue=None, age_at=None):
     if kind == "準重賞" and young:
         if venue == "名古屋":
             d = _date(run.get("d"))
-            if d and d < TOKAI_FY2026 and "弥富記念" not in name:
+            if d and d < TOKAI_FY2026 and ("弥富記念" not in name or d < TOKAI_FY2025):   # 弥富記念の 60% は令和7年度だけ(令和6年度は 50%= アップショウグン 2025-01-14)
                 return 0.50, "2歳3歳P(令和7年度以前)"      # 令和8年度は 60%。公式の履歴は 50% で 6035→6113 件が合う(アップショウグン 弥富記念)
             return 0.60, "2歳3歳P"
         return 0.50, "2歳3歳準重賞"
