@@ -1430,7 +1430,11 @@ def tokai_rate_resident(run, race, venue=None, age_at=None):
     venue = venue or str(run.get("tr") or "")
     if TOKAI_CLASS_NAME.search(name) and "重賞級" not in name:
         return 1.00, "東海"                          # 末尾が級と組= 一般の競走(「ＪＢＣ２０２５船橋・門別Ｃ２２」「くろゆり賞抽選会実施記念Ｂ６」は冠だけ)
+    if re.search(r"[ＡＢＣ][０-９]+[ａ-ｃ]?特別$", name) and "重賞級" not in name:
+        return 1.00, "東海"                          # 級名＋特別= 一般の競走(「東海ゴールドカップトライアルＡ１特別」を重賞と読まない・アルバーシャ)
     hit = tokai_grade(venue, name)
+    if hit and kind == "特別":
+        hit = None                                     # 台帳の格が「特別」= 名前表の部分一致で重賞にしない
     grade, young = (hit if hit else (None, bool(TOKAI_YOUNG_NAME.search(name))))
     if hit and not young and TOKAI_YOUNG_NAME.search(name):
         young = True                                   # 表では古馬扱いの名前でも「弥富記念３歳オープン」のように 3歳限定の回がある
