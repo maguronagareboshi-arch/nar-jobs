@@ -40,7 +40,7 @@ MC_KEYS = ("bc_b", "bc_c", "ba_b", "ba_a")    # bc_b= B だけ当たり / bc_c= 
 # D(§232b の物差しのテン)。⛔場は決め打ちの 14 場(ばんえいは上がり3F が無いので入らない)
 MC_TRACKS_D = ("門別", "盛岡", "水沢", "浦和", "船橋", "大井", "川崎", "金沢", "笠松", "名古屋", "園田", "姫路",
                "高知", "佐賀")
-D_RUNS = 5                                    # D のテンに使う直近の走数(値の出た走だけ数える)
+D_RUNS = tk.PACE_D_RUNS                       # D のテンに使う直近の走数(⛔本番 tenkai と同じ値)
 STAT_KEYS = ("n", "a_n", "a_hit", "b_n", "b_hit", "b_on_a", "c_n", "c_hit", "d_n", "d_hit",
              "h_n", "h_b", "h_d")             # h_n= 出走頭数 / h_b= B のテンが付いた頭数 / h_d= D のテンが付いた頭数
 
@@ -98,12 +98,7 @@ def race_features(t, d, rows, by_horse, style_at_race, ten_of, std, band):
     return feat, a
 
 
-def d_ten(hist, d, dval, std):
-    """1 頭の過去走(新しい順)→ D のテン or None。⛔race_date < d の走だけ。
-    dval= {(場, 日, R, 馬番): (走破 − 上がり3F, 距離m)}(1200m 未満は入っていない)/ std= tk.pace_std の平年値。
-    差の取り方は tk.ten_values と同じ(平年値の無い組は使わない)"""
-    xs = [v for v, _a in tk.ten_values([x for x in hist if x["race_date"] < d], dval, std, None)][:D_RUNS]
-    return round(statistics.mean(xs), 2) if len(xs) >= tk.TEN_MIN_RUNS else None
+d_ten = tk.d_ten   # ⛔本番(tenkai の全頭版)と同じ関数
 
 
 def race_features_d(d, rows, by_horse, style_at_race, dval, dstd):
@@ -280,7 +275,8 @@ def summarize(stat):
                    "b_hit_all": rate(s["b_hit"], s["n"]), "b_hit_on_a": rate(s["b_on_a"], s["a_n"]),
                    "c_cover": rate(s["c_n"], s["n"]), "c_hit_cover": rate(s["c_hit"], s["c_n"]),
                    "c_hit_all": rate(s["c_hit"], s["n"]),
-                   "d_cover": rate(s.get("d_n", 0), s["n"]), "d_hit_all": rate(s.get("d_hit", 0), s["n"]),
+                   "d_cover": rate(s.get("d_n", 0), s["n"]), "d_hit_cover": rate(s.get("d_hit", 0), s.get("d_n", 0)),
+                   "d_hit_all": rate(s.get("d_hit", 0), s["n"]),
                    "horse_ten_b": rate(s.get("h_b", 0), s.get("h_n", 0)),
                    "horse_ten_d": rate(s.get("h_d", 0), s.get("h_n", 0))}
     return rows
@@ -331,7 +327,7 @@ def to_md(rows, meta, mc=None):
 
 def load_recs(base, key, feat_months, with_d=False):
     """feat_months の各月のレース → [{t, ym, y, f, a, nr}](with_d なら fd も)。
-    ⛔本番の係数(cloud/pace_model.py)も同じ材料で作る(D は with_d=True のときだけ= 本番便の取得は増やさない)"""
+    ⛔本番の係数(cloud/pace_model.py)も同じ材料で作る(with_d=True)"""
     f_lo = feat_months[0] + "-01"
     f_hi = (dt.date.fromisoformat(ym_add(feat_months[-1], 1) + "-01") - dt.timedelta(days=1)).isoformat()
     far = (dt.date.fromisoformat(f_lo) - dt.timedelta(days=tk.PAST_DAYS + 1)).isoformat()
@@ -368,18 +364,8 @@ def load_recs(base, key, feat_months, with_d=False):
                                 "&order=race_date.asc,track.asc,race_no.asc", far, f_hi):
             if r.get("distance_m"):
                 dist[(r["track"], r["race_date"], int(r["race_no"]))] = int(r["distance_m"])
-        items = []
-        for r in runs:
-            if r.get("time_sec") is None or r.get("last3f") is None or r.get("runner_number") is None:
-                continue
-            dm = dist.get((r["track"], r["race_date"], int(r["race_no"])))
-            if not dm or dm < tk.CHIHOU_MIN_DIST:
-                continue
-            v = round(float(r["time_sec"]) - float(r["last3f"]), 1)
-            if v <= 0:
-                continue
-            items.append((r["track"], r["race_date"], int(r["race_no"]), int(r["runner_number"]), v, dm))
-            dval[(r["track"], r["race_date"], int(r["race_no"]), int(r["runner_number"]))] = (v, dm)
+        dval = tk.d_values(runs, dist)          # ⛔本番(tenkai の全頭版)と同じ関数
+        items = [(t, d, no, u, v, dm) for (t, d, no, u), (v, dm) in dval.items()]
         fastest = tk.race_fastest(items)        # ⛔§232b の関数をそのまま
         tk.log("  D の材料 %d 走・%d レース・要求 %d 回" % (len(dval), len(fastest), tk.N_REQ[0]))
     sty_by_race = {}

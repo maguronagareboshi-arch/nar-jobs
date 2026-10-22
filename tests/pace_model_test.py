@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """cloud/pace_model.py と tenkai の全頭版の 2 則(⛔ネット・DB なし・sklearn は要る)。
 実行: py -3.12 -X utf8 -m unittest tests.pace_model_test"""
+import datetime as dt
 import random
 import sys
 import unittest
@@ -74,17 +75,107 @@ class FallbackToCurrent(unittest.TestCase):
         self.assertNotIn("pace_p", old["ooi-1"])
 
     def test_with_coef_uses_all_runners(self):
-        _d, races, runs, past, sty, ten = race_inputs()
+        d, races, runs, past, sty, ten = race_inputs()
         mp = {"kind": "const", "label": "遅い"}
-        new, _ = tk.build_races(races, runs, past, sty, ten, {"大井": mp})
+        dten = (d, ten[0], ten[1])              # D の材料(ここでは前半3F と同じ値・平年値 36.5)
+        self.assertEqual(tk.build_races(races, runs, past, sty, ten, {"大井": mp})[0],
+                         tk.build_races(races, runs, past, sty, ten)[0])   # D の材料が無ければ今の見立て
+        new, _ = tk.build_races(races, runs, past, sty, ten, {"大井": mp}, dten)
         r = new["ooi-1"]
         self.assertEqual(r["pace"], "遅い")
         self.assertEqual(r["pace_p"], {"速い": 0.0, "平均": 0.0, "遅い": 1.0})
         self.assertEqual(r["pace_why"], {"ten": [[3, -0.6], [1, -0.5], [2, 0.3]], "lead": 1, "front": 0})
         self.assertNotIn("pace_by", r)
         self.assertNotIn("pace_hit", r)   # wf が無い係数では置かない
-        r2 = tk.build_races(races, runs, past, sty, ten, {"大井": dict(mp, wf={"hit_all": 0.51234})})[0]["ooi-1"]
+        r2 = tk.build_races(races, runs, past, sty, ten, {"大井": dict(mp, wf={"hit_all": 0.51234})}, dten)[0]["ooi-1"]
         self.assertEqual(r2["pace_hit"], 0.512)
+
+
+
+class OldCoefFallback(unittest.TestCase):
+    def test_old_coef_is_not_used(self):
+        base = {"features": list(tk.PACE_FEATURES), "tracks": {"大井": {"kind": "const", "label": "遅い"}}}
+        orig = tk.rows_all
+        try:
+            tk.rows_all = lambda *_a, **_k: [{"value": base}]                   # "ten" の無い古い係数
+            self.assertEqual(tk.fetch_pace_model("u", "k"), {})
+            tk.rows_all = lambda *_a, **_k: [{"value": dict(base, ten="b")}]
+            self.assertEqual(tk.fetch_pace_model("u", "k"), {})
+            tk.rows_all = lambda *_a, **_k: [{"value": dict(base, ten="d")}]
+            self.assertEqual(tk.fetch_pace_model("u", "k"), base["tracks"])
+        finally:
+            tk.rows_all = orig
+        # 古い係数= {} → build_races は今の見立てと 1 バイトも変わらない
+        d, races, runs, past, sty, ten = race_inputs()
+        self.assertEqual(tk.build_races(races, runs, past, sty, ten, {}, (d, ten[0], ten[1]))[0],
+                         tk.build_races(races, runs, past, sty, ten)[0])
+
+
+def d_race():
+    """大井 3R・4 頭の D の材料。馬 1〜3 は他場の走も持つ。馬 4 は 2 走だけ(テンなし)。未来の走は極端に速い"""
+    d = "2026-10-22"
+    std = {("大井", 1400): 88.0, ("金沢", 1400): 89.5, ("川崎", 1500): 95.0}
+    past, dist, runs = {}, {}, []
+    spec = {1: [("大井", 1400, 87.6), ("金沢", 1400, 89.0), ("大井", 1400, 87.9), ("川崎", 1500, 95.2)],
+            2: [("大井", 1400, 88.8), ("大井", 1400, 88.4), ("川崎", 1500, 95.9), ("大井", 1100, 60.0),
+                ("大井", 1400, 88.1), ("大井", 1400, 88.6), ("大井", 1400, 70.0)],      # 6 走目以降は使わない
+            3: [("金沢", 1400, 89.9), ("金沢", 1400, 90.1), ("金沢", 1400, 89.4)],
+            4: [("大井", 1400, 86.0), ("大井", 1400, 86.0)]}
+    for u, xs in spec.items():
+        h = []
+        for i, (t, dm, v) in enumerate(xs):
+            rd = (dt.date(2026, 10, 1) - dt.timedelta(days=7 * i)).isoformat()
+            h.append({"track": t, "race_date": rd, "race_no": 2, "runner_number": u, "horse_name": "D%d" % u,
+                      "birth_date": None, "time_sec": v + 37.0, "last3f": 37.0})
+            dist[(t, rd, 2)] = dm
+        for rd, no in ((d, 1), ("2026-11-01", 2)):                          # 同じ日の前の R も「発走日より前」でない
+            h.insert(0, {"track": "大井", "race_date": rd, "race_no": no, "runner_number": u,
+                         "horse_name": "D%d" % u, "birth_date": None, "time_sec": 80.0, "last3f": 37.0})
+            dist[("大井", rd, no)] = 1400
+        past["D%d" % u] = h
+        runs.append({"track": "大井", "race_no": 3, "runner_number": u, "horse_name": "D%d" % u, "birth_date": None})
+    sty = {("大井", 3, 1): ("逃げ", 0.1, 5), ("大井", 3, 2): ("先行", 0.3, 5), ("大井", 3, 4): ("先行", 0.3, 5)}
+    races = [{"track": "大井", "race_no": 3, "distance_m": 1400, "field_size": 4}]
+    return d, races, runs, past, sty, dist, std
+
+
+class TenkaiEqualsD(unittest.TestCase):
+    def test_same_answer_as_pace_pred_test_d_and_no_future(self):
+        d, races, runs, past, sty, dist, std = d_race()
+        allr = [x for v in past.values() for x in v]
+        dval = tk.d_values(allr, dist)
+        # 試しの D(pace_pred_test.race_features_d)
+        rows = [dict(r, race_date=d) for r in runs]
+        fd = pp.race_features_d(d, rows, past, {u: s[0] for (_t, _n, u), s in sty.items()}, dval, std)
+        self.assertEqual(fd["n_ten"], 3)
+        recs = [dict(r, fd=r["f"]) for r in fake_recs()]
+        m = pp.fit_model(recs[:300], "fd")
+        mp = pm.export(m)
+        want = pp.fit_predict(recs[:300], [{"fd": fd}], "fd")[0]
+        got, _ = tk.build_races(races, runs, past, sty, ({}, {}, {}, None), {"大井": mp}, (d, dval, std))
+        r = got["ooi-3"]
+        self.assertEqual(r["pace"], want)
+        self.assertEqual(r["pace"], tk.pace_apply(mp, fd)[0])
+        pr = m.predict_proba([pp.vec(fd)])[0]
+        for c, v in zip(m.classes_, pr):
+            self.assertAlmostEqual(r["pace_p"][c], round(v, 3), places=9)
+        # pace_why.ten は D のテン(ふだんとの差の秒)
+        # 1= (−0.4 −0.5 −0.1 +0.2)/4・2= 直近 5 走(1100m は除く)(0.8+0.4+0.9+0.1+0.6)/5・3= 金沢だけ 3 走・4= 2 走で出さない
+        self.assertEqual(r["pace_why"]["ten"], [[1, -0.2], [3, 0.3], [2, 0.56]])
+        self.assertEqual(r["pace_why"]["lead"], 1)
+        self.assertEqual(r["pace_why"]["front"], 2)
+        # 未来の走(発走日当日・後の日)を抜いても同じ
+        cut = {k: [x for x in v if x["race_date"] < d] for k, v in past.items()}
+        got2, _ = tk.build_races(races, runs, cut, sty, ({}, {}, {}, None), {"大井": mp},
+                                 (d, tk.d_values([x for v in cut.values() for x in v], dist), std))
+        self.assertEqual(got2, got)
+
+    def test_build_writes_d_coef(self):
+        recs = [dict(r, fd=r["f"], f=tk.pace_feat({}, [], [])) for r in fake_recs()]
+        v = pm.build(recs, "2026-12", tracks=("大井",))
+        self.assertEqual(v["ten"], "d")
+        self.assertEqual(v["tracks"]["大井"], dict(pm.export(pp.fit_model(recs, "fd")),
+                                                  n_train=len(recs), wf=v["tracks"]["大井"]["wf"]))
 
 
 if __name__ == "__main__":

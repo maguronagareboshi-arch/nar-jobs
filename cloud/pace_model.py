@@ -2,8 +2,9 @@
 """月 1 の便: 出走全頭の前半3F で流れ(速い/平均/遅い)を当てる係数を場ごとに作り、nar_meta 'pace_model:v1' の
 1 行に書く。tenkai.py が PACE_MODEL_TRACKS の場でこの係数を使う(読めなければ今の見立て add_pace に戻る)。
 
-⛔材料・特徴量・欠損の扱い・標準化・学習は cloud/pace_pred_test.py の B と**同じ関数**(load_recs / fit_model /
-  tenkai.pace_feat / tenkai.pace_vec)。ここで作り直さない。
+⛔材料・特徴量・欠損の扱い・標準化・学習は cloud/pace_pred_test.py の D と**同じ関数**(load_recs(with_d=True) /
+  fit_model(fk="fd") / tenkai.d_ten / tenkai.pace_feat / tenkai.pace_vec)。ここで作り直さない。
+  2026-10-23 からテンは D(走破 − 上がり3F の §232b 物差し)。value に "ten": "d"(無い係数は tenkai が使わない)。
 学習= 直前 12 か月(--to の月まで)。当たりの割合= その 12 か月を月ごとのウォークフォワード(各月は前 12 か月で学習)。
 数えるのはこの runner の中(⛔本番 DB では集計しない・書くのは nar_meta の 1 行だけ)。
 
@@ -41,16 +42,16 @@ def build(recs, to, tracks=tk.PACE_MODEL_TRACKS):
     out = {}
     for t in tracks:
         train = [r for r in recs if r["t"] == t and lo <= r["ym"] <= to]
-        mp = export(pp.fit_model(train))
+        mp = export(pp.fit_model(train, "fd"))
         if mp is None:
             continue
         w = wf.get(t) or {}
         mp["n_train"] = len(train)
-        mp["wf"] = {"races": w.get("races"), "hit_all": w.get("b_hit_all"), "hit_cover": w.get("b_hit_cover"),
+        mp["wf"] = {"races": w.get("races"), "hit_all": w.get("d_hit_all"), "hit_cover": w.get("d_hit_cover"),
                     "const_hit_all": w.get("c_hit_all")}
         out[t] = mp
     return {"built": dt.datetime.now(tk.JST).isoformat(timespec="minutes"), "train": [lo, to],
-            "features": list(tk.PACE_FEATURES), "tracks": out}
+            "ten": "d", "d_runs": tk.PACE_D_RUNS, "features": list(tk.PACE_FEATURES), "tracks": out}
 
 
 def main():
@@ -67,7 +68,8 @@ def main():
         return 2
     to = a.to or pp.ym_add(dt.datetime.now(tk.JST).strftime("%Y-%m"), -1)
     # WF の最初の月も前 12 か月で学習するので、材料は 24 か月ぶん
-    recs = pp.load_recs(base, key, pp.months(pp.ym_add(to, -(2 * pp.TRAIN_MONTHS - 1)), to))
+    recs = pp.load_recs(base, key, pp.months(pp.ym_add(to, -(2 * pp.TRAIN_MONTHS - 1)), to),
+                       with_d=True)
     value = build(recs, to)
     for t, mp in value["tracks"].items():
         tk.log("  %s %s 学習 %d 本・WF 一致(全) %s・いつも同じ答え %s"

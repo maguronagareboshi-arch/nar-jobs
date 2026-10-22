@@ -92,8 +92,9 @@ TEN_TRACKS = ("高知", "門別", "大井", "船橋", "川崎", "浦和")
 PACE_TRACKS = {"monbetsu", "ooi", "funabashi"}
 # 全頭の前半3F で流れを当てる(多項ロジスティック回帰・月 1 の便 cloud/pace_model.py が係数を nar_meta に書く)。
 # ⛔この場では add_pace の代わりに係数で出す。係数が読めない場・日は add_pace に戻す。絞り込みは検定(pace_pred_test)の後
-# 2026-10-22 検定(McNemar・Holm)で「いつも同じ答え」に勝った 5 場。川崎・盛岡は不合格(補正後 p 0.11・0.16)
-PACE_MODEL_TRACKS = ("門別", "金沢", "船橋", "大井", "高知")
+# 2026-10-23 テンを D(走破−上がり3F の §232b 物差し)に替え、D と C の McNemar+Holm で合格した 10 場(盛岡・水沢・浦和・姫路は不合格)
+PACE_MODEL_TRACKS = ("笠松", "門別", "佐賀", "船橋", "名古屋", "川崎", "金沢", "大井", "園田", "高知")
+PACE_D_RUNS = 5         # D のテンに使う直近の走数(値の出た走だけ数える)
 PACE_MODEL_KEY = "pace_model:v1"
 PACE_WORDS = ("速い", "平均", "遅い")
 PACE_FEATURES = ("f1", "f2", "f3", "miss1", "miss2", "miss3", "n_ten", "n_lead", "n_front", "solo")
@@ -328,13 +329,13 @@ def thickness(n_front, k):
 
 # ---------------------------------------------------------------- 取得
 
-def fetch_runs_for(base, key, names, lo, hi):
-    """horse_name in names・lo <= race_date < hi・着順ありの走。80頭ずつ・ページングつき"""
+def fetch_runs_for(base, key, names, lo, hi, extra=""):
+    """horse_name in names・lo <= race_date < hi・着順ありの走。80頭ずつ・ページングつき。extra= 足す列(",time_sec,last3f")"""
     out = []
     for part in chunks(sorted(names)):
         out.extend(rows_all(
             base, key,
-            "/rest/v1/nar_runs?select=track,race_date,race_no,runner_number,horse_name,birth_date"
+            "/rest/v1/nar_runs?select=track,race_date,race_no,runner_number,horse_name,birth_date" + extra +
             f"&horse_name=in.({q_in(part)})&race_date=gte.{lo}&race_date=lt.{hi}&finish=not.is.null"
             "&order=race_date.desc,track.asc,race_no.asc,runner_number.asc"))
     return out
@@ -367,7 +368,7 @@ def positions(runs, pos_of):
     return ps
 
 
-def build_races(day_races, day_runs, past_by_horse, style_of_row, ten=None, pace_model=None):
+def build_races(day_races, day_runs, past_by_horse, style_of_row, ten=None, pace_model=None, dten=None):
     """1日ぶんの races ブロックを組む。
 
     ⛔`ten`(§99b・(ten_of, std, band, day_off))を渡したときだけ `h[馬番].ten/tn` と `pace/pace_by/pace_ten`
@@ -377,8 +378,9 @@ def build_races(day_races, day_runs, past_by_horse, style_of_row, ten=None, pace
       (`style_of_row` = {(場, R, 馬番): (style, style_p, style_n)})。⛔ここで型を出し直さない。
       過去走(`past_by_horse`)はテン(前半3F)の材料としてだけ使う。
     `pace_model`= nar_meta pace_model:v1 の tracks({場: 係数})。PACE_MODEL_TRACKS の場で係数があれば
-      pace/pace_p/pace_why を係数で出す(⛔特徴量は型の無い馬も含めた全頭= pace_pred_test の B と同じ)。
-      無ければ add_pace(今の見立て)。
+      pace/pace_p/pace_why を係数で出す(⛔特徴量は型の無い馬も含めた全頭= pace_pred_test の D と同じ)。
+      `dten`= (発走日, dval, 平年値)(d_inputs の戻り)。各馬のテンは d_ten(他場の走も・発走日より前だけ)。
+      係数か dten が無ければ add_pace(今の見立て)。
     """
     ten_of, std, band, day_off = ten if ten else ({}, {}, {}, None)
     runs_by_race = {}
@@ -404,10 +406,10 @@ def build_races(day_races, day_runs, past_by_horse, style_of_row, ten=None, pace
                     if same_horse(e.get("birth_date"), x.get("birth_date"))]
             picked = pick_runs(hist, t)
             s, m, mn = style_of_row.get((t, no, u)) or (None, None, None)
-            if pace_model is not None:          # 全頭版の材料(型の無い馬のテンも入れる)
-                tv0 = ten_values(picked, ten_of, std, None) if ten_of else []
-                if len(tv0) >= TEN_MIN_RUNS:
-                    m_tens[u] = round(statistics.median([v for v, _a in tv0]), 2)
+            if pace_model and dten is not None:   # 全頭版の材料(型の無い馬のテンも入れる)
+                v0 = d_ten(hist, dten[0], dten[1], dten[2])
+                if v0 is not None:
+                    m_tens[u] = v0
                 if s == "逃げ":
                     m_lead.append(u)
                 elif s == "先行":
@@ -439,7 +441,7 @@ def build_races(day_races, day_runs, past_by_horse, style_of_row, ten=None, pace
         }
         # §169 段 3 逃げそうな馬 1 頭と隊列の見込み(⛔手元の h から作る= 通信 +0・既存の鍵は変えない)
         rec["pick"], rec["order"] = pick_order(hh)
-        mp = (pace_model or {}).get(t) if t in PACE_MODEL_TRACKS else None
+        mp = (pace_model or {}).get(t) if (t in PACE_MODEL_TRACKS and dten is not None) else None
         if mp and add_pace_model(rec, mp, m_tens, m_lead, m_front):
             pass                                # 全頭版で出せた
         elif ten_of:
@@ -462,7 +464,10 @@ def day_block(base, key, date):
     runs = [r for r in runs if r["track"] in tracks]
     names = {r["horse_name"] for r in runs if r.get("horse_name")}
     lo = (dt.date.fromisoformat(date) - dt.timedelta(days=PAST_DAYS)).isoformat()
-    past = fetch_runs_for(base, key, names, lo, date)
+    pmodel = fetch_pace_model(base, key)
+    d_on = any(r["track"] in pmodel and r["track"] in PACE_MODEL_TRACKS for r in races)
+    past = fetch_runs_for(base, key, names, lo, date, ",time_sec,last3f" if d_on else "")
+    dten = d_inputs(base, key, date, lo, past) if d_on else None
     by_horse = {}
     for r in past:
         by_horse.setdefault(r["horse_name"], []).append(r)
@@ -479,7 +484,7 @@ def day_block(base, key, date):
     style_of_row = fetch_style(base, key, date)
     # §99b テン。⛔前半3F のある6場の日だけ旧DBへ行く(他9場は今までどおり通信ゼロ)
     ten = fetch_ten(base, key, {(t, d) for t, d in need if t in TEN_TRACKS} | ten_year_days(base, key, date))
-    out, k_ratios = build_races(races, runs, by_horse, style_of_row, ten, fetch_pace_model(base, key))
+    out, k_ratios = build_races(races, runs, by_horse, style_of_row, ten, pmodel, dten)
     n_ten = sum(1 for r in out.values() for h in r["h"].values() if h.get("ten") is not None)
     n_pace = sum(1 for r in out.values() if r.get("pace"))
     memo = ("レース %d / 出走 %d / 過去走 %d(馬 %d)・派生表の型 %d 頭 / 見立てを出す %d 本"
@@ -746,6 +751,9 @@ def fetch_pace_model(base, key):
         v = rows[0]["value"] if rows else None
         if not isinstance(v, dict) or list(v.get("features") or []) != list(PACE_FEATURES):
             return {}
+        if v.get("ten") != "d":                 # ⛔古い係数(テンが D でない)は使わない= 今の見立て
+            log("   pace_model が D の係数でない(今の見立てで出す)")
+            return {}
         tr = v.get("tracks") or {}
         return {t: m for t, m in tr.items() if isinstance(m, dict) and m.get("kind") in ("lr", "const")}
     except Exception as ex:  # noqa: BLE001 — 係数が無くても便は止めない
@@ -880,6 +888,54 @@ def pace_fastest(base, key, lo, hi):
                 continue
             yield r["track"], r["race_date"], int(r["race_no"]), r.get("runner_number"), v, dm
     return race_fastest(items())
+
+
+def d_values(runs, dist):
+    """走 → D の材料 {(場, 日, R, 馬番): (走破 − 上がり3F, 距離m)}。⛔§232b と同じ= 1200m 未満と 0 以下は除く。
+    dist= {(場, 日, R): 距離m}。⛔pace_pred_test の D と共用"""
+    out = {}
+    for r in runs:
+        if r.get("time_sec") is None or r.get("last3f") is None or r.get("runner_number") is None:
+            continue
+        dm = dist.get((r["track"], r["race_date"], int(r["race_no"])))
+        if not dm or dm < CHIHOU_MIN_DIST:
+            continue
+        v = round(float(r["time_sec"]) - float(r["last3f"]), 1)
+        if v <= 0:
+            continue
+        out[(r["track"], r["race_date"], int(r["race_no"]), int(r["runner_number"]))] = (v, dm)
+    return out
+
+
+def d_ten(hist, d, dval, std):
+    """1 頭の過去走(新しい順)→ D のテン or None。⛔race_date < d の走だけ・他場の走もその場の平年値との差。
+    dval= d_values の戻り / std= pace_std の平年値。値の出た直近 PACE_D_RUNS 走の平均・最少 TEN_MIN_RUNS 走。
+    ⛔pace_pred_test の D と共用"""
+    xs = [v for v, _a in ten_values([x for x in hist if x["race_date"] < d], dval, std, None)][:PACE_D_RUNS]
+    return round(statistics.mean(xs), 2) if len(xs) >= TEN_MIN_RUNS else None
+
+
+_D_STD = {}   # {月の 1 日: 平年値}(今日と明日が同じ月なら 1 回だけ引く)
+
+
+def d_inputs(base, key, date, lo, past):
+    """当日の D の材料 → (date, dval, 平年値)。past= 出走馬の [lo, date) の走(time_sec・last3f つき)。
+    平年値= その月の 1 日より前の 1 年の全場のレース(pace_std・nar_race_pace と同じ窓)"""
+    prev = (dt.date.fromisoformat(date) - dt.timedelta(days=1)).isoformat()
+    dist = {}
+    for r in rows_window(base, key, "/rest/v1/nar_races?select=track,race_date,race_no,distance_m"
+                         "&race_date=gte.{lo}&race_date=lte.{hi}"
+                         "&order=race_date.asc,track.asc,race_no.asc", lo, prev):
+        if r.get("distance_m"):
+            dist[(r["track"], r["race_date"], int(r["race_no"]))] = int(r["distance_m"])
+    start = date[:7] + "-01"
+    if start not in _D_STD:
+        far = (dt.date.fromisoformat(start) - dt.timedelta(days=PACE_STD_YEARS)).isoformat()
+        last = (dt.date.fromisoformat(start) - dt.timedelta(days=1)).isoformat()
+        _D_STD[start] = pace_std(pace_fastest(base, key, far, last), start)
+    dval = d_values(past, dist)
+    log("   D の材料 %d 走・平年値 %d 組・要求 %d 回" % (len(dval), len(_D_STD[start]), N_REQ[0]))
+    return date, dval, _D_STD[start]
 
 
 def pace_std(fastest, before, years=PACE_STD_YEARS):
