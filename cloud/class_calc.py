@@ -30,6 +30,7 @@
   ③帯広ばんえい・海外は換算率の表に無い→ 90%(既定)で数え、件数を検算に出す
 """
 import argparse
+import calendar
 import datetime as dt
 import json
 import math
@@ -1613,6 +1614,18 @@ def tokai_ks_back_e(last_tk, last_away, d):
     return ent < lim
 
 
+def tokai_ng_back(last_tk, last_away, d):
+    """名古屋 令和5・6年度 7 再転入= 最後の名古屋所属の走の翌日から 入きゅう日まで 6 か月未満なら 転出中の収得を足す。
+    入きゅう日= 戻って最初の走の 21 日前(転出先の最後の走の翌日より前にしない)。月は暦で数える
+    (エドノバイオレット 2023-04 大井から 190 日で戻り 公式 1,127+630×40%= 1,379)"""
+    if not (TOKAI_FY2023 <= d < TOKAI_FY2025):
+        return False
+    ent = max(last_away + dt.timedelta(days=1), d - dt.timedelta(days=21))
+    b = last_tk + dt.timedelta(days=1)
+    y, mo = b.year + (b.month - 1 + 6) // 12, (b.month - 1 + 6) % 12 + 1
+    return ent < dt.date(y, mo, min(b.day, calendar.monthrange(y, mo)[1]))
+
+
 def tokai_ks_back(d):
     return 182 if tokai_r6(d, "B") else TOKAI_KS_BACK   # 令和6年度は 6 か月未満
 
@@ -1863,8 +1876,8 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
             if trk == "名古屋" and prev_home == "名古屋" and not pending:
                 how = "再転入(未出走・引き継ぎ)"             # 名古屋 7
             elif trk == "名古屋" and prev_home == "名古屋" and last_tk_aff and pending \
-                    and tokai_r6(d, "Bn") and (d - last_tk_aff).days < 182:
-                how = "再転入(6か月未満・加算)"              # 名古屋 令和6年度 7
+                    and tokai_ng_back(last_tk_aff, _date(pending[-1].get("d")), d):
+                how = "再転入(6か月未満・加算)"              # 名古屋 令和5・6年度 7
             elif trk == "笠松" and prev_home == "笠松" and last_tk_aff and pending \
                     and tokai_ks_back_e(last_tk_aff, _date(pending[-1].get("d")), d):
                 how = "再転入(9か月未満・加算)"              # 笠松 6(2)
@@ -2049,6 +2062,8 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
         if trk == "笠松" and prev_home == "笠松" and last_tk_aff and (_date(pending[-1].get("d")) - last_tk_aff).days < tokai_ks_back(asof):
             ks_reentry(a, asof)
             young = cur_young(asof, value)
+        elif trk == "名古屋" and prev_home == "名古屋" and last_tk_aff and tokai_ng_back(last_tk_aff, _date(pending[-1].get("d")), asof):
+            value += sum(_thou(int(p.get("prize") or 0) * round(tokai_rate_entry(p, a, "名古屋", asof)[0] * 100) // 100) for p in pending)
         else:
             origin = set_origin()
             we = asof
