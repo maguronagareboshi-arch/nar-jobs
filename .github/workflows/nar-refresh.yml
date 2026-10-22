@@ -288,8 +288,8 @@ jobs:
             if psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -X -v days=3 -v parts=30 -v part=$PART -v apply=1 -f pipeline/sql/horse_dates.sql; then python3 cloud/beat.py horse_dates ok "組 $PART" || true; else python3 cloud/beat.py horse_dates fail "数え直しに失敗" || true; echo "⚠ 馬の日付の数え直しに失敗(続行)"; fi
           else echo "horse dates は朝の便だけ(JST $H)=スキップ"; fi
 
-      # §38 1-C 南関東4場の「格」「格付ポイント」(主催者 nankankeiba の馬ページ・1.5秒/本)。直近2日に走った馬だけ=
-      # 日次 100〜300 本・数分。**朝の便だけ**(分予算)。他場PCの fetch_nankan_points.py(大井だけ・chihou_meta)の置き換え
+      # §38 1-C 南関東4場の「格」「格付ポイント」(主催者 nankankeiba の馬ページ・1.5秒/本)。直近2日に走った馬+出走予定で反映前の値の馬=
+      # 日次 100〜400 本・数分。朝の便が本体・日中は読み直しの残りだけ。他場PCの fetch_nankan_points.py(大井だけ・chihou_meta)の置き換え
       - name: nankan points (morning only)
         id: am_nankan_points
         if: '!cancelled()'
@@ -301,9 +301,12 @@ jobs:
           if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/nankan_points.py --apply --days 2 --max-horses 400
           # 夕方 17 時台= 翌日の出馬表の新顔(休み明け・転入)だけ。前日の夜から格を出す(既知の馬は朝の便のまま)
           elif [ "$EVENING" = 1 ] && [ $((10#$H)) -lt 1800 ]; then python cloud/nankan_points.py --apply --days 0 --new-only --max-horses 200 || echo "⚠ nankan points 夕方の新顔が取れない(続行)"
-          else echo "nankan points は朝の便と夕方 17 時台だけ(JST $H)=スキップ"; fi
+          # 2026-10-23 日中= 出走予定の馬で、主催者の反映(開催最終日の後)より前の値だけ読み直す(③b・無ければ数秒で終わる)
+          else python cloud/nankan_points.py --apply --stale-only --max-horses 200 || echo "⚠ nankan points 日中の読み直しに失敗(続行)"; fi
           # §196b 第 2 段= 走った馬の格付ポイントの履歴(表 nar_nankan_point_hist)。nankan_points の直後・朝の便だけ
           if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then python cloud/nankan_hist.py --apply --days 3; fi
+          # 2026-10-23 見張り= 出走予定の全馬の値の古さと「レースの級 × 当サイトの規則の級」(ずれ= fail → 見張りが赤)。朝と夕方 17 時台
+          if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ] || { [ "$EVENING" = 1 ] && [ $((10#$H)) -lt 1800 ]; }; then python cloud/nankan_check.py --beat || echo "⚠ nankan check が読めない(続行)"; fi
 
       # §79 P3 場ごとの「番組賞金(当サイトの計算)」と「あと◯」を台帳の calc 列へ(通信は DB だけ・数秒)。
       # 線の表は class.js を node で読む(tests/class_const_dump.mjs)。検算= docs/s79_p3_verify_20260903.md

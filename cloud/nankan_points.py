@@ -19,6 +19,8 @@
      (回・日は /calendar/000000.do(直近数か月ぶん・日々動くので毎回読む)と過去月 /calendar/YYYYMM.do から。⛔当月以降の月別URLは 404 #157)
   ③ 馬ページ uma_info/{code}.do → 馬名・格・格付ポイント・「◯日現在」・生年月日。取り直しの規則=
      きょう既に読んだ馬は飛ばす / asof(主催者の基準日)が最終出走日以上なら飛ばす / それ以外(走ったのに反映前)は読む
+  ③b 出走予定(きょう〜--entrants-ahead 日先)の馬は、asof が「きょうより前の最後の開催最終日」より前なら読み直す
+     (反映は開催最終日の後= 走った翌日の値は反映前のことがある・2026-10-23 の事故)。日中の便は --stale-only でこれだけ
   ④ §196b その窓で南関を走り終えたレースの結果ページ /result/{raceid}.do → nar_races.nankan= {raceid, pts[5], grade}
      (raceid は③の馬ページのリンクの本物を優先・無ければ開催カレンダー・過去は DB の日程から組み、日付と場を見て確かめる)
   ⛔ 抹消馬は格・ポイント欄ごと消える= kaku/points null で保存(解析不能が正常・出馬表に載らないので実害なし)
@@ -259,6 +261,10 @@ def main():
     ap.add_argument("--days", type=int, default=2, help="直近この日数に走った馬を対象にする")
     ap.add_argument("--ahead", type=int, default=1, help="この日数先までの出馬表の新顔も取る(休み明け・転入を前日から出す)")
     ap.add_argument("--new-only", action="store_true", help="新顔(表に無い馬)だけ= 既知の馬の取り直しと④をしない(夕方の便)")
+    ap.add_argument("--entrants-ahead", type=int, default=3,
+                    help="③b きょう〜この日数先の出馬表の馬で、最後の反映(開催最終日)より前に読んだ馬を読み直す")
+    ap.add_argument("--stale-only", action="store_true",
+                    help="③b だけ(出馬表の新顔②・走った馬の取り直し・④をしない)= 日中の便。読み直す馬が無ければすぐ終わる")
     ap.add_argument("--max-horses", type=int, default=400, help="馬ページを引く上限(1本 1.5 秒)")
     ap.add_argument("--max-races", type=int, default=200, help="出馬表を引く上限")
     ap.add_argument("--runs-csv", help="nar_runs の代わりに読む CSV(track,race_date,race_no,horse_name,birth_date)")
@@ -319,7 +325,7 @@ def main():
             log("SUPABASE_URL / SUPABASE_SERVICE_KEY が無い")
             return 2
         try:
-            for r in sb_all(url, key, f"{TABLE}?select=code,horse_name,kaku,points,asof,birth_date,last_run,seen_track,fetched"):
+            for r in sb_all(url, key, f"{TABLE}?select=code,horse_name,kaku,points,asof,birth_date,last_run,seen_track,fetched,updated_at"):
                 known[r["code"]] = r
         except Exception as e:
             log(f"DB の読み取りに失敗: {type(e).__name__}: {str(e)[:200]}")
@@ -335,7 +341,7 @@ def main():
     # ---- ① 窓の中の出走(nar_runs か CSV)
     lo = (today - dt.timedelta(days=args.days)).isoformat()
     # 先の出馬表(翌日ぶん)は② 新顔の馬コード集めだけに使う。最終出走日(③の取り直し規則)は今日までの出走から
-    hi = (today + dt.timedelta(days=max(args.ahead, 0))).isoformat()
+    hi = (today + dt.timedelta(days=max(args.ahead, args.entrants_ahead, 0))).isoformat()
     try:
         if args.runs_csv:
             runs = read_runs_csv(args.runs_csv, lo, hi)
@@ -367,7 +373,8 @@ def main():
             names_known.setdefault(v["horse_name"], []).append(c)
 
     # ---- ② 馬名の無い馬がいるレースだけ出馬表を引いて馬コードを集める
-    need = [k for k, ents in sorted(by_race.items()) if any(e["horse_name"] not in names_known for e in ents)]
+    need = [] if args.stale_only else \
+        [k for k, ents in sorted(by_race.items()) if any(e["horse_name"] not in names_known for e in ents)]
     log(f"② 出馬表を引くレース {len(need)}(上限 {args.max_races})")
     need = need[:args.max_races]
     shard_i, shard_n = (int(x) for x in args.shard.split("/")) if args.shard else (0, 1)
@@ -414,15 +421,54 @@ def main():
         new_codes = {c: v for c, v in new_codes.items() if int(c) % shard_n == shard_i}
         log(f"  shard {shard_i}/{shard_n}: 寄せ集め後の担当 {len(new_codes)} 頭")
 
-    # ---- ③ 馬ページ: 新顔 + 走ったのに基準日が古い既知の馬
+    # ---- ③ 馬ページ: 新顔 + ③b 出走予定で最後の反映より前の値の馬 + 走ったのに基準日が古い既知の馬
     targets = [(c, tr, d) for c, (tr, d) in new_codes.items()]
-    for name, lr in ({} if args.new_only else last_run).items():
+    # ③b ⛔2026-10-23 浦和 7R: 13 頭中 7 頭が古い値(シナノショウグンは 9/24 に読んだ C2・596 のまま・公式は C1・668)。
+    #   反映は「開催最終日の全レース終了後」= 走った翌日に読んでも点は前のまま。下の「基準日が最終出走日以上なら飛ばす」では
+    #   次に走るまで読み直さなかった。主催者の「◯日現在」は全馬共通の日付で、最終日の翌朝に読めばその開催の点が入っている
+    #   (10/17 に読んだ 4 頭= 10/23 の公式と同じ)。⇒ 出走予定の馬は asof が「きょうより前の最後の開催最終日」以上になるまで読む
+    if not args.state_json:
+        try:
+            ends = {v[0] for v in sched_map(url, key, (today - dt.timedelta(days=120)).isoformat()).values()}
+        except Exception as e:
+            ends = set()
+            log(f"③b 開催日程の読み取りに失敗(③b をしない): {type(e).__name__}: {str(e)[:200]}")
+        e_last = max((x for x in ends if x < today_s), default=None)
+        ent_hi = (today + dt.timedelta(days=max(args.entrants_ahead, 0))).isoformat()
+        now_utc = dt.datetime.now(dt.timezone.utc)
+        seen, stale, wait = {c for c, _, _ in targets}, 0, 0
+        for (track, date, no), ents in (sorted(by_race.items()) if e_last else []):
+            if not (today_s <= date <= ent_hi):
+                continue
+            for e in ents:
+                for c in names_known.get(e["horse_name"], []):
+                    v = known[c]
+                    if c in seen or (e.get("birth_date") and v.get("birth_date") and e["birth_date"] != v["birth_date"]):
+                        continue                             # 読む予定 / 同名の別馬
+                    if (v.get("asof") or "") >= e_last:
+                        continue                             # 最後の反映より後の値= そのままでよい
+                    if v.get("fetched") == today_s:
+                        try:
+                            age_h = (now_utc - dt.datetime.fromisoformat(str(v.get("updated_at")).replace("Z", "+00:00"))).total_seconds() / 3600
+                        except ValueError:
+                            age_h = 0
+                        if not v.get("asof") or age_h < 2:
+                            wait += 1
+                            continue                         # きょう読んだのに主催者がまだ反映前= 2 時間おきに見る
+                    seen.add(c)
+                    stale += 1
+                    targets.append((c, track, date))
+        log(f"③b 出走予定(〜{ent_hi})で {e_last} の反映より前の値 {stale} 頭を読み直す(主催者の反映待ち {wait})")
+        if args.stale_only and not stale:
+            log("③b 読み直す馬なし=終わり")
+            return 0
+    for name, lr in ({} if (args.new_only or args.stale_only) else last_run).items():
         for c in names_known.get(name, []):
             if args.shard and int(c) % shard_n != shard_i:
                 continue
             v = known[c]
-            if v.get("fetched") == today_s:
-                continue                                     # きょう読んだ
+            if v.get("fetched") == today_s or any(t[0] == c for t in targets):
+                continue                                     # きょう読んだ / ③b で読む
             if (v.get("asof") or "") >= lr:
                 continue                                     # 基準日が最終出走日以上=反映済み
             tr = next((t for (t, d, _), ents in by_race.items() if d == lr and any(e["horse_name"] == name for e in ents)), None)
@@ -477,7 +523,7 @@ def main():
     else:
         log("dry-run: 書かない")
     # ---- ④ §196b 走り終えたレースの結果ページ → nar_races.nankan(⛔③の表の書き込みとは別= ここで失敗しても③は済んでいる)
-    if args.no_results or args.new_only or args.state_json or args.test:
+    if args.no_results or args.new_only or args.stale_only or args.state_json or args.test:
         return rc
     try:
         have = sb_all(url, key, f"nar_races?select=track,race_date,race_no,nankan&track=in.({urllib.request.quote(','.join(chr(34) + t + chr(34) for t in BA))})"
