@@ -1828,6 +1828,8 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
             how = "移籍"
         if how == "移籍" and a is not None and (a <= 2 or (a == 3 and (d.month <= 9 or (trk == "笠松" and d >= TOKAI_FY2026)))):
             how = "移籍(3歳9月まで・引き継ぎ)"               # 名古屋 6(3) ただし書き・笠松 6(1)。笠松 令和8年度は 3 歳 10 月の名古屋→笠松も引き継ぐ(公式 サンモリッツ 2026-10 198= 名古屋の一斉編入後の値のまま)
+        if how == "移籍" and trk == "笠松" and d < TOKAI_FY2024:
+            how = "移籍(3/愛知の値を引き継ぎ・令和5年度以前の要綱6オ)"   # 笠松 令和5年度以前は名古屋→笠松で愛知の値を引き継ぐ(ネオアマゾネス 2024-02-09 4,053)
         if how.startswith("再転入(9"):
             ks_reentry(a, d)
             young = cur_young(d, value)
