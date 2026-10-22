@@ -1369,7 +1369,7 @@ def _is_jra(run):
 
 
 def _dg(name):
-    return bool(re.search(r"Ｊｐｎ|Jpn|ＪＢＣ|JBC|ネクストスター", name))
+    return bool(re.search(r"Ｊｐｎ|Jpn|(ＪＢＣ|JBC)(?!協会)|ネクストスター", name))   # ＪＢＣ協会の冠= 一般の競走(マジョリー)
 
 
 # §285-B 令和8年度の重賞・準重賞の格(公式の年間日程から)。値= (格 1/2/3/"P", 2歳3歳限定か)。
