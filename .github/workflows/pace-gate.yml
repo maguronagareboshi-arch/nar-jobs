@@ -1,0 +1,31 @@
+# 研究用・§224 段 2b のゲート試験の材料を作る便(手押しだけ)。⛔本番 DB には書かない(読むだけ)。
+# 出すのは公開鍵で包んだ暗号ファイル 1 つだけ(artifact・保存 1 日)。⛔走ごとの値を平文で log に出さない(repo は PUBLIC)。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: pace-gate
+on:
+  workflow_dispatch:
+    inputs:
+      pubkey:
+        description: 'RSA public key (PEM or base64 DER)'
+        required: true
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install -r cloud/requirements.txt
+      - name: pace gate dump
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          PUBKEY: ${{ github.event.inputs.pubkey }}
+        run: python cloud/pace_gate_dump.py --pubkey "$PUBKEY" --out pace_gate.bin
+      - uses: actions/upload-artifact@v7
+        with:
+          name: pace-gate
+          path: pace_gate.bin
+          retention-days: 1
