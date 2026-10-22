@@ -1502,7 +1502,8 @@ def tokai_rate_entry(run, age_entry, track, when=None):
     if _is_jra(run):
         mul = float(os.environ.get("TOKAI_JMUL", "1"))
         return tbl["jra"][col] * mul, "転入前中央"
-    if tr in NANKAN_TRACKS or "認定" in name or "Ｊ認" in name or _dg(name):
+    crown = TOKAI_CLASS_NAME.search(name) and "重賞級" not in name   # 末尾が級と組= 冠だけの一般の競走(「ＪＢＣ２０２５船橋・門別Ｃ２２」)は認定・ＪＢＣで引かない(ハンクスター 2026-04-20)
+    if tr in NANKAN_TRACKS or (not crown and ("認定" in name or "Ｊ認" in name or _dg(name))):
         return tbl["mid"][col], "転入前南関等"
     if old:
         return (tbl["hk"][col], "転入前兵庫高知") if tr in ("園田", "姫路", "門別", "帯広") else (tbl["nar"][col], "転入前地方")
