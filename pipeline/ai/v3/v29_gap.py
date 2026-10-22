@@ -267,6 +267,11 @@ def day_marks(Bk, odds, w, going, dm, day):
     stamp += ' + 勝つ率の直し' if 'p1f' in used else ''
     stamp += ' + 短評の層' if 'tpl' in used else ''
     stamp += ' + F3 の混ぜ' if 'f3' in used else ''
+    day8 = 'tpl' in used and getattr(sys.modules.get('tanpyo_live'), 'LAST_VER', None) == 'day8'
+    ver = ('南関 第17版' if 'f3' in used else '南関 第16版' if day8 else
+           '南関 第15版' if 'seq2' in used and {'debut', 'p1f', 'tpl'} & set(used) else '南関 第14版' if 'seq2' in used else
+           '南関 第12版' if 'b19_u' in used else '南関 第11版' if 'b14_u' in used else '南関 第10版')  # 版の名前(研究 nankan-ai-v3 VERSIONS.md)
+    stamp = f'{ver} 直前版 = {stamp}'
     d = pd.DataFrame({'num': b.umaban.astype(int).to_numpy(), 'p1': p1, 'p3': p3p, 'p3_raw': p3})
     d = d.sort_values(['p3', 'p1', 'num'], ascending=[False, False, True], kind='mergesort').reset_index(drop=True)
     marks = [{'num': int(x.num), 'mark': MARKS[i], 'score': round(float(x.p3) * 100, 1)} for i, x in enumerate(d.itertuples()) if i < 5]

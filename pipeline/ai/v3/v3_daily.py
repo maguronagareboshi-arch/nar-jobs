@@ -248,7 +248,8 @@ def main():
     except Exception as e:  # noqa: BLE001
         log('ひとこと 失敗', type(e).__name__, str(e)[:200])
     del cap
-    rows = build_rows(csv_path, day, src, (STAMP12 + (STAMP_DEB if nd else '') + (STAMP_TPL if nt else '')) if b12 else (STAMP11 if bundle else STAMP))
+    ver = '南関 第15版 前日版' if b12 and nt else '南関 第12版 前日版' if b12 else '南関 第11版 前日版' if bundle else '南関 第10版 前日版'  # 版の名前(研究 nankan-ai-v3 VERSIONS.md)
+    rows = build_rows(csv_path, day, src, ver + ' = ' + ((STAMP12 + (STAMP_DEB if nd else '') + (STAMP_TPL if nt else '')) if b12 else (STAMP11 if bundle else STAMP)))
     if notes:
         log('ひとこと 付けた', v3_notes.attach(rows, notes), '頭')
     log('races', len(rows), '◎', ' '.join(f"{r['track']}{r['race_no']}R:{r['marks'][0]['num']}" for r in rows[:12] if r['marks']))
