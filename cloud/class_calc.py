@@ -1060,6 +1060,7 @@ TOKAI_KS_BLOCKLAG = int(os.environ.get("TOKAI_KS_BLOCKLAG", "3"))
 TOKAI_KS_HEN_OWN = os.environ.get("TOKAI_KS_HEN_OWN", "1") == "1"
 TOKAI_KS_CARRY = os.environ.get("TOKAI_KS_CARRY", "1") == "1"
 TOKAI_KS_ENT = os.environ.get("TOKAI_KS_ENT", "1") == "1"
+TOKAI_KS_ENT_N = int(os.environ.get("TOKAI_KS_ENT_N", "14"))   # 笠松の入きゅう日の推定= 最初の走の何日前か(17・21 日前はラグーンが外れる)
 TOKAI_KS_SP60 = os.environ.get("TOKAI_KS_SP60", "1") == "1"
 
 
@@ -1831,10 +1832,20 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
             origin = set_origin()
             if how == "移籍" and trk == "名古屋" and origin == "native":
                 origin = "local"                       # 名古屋は笠松からの移籍も転入馬(初出走が東海で転出歴のない馬でない)
-            value = fresh_value(before, trk, a, d)
+            we = d
+            if trk == "笠松" and how in ("転入", "移籍"):
+                # 笠松の格付けの年度= 入きゅう日(笠松 令和6年度 要綱 5(1)オ・5(2)・令和7年度 5(1)オ)。入きゅう日の推定= 最初の走の 14 日前
+                #   (転出先の最後の走の翌日より前にしない・年をまたいだら年明けの格付け)。例: チュウワエース 2025-04-04 戻り= 令和6年度の段
+                lastp = _date(rs[i - 1].get("d")) if i > 0 else None
+                we = d - dt.timedelta(days=TOKAI_KS_ENT_N)
+                if lastp and lastp + dt.timedelta(days=1) > we:
+                    we = lastp + dt.timedelta(days=1)
+                if we.year < d.year:
+                    we = d
+            value = fresh_value(before, trk, a, we)
             young = cur_young(d, value)
-            if not young and value >= (3_300_000 if tokai_r5(d, "5A" if trk == "名古屋" else "5Ak") else 3_800_000 if tokai_r6_a(trk, d) else 4_500_000):
-                value = a_step(value, d, trk)
+            if not young and value >= (3_300_000 if tokai_r5(we, "5A" if trk == "名古屋" else "5Ak") else 3_800_000 if tokai_r6_a(trk, we) else 4_500_000):
+                value = a_step(value, we, trk)
         if trace:
             print(f"  {d} {how} → {trk} value {value:>10,} young={young}")
         home, prev_home = trk, trk
@@ -1964,10 +1975,18 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
             young = cur_young(asof, value)
         else:
             origin = set_origin()
-            value = fresh_value(rs, trk, a, asof)
+            we = asof
+            if trk == "笠松":                          # まだ走っていない転入馬の格付けの日= 入きゅう日(推定= 一覧の日の 14 日前・上と同じ)
+                we = asof - dt.timedelta(days=TOKAI_KS_ENT_N)
+                lp = _date(pending[-1].get("d"))
+                if lp + dt.timedelta(days=1) > we:
+                    we = lp + dt.timedelta(days=1)
+                if we.year < asof.year or we > asof:
+                    we = asof
+            value = fresh_value(rs, trk, a, we)
             young = cur_young(asof, value)
-            if not young and value >= (3_300_000 if tokai_r5(asof, "5A" if trk == "名古屋" else "5Ak") else 3_800_000 if tokai_r6_a(trk, asof) else 4_500_000):
-                value = a_step(value, asof, trk)
+            if not young and value >= (3_300_000 if tokai_r5(we, "5A" if trk == "名古屋" else "5Ak") else 3_800_000 if tokai_r6_a(trk, we) else 4_500_000):
+                value = a_step(value, we, trk)
         entry_track = trk
         if trace:
             print(f"  (転入したら) value {value:>10,} young={young}")
