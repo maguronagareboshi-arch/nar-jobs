@@ -280,6 +280,20 @@ def build_event(adapter, track, race_date, doc_url, doc_hash, rec, run):
 
 def upsert(client, rows):
     """event_id で冪等に。⛔UPSERT_CHUNK 行ずつ(1 回の本文を大きくしない)。"""
+    # ⛔公式が後から文面(detail)を書き換えると event_id だけ変わり、event_key の一意索引で 409 になる
+    #   (2026-10-18 高知 4R の取消で 10/19〜10/22 毎回赤)。同じ event_key の既存行があればその event_id で上書きする。
+    #   索引は部分索引(event_key IS NOT NULL)なので on_conflict=event_key は使えない。
+    by_key = {}
+    for row in rows:
+        by_key[row["event_key"]] = row          # 同じ便の中で鍵が重なれば後の行を残す
+    rows = list(by_key.values())
+    keys = list(by_key)
+    for i in range(0, len(keys), 100):
+        for old in client.get("nar_horse_health_events?select=event_id,event_key&event_key=in.("
+                              + ",".join(keys[i:i + 100]) + ")"):
+            row = by_key.get(old["event_key"])
+            if row and row["event_id"] != old["event_id"]:
+                row["event_id"] = old["event_id"]
     done = 0
     for i in range(0, len(rows), UPSERT_CHUNK):
         part = rows[i:i + UPSERT_CHUNK]
