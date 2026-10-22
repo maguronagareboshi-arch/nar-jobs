@@ -1430,6 +1430,8 @@ def tokai_rate_resident(run, race, venue=None, age_at=None):
     if hit and kind not in ("重賞", "準重賞"):
         kind = "準重賞" if grade == "P" else "重賞"
     both = name + " " + str(run.get("name") or "")   # 走の名前にだけ「Ｊ認」が付くことがある(セレクトゴールドなど)
+    if venue == "笠松" and "ネクストスター" in name and _date(run.get("d")) and _date(run.get("d")) < TOKAI_FY2024:
+        return 0.40, "ネクストスター(2歳重賞)"         # 笠松 令和5年度= 40%(公式 キスリング 2023-10-12 2 着 4,000×40%)。2024・2025 年度は 30% のままで合う
     if _dg(name):
         return 0.30, "ダートグレード"
     if "重賞級" in name:
