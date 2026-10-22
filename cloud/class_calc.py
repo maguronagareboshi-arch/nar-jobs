@@ -1635,6 +1635,9 @@ def tokai_affs(rs):
         if len(grp) >= 2:
             jra_out |= set(grp)
         grp = [j] if j is not None else []
+    for j in jra_idx:                              # 特別名の無い中央の条件戦(N歳(上)N勝クラス・未勝利・新馬)= 地方所属では出られない= 1 走でも転出(アミアン)
+        if re.fullmatch(r"[0-9]歳(以上|上)?(未勝利|新馬|[0-9]勝クラス)", unicodedata.normalize("NFKC", str(rs[j].get("name") or "")).replace(" ", "")):
+            jra_out.add(j)
     for i, r in enumerate(rs):
         d = _date(r.get("d"))
         ta = r.get("ta")
