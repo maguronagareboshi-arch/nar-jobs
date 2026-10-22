@@ -30,7 +30,7 @@ class TokaiHen(unittest.TestCase):
         races = _races("名古屋", [("2026-09-14", "2026-09-18"), ("2026-09-29", "2026-10-02"), ("2026-10-13", "2026-10-16")])
         races.update(_races("笠松", [("2026-09-07", "2026-09-11"), ("2026-09-23", "2026-09-25"), ("2026-10-12", "2026-10-16")]))
         adj = C.tokai_adj_dates(races)
-        self.assertEqual([d.isoformat() for d in adj["名古屋"]], ["2026-10-03"])
+        self.assertEqual([d.isoformat() for d in adj["名古屋"] if d.year >= 2026], ["2026-10-03"])   # 2022-10 以前は補いの表(tokai_old_days.json)の日が入る
         self.assertEqual(C.TOKAI_HEN[2026], dt.date(2026, 10, 3))
 
 
