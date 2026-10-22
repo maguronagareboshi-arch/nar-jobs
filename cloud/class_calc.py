@@ -2015,7 +2015,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
         # 締めの後の最初の走(この一覧の走)が笠松所属= 名古屋→笠松の所属替えは一覧の時点(入きゅう日)で済んでいる= 転入の格付け
         #   (笠松 令和7・8年度 要綱 5(1)オ・5(2)「転入起算日は入きゅう日とし、同日に格付け」。その走の所属は発走前に出馬表で分かる値)
         #   例: セブンスストリート・マッティーナ 2026-08〜09 の公式 4,500(450〜900 万→450 万の段)
-        nx = sorted([r for r in runs if (dd := _date(r.get("d"))) and dd >= cutoff], key=lambda r: str(r.get("d")))
+        nx = sorted([r for r in runs if (dd := _date(r.get("d"))) and cutoff <= dd <= tokai_block_end(track, asof)], key=lambda r: str(r.get("d")))   # 後の出来事を混ぜない= 今の開催(編成発表で出馬表が決まっている走)まで
         if nx and nx[0].get("ta") in ("笠松", "岐阜"):
             enter(len(rs), asof, "笠松", age(asof))
     if track and rs and home is not None and home != track and not (track == "笠松" and TOKAI_KS_CARRY):
@@ -2029,7 +2029,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
         if track in TOKAI_TRACKS and prev_home and prev_home != track:
             trk = track                            # 東海の外から 前と違う場の一覧に載った= その場への転入(シヴァールバーニ 笠松→中央→名古屋 1,821 が一致)
         if not prev_home and track == "笠松":       # まだ東海で走っていない転入馬で 締めの後の最初の走(この一覧の走)が愛知所属= 名古屋で格付け済み(名古屋の換算表・公式 ゴールデンリング・ベラジオチャンネル)
-            nx = sorted([r for r in runs if (dd := _date(r.get("d"))) and dd >= cutoff], key=lambda r: str(r.get("d")))
+            nx = sorted([r for r in runs if (dd := _date(r.get("d"))) and cutoff <= dd <= tokai_block_end(track, asof)], key=lambda r: str(r.get("d")))   # 後の出来事を混ぜない= 今の開催(編成発表で出馬表が決まっている走)まで
             if nx and nx[0].get("ta") == "愛知":
                 trk = "名古屋"
         if trk == "笠松" and prev_home == "笠松" and last_tk_aff and (_date(pending[-1].get("d")) - last_tk_aff).days < tokai_ks_back(asof):
