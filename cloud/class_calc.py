@@ -1283,6 +1283,9 @@ def tokai_cut_rate(trk, origin, when):
     return TOKAI_CUT_RATE[origin]
 
 
+TOKAI_OLD_DAYS = json.load(open(HERE / "tokai_old_days.json", encoding="utf-8"))     if os.environ.get("TOKAI_OLD_DAYS", "1") == "1" and (HERE / "tokai_old_days.json").exists() else []
+
+
 def tokai_adj_dates(races):
     """(track, date, no) → row の辞書から、場ごとの調整日= 6/9/12/3 月の最終開催日+1 を作る。
     ⚠公式は名古屋= 第7/13/19/26回の終了後・笠松= 月末開催の終了後。開催回の数え方が公式と一致しないので月で読む。
@@ -1290,6 +1293,12 @@ def tokai_adj_dates(races):
     days = defaultdict(set)
     for (tr, d, _no) in races:
         days[tr].add(_date(d))
+    if TOKAI_OLD_DAYS and days:                    # 台帳の開催(races)は 2022-11〜= それより前の開催日を走の日から補った表(2017-01〜2022-10・名古屋 327 日・笠松 196 日)で足す
+        first = {tr: min(ds) for tr, ds in days.items() if ds}   # 足さないと 2022-10 以前の 25% 調整・3 歳の一斉編入が抜ける(照合 B 名古屋 +453・笠松 +113)
+        for tr, d in TOKAI_OLD_DAYS:
+            d = _date(d)
+            if tr in first and d < first[tr]:
+                days[tr].add(d)
     out = {}
     for tr, ds in days.items():
         blocks = []                                # 連続する開催日を 1 開催に(2 日以内の空きは同じ開催)
