@@ -1810,8 +1810,8 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
                 how = "移籍"                                  # 東海の外で走らずに相手の県へ
         elif home is not None and home != trk:
             how = "移籍"
-        if how == "移籍" and a is not None and (a <= 2 or (a == 3 and d.month <= 9)):
-            how = "移籍(3歳9月まで・引き継ぎ)"               # 名古屋 6(3) ただし書き・笠松 6(1)
+        if how == "移籍" and a is not None and (a <= 2 or (a == 3 and (d.month <= 9 or (trk == "笠松" and d >= TOKAI_FY2026)))):
+            how = "移籍(3歳9月まで・引き継ぎ)"               # 名古屋 6(3) ただし書き・笠松 6(1)。笠松 令和8年度は 3 歳 10 月の名古屋→笠松も引き継ぐ(公式 サンモリッツ 2026-10 198= 名古屋の一斉編入後の値のまま)
         if how.startswith("再転入(9"):
             ks_reentry(a, d)
             young = cur_young(d, value)
@@ -1942,6 +1942,13 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
             pending.append(r)
         if trace:
             print(f"  {d} run  {str(r.get('tr')):4} {str(r.get('ta') or '-'):4} {prize:>9,} → value {value:>10,} home={home} young={young} pend={len(pending)}")
+    if track == "笠松" and home == "名古屋":
+        # 締めの後の最初の走(この一覧の走)が笠松所属= 名古屋→笠松の所属替えは一覧の時点(入きゅう日)で済んでいる= 転入の格付け
+        #   (笠松 令和7・8年度 要綱 5(1)オ・5(2)「転入起算日は入きゅう日とし、同日に格付け」。その走の所属は発走前に出馬表で分かる値)
+        #   例: セブンスストリート・マッティーナ 2026-08〜09 の公式 4,500(450〜900 万→450 万の段)
+        nx = sorted([r for r in runs if (dd := _date(r.get("d"))) and dd >= cutoff], key=lambda r: str(r.get("d")))
+        if nx and nx[0].get("ta") in ("笠松", "岐阜"):
+            enter(len(rs), asof, "笠松", age(asof))
     if track and rs and home is not None and home != track and not (track == "笠松" and TOKAI_KS_CARRY):
         # 笠松所属のまま名古屋の競走へ出る馬(その逆も)。公式の編成は移籍後の格付け= 転入と同じに全収得を所属先の換算表で換算し直す
         #   (名古屋 6(3)・笠松 5(1)オ)。例: 3歳 10 月に笠松→名古屋= 笠松での一斉編入の控除は付かず 収得 100% で一般格(公式の第14回 ヨザクラブルース 480)
