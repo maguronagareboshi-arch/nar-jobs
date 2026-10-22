@@ -49,13 +49,16 @@ jobs:
           DRY: ${{ github.event.inputs.dry_run }}
           NIGHT_IN: ${{ github.event.inputs.night }}
           DAY: ${{ github.event.inputs.date }}
+          SCHED: ${{ github.event.schedule }}
           SUPABASE_DB_PASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H)
-          # 夜の回= 18 時以降に起きた予定の便か、手動で night を選んだとき
-          if [ "$NIGHT_IN" = "true" ] || { [ -z "$NIGHT_IN" ] && [ $((10#$H)) -ge 18 ]; }; then NIGHT=1; else NIGHT=0; fi
+          # 夜の回= 22:10 の予定の便か、手動で night を選んだとき
+          # ⛔起きた時刻で見分けない= 10/20・10/21 は予定の便が 4 時間 46〜49 分遅れて翌 02:56 に起き、朝の回と数えて top_band_next が赤
+          if [ "$NIGHT_IN" = "true" ] || [ "$SCHED" = "10 13 * * *" ]; then NIGHT=1; else NIGHT=0; fi
           if [ -z "$DAY" ]; then
-            if [ "$NIGHT" = "1" ]; then DAY=$(TZ=Asia/Tokyo date -d tomorrow +%F); else DAY=$(TZ=Asia/Tokyo date +%F); fi
+            # 夜の回が日付をまたいで起きたら、もう「翌日」は今日
+            if [ "$NIGHT" = "1" ] && { [ -z "$SCHED" ] || [ $((10#$H)) -ge 12 ]; }; then DAY=$(TZ=Asia/Tokyo date -d tomorrow +%F); else DAY=$(TZ=Asia/Tokyo date +%F); fi
           fi
           if [ "$DRY" = "true" ]; then W=--dry-run; else W=--apply; fi
           echo "夜の回= $NIGHT・日= $DAY・$W"
