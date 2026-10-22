@@ -1041,6 +1041,8 @@ TOKAI_PARKED = False
 TOKAI_ADJ = {}        # 場 → 調整日の一覧(四半期末の月の最終開催日の翌日。tokai_adj_dates で作る)
 TOKAI_BLOCKS = {}     # 場 → [(開催初日, 最終日)](tokai_adj_dates で作る)
 TOKAI_HEN = {}        # 年 → 3 歳の一斉編入日(読み方 u・tokai_adj_dates で作る。10 月の開催が見えるまでは無い)
+TOKAI_HEN_NG = {}     # 年 → 名古屋所属の 3 歳の一斉編入日= 名古屋の 9 月の見直しの日(名古屋の一覧・TOKAI_NG_HEN_OWN のとき)
+TOKAI_NG_HEN_OWN = os.environ.get("TOKAI_NG_HEN_OWN", "1") == "1"   # 名古屋 R5 10(6)= 共通の日(2023-09-30)では 10/3 の一覧に入らない→ 名古屋の日(2023-09-26)で編入(メディアプンタ 2023-10-03 1450→362)
 TOKAI_HEN_KS = {}     # 年 → 笠松所属の 3 歳の一斉編入日= 笠松の 9 月の見直しの日(TOKAI_KS_HEN_OWN のとき)
 # 笠松の出走投票準備一覧(2025-11〜2026-10 の 24 回)と突き合わせて決めた 5 則(2026-10-21)。
 #   照合 A= 前の一覧の公式の値から次の一覧を当てる(7,115 組)・照合 B= 計算だけで各一覧を当てる(9,060 件)。採らない→採る:
@@ -1337,6 +1339,7 @@ def tokai_adj_dates(races):
         out[tr] = sorted(v + dt.timedelta(days=1) for v in last.values())
     TOKAI_HEN.clear()
     TOKAI_HEN_KS.clear()
+    TOKAI_HEN_NG.clear()
     later = max((d for ds in days.values() for d in ds), default=None)
     for y in sorted({d.year for ds in out.values() for d in ds}):
         sep = [d for ds in out.values() for d in ds if d.year == y and d.month in (9, 10) and d <= dt.date(y, 10, 10)]
@@ -1345,6 +1348,9 @@ def tokai_adj_dates(races):
             ks = [d for d in out.get("笠松", []) if d.year == y and d.month in (9, 10) and d <= dt.date(y, 10, 10)]
             if ks:
                 TOKAI_HEN_KS[y] = max(ks)
+            ngs = [d for d in out.get("名古屋", []) if d.year == y and d.month in (9, 10) and d <= dt.date(y, 10, 10)]
+            if ngs:
+                TOKAI_HEN_NG[y] = max(ngs)
     return out
 
 
@@ -1700,7 +1706,8 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
         if a == 2:
             return v < tokai_line(2, d)
         if a == 3 and "u" in TOKAI_V:
-            hen = (TOKAI_HEN_KS if TOKAI_KS_HEN_OWN and (home or prev_home) == "笠松" else TOKAI_HEN).get(d.year)
+            hen = (TOKAI_HEN_KS if TOKAI_KS_HEN_OWN and (home or prev_home) == "笠松" else
+                   TOKAI_HEN_NG if TOKAI_NG_HEN_OWN and track != "笠松" and (home or prev_home) == "名古屋" else TOKAI_HEN).get(d.year)
             return v < tokai_line(3, d) and (d < hen if hen else d.month <= 9)
         if a == 3 and d.month <= 9:
             return v < tokai_line(3, d)
@@ -1728,6 +1735,10 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
             for e in TOKAI_HEN_KS.values():
                 if first < e <= cutoff:
                     events.append(("hen", e, "笠松"))
+        if TOKAI_NG_HEN_OWN and track != "笠松":
+            for e in TOKAI_HEN_NG.values():
+                if first < e <= cutoff:
+                    events.append(("hen", e, "名古屋"))
     # 出発点 seed=(日, 値) か その並び= 締めの日に value を公式の一覧の値に置き換えて、その後の走・見直し・編入は仕組みで進める
     #   (笠松の出走投票準備一覧= KS_SEEDS)。cutoff までの一番新しいもの 1 つだけ使う
     seeds = [seed] if isinstance(seed, tuple) else (seed or [])
@@ -1900,6 +1911,12 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
                 young = False
             continue
         if kind == "hen":                          # u: 3 歳の一斉編入(東海 2 場共通の日)
+            if TOKAI_NG_HEN_OWN and track != "笠松":   # 名古屋の一覧: 名古屋所属の馬は名古屋の日・他は共通の日
+                ng_own = (home or prev_home) == "名古屋"
+                if i == "名古屋" and not ng_own:
+                    continue
+                if i is None and ng_own:
+                    continue
             if i == "笠松":                          # TOKAI_KS_HEN_OWN: 笠松所属のまま次も笠松で走る馬だけ笠松の日に(他は従来の日)
                 if track == "笠松" and (home or prev_home) == "名古屋" and d < TOKAI_FY2026:
                     continue                       # 令和7年度以前は 名古屋所属の馬は笠松の一覧でも名古屋の日に編入(公式= 名古屋の値。パープルルージュ 2025-10-04 の調整の日はまだ 3 歳格)。令和8年度は笠松の日のまま(ポルタシャーンス)
