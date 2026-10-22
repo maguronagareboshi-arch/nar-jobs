@@ -27,6 +27,10 @@ on:
         description: '高知のレース後コメントをさかのぼる開始日(YYYY-MM-DD・空なら既定の窓)'
         required: false
         default: ''
+      day_trend_norm:
+        description: '1 なら朝でなくても「今日ここまで」のふだんの値を作り直す'
+        required: false
+        default: ''
 
 concurrency:
   group: nar-refresh
@@ -412,6 +416,19 @@ jobs:
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
           if [ "$MORNING" = 1 ]; then python cloud/baba_trend.py --apply; else python cloud/baba_trend.py --apply --today; fi
+
+      # §304 「今日ここまで」のふだんの値(場ごと・過去1年の開催日の 位置取り/枠 の差の中央値と中央8割)→ nar_meta day_trend_norm。
+      #   計算は js/day-trend.js の写し(tests/test_day_trend_norm.py で照合)。朝の便だけ(手押しの day_trend_norm=1 でも回る)・落ちても続行
+      - name: day trend norm (morning only)
+        id: am_day_trend_norm
+        if: env.MODE != 'monthly' && !cancelled()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          NORM_NOW: ${{ github.event.inputs.day_trend_norm }}
+        run: |
+          H=$(TZ=Asia/Tokyo date +%H%M)
+          if [ "$MORNING" = 1 ] || [ "$NORM_NOW" = 1 ]; then python tests/test_day_trend_norm.py && python cloud/day_trend_norm.py --apply || echo "⚠ day_trend_norm に失敗(続行)"; else echo "day trend norm は朝の便だけ(JST $H)=スキップ"; fi
 
       # §103 コース別データ(場×距離の枠番・序盤の位置・逃げ馬)。前日までの過去1年の数なので朝の便だけ
       # (手元の実測= 14場ぶんで 32 秒・要求 187 回)

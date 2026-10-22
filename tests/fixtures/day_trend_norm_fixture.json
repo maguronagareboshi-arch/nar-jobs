@@ -1,0 +1,871 @@
+{
+"races": [
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 1,
+"corners": [
+{
+"name": "３角",
+"order": "8,3,1(6,10)-2-7-5-9-4"
+},
+{
+"name": "４角",
+"order": "1,2,6(4,9)-10-3-8-5-7"
+}
+]
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 2,
+"corners": [
+{
+"name": "３角",
+"order": "3,2,4(6,10)-11-8-12-7-1-9-5"
+},
+{
+"name": "４角",
+"order": "10,11,6(3,5)-12-1-9-7-8-2-4"
+}
+]
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 3,
+"corners": [
+{
+"name": "１角",
+"order": "6,3,4(7,8)-2-1-5"
+},
+{
+"name": "２角",
+"order": "6,2,1(8,4)-7-3-5"
+},
+{
+"name": "３角",
+"order": "6,5,1(7,4)-3-2-8"
+}
+]
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 4,
+"corners": [
+{
+"name": "１角",
+"order": "6,3,7(1,8)-2-4-9-5"
+},
+{
+"name": "２角",
+"order": "6,5,4(1,3)-8-9-7-2"
+},
+{
+"name": "３角",
+"order": "9,4,7(2,5)-6-1-3-8"
+},
+{
+"name": "４角",
+"order": "8,2,9(7,4)-6-5-3-1"
+}
+]
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 5,
+"corners": [
+{
+"name": "３角",
+"order": "2,1,6(3,4)-5-7"
+},
+{
+"name": "４角",
+"order": "5,1,7(3,6)-2-4"
+}
+]
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 6,
+"corners": [
+{
+"name": "３角",
+"order": "6,10,8(2,7)-11-3-5-4-9-1"
+},
+{
+"name": "４角",
+"order": "2,10,7(6,3)-8-1-9-4-5-11"
+}
+]
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 7,
+"corners": [
+{
+"name": "３角",
+"order": "6,1,7(2,11)-4-10-9-8-3-5"
+},
+{
+"name": "４角",
+"order": "6,9,8(1,11)-10-3-7-5-2-4"
+}
+]
+}
+],
+"runs": [
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 1,
+"runner_number": 1,
+"gate": 1,
+"finish": 9,
+"finish_note": null,
+"margin": null,
+"popularity": 2
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 1,
+"runner_number": 2,
+"gate": 1,
+"finish": 7,
+"finish_note": null,
+"margin": null,
+"popularity": 2
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 1,
+"runner_number": 3,
+"gate": 2,
+"finish": null,
+"finish_note": "取消",
+"margin": null,
+"popularity": 10
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 1,
+"runner_number": 4,
+"gate": 2,
+"finish": 2,
+"finish_note": null,
+"margin": null,
+"popularity": 4
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 1,
+"runner_number": 5,
+"gate": 3,
+"finish": 8,
+"finish_note": null,
+"margin": null,
+"popularity": 9
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 1,
+"runner_number": 6,
+"gate": 3,
+"finish": 1,
+"finish_note": null,
+"margin": null,
+"popularity": 9
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 1,
+"runner_number": 7,
+"gate": 4,
+"finish": 4,
+"finish_note": null,
+"margin": null,
+"popularity": 6
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 1,
+"runner_number": 8,
+"gate": 4,
+"finish": 10,
+"finish_note": null,
+"margin": null,
+"popularity": 2
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 1,
+"runner_number": 9,
+"gate": 5,
+"finish": 3,
+"finish_note": null,
+"margin": null,
+"popularity": 3
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 1,
+"runner_number": 10,
+"gate": 5,
+"finish": 6,
+"finish_note": null,
+"margin": null,
+"popularity": 7
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 2,
+"runner_number": 1,
+"gate": 1,
+"finish": 11,
+"finish_note": null,
+"margin": null,
+"popularity": 12
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 2,
+"runner_number": 2,
+"gate": 1,
+"finish": 5,
+"finish_note": null,
+"margin": null,
+"popularity": 1
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 2,
+"runner_number": 3,
+"gate": 2,
+"finish": 9,
+"finish_note": null,
+"margin": null,
+"popularity": 5
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 2,
+"runner_number": 4,
+"gate": 2,
+"finish": 3,
+"finish_note": null,
+"margin": null,
+"popularity": 8
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 2,
+"runner_number": 5,
+"gate": 3,
+"finish": null,
+"finish_note": null,
+"margin": "競走中止",
+"popularity": 1
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 2,
+"runner_number": 6,
+"gate": 3,
+"finish": 6,
+"finish_note": null,
+"margin": null,
+"popularity": 2
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 2,
+"runner_number": 7,
+"gate": 4,
+"finish": 7,
+"finish_note": null,
+"margin": null,
+"popularity": 1
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 2,
+"runner_number": 8,
+"gate": 4,
+"finish": 10,
+"finish_note": null,
+"margin": null,
+"popularity": 5
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 2,
+"runner_number": 9,
+"gate": 5,
+"finish": 4,
+"finish_note": null,
+"margin": null,
+"popularity": 10
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 2,
+"runner_number": 10,
+"gate": 5,
+"finish": 12,
+"finish_note": null,
+"margin": null,
+"popularity": 10
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 2,
+"runner_number": 11,
+"gate": 6,
+"finish": 8,
+"finish_note": null,
+"margin": null,
+"popularity": 1
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 2,
+"runner_number": 12,
+"gate": 6,
+"finish": 1,
+"finish_note": null,
+"margin": null,
+"popularity": 1
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 3,
+"runner_number": 1,
+"gate": 1,
+"finish": 4,
+"finish_note": null,
+"margin": null,
+"popularity": 5
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 3,
+"runner_number": 2,
+"gate": 2,
+"finish": 7,
+"finish_note": null,
+"margin": null,
+"popularity": 4
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 3,
+"runner_number": 3,
+"gate": 3,
+"finish": 3,
+"finish_note": null,
+"margin": null,
+"popularity": 2
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 3,
+"runner_number": 4,
+"gate": 4,
+"finish": 5,
+"finish_note": null,
+"margin": null,
+"popularity": 8
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 3,
+"runner_number": 5,
+"gate": 5,
+"finish": 1,
+"finish_note": null,
+"margin": null,
+"popularity": 7
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 3,
+"runner_number": 6,
+"gate": 6,
+"finish": 6,
+"finish_note": null,
+"margin": null,
+"popularity": 3
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 3,
+"runner_number": 7,
+"gate": 7,
+"finish": 2,
+"finish_note": null,
+"margin": null,
+"popularity": 3
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 3,
+"runner_number": 8,
+"gate": 8,
+"finish": 8,
+"finish_note": null,
+"margin": null,
+"popularity": 8
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 4,
+"runner_number": 1,
+"gate": 1,
+"finish": 8,
+"finish_note": null,
+"margin": null,
+"popularity": 9
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 4,
+"runner_number": 2,
+"gate": 1,
+"finish": 2,
+"finish_note": null,
+"margin": null,
+"popularity": 4
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 4,
+"runner_number": 3,
+"gate": 2,
+"finish": 4,
+"finish_note": null,
+"margin": null,
+"popularity": 8
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 4,
+"runner_number": 4,
+"gate": null,
+"finish": 9,
+"finish_note": null,
+"margin": null,
+"popularity": 3
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 4,
+"runner_number": 5,
+"gate": 3,
+"finish": 1,
+"finish_note": null,
+"margin": null,
+"popularity": 1
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 4,
+"runner_number": 6,
+"gate": 3,
+"finish": 3,
+"finish_note": null,
+"margin": null,
+"popularity": 5
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 4,
+"runner_number": 7,
+"gate": 4,
+"finish": 5,
+"finish_note": null,
+"margin": null,
+"popularity": 3
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 4,
+"runner_number": 8,
+"gate": 4,
+"finish": 6,
+"finish_note": null,
+"margin": null,
+"popularity": 8
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 4,
+"runner_number": 9,
+"gate": 5,
+"finish": 7,
+"finish_note": null,
+"margin": null,
+"popularity": 8
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 5,
+"runner_number": 1,
+"gate": 1,
+"finish": 2,
+"finish_note": null,
+"margin": null,
+"popularity": 5
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 5,
+"runner_number": 2,
+"gate": 2,
+"finish": null,
+"finish_note": "除外",
+"margin": null,
+"popularity": 6
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 5,
+"runner_number": 3,
+"gate": 3,
+"finish": 7,
+"finish_note": null,
+"margin": null,
+"popularity": 5
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 5,
+"runner_number": 4,
+"gate": 4,
+"finish": 4,
+"finish_note": null,
+"margin": null,
+"popularity": 6
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 5,
+"runner_number": 5,
+"gate": 5,
+"finish": 5,
+"finish_note": null,
+"margin": null,
+"popularity": 3
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 5,
+"runner_number": 6,
+"gate": 6,
+"finish": 6,
+"finish_note": null,
+"margin": null,
+"popularity": 2
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 5,
+"runner_number": 7,
+"gate": 7,
+"finish": 1,
+"finish_note": null,
+"margin": null,
+"popularity": 5
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 6,
+"runner_number": 1,
+"gate": 1,
+"finish": 9,
+"finish_note": null,
+"margin": null,
+"popularity": 6
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 6,
+"runner_number": 2,
+"gate": 1,
+"finish": 11,
+"finish_note": null,
+"margin": null,
+"popularity": 10
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 6,
+"runner_number": 3,
+"gate": 2,
+"finish": 5,
+"finish_note": null,
+"margin": null,
+"popularity": 4
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 6,
+"runner_number": 4,
+"gate": 2,
+"finish": 8,
+"finish_note": null,
+"margin": null,
+"popularity": 5
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 6,
+"runner_number": 5,
+"gate": 3,
+"finish": 7,
+"finish_note": null,
+"margin": null,
+"popularity": 8
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 6,
+"runner_number": 6,
+"gate": 3,
+"finish": 3,
+"finish_note": null,
+"margin": null,
+"popularity": 2
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 6,
+"runner_number": 7,
+"gate": 4,
+"finish": 10,
+"finish_note": null,
+"margin": null,
+"popularity": 10
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 6,
+"runner_number": 8,
+"gate": 4,
+"finish": 6,
+"finish_note": null,
+"margin": null,
+"popularity": 10
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 6,
+"runner_number": 9,
+"gate": 5,
+"finish": 2,
+"finish_note": null,
+"margin": null,
+"popularity": 6
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 6,
+"runner_number": 10,
+"gate": 5,
+"finish": 4,
+"finish_note": null,
+"margin": null,
+"popularity": 2
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 6,
+"runner_number": 11,
+"gate": 6,
+"finish": 1,
+"finish_note": null,
+"margin": null,
+"popularity": 11
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 7,
+"runner_number": 1,
+"gate": 1,
+"finish": null,
+"finish_note": null,
+"margin": null,
+"popularity": 5
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 7,
+"runner_number": 2,
+"gate": 1,
+"finish": null,
+"finish_note": null,
+"margin": null,
+"popularity": 3
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 7,
+"runner_number": 3,
+"gate": 2,
+"finish": null,
+"finish_note": null,
+"margin": null,
+"popularity": 6
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 7,
+"runner_number": 4,
+"gate": 2,
+"finish": null,
+"finish_note": null,
+"margin": null,
+"popularity": 6
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 7,
+"runner_number": 5,
+"gate": 3,
+"finish": null,
+"finish_note": null,
+"margin": null,
+"popularity": 6
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 7,
+"runner_number": 6,
+"gate": 3,
+"finish": null,
+"finish_note": null,
+"margin": null,
+"popularity": 9
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 7,
+"runner_number": 7,
+"gate": 4,
+"finish": null,
+"finish_note": null,
+"margin": null,
+"popularity": 1
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 7,
+"runner_number": 8,
+"gate": 4,
+"finish": null,
+"finish_note": null,
+"margin": null,
+"popularity": 6
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 7,
+"runner_number": 9,
+"gate": 5,
+"finish": null,
+"finish_note": null,
+"margin": null,
+"popularity": 6
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 7,
+"runner_number": 10,
+"gate": 5,
+"finish": null,
+"finish_note": null,
+"margin": null,
+"popularity": 8
+},
+{
+"track": "浦和",
+"race_date": "2026-10-15",
+"race_no": 7,
+"runner_number": 11,
+"gate": 6,
+"finish": null,
+"finish_note": null,
+"margin": null,
+"popularity": 1
+}
+]
+}
