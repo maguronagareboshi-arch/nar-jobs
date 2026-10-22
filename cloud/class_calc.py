@@ -2008,7 +2008,8 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
             if _started(r):
                 ran = True
             if young and not cur_young(d, value):                        # 線に達した→ 編入(控除)
-                value = max(0, value - (tokai_line_cut(origin, birth.year if birth else None, d, home) if "e" in TOKAI_V else 0))
+                org = "jra" if (d < TOKAI_FY2023 and origin == "native" and has_jra) else origin   # 令和4年度以前= 中央へ遠征した生え抜きの控除は中央歴の区分(20万・スタンレー)
+                value = max(0, value - (tokai_line_cut(org, birth.year if birth else None, d, home) if "e" in TOKAI_V else 0))
                 young = False
             elif not young:
                 gained += got
