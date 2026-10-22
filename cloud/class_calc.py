@@ -1109,7 +1109,7 @@ TOKAI_R7 = set(filter(None, os.environ.get("TOKAI_R7", "L,X,C,Ck,S").split(","))
 TOKAI_CUT_R7 = {"native": 1_800_000, "local": 900_000, "jra": 400_000}
 
 TOKAI_FY2024 = dt.date(2024, 4, 1)
-TOKAI_R6 = set(filter(None, os.environ.get("TOKAI_R6", "E,H,A,Cn,PE,PH,L,Xk,Gk,Hn,An,PHn,PAn,X,Gn,Sx,J5,5L,5X,5C,5E,5A,5G,5Ak,4J,4E,4G,4X,4A,4L,4C,3J,3A,3G,3L,3X,3C,3E").split(",")))
+TOKAI_R6 = set(filter(None, os.environ.get("TOKAI_R6", "E,H,A,Cn,PE,PH,L,Xk,Gk,Hn,An,PHn,PAn,X,Gn,Sx,J5,5L,5X,5C,5E,5A,5G,5Ak,4J,4E,4G,4X,4A,4L,4C,3J,3A,3G,3L,3X,3C,3E,Q").split(",")))
 # 笠松の令和6年度(2024/4〜2025/3)の番組要綱(research/tokai-prize/youko_r6_kasamatsu.txt)
 #   L= 格の線 2歳 400万・3歳 360万(1〜3月は 400万)  X= 線越えの控除 3歳 160/80/40万・2歳 180/90/40万
 #   C= 一斉編入 70%/30%/15%(限度 160/80/40万)を笠松に  Cn= 同じを名古屋に
@@ -1184,11 +1184,17 @@ def tokai_r6_a(trk, d):
     return (trk == "笠松" and tokai_r6(d, "A")) or (trk == "名古屋" and tokai_r6(d, "An"))
 
 
+TOKAI_RP = defaultdict(dict)   # (場, 日, 番) → {着: 賞金}(Ａ級１組と同額の判定に 1 着の賞金を使う)
+
+
 def tokai_a1_build(rows):
     acc = defaultdict(lambda: defaultdict(dict))
+    TOKAI_RP.clear()
     for r in rows:
         for x in r.get("runs") or []:
             tr, cls = x.get("tr"), str(x.get("cls") or "")
+            if tr in TOKAI_TRACKS and x.get("fin") and x.get("prize"):
+                TOKAI_RP[(tr,) + _rkey(x)][x["fin"]] = int(x["prize"])
             if tr in TOKAI_TRACKS and cls in (("Ａ１",) if tr == "笠松" else ("Ａ１", "Ａ１ａ")) and x.get("fin") and x.get("prize"):
                 acc[tr][_date(x.get("d"))][x["fin"]] = int(x["prize"])
     TOKAI_A1.clear()
@@ -1196,17 +1202,28 @@ def tokai_a1_build(rows):
 
 
 def tokai_a1_same(run, label, got):
-    """Q: 古馬重賞で Ａ級１組の加算額以下→ 同額・古馬準重賞で超える→ 同額。Ａ級１組の額= その日までで一番新しい同じ着の賞金"""
+    """Q: 競走ごとに「1 着の賞金×率」がＡ級１組の 1 着の賞金以下の古馬重賞→ 全着をＡ級１組の同じ着の賞金と同額・古馬準重賞は 1 着が超えると同額。
+    Ａ級１組の額= その日までで一番新しい賞金。令和5年度〜だけ(笠松 令和5年度 要綱 11(2)・令和6〜8年度 10(2)。令和4年度以前の要綱には無い)。
+    1 着の賞金が台帳に無い競走は着の比(令和7年度〜 2着32/3着18/4着12/5着8%・それ以前 35/20/10/5%)で推す。
+    例: レジェンドハンター記念 2025-11-14 コヴィーニャ 2 着 576→800・東海クラウン 2025-10-24 ヴェッツラー 2 着 +224"""
     fin, d, tr = run.get("fin"), _date(run.get("d")), run.get("tr")
     if not fin or fin > 5 or not got:
         return got
-    amt = next((p[fin] for day, p in reversed(TOKAI_A1.get(tr, [])) if day <= d and fin in p), None)
-    if not amt:
+    if d < TOKAI_FY2023:
         return got
+    a1 = next((p for day, p in reversed(TOKAI_A1.get(tr, [])) if day <= d and 1 in p and fin in p), None)
+    rp = TOKAI_RP.get((tr,) + _rkey(run), {})
+    prize = int(run.get("prize") or 0)
+    p1 = rp.get(1)
+    if not p1 and prize and fin in (2, 3, 4, 5):
+        p1 = round(prize / ({2: .32, 3: .18, 4: .12, 5: .08} if d >= TOKAI_FY2025 else {2: .35, 3: .20, 4: .10, 5: .05})[fin] / 10000) * 10000
+    if not a1 or not p1 or not prize:
+        return got
+    rate = got / prize
     if label.startswith("古馬SP") or label == "古馬重賞":
-        return max(got, amt)
+        return a1[fin] if p1 * rate <= a1[1] else got
     if label == "古馬準重賞":
-        return min(got, amt)
+        return a1[fin] if p1 > a1[1] else got
     return got
 
 
@@ -2167,6 +2184,8 @@ def main_tokai(a):
         rows, births, entered, races = fetch_tokai(url, key, since)
     log(f"台帳 {len(rows)} 頭(東海の走が {since} 以降にある馬)・レース {len(races)}")
     TOKAI_ADJ.update(tokai_adj_dates(races))
+    if "Q" in TOKAI_R6 or "Qn" in TOKAI_R6:
+        tokai_a1_build(rows)                       # Ａ級１組と同額の判定に Ａ級１組の賞金・各競走の 1 着の賞金を台帳の走から作る
     if not a.local:
         ks_lists_once()
     log("調整日:", {k: [x.isoformat() for x in v if x.year >= 2025] for k, v in TOKAI_ADJ.items()},
