@@ -82,6 +82,9 @@ class FallbackToCurrent(unittest.TestCase):
         self.assertEqual(r["pace_p"], {"速い": 0.0, "平均": 0.0, "遅い": 1.0})
         self.assertEqual(r["pace_why"], {"ten": [[3, -0.6], [1, -0.5], [2, 0.3]], "lead": 1, "front": 0})
         self.assertNotIn("pace_by", r)
+        self.assertNotIn("pace_hit", r)   # wf が無い係数では置かない
+        r2 = tk.build_races(races, runs, past, sty, ten, {"大井": dict(mp, wf={"hit_all": 0.51234})})[0]["ooi-1"]
+        self.assertEqual(r2["pace_hit"], 0.512)
 
 
 if __name__ == "__main__":

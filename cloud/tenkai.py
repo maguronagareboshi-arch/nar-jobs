@@ -732,6 +732,10 @@ def add_pace_model(rec, mp, tens, lead, front):
     rec["pace"] = w
     rec["pace_p"] = {x: round(p[x], 3) for x in PACE_WORDS}
     rec["pace_why"] = {"ten": [[u, v] for u, v in fast], "lead": len(lead), "front": len(front)}
+    # その場の直前 12 か月の WF の当たりの割合(pace_model:v1 の wf.hit_all)。⛔無ければ置かない
+    h = (mp.get("wf") or {}).get("hit_all") if isinstance(mp, dict) else None
+    if isinstance(h, (int, float)) and 0 <= h <= 1:
+        rec["pace_hit"] = round(float(h), 3)
     return True
 
 
