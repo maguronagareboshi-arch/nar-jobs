@@ -1605,7 +1605,7 @@ def tokai_ks_back_e(last_tk, last_away, d):
     例: カヤドーブラック 最後の笠松 2023-11-08→2024-06-05 戻り= 6 か月以上= 転入"""
     import calendar
     ent = max(last_away + dt.timedelta(days=1), d - dt.timedelta(days=21))
-    n = 12 if d < dt.date(2024, 1, 1) else (6 if d < TOKAI_FY2025 else 9)
+    n = 12 if ent < dt.date(2024, 1, 1) else (6 if ent < TOKAI_FY2025 else 9)   # 月数は入きゅう日の年度で選ぶ(戻りの走の日でない・ウインフランシーズ)
     b = last_tk + dt.timedelta(days=1)
     y, mo = b.year + (b.month - 1 + n) // 12, (b.month - 1 + n) % 12 + 1
     lim = dt.date(y, mo, min(b.day, calendar.monthrange(y, mo)[1]))
