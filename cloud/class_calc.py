@@ -1843,7 +1843,7 @@ def tokai_state(runs, birth, asof, lag, races, trace=False, track=None, seed=Non
                     value = max(0, value - (min(_thou(value * TOKAI_CUT_RATE[origin]), TOKAI_CUT[origin]) if "e" in TOKAI_V else 0))
                     young = False
                 continue
-            rate, _label = tokai_rate_entry(p, age(e), "笠松", when)
+            rate, _label = tokai_rate_entry(p, a if a is not None else age(e), "笠松", when)   # 換算は再格付けの時点の馬齢(要綱 6・ホーリーホック)
             got = _thou(int(p.get("prize") or 0) * round(rate * 100) // 100)
             last_young = young_race(p)
             value += got
