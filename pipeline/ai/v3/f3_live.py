@@ -20,6 +20,9 @@ KEY = ['track', 'race_date', 'race_no']
 Q4 = KEY + ['umaban']
 PFX = 'F3:'
 DAYC = ['body_weight', 'o_bwchg', 'f_bwabs']  # 当日の便が埋める列
+# 2026-10-23 馬場の得手 3 列: 前の晩は馬場が分からず 'F3:' の写しは空。当日の便は v31_bundle.pick_going が選んだ v8bl_ の列から取る
+#   (研究の表は実際の馬場で 86〜99% 埋まっている・決め 49 の照合は過去の日だけで見落とした)
+GOING = {'v8bl:S_g': 'v8bl_S_g', 'v8bl:M_g': 'v8bl_M_g', 'v8bl:D_g': 'v8bl_D_g'}
 ATOMS = ['fin_r', 'top3', 'win', 'SI', 'si_rk', 'up_rk', 'ten_rk', 'c1r', 'c4r', 'tdiff_k', 'last3f', 'gain', 'si_gap']
 TRK = {'大井': 0, '川崎': 1, '船橋': 2, '浦和': 3}
 SEM_FLG = ['light', 'strong', 'much', 'gaik', 'gear', 'rest', 'late', 'jissen', 'partner', 'temper', 'heavy', 'scratch', 'gate']
@@ -255,6 +258,9 @@ def day_x(M, b):
     if not set(have) <= set(b.columns):
         return None
     X = pd.DataFrame({c: pd.to_numeric(b[PFX + c], errors='coerce').to_numpy(float) for c in M['cols'] if c not in DAYC})
+    for c, g in GOING.items():
+        if c in X.columns and g in b.columns:
+            X[c] = X[c].where(np.isfinite(X[c]), pd.to_numeric(b[g], errors='coerce').to_numpy(float))
     bwd = pd.to_numeric(b['bwd'], errors='coerce').to_numpy(float) if 'bwd' in b.columns else np.full(len(b), np.nan)
     X['body_weight'] = pd.to_numeric(b['bw'], errors='coerce').to_numpy(float) if 'bw' in b.columns else np.nan
     X['o_bwchg'] = bwd
