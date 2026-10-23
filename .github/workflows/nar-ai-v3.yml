@@ -199,7 +199,7 @@ jobs:
         run: |
           set -o pipefail
           V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
-          gh release download v3-seq3-20261013 -p 'v3_seq2.tar.gz.enc' -D in
+          gh release download v3-seq51-20261023 -p 'v3_seq2.tar.gz.enc' -D in
           mkdir -p v3/seq2
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_seq2.tar.gz.enc | tar -C v3/seq2 -xzf -
           rm -f in/v3_seq2.tar.gz.enc
