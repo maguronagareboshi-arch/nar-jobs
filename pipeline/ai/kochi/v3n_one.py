@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """他場版 v3n 第 10 版(決め 32・2026-10-15)= 同じ作りの木を材料表 2014〜・学び 2015-01〜切りの前で(B15・v3 の out/v3n_2015_u.md・研究 v3n_2015_prod.py)。
+第 11 版(決め 54・2026-10-25)= 同じ作りで木の本数を 3 着内 2 値 2550(種 3)・順位 1140・勝ち 1040 本に(v3 の out/v3n_trees_judge.md・研究 v3n_trees_prod.py)。
 第 9 版 = イ' 全国 1 本の木(決め 31・v3 の out/v3n_one_u.md・研究 src/f5_scripts/v3n_one.py pool・v3n_one_prod.py)。
 
   土台 = base-v1 の朝の材料(nar_ai_feat_run・当日の馬場・体重の列を抜いた 263 列)+ 場の材料 v_ 148 列(k1・k4・k8 + Glicko 18 + 血統 9・
@@ -17,7 +18,7 @@ import numpy as np
 import pandas as pd
 
 HERE = Path(__file__).resolve().parent
-FORM = 'v3n-10: one15 (base-v1 + v_ + trk・2015〜) + seq-one15'
+FORM = 'v3n-11: trees54 (base-v1 + v_ + trk・2015〜・木 2550/1140/1040) + seq-trees54'
 KEY = ['track', 'race_date', 'race_no', 'runner_number']
 sys.path.append(str(HERE.parent))  # 末尾に足す = pipeline/ai の sealed
 import sealed  # noqa: E402  表は暗号化したリリース(公開のコードに置かない)

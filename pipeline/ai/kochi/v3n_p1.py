@@ -15,7 +15,7 @@ import numpy as np
 sys.path.append(str(Path(__file__).resolve().parent.parent))  # 末尾に足す = pipeline/ai の sealed
 import sealed  # noqa: E402  定数は暗号化したリリース(公開のコードに置かない)
 
-# 版 → k。mo/di = 決め 29・mo1/di1 = 第 9 版 イ' 全国 1 本(決め 31・v3 の out/v3n_one_u.md)・mo2/di2 = 第 10 版 B15(決め 32・v3 の out/v3n_2015_u.md)
+# 版 → k。mo/di = 決め 29・mo1/di1 = 第 9 版 イ' 全国 1 本(決め 31・v3 の out/v3n_one_u.md)・mo2/di2 = 第 10 版 B15(決め 32・v3 の out/v3n_2015_u.md)・mo3/di3 = 第 11 版(決め 54・v3 の out/v3n_trees_consts.md)
 K = sealed.get('v3n_p1')['K']
 TAG = sealed.get('v3n_p1')['TAG']  # 行の meta.p1f の字
 

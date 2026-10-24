@@ -108,11 +108,11 @@ def relabel(meta, gone, ud=None, sf=None, rk=None):
     if pc and all(n in pc for n in keep):
         import v3n_p1
         xs = np.array([(u[n] if (u and all(m in u for m in keep)) else 0.0) + (v3n_e1.BETA_NOKEN * nz.get(n, 0.0) if e1on else 0.0) + (fs[n] if fs is not None else 0.0) for n in keep])
-        ver = ('di' if ud is not None else 'mo') + ('2' if meta.get('one15') else '1' if one else '')  # 第 10 版(決め 32)の朝の行 = k mo2・di2
+        ver = ('di' if ud is not None else 'mo') + ('3' if meta.get('trees54') else '2' if meta.get('one15') else '1' if one else '')  # 第 10 版(決め 32)の朝の行 = k mo2・di2・第 11 版(決め 54)= mo3・di3
         p1n = dict(zip(keep, v3n_p1.follow([pc[n] for n in keep], xs, ver)))
         import v3n_p1mix
         if meta.get('one15') and len(keep) >= v3n_p1mix.MIN_N:  # 決め 40: 画面の勝つ率を 3 着内率(E1・能検の後・max の前)と混ぜる。第 10 版の行だけ・印は key の順のまま
-            mv = 'di' if ud is not None else 'mo'
+            mv = ('di' if ud is not None else 'mo') + ('3' if meta.get('trees54') else '')  # 決め 54 の行 = 学び直した混ぜ
             p1r = dict(p1n)
             p1n = dict(zip(keep, v3n_p1mix.mix([p1r[n] for n in keep], [q3[n] for n in keep], mv)))
         q3 = {n: max(q3[n], p1n[n]) for n in keep}
