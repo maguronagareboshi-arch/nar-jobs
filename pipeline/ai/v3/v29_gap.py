@@ -33,6 +33,7 @@ import pandas as pd
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import v3_tri as TRI  # noqa: E402  3 連単・3 連複のずれ模型(記録だけ)
+import b53 as B53  # noqa: E402  全券種の参考の買い目(決め 53・書く行の runners と枠番だけから作る)
 
 HERE = Path(__file__).resolve().parent
 JST = dt.timezone(dt.timedelta(hours=9))
@@ -493,6 +494,29 @@ def latest_combos(track, day, rno, kinds=('wide', 'umaren')):
     return out
 
 
+def race_gates(track, day, rno):
+    """そのレースの枠番 {馬番: 枠番}(出走表の写し nar_runs の gate)。枠連・枠単の参考(決め 53)に使う。無ければ空。"""
+    t = urllib.parse.quote(track)
+    r = _get(f'/rest/v1/nar_runs?track=eq.{t}&race_date=eq.{day}&race_no=eq.{rno}&gate=not.is.null&select=runner_number,gate')
+    return {int(x['runner_number']): int(x['gate']) for x in r if x.get('runner_number') is not None and x.get('gate') is not None}
+
+
+def add_b53(val, tr, day, rno):
+    """決め 53(2026-10-24): val['b53'] に全券種の参考の買い目を足す。いま書く行の val['runners'] と枠番だけから作る(組のオッズは使わない)。
+    作れなくても val はそのまま = 単勝・組の記録は書く。⛔ログには点数だけ(候補は出さない)。"""
+    try:
+        try:
+            gts = race_gates(tr, day, rno)
+        except Exception as e:  # noqa: BLE001  枠番が読めない = 枠連・枠単だけ出さない
+            gts = {}
+            log(f'{tr}{rno}R: 枠番 読めない {type(e).__name__}(枠連・枠単なし)')
+        b = B53.make(val['runners'], gts)
+        if b:
+            val['b53'] = b
+    except Exception as e:  # noqa: BLE001
+        log(f'{tr}{rno}R: 参考(決め 53) 失敗 {type(e).__name__} {str(e)[:120]}')
+
+
 def exists(key):
     return bool(_get(f"{GAP}?key=eq.{urllib.parse.quote(key)}&select=key"))
 
@@ -790,6 +814,7 @@ def live(day, base_csv, mdir, write, until):
                 if tri:
                     val['tri_model'] = {'tri': tri_name, 'trio': 'c8', 'ev_min': TRI.EV_MIN, 'cols': ['組', 'オッズ', '期待値', '模型の率', '市場の率']}
                     val.update(tri)
+                add_b53(val, tr, day, rno)  # 決め 53: 全券種の参考の買い目(失敗しても単勝・組の記録はそのまま書く)
                 try:
                     st = put_gap(k, val, tr, day, rno) if write else 'dry'
                 except Exception as e:  # noqa: BLE001
@@ -799,7 +824,7 @@ def live(day, base_csv, mdir, write, until):
                 n_w += 1
                 n_buy += len(c)
                 log(f'{tr}{rno}R: 発走 {at:%H:%M}・{now:%H:%M:%S} に決めた・{len(b)} 頭(体重 {val["weights"]})'
-                    f'・{val["buy_model"]}・候補 {len(c)} 頭(複勝も {len(val.get("place") or [])})・3 連単 {len(val.get("tri") or [])}・3 連複 {len(val.get("trio") or [])} 組(記録)・書き込み {st}')
+                    f'・{val["buy_model"]}・候補 {len(c)} 頭(複勝も {len(val.get("place") or [])})・3 連単 {len(val.get("tri") or [])}・3 連複 {len(val.get("trio") or [])} 組(記録)・参考(決め 53) {B53.count(val.get("b53"))} 点・書き込み {st}')
         if now > end:
             log('時間切れ: 書いた', n_w, 'R・候補', n_buy, '頭')
             _record_after(day, write)
