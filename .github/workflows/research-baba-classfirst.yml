@@ -1,0 +1,48 @@
+# 研究用・1 回きり。馬場差の基準を「クラス優先」に変える案(cloud/research_baba_classfirst.py)を本番データで
+# 測る年 2025-09-28〜2026-09-27 に集計し docs/research-baba-classfirst/result.md を書く。
+# ⛔本番 DB では REST の単純 select だけ。集計は全部 Python。書き込みなし。
+name: research-baba-classfirst
+on:
+  workflow_dispatch:
+    inputs:
+      nb:
+        description: "復元抽出の回数(重ければ 300)"
+        required: false
+        default: "1000"
+permissions:
+  contents: write
+concurrency:
+  group: research-baba-classfirst
+  cancel-in-progress: false
+jobs:
+  classfirst:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install numpy==1.26.4 pandas==2.2.3
+      - name: baba classfirst research
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          NB: ${{ github.event.inputs.nb }}
+        run: |
+          python cloud/research_baba_classfirst.py
+          if [ -n "$(git status --porcelain docs/research-baba-classfirst)" ]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add docs/research-baba-classfirst
+            git commit -m "馬場差 クラス優先 研究集計 $(TZ=Asia/Tokyo date +%F)"
+            for i in 1 2 3; do
+              git fetch origin "${GITHUB_REF_NAME}"
+              git rebase "origin/${GITHUB_REF_NAME}"
+              if git push origin "HEAD:${GITHUB_REF_NAME}"; then break; fi
+              if [ "$i" = 3 ]; then exit 1; fi
+              sleep $((i * 15))
+            done
+          else
+            echo "差分なし"
+          fi
