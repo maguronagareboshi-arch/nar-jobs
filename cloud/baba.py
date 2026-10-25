@@ -105,6 +105,9 @@ CLASSFIRST_STAGES = (("b", STD_DAYS), ("b", STD_DAYS_LEGACY), ("c", STD_DAYS), (
 GOING_LIKE = ("going", "classfirst")
 # 帯が読めない走(band_of が None)の扱い: "dist"= 場×距離の基準へ落とす(going の今まで)/"drop"= その日の値から外す
 NONE_BAND_DEFAULT = {"going": "dist", "classfirst": "drop"}
+# ⛔2026-10-25 ユーザー決定で既定を classfirst へ(本番データの研究便 docs/research-baba-classfirst: クラスの片寄り 0.93→0.39 秒・
+#   オープン −2.17→−0.85・次走の当たり d 同等/g +0.20 点)。baba_hist.py もこれを使う
+DEFAULT_BASELINE = "classfirst"
 GOING_BASE = "良"          # going 版の d の物差し
 TOP_N = 5                # going 版(T5)で使う着順の上限(1〜5着)
 MIN_HORSES = 3           # going 版(T5): レース差を出す最少頭数
@@ -477,8 +480,8 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--verify", action="store_true", help="公式の馬場状態(going)との相関を出す")
     ap.add_argument("--apply", action="store_true", help="nar_meta へ upsert(既定はドライラン)")
-    ap.add_argument("--baseline", choices=BASELINES, default="going",
-                    help="標準の窓。going=良馬場比 d+同じ馬場状態比 g(直近1年・既定) / season=同じ暦±45日×3年 / 365=前日までの直近1年 / 1095=旧§104")
+    ap.add_argument("--baseline", choices=BASELINES, default=DEFAULT_BASELINE,
+                    help="標準の窓。classfirst=クラス優先 5 段・帯なしは外す(既定・10/25)/ going=良馬場比 d+同じ馬場状態比 g(直近1年) / season=同じ暦±45日×3年 / 365=前日までの直近1年 / 1095=旧§104")
     ap.add_argument("--rebuild-all", action="store_true",
                     help="⛔確定済みの日も作り直す(定義を変えたときだけ。ふだんは付けない)")
     ap.add_argument("--env")

@@ -3,6 +3,7 @@
 #   2) baba_trend.py --calibrate(閾値表 pipeline/baba_trend_q.json を新しい d で作り直す)
 #   3) q.json に差分があれば commit・push(rebase してから。失敗したら赤で止める)
 #   4) baba_trend.py --apply(--today なし= 90 日ぜんぶ組み直し・新しい閾値表で言葉を付け直す)
+#   5) baba_hist.py --apply --rebuild-all(持ちタイム表の全期間ファイルを 2014〜 で作り直す・10/25)
 # ⛔nar-refresh と同じ concurrency group= 定時便と重ならない。nar-refresh.yml の権限は広げない(書き込みはこの便だけ)。
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
 name: baba-rebuild
@@ -16,7 +17,7 @@ concurrency:
 jobs:
   rebuild:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 120
     env:
       SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
       SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -49,3 +50,7 @@ jobs:
 
       - name: baba trend apply all days
         run: python cloud/baba_trend.py --apply
+
+      # 2026-10-25 持ちタイム表の全期間ファイル(cond-stats/v1/baba-hist/)も同じ方式で全期間を作り直す
+      - name: baba hist rebuild all
+        run: python cloud/baba_hist.py --apply --rebuild-all

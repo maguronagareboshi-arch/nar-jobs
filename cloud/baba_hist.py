@@ -85,7 +85,7 @@ def to_samples(track, wins, races):
 def merge_days(prefix, samples, targets, old_days, today, rebuild_all):
     """baba.build_days を 1 場ぶんで呼び、前回のファイルの確定済みの日と合わせる。戻り= (days, 組み直した日数)"""
     frozen = {d: {prefix: c} for d, c in (old_days or {}).items()}
-    built, rebuilt, _ = baba.build_days(samples, targets, "going", today=today, frozen=frozen,
+    built, rebuilt, _ = baba.build_days(samples, targets, baba.DEFAULT_BASELINE, today=today, frozen=frozen,
                                         rebuild_all=rebuild_all)
     days = {} if rebuild_all else {d: dict(c) for d, c in (old_days or {}).items()}
     for d, cells in built.items():
@@ -138,7 +138,7 @@ def main(argv=None):
                 since, lo = FIRST_DATE, FIRST_DATE.isoformat()
             else:
                 lo = (today - dt.timedelta(days=DAILY_DAYS)).isoformat()
-                since = today - dt.timedelta(days=DAILY_DAYS + baba.fetch_days("going"))
+                since = today - dt.timedelta(days=DAILY_DAYS + baba.fetch_days(baba.DEFAULT_BASELINE))
             wins, races = fetch_track(rest, track, since, today)
             samples = to_samples(track, wins, races)
             targets = {s[1] for s in samples if lo <= s[1] <= today.isoformat()}
