@@ -8,6 +8,7 @@
 2. t9_forecast.table(DATE, 'pre', OUTDIR) → OUTDIR/DATE_第9版_前日版.csv・.md(追い切り・材料の差し替えは t8 の関数に入れる = t9 が呼ぶ)
 2b. 談話の印 3 定数(danwa_marks)→ 束 t14(t14_bundle・第11版・2026-10)を前日の表に足す(どちらも失敗したら前のまま)。
 2c. 束 t14 を足せた日だけ、束 f10k(f10k_bundle・第12版・材料 1 万個のふるいの 60 列の木・2026-10)を足す(失敗・見張りで止まったら第11版のまま)。
+2a. --write のときだけ、走破指数 SI5(表の材料と同じ値)の直近 21 日分を nar_si5 に書く(si5_store・サイトの「指数」の列)。
 3. --write のときだけ nar_ai_marks に model='v3-9'・timing='morning' で書く(base_v1.write_marks = 朝の行は凍結・読み直し)。
    marks = 印の付いた馬(◎○▲△・順位の順)・score = 3 着以内の確率 p3′ × 100。
    meta = n・model・stamp・works の元・runners(全馬の num・p1 = 勝つ確率・p3 = 3 着以内の確率 p3′(表の値)・p3_raw = 上乗せ後の p3)。
@@ -136,7 +137,20 @@ def main():
         _dump_feats(day, out)
     cap = {}
     _capture(cap)
+    try:  # 走破指数 SI5 を控える(サイトの「指数」の列・計算は変えない・2026-10-26)
+        import si5_store
+        si5_store.install()
+    except Exception as e:  # noqa: BLE001
+        log('SI5 の控え 失敗', type(e).__name__, str(e)[:200])
     t9.table(day, 'pre', str(out))
+    if __import__('os').environ.get('V3_SI5_DUMP'):  # 照合・過去分の書き込み用: 控えた SI5 を全期間 parquet に出す(手元だけ)
+        si5_store.frame().to_parquet(__import__('os').environ['V3_SI5_DUMP'])
+    si5_all = __import__('os').environ.get('V3_SI5_ALL') == 'yes'
+    if write or si5_all:
+        try:  # 直近 21 日(si5_all = 2014〜前日の全部)の南関の SI5 を nar_si5 へ(失敗しても予想の表と書き込みは止めない)
+            si5_store.write(day, days=None if si5_all else si5_store.DAYS)
+        except Exception as e:  # noqa: BLE001
+            log('SI5 の保存 失敗', type(e).__name__, str(e)[:200])
     csv_path = out / f'{day}_第9版_前日版.csv'
     try:  # v29 の前日の土台(失敗しても予想の表と書き込みは止めない)
         import v29_gap

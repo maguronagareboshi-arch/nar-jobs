@@ -31,6 +31,10 @@ on:
         description: 'yes = DB の時計(pg_cron)からの起動。全レースの印が済みなら何もしない(手で回すときは no のまま)'
         required: false
         default: 'no'
+      si5_all:
+        description: 'yes = 走破指数 SI5 の過去分(2014〜前日)を全部 nar_si5 に書く(1 回だけ・write=no でも書く)'
+        required: false
+        default: 'no'
 
 concurrency:
   # 2026-10-15 master 以外の枝の試しの便は別の列(本番の待ちを消さない・本番は今までどおり nar-ai-v3)
@@ -311,6 +315,7 @@ jobs:
           V3_TANPYO: v3/tanpyo  # 全馬の短評の層の模型・前走の元(上の download tanpyo files)
           V3_DWBERT: v3/dwbert  # 談話の札の BERT(上の download dwbert files)
           V3_F3: v3/f3  # 決め 49 F3 の列の一覧・意味の札の表(上の download f3 files)
+          V3_SI5_ALL: ${{ github.event.inputs.si5_all }}  # 2026-10-26 yes = SI5 の過去分を全部書く(si5_store・1 回だけ)
         run: |
           set -o pipefail
           mkdir -p out
