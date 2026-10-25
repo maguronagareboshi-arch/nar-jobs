@@ -96,7 +96,15 @@ STD_DAYS = 365
 STD_DAYS_LEGACY = 1095   # 旧版(§104)。--baseline 1095 で使える
 SEASON_YEARS = 3         # season 版: 何年ぶん遡るか
 SEASON_PAD = 45          # season 版: 同じ暦日の前後 何日
-BASELINES = ("365", "1095", "season", "going")
+BASELINES = ("365", "1095", "season", "going", "classfirst")
+# going 版の退避の段(段= (層, 窓の日数))。層 b= 細かい帯・c= 字だけの帯・d= 場×距離
+GOING_STAGES = (("b", STD_DAYS), ("c", STD_DAYS), ("d", STD_DAYS))
+# classfirst(2026-10-25 研究用・既定ではない)= クラスを先に守る 5 段。帯の窓だけ 3 年まで延ばす
+CLASSFIRST_STAGES = (("b", STD_DAYS), ("b", STD_DAYS_LEGACY), ("c", STD_DAYS), ("c", STD_DAYS_LEGACY),
+                     ("d", STD_DAYS))
+GOING_LIKE = ("going", "classfirst")
+# 帯が読めない走(band_of が None)の扱い: "dist"= 場×距離の基準へ落とす(going の今まで)/"drop"= その日の値から外す
+NONE_BAND_DEFAULT = {"going": "dist", "classfirst": "drop"}
 GOING_BASE = "良"          # going 版の d の物差し
 TOP_N = 5                # going 版(T5)で使う着順の上限(1〜5着)
 MIN_HORSES = 3           # going 版(T5): レース差を出す最少頭数
@@ -199,6 +207,8 @@ def fetch_days(baseline):
     """標準を作るのに何日ぶんの時計を読めばよいか(表示する90日ぶんの一番古い日から見た遡り)"""
     if baseline == "season":
         return 365 * SEASON_YEARS + SEASON_PAD + 30
+    if baseline == "classfirst":                      # 帯の 3 年の段のぶん(going 版の読み方は変えない)
+        return max(sp for _, sp in CLASSFIRST_STAGES) + 30
     return (STD_DAYS_LEGACY if baseline == "1095" else STD_DAYS) + 30
 
 
@@ -270,43 +280,74 @@ def day_cell(day_rows, by_band, by_dist, d, baseline):
     return round(statistics.median(devs), 1), len(devs), devs
 
 
-def day_cell_going(day_rows, by_band_g, by_dist_g, d):
+def day_cell_going(day_rows, by_band_g, by_dist_g, d, stages=None, none_band="dist", info=None):
     """going 版(T5)の1つの日×場。day_rows= [(dist, band, time, going, race_no, finish)]。
     by_band_g[(dist, band, going, finish)] / by_dist_g[(dist, going, finish)] = 日付昇順の (date, time)。
     退避は 3 段(9/28)= 細かい帯(C1)→ 粗い帯(字だけ・by_band_g[(dist, "*C", going, finish)])→ 場×距離。
     going を良に固定(d)/その走の going(g)にして、各段とも同じ going・同じ着順で引く。
     レース差= そのレースの 1〜5着の差の中央値(MIN_HORSES 頭以上)。日×場= レース差の中央値。
-    戻り= {"d","n","g","ng","devs"} のうち出せたものだけ(MIN_RACES R 未満は載せない。n/ng はレース数)"""
-    ranges = baseline_ranges(d, "going")
+    戻り= {"d","n","g","ng","devs"} のうち出せたものだけ(MIN_RACES R 未満は載せない。n/ng はレース数)
+    stages   : 退避の段 ((層, 窓の日数), …)。None= GOING_STAGES(今の本番)
+    none_band: 帯なしの走を "dist"= 場×距離へ落とす(今の本番)/"drop"= 外す
+    info     : dict を渡すと研究用の内訳を入れる(本番は渡さない)=
+               reach_d/reach_g= 段ごとの時計の本数(最後の要素= 基準なし)・drop= 外した時計の本数・
+               race_d/race_g= {R: レース差}・stage_d/stage_g= {R: [使った段の番号…]}"""
+    stages = stages or GOING_STAGES
+    rng_of = {sp: [((d - dt.timedelta(days=sp)).isoformat(), d.isoformat())] for _, sp in stages}
     cache = {}
 
     def med_of(dist, band, going, fin):
         cb = coarse_key(band)
-        for k, src, kk in ((("b", dist, band, going, fin), by_band_g, (dist, band, going, fin)),
-                           (("c", dist, cb, going, fin), by_band_g, (dist, cb, going, fin)),
-                           (("d", dist, going, fin), by_dist_g, (dist, going, fin))):
-            if k[0] != "d" and not k[2]:
+        for i, (lv, sp) in enumerate(stages):
+            if lv == "b":
+                k, src, kk = ("b", dist, band, going, fin, sp), by_band_g, (dist, band, going, fin)
+            elif lv == "c":
+                k, src, kk = ("c", dist, cb, going, fin, sp), by_band_g, (dist, cb, going, fin)
+            else:
+                k, src, kk = ("d", dist, going, fin, sp), by_dist_g, (dist, going, fin)
+            if lv != "d" and not k[2]:
                 continue
             m = cache.get(k, "?")
             if m == "?":
-                v = _vals_in(src.get(kk, []), ranges)
+                v = _vals_in(src.get(kk, []), rng_of[sp])
                 m = statistics.median(v) if len(v) >= MIN_BAND else None
                 cache[k] = m
             if m is not None:
-                return m
-        return None
+                return m, i
+        return None, -1
 
-    per_d, per_g = {}, {}
+    if info is not None:
+        for nm in ("d", "g"):
+            info["reach_" + nm] = [0] * (len(stages) + 1)
+            info["race_" + nm], info["stage_" + nm] = {}, {}
+        info["drop"] = 0
+    per_d, per_g, st_d, st_g = {}, {}, {}, {}
     for dist, band, t, going, rno, fin in day_rows:
         if not fin or fin > TOP_N:
             continue
-        m = med_of(dist, band, GOING_BASE, fin)
+        if band is None and none_band == "drop":
+            if info is not None:
+                info["drop"] += 1
+            continue
+        m, i = med_of(dist, band, GOING_BASE, fin)
+        if info is not None:
+            info["reach_d"][i] += 1
         if m is not None:
             per_d.setdefault(rno, []).append(t - m)
+            st_d.setdefault(rno, []).append(i)
         if going:
-            m = med_of(dist, band, going, fin)
+            m, i = med_of(dist, band, going, fin)
+            if info is not None:
+                info["reach_g"][i] += 1
             if m is not None:
                 per_g.setdefault(rno, []).append(t - m)
+                st_g.setdefault(rno, []).append(i)
+    if info is not None:
+        for nm, per, st in (("d", per_d, st_d), ("g", per_g, st_g)):
+            for r_, v in per.items():
+                if len(v) >= MIN_HORSES:
+                    info["race_" + nm][r_] = statistics.median(v)
+                    info["stage_" + nm][r_] = st[r_]
     dv = [statistics.median(v) for _, v in sorted(per_d.items(), key=lambda kv: str(kv[0]))
           if len(v) >= MIN_HORSES]
     gv = [statistics.median(v) for _, v in sorted(per_g.items(), key=lambda kv: str(kv[0]))
@@ -335,7 +376,8 @@ def _norm(samples):
     return [tuple(s_[:8]) if len(s_) >= 8 else tuple(s_[:6]) + (None, 1) for s_ in samples]
 
 
-def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=False):
+def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=False, none_band=None,
+               info_of=None):
     """as-of の馬場差を組む。
       samples  : [(track, date, dist, band, time, going, race_no, finish)]  1〜5着の時計(標準の窓ぶん全部)
                  going 版は 1〜5着(T5)で組む。旧版(season/365/1095)は finish=1 だけ。6 要素なら勝ち時計とみなす
@@ -343,12 +385,16 @@ def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=
       frozen   : 前回の blob の days(確定済みは据え置く)
       戻り     : ({日: {場prefix: {d,n[,p]}}}, 組み直した場日の数, {(日,場): 偏差列})
     ⛔p=true(暫定)= その日がまだ終わっていない(=当日)。終わったレースだけから出した途中の値。
+      none_band: going/classfirst の帯なしの走の扱い("dist"/"drop")。None= NONE_BAND_DEFAULT(going は今まで通り "dist")
+      info_of  : dict を渡すと {(日, 場): day_cell_going の内訳} を入れる(研究用)
     """
     today = today or _today_jst()
     frozen = frozen or {}
     samples = _norm(samples)
-    if baseline != "going":
+    if baseline not in GOING_LIKE:
         samples = [s_ for s_ in samples if s_[7] == 1]
+    stages = CLASSFIRST_STAGES if baseline == "classfirst" else GOING_STAGES
+    none_band = none_band or NONE_BAND_DEFAULT.get(baseline, "dist")
     by_band_all, by_dist_all = {}, {}
     for track, date, dist, band, t, _g, _rno, _fin in sorted(samples, key=lambda s: s[1]):
         by_dist_all.setdefault(track, {}).setdefault((dist,), []).append((date, t))
@@ -358,7 +404,7 @@ def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=
     for track, date, dist, band, t, _g, rno, fin in samples:
         if date in targets:
             per_day.setdefault((date, track), []).append((dist, band, t, _g, rno, fin))
-    if baseline == "going":
+    if baseline in GOING_LIKE:
         by_band_gg, by_dist_gg = {}, {}
         for track, date, dist, band, t, _g, _rno, fin in sorted(samples, key=lambda s: s[1]):
             if not _g or not fin or fin > TOP_N:
@@ -385,8 +431,12 @@ def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=
                     out.setdefault(date, {})[prefix] = old
                 continue
             dd = dt.date.fromisoformat(date)
-            if baseline == "going":
-                c = day_cell_going(rows, by_band_gg.get(track, {}), by_dist_gg.get(track, {}), dd)
+            if baseline in GOING_LIKE:
+                inf = {} if info_of is not None else None
+                c = day_cell_going(rows, by_band_gg.get(track, {}), by_dist_gg.get(track, {}), dd,
+                                   stages=stages, none_band=none_band, info=inf)
+                if inf is not None:
+                    info_of[(date, track)] = inf
                 if "d" not in c and "g" not in c:
                     continue
                 cell = {k: c[k] for k in ("d", "g", "n", "ng") if k in c}
