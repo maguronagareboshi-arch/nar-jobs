@@ -1,0 +1,39 @@
+# ev_coef:v2 の材料(DB 分・区分 0-5 から 60+)。手動だけ・1 回きりの研究便。
+# ⛔読むだけ(REST の単純 select)。nar_meta にも他の表にも書かない。repo にも commit しない(成果物 1 日で消える)。
+# ⛔公開 repo= 出力はレースの鍵を落とした集計だけ(cloud/ev_coef_v2_db.py の説明)。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: ev-coef-v2-db
+on:
+  workflow_dispatch:
+    inputs:
+      from:
+        description: 'from (YYYY-MM-DD)'
+        required: false
+        default: '2026-09-02'
+      to:
+        description: 'to (YYYY-MM-DD)'
+        required: false
+        default: '2026-10-24'
+permissions:
+  contents: read
+concurrency:
+  group: ev-coef-v2-db
+  cancel-in-progress: false
+jobs:
+  audit:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: collect from db (read only)
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          FROM_IN: ${{ github.event.inputs.from }}
+          TO_IN: ${{ github.event.inputs.to }}
+        run: python3 cloud/ev_coef_v2_db.py --from "$FROM_IN" --to "$TO_IN" --out out/ev_coef_v2_db
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ev-coef-v2-db
+          path: out/ev_coef_v2_db/agg.json
+          retention-days: 1
