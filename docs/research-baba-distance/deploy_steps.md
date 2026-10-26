@@ -18,12 +18,12 @@ git push origin wip/baba-dist-20261026:master
 ## 2. 作り直し便を 1 回(確定済みの日にも d1/g1 を付ける)
 
 ```powershell
-gh workflow run baba-rebuild.yml --repo (git remote get-url origin)
+gh workflow run baba-rebuild.yml --repo maguronagareboshi-arch/nar-jobs
 ```
 数分後に結果を見る(緑なら次へ。nar-refresh と同じ順番待ちの組なので、定時便の後に回ることがある):
 
 ```powershell
-gh run list --workflow baba-rebuild.yml --limit 1 --repo (git remote get-url origin)
+gh run list --workflow baba-rebuild.yml --limit 1 --repo maguronagareboshi-arch/nar-jobs
 ```
 
 ## 3. nar-viewer を本番へ(補正タイムの直し)
