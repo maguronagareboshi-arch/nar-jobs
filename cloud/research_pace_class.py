@@ -18,7 +18,9 @@ NANKAN = ("大井", "船橋", "川崎", "浦和")
 WORD = {"速い": "ハイ", "平均": "ミドル", "遅い": "スロー"}
 CONFIGS = [("今の道(場×距離・1年)", 365, False, True), ("クラス別・1年", 365, True, True),
            ("クラス別・2年", 730, True, True), ("クラス別・3年", 1095, True, True),
-           ("クラス別・1年・高知も四分位", 365, True, False)]
+           ("クラス別・1年・高知も四分位", 365, True, False),
+           ("クラス別・2年・高知も四分位", 730, True, False),
+           ("クラス別・3年・高知も四分位", 1095, True, False)]
 
 
 def nk_bucket(c):
@@ -109,11 +111,12 @@ def main():
           "| 場 | " + " | ".join(n for n, *_ in CONFIGS) + " |", "|---" * (len(CONFIGS) + 1) + "|"]
     tracks = sorted({k[0] for k in res[CONFIGS[0][0]][0]})
     allv = {n: [0.0, 0] for n, *_ in CONFIGS}
-    for t in tracks + ["全場"]:
+    exk = {n: [0.0, 0] for n, *_ in CONFIGS}      # 金沢を除く(2026 年に変わった= ユーザー 10/26)
+    for t in tracks + ["全場", "全場(金沢除く)"]:
         cells = []
         for name, *_ in CONFIGS:
-            if t == "全場":
-                a = allv[name]
+            if t in ("全場", "全場(金沢除く)"):
+                a = allv[name] if t == "全場" else exk[name]
                 cells.append("%.1f" % (a[0] / a[1]) if a[1] else "—")
                 continue
             m = res[name][0]
@@ -129,6 +132,9 @@ def main():
                     sn += n
             allv[name][0] += sw
             allv[name][1] += sn
+            if t != "金沢":
+                exk[name][0] += sw
+                exk[name][1] += sn
             cells.append("%.1f" % (sw / sn) if sn else "—")
         L.append("| %s | %s |" % (t, " | ".join(cells)))
 
