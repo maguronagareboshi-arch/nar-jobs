@@ -55,7 +55,11 @@ BASE, NONE_BAND = baba.DEFAULT_BASELINE, "drop"
 SHRINK = 5
 MIN_PRIOR = 5
 DBANDS = (("〜1200m", 0, 1250), ("1300〜1600m", 1251, 1650), ("1700m〜", 1651, 99999))
-METH = {"a": "(a) 今のまま", "b": "(b) 1000m あたり×距離", "c": "(c) (b)+少ない日は寄せる"}
+METH = {"a": "(a) 今のまま", "b": "(b) 1000m あたり×距離", "c": "(c) (b)+少ない日は寄せる",
+        "t": "(t) (a)×0.75(今の画面の倍率に近い)", "s": "(s) (b)×0.76"}
+SEC = ("a", "t")                                  # 秒のまま引く直し方(他は 1000m あたり×距離)
+# AI_D5= 南関の予想 AI の日の値(nar_meta nankan_d5 の形 {"days": {日: {prefix: D5}}})の json。あれば南関で比べる
+AI_D5 = os.environ.get("AI_D5") or None
 
 
 def pct(x):
@@ -249,10 +253,18 @@ def run(rest, out_path=OUT, nb=None, cache=None, log=print):
             cv, _ = shrink_all(bd[mode], kday)
             for d, v in cv.items():
                 VAL.setdefault(("c", mode), {})[(track, d)] = v
-                if d >= TQ0s:            # 照合= 本番の build_days が付けた d1/g1 と (c) が同じか
+            for d, (bv, _n) in bd[mode].items():
+                if d >= TQ0s:            # 照合= 本番の build_days が付けた d1/g1 と (b) が同じか
                     got = ((days.get(d) or {}).get(pf) or {}).get(mode + "1")
                     MATCH[mode][0] += 1
-                    MATCH[mode][1] += int(got is not None and abs(got - v) < 0.005)
+                    MATCH[mode][1] += int(got is not None and abs(got - bv) < 0.005)
+        for mode in "dg":
+            for k_, v_ in list(VAL[("a", mode)].items()):
+                if k_[0] == track:
+                    VAL.setdefault(("t", mode), {})[k_] = v_ * 0.75
+            for k_, v_ in list(VAL[("b", mode)].items()):
+                if k_[0] == track:
+                    VAL.setdefault(("s", mode), {})[k_] = v_ * 0.76
         lap(f"{track} 1〜5着 {len(wins)}・レース {len(races)}・全着順 {len(runs)}")
 
     L = []
@@ -296,7 +308,7 @@ def run(rest, out_path=OUT, nb=None, cache=None, log=print):
             col = f"{m}{mode}"
             dm = VAL.get((m, mode), {})
             v = np.array([dm.get((t, d), np.nan) for t, d in zip(r2.p_track, r2.p_race_date)], dtype=float)
-            r2[col] = v if m == "a" else v * r2.p_dist.values.astype(float) / 1000.0     # 引く秒
+            r2[col] = v if m in SEC else v * r2.p_dist.values.astype(float) / 1000.0     # 引く秒
             VC.append(col)
     r2["nr"] = [NR.get("d", {}).get((t, d), 0) for t, d in zip(r2.p_track, r2.p_race_date)]
     r2 = r2.dropna(subset=VC)
@@ -389,35 +401,60 @@ def run(rest, out_path=OUT, nb=None, cache=None, log=print):
     table(["場", "組", "補正なし"] + [METH[m] for m in METH] + ["(b)−(a)", "(c)−(a)"], rows)
 
     # 場ごとの倍率と当てになりやすさ((c) の d・nar-site RESULT_baba_nextrun_prod_20261025.md §4 と同じ決め方)
-    say("### 場ごとのおすすめ倍率と当てになりやすさ((c) の良馬場比 d)\n")
-    say("サイトの持ちタイム表の倍率(js/pages/race.js AN6_BABA_SCALE)を (c) 用に作り直すための表。決め方は nar-site "
-        "RESULT_baba_nextrun_prod_20261025.md §4 と同じ= 場ごとの k を全体の k へ縮める(経験ベイズ・τ² = 場ごとの k の分散 − 誤差² の平均)。"
-        "誤差= 95% 区間の幅 ÷ 3.92。おすすめ倍率= 縮めた k を 0〜1 に収めて小数 1 桁。"
-        "当てになりやすさ: 高い= 縮めた k が 0.8 以上で、補正で的中率が有意に上がる/低い= 縮めた k が 0.4 未満か、補正で有意に下がる/ふつう= それ以外。\n")
-    K_ALL = float(summ[("全場", "d", "全部", "c")][1].split(" ")[0])
-    kt = []
-    for track in TRACKS:
-        MK = ptrack == track
-        if MK.sum() < 200:
-            continue
-        ks = kfit(MK, "cd")
-        k0 = float(ks.split(" ")[0])
-        lo_, hi_ = (float(x) for x in ks.split("[")[1].rstrip("]").split(", "))
-        bt = boot(H["cd"], MK) - boot(H["Z"], MK)
-        kt.append((track, int(MK.sum()), k0, (hi_ - lo_) / 3.92, H["cd"][MK].mean() - H["Z"][MK].mean(),
-                   *np.percentile(bt, [2.5, 97.5])))
-    ka = np.array([x[2] for x in kt])
-    se = np.array([x[3] for x in kt])
-    tau2 = max(float(np.var(ka, ddof=1) - np.mean(se ** 2)), 1e-6)
-    rows = []
-    for (track, npair, k0, s0, dd, lo_, hi_), in_ in zip(kt, range(len(kt))):
-        ksh = (k0 / s0 ** 2 + K_ALL / tau2) / (1 / s0 ** 2 + 1 / tau2)
-        rec = min(max(round(ksh, 1), 0.0), 1.0)
-        lv = "高い" if ksh >= 0.8 and lo_ > 0 else ("低い" if ksh < 0.4 or hi_ < 0 else "ふつう")
-        rows.append([track, f"{npair:,}", f"{k0:.2f}", f"{s0:.2f}", f"{ksh:.2f}", f"{rec:.1f}",
-                     f"{fd(dd)} [{fd(lo_)}, {fd(hi_)}]", lv])
-    say(f"全体の k = {K_ALL:.2f}・τ² = {tau2:.4f}\n")
-    table(["前走の場", "組の数", "場の k", "誤差", "縮めた k", "おすすめ倍率", "補正の差(点)と 95% 区間", "当てになりやすさ"], rows)
+    for SM, SNM in (("b", "(b)"), ("c", "(c)")):
+        say(f"### 場ごとのおすすめ倍率と当てになりやすさ({SNM} の良馬場比 d)\n")
+        say("サイトの持ちタイム表の倍率(js/pages/race.js AN6_BABA_SCALE_1K)を作るための表。決め方は nar-site "
+            "RESULT_baba_nextrun_prod_20261025.md §4 と同じ= 場ごとの k を全体の k へ縮める(経験ベイズ・τ² = 場ごとの k の分散 − 誤差² の平均)。"
+            "誤差= 95% 区間の幅 ÷ 3.92。おすすめ倍率= 縮めた k を 0〜1 に収めて小数 1 桁。"
+            "当てになりやすさ: 高い= 縮めた k が 0.8 以上で、補正で的中率が有意に上がる/低い= 縮めた k が 0.4 未満か、補正で有意に下がる/ふつう= それ以外。"
+            "⛔倍率も全体の k も測る年と同じ年で作っている(前の版と同じ作り方・少し甘めに出る)。\n")
+        K_ALL = float(summ[("全場", "d", "全部", SM)][1].split(" ")[0])
+        kt = []
+        for track in TRACKS:
+            MK = ptrack == track
+            if MK.sum() < 200:
+                continue
+            ks = kfit(MK, SM + "d")
+            k0 = float(ks.split(" ")[0])
+            lo_, hi_ = (float(x) for x in ks.split("[")[1].rstrip("]").split(", "))
+            bt = boot(H[SM + "d"], MK) - boot(H["Z"], MK)
+            kt.append((track, int(MK.sum()), k0, (hi_ - lo_) / 3.92, H[SM + "d"][MK].mean() - H["Z"][MK].mean(),
+                       *np.percentile(bt, [2.5, 97.5])))
+        ka = np.array([x[2] for x in kt])
+        se = np.array([x[3] for x in kt])
+        tau2 = max(float(np.var(ka, ddof=1) - np.mean(se ** 2)), 1e-6)
+        rows = []
+        for track, npair, k0, s0, dd, lo_, hi_ in kt:
+            ksh = (k0 / s0 ** 2 + K_ALL / tau2) / (1 / s0 ** 2 + 1 / tau2)
+            rec = min(max(round(ksh, 1), 0.0), 1.0)
+            lv = "高い" if ksh >= 0.8 and lo_ > 0 else ("低い" if ksh < 0.4 or hi_ < 0 else "ふつう")
+            rows.append([track, f"{npair:,}", f"{k0:.2f}", f"{s0:.2f}", f"{ksh:.2f}", f"{rec:.1f}",
+                         f"{fd(dd)} [{fd(lo_)}, {fd(hi_)}]", lv])
+        say(f"全体の k = {K_ALL:.2f}・τ² = {tau2:.4f}\n")
+        table(["前走の場", "組の数", "場の k", "誤差", "縮めた k", "おすすめ倍率", "補正の差(点)と 95% 区間", "当てになりやすさ"], rows)
+
+    # 南関 4 場= 予想 AI の日の値(D5・1000m あたり)にそろえた場合
+    if AI_D5:
+        import json as _js
+        aid = _js.load(open(AI_D5, encoding="utf-8")).get("days") or {}
+        say("### 南関 4 場: 予想 AI の日の値(D5)にそろえた場合(良馬場比 d の組と同じ組)\n")
+        say("AI の値= 走破指数 SI5 の計算に使う 1000m あたりのその日の値(手元の t4_base_2014_2026 から t5_open.si5_of で作った値)。"
+            "引く秒 = D5 × 前走の距離 / 1000(倍率なし= SI5 と同じ)。\n")
+        av = np.array([(aid.get(d) or {}).get(baba.TRACK2PREFIX.get(t, "")) for t, d in zip(pr.p_track, pr.p_race_date_i)], dtype=float)
+        av_j = np.array([(aid.get(d) or {}).get(baba.TRACK2PREFIX.get(t, "")) for t, d in zip(pr.p_track, pr.p_race_date_j)], dtype=float)
+        DB["AId"] = (av - av_j) * pdist / 1000.0
+        okm = np.isin(ptrack, NANKAN) & np.isfinite(DB["AId"])
+        DB["AId"] = np.where(okm, DB["AId"], 0.0)
+        H["AId"] = hits(dtv - DB["AId"])
+        rows = []
+        for bnm, lo, hi in (("全部", 0, 99999),) + DBANDS:
+            MK = okm & (pdist >= lo) & (pdist <= hi)
+            if MK.sum() < 200:
+                continue
+            for c, nm in (("ad", METH["a"]), ("bd", METH["b"]), ("td", METH["t"]), ("AId", "予想 AI の D5")):
+                rows.append([bnm, f"{int(MK.sum()):,}", pct(H["Z"][MK].mean()), nm, pct(H[c][MK].mean()),
+                             dif(H[c], H["Z"], MK), "—" if c == "ad" else dif(H[c], H["ad"], MK), kfit(MK, c)])
+        table(["距離", "組", "補正なし", "直し方", "的中率", "補正なしとの差(点)", "(a) との差(点)", "縮尺 k"], rows)
 
     # 日のレース数ごと((c) が効くはずの少ない日)
     say("### 前走の日のレース数ごと(良馬場比 d・全場・全距離・的中率)\n")
@@ -464,7 +501,7 @@ def run(rest, out_path=OUT, nb=None, cache=None, log=print):
     table(["値", "直し方", "日×場", "相関 r", "差の絶対値の平均"], rows)
 
     # ---------- 照合 ----------
-    say("## 照合(本番の cloud/baba.py build_days が付けた d1/g1 と、この台本の (c) の値)\n")
+    say("## 照合(本番の cloud/baba.py build_days が付けた d1/g1 と、この台本の (b) の値)\n")
     say("一致= 小数 2 桁の値が同じ。前走の日の範囲(" + TQ0s + "〜" + D1s + ")の日×場。\n")
     table(["値", "日×場", "一致"], [[m_, f"{MATCH[m_][0]:,}", f"{MATCH[m_][1]:,}({MATCH[m_][1] / max(MATCH[m_][0], 1) * 100:.1f}%)"]
                                    for m_ in "dg"])
@@ -477,7 +514,7 @@ def run(rest, out_path=OUT, nb=None, cache=None, log=print):
         rows.append([METH[m], f"{len(v):,}", f"{np.mean(v):+.3f}", f"{np.std(v):.3f}",
                      f"{np.percentile(v, 5):+.2f}〜{np.percentile(v, 95):+.2f}"])
     table(["直し方", "日×場", "平均", "ばらつき(標準偏差)", "5〜95%"], rows)
-    say("(a) は秒・(b)(c) は 1000m あたりの秒。\n")
+    say("(a)(t) は秒・(b)(c)(s) は 1000m あたりの秒。\n")
 
     # ---------- まとめ ----------
     say("## まとめ(数字だけ・全場)\n")

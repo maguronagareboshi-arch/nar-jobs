@@ -151,6 +151,10 @@ def main():
             si5_store.write(day, days=None if si5_all else si5_store.DAYS)
         except Exception as e:  # noqa: BLE001
             log('SI5 の保存 失敗', type(e).__name__, str(e)[:200])
+        try:  # 10/26 南関の日の馬場の速さ D5 を nar_meta nankan_d5 へ(サイトの馬場差を予想 AI にそろえる・失敗しても止めない)
+            si5_store.write_d5(day, days=None if si5_all else si5_store.DAYS)
+        except Exception as e:  # noqa: BLE001
+            log('D5 の保存 失敗', type(e).__name__, str(e)[:200])
     csv_path = out / f'{day}_第9版_前日版.csv'
     try:  # v29 の前日の土台(失敗しても予想の表と書き込みは止めない)
         import v29_gap

@@ -19,9 +19,10 @@
           # まだ終わっていない日(=当日)は {"d":…,"n":…,"p":true}= 暫定。翌朝の便で確定して p が消える
 
   ⛔2026-10-26 距離の直し(going/classfirst のセルに "d1"/"g1" を足す・d/g は今のまま)
-    d1/g1 = 1000m あたりの秒(小数 2 桁)。レース差を距離で割って日の中央値を作り、n/(n+SHRINK_K) で
-    場×主な馬場状態のふだん(前日までの 365 日)へ寄せる。補正タイムは 時計 − d1 × その走の距離 / 1000。
+    d1/g1 = 1000m あたりの秒(小数 2 桁)= レース差を距離で割った日の中央値。
+    補正タイムは 時計 − d1 × その走の距離 / 1000 × 場ごとの倍率(画面)。
     今までの d を距離によらず引くと 〜1200m で約 2 倍の引きすぎだった(docs/research-baba-distance/result.md)。
+    ⛔南関 4 場は予想 AI の日の値(nar_meta nankan_d5= SI5 と同じ D5)にそろえる(overlay_ai・"s":"ai")。
     ⛔切替の初回だけ baba-rebuild 便(--rebuild-all)で確定済みの日にも d1/g1 を付ける。
 
   ⛔as-of(§17 監査 2026-09-22 で「as-of でない」と判定された点の直し)
@@ -117,13 +118,14 @@ DEFAULT_BASELINE = "classfirst"
 GOING_BASE = "良"          # going 版の d の物差し
 TOP_N = 5                # going 版(T5)で使う着順の上限(1〜5着)
 MIN_HORSES = 3           # going 版(T5): レース差を出す最少頭数
-# ⛔2026-10-26 距離の直し (c)(ユーザー決定)。d/g(その日の秒)は今のまま残し(札・言葉・閾値はこれ)、
-#   補正タイム用に d1/g1(1000m あたりの秒・小数 2 桁)を足す。画面は 時計 − d1 × その走の距離/1000。
-#   日の値を n/(n+SHRINK_K) だけ使い、残りを場×主な馬場状態のふだん(前日までの PRIOR_DAYS 日)へ寄せる。
-#   研究(全 14 場・2025-09〜2026-08)で次走の的中 69.14→69.52%・縮尺 k 0.75→1.00(docs/research-baba-distance)
-SHRINK_K = 5
-PRIOR_DAYS = 365
-PRIOR_MIN = 5
+# ⛔2026-10-26 距離の直し(ユーザー決定)。d/g(その日の秒)は今のまま残し(札・言葉・閾値はこれ)、
+#   補正タイム用に d1/g1(1000m あたりの秒・小数 2 桁)を足す。画面は 時計 − d1 × その走の距離/1000 × 場ごとの倍率。
+#   研究(全 14 場・2025-09〜2026-08・docs/research-baba-distance): 今の画面(d × 倍率)に近い「d × 0.75」に対し、
+#   距離の直しの上積みは全体 +0.13 点・〜1200m +0.45 点(監査で確かめた)。ふだんへ寄せる案 (c) は上積み 0 だったので入れない
+# ⛔南関 4 場は予想 AI の日の値にそろえる(2026-10-26 ユーザー決定)= 便 nar-ai-v3 の si5_store が書く nar_meta nankan_d5
+#   ({"days": {日: {prefix: D5}}}・1000m あたり・走破指数 SI5 の計算に使う値そのもの)
+AI_META_KEY = "nankan_d5"
+AI_TRACKS = ("浦和", "船橋", "大井", "川崎")
 
 Z = str.maketrans("ＡＢＣ０１２３４５６７８９", "ABC0123456789")
 
@@ -224,7 +226,7 @@ def fetch_days(baseline):
     if baseline == "season":
         return 365 * SEASON_YEARS + SEASON_PAD + 30
     if baseline == "classfirst":                      # 帯の 3 年の段のぶん(going 版の読み方は変えない)
-        return max(sp for _, sp in CLASSFIRST_STAGES) + 30 + PRIOR_DAYS   # + d1/g1 のふだんの 365 日
+        return max(sp for _, sp in CLASSFIRST_STAGES) + 30
     return (STD_DAYS_LEGACY if baseline == "1095" else STD_DAYS) + 30
 
 
@@ -371,33 +373,15 @@ def day_cell_going(day_rows, by_band_g, by_dist_g, d, stages=None, none_band="di
           if len(v) >= MIN_HORSES]
     dv, gv = [v for _, v in dr], [v for _, v in gr]
     out = {}
-    # d1r/g1r(2026-10-26 距離の直し)= レース差を 1000m あたりに直した中央値(寄せる前・小数 2 桁)
+    # d1/g1(2026-10-26 距離の直し)= レース差を 1000m あたりに直した中央値(小数 2 桁)
     if len(dv) >= MIN_RACES:
         out["d"], out["n"], out["devs"] = round(statistics.median(dv), 1), len(dv), dv
-        out["d1r"] = round(statistics.median([v * 1000.0 / dist_r[r_] for r_, v in dr]), 2)
+        out["d1"] = round(statistics.median([v * 1000.0 / dist_r[r_] for r_, v in dr]), 2)
     if len(gv) >= MIN_RACES:
         out["g"], out["ng"] = round(statistics.median(gv), 1), len(gv)
-        out["g1r"] = round(statistics.median([v * 1000.0 / dist_r[r_] for r_, v in gr]), 2)
+        out["g1"] = round(statistics.median([v * 1000.0 / dist_r[r_] for r_, v in gr]), 2)
     return out
 
-
-def shrink_1k(raw, k_of, d, n, mode):
-    """距離の直し (c)(2026-10-26 ユーザー決定・docs/research-baba-distance/result.md)。
-    raw= {日: {"d1r","g1r",…}}(1 場ぶん・寄せる前の 1000m あたりの値)・k_of= {日: 主な馬場状態}。
-    日 d の値 = (n·その日の値 + SHRINK_K·ふだん) / (n + SHRINK_K)。n= その日のレース数。
-    ふだん= 同じ場・同じ主な馬場状態の、前日までの 365 日の寄せる前の値の中央値(PRIOR_MIN 日未満なら場の全馬場・それも無ければ 0)"""
-    key = mode + "1r"
-    v = raw[d][key]
-    lo = (dt.date.fromisoformat(d) - dt.timedelta(days=PRIOR_DAYS)).isoformat()
-    past = [x for x in raw if lo <= x < d and key in raw[x]]
-    same = [raw[x][key] for x in past if k_of.get(x) == k_of.get(d)]
-    if len(same) >= PRIOR_MIN:
-        prior = statistics.median(same)
-    elif len(past) >= PRIOR_MIN:
-        prior = statistics.median([raw[x][key] for x in past])
-    else:
-        prior = 0.0
-    return round((n * v + SHRINK_K * prior) / (n + SHRINK_K), 2)
 
 
 def _main_going(rows):
@@ -440,14 +424,9 @@ def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=
         by_dist_all.setdefault(track, {}).setdefault((dist,), []).append((date, t))
         if band:
             by_band_all.setdefault(track, {}).setdefault((dist, band), []).append((date, t))
-    # going 版は d1/g1 のふだん(前日までの PRIOR_DAYS 日)のため、出す日より前の日も組む(出しはしない)
-    need_lo = need_hi = None
-    if baseline in GOING_LIKE and targets:
-        need_lo = (dt.date.fromisoformat(min(targets)) - dt.timedelta(days=PRIOR_DAYS)).isoformat()
-        need_hi = max(targets)
     per_day = {}
     for track, date, dist, band, t, _g, rno, fin in samples:
-        if date in targets or (need_lo and need_lo <= date <= need_hi):
+        if date in targets:
             per_day.setdefault((date, track), []).append((dist, band, t, _g, rno, fin))
     if baseline in GOING_LIKE:
         by_band_gg, by_dist_gg = {}, {}
@@ -459,19 +438,6 @@ def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=
                 by_band_gg.setdefault(track, {}).setdefault((dist, band, _g, fin), []).append((date, t))
                 if coarse_key(band):        # 退避 2 段目(字だけの粗い帯)
                     by_band_gg[track].setdefault((dist, coarse_key(band), _g, fin), []).append((date, t))
-
-    # going 版の日×場をまとめて先に組む(確定済みの日も= 後の日のふだんに要る)。raw_of= {場: {日: {d1r,g1r}}}
-    cell_of, raw_of, k_of = {}, {}, {}
-    if baseline in GOING_LIKE:
-        for (date, track), rows in per_day.items():
-            inf = {} if (info_of is not None and date in targets) else None
-            c = day_cell_going(rows, by_band_gg.get(track, {}), by_dist_gg.get(track, {}), dt.date.fromisoformat(date),
-                               stages=stages, none_band=none_band, info=inf)
-            cell_of[(date, track)] = (c, inf)
-            k_of.setdefault(track, {})[date] = _main_going(rows)
-            rr = {k: c[k] for k in ("d1r", "g1r") if k in c}
-            if rr:
-                raw_of.setdefault(track, {})[date] = rr
 
     out, rebuilt, devs_of = {}, 0, {}
     tstr = today.isoformat()
@@ -490,16 +456,14 @@ def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=
                 continue
             dd = dt.date.fromisoformat(date)
             if baseline in GOING_LIKE:
-                c, inf = cell_of[(date, track)]
+                inf = {} if info_of is not None else None
+                c = day_cell_going(rows, by_band_gg.get(track, {}), by_dist_gg.get(track, {}), dd,
+                                   stages=stages, none_band=none_band, info=inf)
                 if inf is not None:
                     info_of[(date, track)] = inf
                 if "d" not in c and "g" not in c:
                     continue
-                cell = {k: c[k] for k in ("d", "g", "n", "ng") if k in c}
-                if "d1r" in c:
-                    cell["d1"] = shrink_1k(raw_of[track], k_of[track], date, c["n"], "d")
-                if "g1r" in c:
-                    cell["g1"] = shrink_1k(raw_of[track], k_of[track], date, c["ng"], "g")
+                cell = {k: c[k] for k in ("d", "g", "n", "ng", "d1", "g1") if k in c}
                 k = _main_going(rows)
                 if k:
                     cell["k"] = k
@@ -531,6 +495,44 @@ def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=
             devs_of[(date, track)] = r[2]
             rebuilt += 1
     return out, rebuilt, devs_of
+
+
+def overlay_ai(days, samples, ai):
+    """南関 4 場の日の値を予想 AI の D5(1000m あたり)にそろえる。days= {日: {prefix: セル}}(その場で書き換える)。
+    ai= {日: {prefix: D5}}。d1 = D5・d = D5 × その日のその場のレースの平均距離 / 1000(小数 1 桁)・"s":"ai" を付ける。
+    g/g1(同じ馬場状態比)は予想 AI に無いので今のまま。暫定(p)の日・AI の値が無い日・サイトのセルが無い日は触らない。
+    ⛔確定済みの日も毎回かぶせ直す(AI の値は確定すると動かない= 便より後に AI の値が届いた日も次の回で直る)。
+    戻り= かぶせた場日の数"""
+    dist_of = {}
+    for track, date, dist, _b, _t, _g, rno, _fin in _norm(samples):
+        if track in AI_TRACKS:
+            dist_of.setdefault((date, track), {})[rno] = dist
+    n = 0
+    for date, cells in days.items():
+        for track in AI_TRACKS:
+            pf = TRACK2PREFIX[track]
+            v = (ai.get(date) or {}).get(pf)
+            c = cells.get(pf)
+            ds = dist_of.get((date, track))
+            if v is None or not c or c.get("p") or not ds:
+                continue
+            c["d1"] = round(float(v), 2)
+            c["d"] = round(float(v) * statistics.mean(ds.values()) / 1000.0, 1)
+            c["s"] = "ai"
+            n += 1
+    return n
+
+
+def read_ai(base, key):
+    """nar_meta nankan_d5 の days。読めなければ {}(南関もサイトの計算のまま)"""
+    try:
+        _, body = req(base, key, f"/rest/v1/nar_meta?select=value&key=eq.{AI_META_KEY}")
+        rows = json.loads(body)
+        v = rows[0].get("value") if rows else None
+        return (v or {}).get("days") or {}
+    except Exception as e:                      # noqa: BLE001
+        log(f"⚠{AI_META_KEY} を読めない({e})= 南関もサイトの計算のまま")
+        return {}
 
 
 def main():
@@ -604,6 +606,8 @@ def main():
     days, rebuilt, devs = build_days(samples, targets, a.baseline, today=today,
                                      frozen=frozen, rebuild_all=a.rebuild_all)
     days = {d: v for d, v in days.items() if d >= lo}      # 90日の窓から出た日は落とす
+    if a.baseline in GOING_LIKE:
+        log(f"南関 4 場を予想 AI の日の値にそろえた: {overlay_ai(days, samples, read_ai(base, key))} 場日")
     n_cells = sum(len(v) for v in days.values())
     n_prov = sum(1 for v in days.values() for c in v.values() if c.get("p"))
     n_fb = sum(1 for v in days.values() for c in v.values() if c.get("b"))

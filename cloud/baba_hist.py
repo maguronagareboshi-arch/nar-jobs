@@ -7,7 +7,8 @@ going 版の d= 良馬場比 / g= 同じ馬場状態比)で、データのある
 公開バケット cond-stats の v1/baba-hist/<prefix>.json に場ごとに 1 本で上げる。計算は baba.build_days をそのまま呼ぶ。
 
   形 = {"v":1, "built":"YYYY-MM-DD", "track":"高知", "days": {"2026-02-02": {"d":-0.8, "g":0.1, "d1":-0.45, "g1":0.05, "k":"重"}, …}}
-       d1/g1(2026-10-26)= 補正タイム用の 1000m あたりの秒(baba.py の SHRINK_K の寄せ込み)。画面は 時計 − d1×距離/1000
+       d1/g1(2026-10-26)= 補正タイム用の 1000m あたりの秒。画面は 時計 − d1×距離/1000×場ごとの倍率。
+       ⛔南関 4 場は d1・d を予想 AI の日の値(nar_meta nankan_d5)にそろえ "s":"ai"(baba.overlay_ai・確定済みの日も毎回かぶせ直す)
        当日(まだ終わっていない日)は "p":true(暫定)。翌朝の便で確定して p が消える。
 
   ⛔確定した日は組み直さない(baba.py の frozen と同じ)。組むのは ファイルに無い日・前回 p の日・当日 だけ。
@@ -39,7 +40,7 @@ import cond_stats  # noqa: E402
 DIR = "baba-hist/"
 FIRST_DATE = dt.date(2014, 1, 1)     # nar_races の最古(2026-10-17 実測)
 DAILY_DAYS = 14                      # 毎朝 組み直す候補の日数(確定済みは据え置くので実際は p と新しい日だけ)
-KEEP = ("d", "g", "d1", "g1", "k", "p")   # d1/g1= 補正タイム用の 1000m あたり(2026-10-26)
+KEEP = ("d", "g", "d1", "g1", "k", "p", "s")   # d1/g1= 補正タイム用の 1000m あたり・s="ai"= 南関は予想 AI の値(2026-10-26)
 
 
 def log(msg):
@@ -96,6 +97,17 @@ def merge_days(prefix, samples, targets, old_days, today, rebuild_all):
     return dict(sorted(days.items())), rebuilt
 
 
+def read_ai(rest):
+    """nar_meta nankan_d5 の days(南関の予想 AI の日の値)。読めなければ {}= 南関もサイトの計算のまま"""
+    try:
+        rows = rest.get("nar_meta?select=value&key=eq.%s" % baba.AI_META_KEY)
+        v = rows[0].get("value") if rows else None
+        return (v or {}).get("days") or {}
+    except Exception as e:                           # noqa: BLE001
+        log("⚠%s を読めない(%s)= 南関もサイトの計算のまま" % (baba.AI_META_KEY, e))
+        return {}
+
+
 def read_old(rest, prefix):
     try:
         raw = rest.req("/storage/v1/object/%s/%s%s%s.json" % (cond_stats.BUCKET, cond_stats.ROOT, DIR, prefix))
@@ -130,6 +142,7 @@ def main(argv=None):
     if a.apply:
         cond_stats.ensure_bucket(rest)
     fails = {}
+    ai = None
     for prefix, track in venues:
         t0 = time.time()
         try:
@@ -150,6 +163,10 @@ def main(argv=None):
             targets = {d for d in targets if d >= ok_from}
             days, rebuilt = merge_days(prefix, samples, targets, old, today, a.rebuild_all)
             days = {d: v for d, v in days.items() if d >= ok_from}
+            if track in baba.AI_TRACKS:                  # 南関は予想 AI の日の値にそろえる(確定済みの日も毎回)
+                ai = read_ai(rest) if ai is None else ai
+                n_ai = baba.overlay_ai({d: {prefix: c} for d, c in days.items()}, samples, ai)
+                log("%s 予想 AI の日の値にそろえた %d 日" % (prefix, n_ai))
             doc = {"v": 1, "built": today.isoformat(), "track": track, "days": days}
             data = json.dumps(doc, ensure_ascii=False, separators=(",", ":")).encode("utf-8")
             first = next(iter(days), None)

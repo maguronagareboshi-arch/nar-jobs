@@ -9,6 +9,9 @@
 - 値 = 便が予想の材料に作る t5_open.si5_of(U)(= t5_base.make_si5)の SI5 そのもの。新しい定数は足さない。
 - 確定した日の値は後から動かない(2015〜21 の 25.5 万走で差 0)= 毎日は直近 DAYS 日だけ書き直す。
 - 表の nar_si5 は DB のトリガーで nar_runs.si5 に写り、サイトは今までの窓口(runs_*)で読む(sql/si5_store.sql)。
+- 2026-10-26 南関の「その日の馬場の速さ」D5(SI5 の計算に使う日×場の 1000m あたりの秒)も nar_meta nankan_d5 に書く
+  (write_d5)。サイトの馬場差(cloud/baba.py overlay_ai)が南関 4 場をこの値にそろえる= 予想 AI とサイトで同じ数字。
+  形 = {"built": 日, "days": {日: {prefix: D5(小数 2 桁)}}}。まだ無ければ全期間・あれば直近 DAYS 日を足し直す。
 """
 import sys
 from pathlib import Path
@@ -23,6 +26,8 @@ CONFLICT = 'track,race_date,race_no,runner_number'
 NANKAN = ['浦和', '船橋', '大井', '川崎']
 DAYS = 21
 CHUNK = 2000
+META = 'nankan_d5'
+PF = {'浦和': 'urawa', '船橋': 'funabashi', '大井': 'ooi', '川崎': 'kawasaki'}
 CACHE = {}
 
 
@@ -108,6 +113,43 @@ def write(day, days=DAYS):
     c = compare(x, read_back(lo, str(day)))
     log('nar_si5', lo, '〜', day, c)
     return c
+
+
+def d5_days(U=None, R=None):
+    """→ {日: {prefix: D5}}(南関・D5 のある日×場)。D5 は日×場で一つ(t5_base.make_si5)= 違えば止める。"""
+    U = CACHE['U'] if U is None else U.reset_index(drop=True)
+    R = CACHE['R'] if R is None else R
+    assert len(U) == len(R), 'U と make_si5 の行数が違う'
+    x = pd.DataFrame({'track': U.track.to_numpy(), 'race_date': pd.to_datetime(U.race_date).dt.strftime('%Y-%m-%d').to_numpy(),
+                      'd5': R.D5.to_numpy(float)})
+    x = x[x.track.isin(NANKAN) & np.isfinite(x.d5)]
+    g = x.groupby(['track', 'race_date']).d5
+    assert float((g.max() - g.min()).max() if len(x) else 0) < 1e-9, '同じ日×場で D5 が 2 つある'
+    out = {}
+    for (t, d), v in g.first().items():
+        out.setdefault(d, {})[PF[t]] = round(float(v), 2)
+    return out
+
+
+def write_d5(day, days=DAYS):
+    """便の中: [day − days, day) の D5 を nar_meta nankan_d5 に足す(days=None・まだ無い = 前日までの全期間)。→ 書いた日数"""
+    import datetime as dt
+    sys.path.insert(0, str(HERE.parent))
+    import base_v1 as B1
+    base, key = B1.creds()
+    new = d5_days()
+    rows = B1.sb_get(base, key, f'nar_meta?select=value&key=eq.{META}')
+    old = ((rows[0].get('value') or {}).get('days') or {}) if rows else {}
+    lo = '0000' if days is None or not old else (pd.Timestamp(day) - pd.Timedelta(days=days)).strftime('%Y-%m-%d')
+    new = {d: v for d, v in new.items() if lo <= d < str(day)}
+    merged = dict(sorted({**old, **new}.items()))
+    row = {'key': META, 'value': {'built': str(day), 'days': merged},
+           'updated_at': dt.datetime.now(dt.timezone.utc).isoformat()}
+    st, err = B1.upsert(base, key, 'nar_meta', 'key', [row])
+    if st not in (200, 201, 204):
+        raise SystemExit(f'nar_meta {META} upsert failed: {st} {err}')
+    log(META, '書いた', len(new), '日(全', len(merged), '日)', min(new) if new else '-', '〜', max(new) if new else '-')
+    return len(new)
 
 
 def main():
