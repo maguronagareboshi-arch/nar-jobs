@@ -276,6 +276,10 @@ SELFTEST_CLASS = [
     (("オープン", "", "高知"), "OP"),
     (("３歳", "", "浦和"), "3歳"),
     (("サラ系一般", "", "大井"), None),
+    (("ＡＢ混合", "", "高知"), "AB"),
+    (("３歳ＢＣ１特別", "", "園田"), "BC"),
+    (("さがびより１５年連続特Ａ記念杯Ａ１・Ａ２", "", "佐賀"), "A1"),
+    (("名古屋ＣＣ　秋桜賞Ｃ８", "", "名古屋"), "C"),
 ]
 
 
@@ -1003,39 +1007,62 @@ def pace_band(fastest, std, before, years=PACE_STD_YEARS):
 
 # 10/27 ふだんを「場 × 距離 × クラス」に(⛔記録の道 pace_rows だけ。見込みの D は pace_std のまま)
 NK_TRACKS = ("名古屋", "笠松")      # 字の後ろの数字は組(台帳 #473)= 級は字だけ
-_CLS_RE = re.compile(r"([A-D])([0-9]*)")
 _Z2H = {c: c - 0xFEE0 for c in range(0xFF01, 0xFF5F)}
 _Z2H[0x3000] = 0x20
+_AFTER0 = re.compile(r"[0-9一二三四五六七八九十\-―‐−級]")
+_STRICT = re.compile(r"[0-9]+([一二三四五六七八九十\-―‐−組]|$)")
+_ORD = re.compile(r"[0-9](st|nd|rd|th)$", re.I)
+
+
+def _find_letter(h, pass0):
+    """js/class-parts.js findLetter の写し= 級字(A〜D の塊)の (位置, 塊) or None"""
+    up = lambda c: "A" <= c <= "Z"
+    lat = lambda c: c.isascii() and c.isalpha()
+    for i, c in enumerate(h):
+        if c not in "ABCD":
+            continue
+        if i + 1 < len(h) and "a" <= h[i + 1] <= "z":
+            continue
+        j = i
+        while j < len(h) and lat(h[j]) and up(h[j]):
+            j += 1
+        blk, rest = h[i:j], h[j:]
+        if any(x not in "ABCD" for x in blk):
+            continue                                     # ＢＲＥＷ・ＪＲＡ の中の字
+        if i > 0 and lat(h[i - 1]):
+            if not _ORD.search(h[max(0, i - 6):i]) and not (len(blk) == 1 and _STRICT.match(rest)):
+                continue
+        if pass0 and not _AFTER0.match(rest):
+            continue
+        if len(blk) >= 2 and rest.startswith(" "):
+            continue                                     # 名古屋ＣＣ　◯◯賞(協賛名)
+        return i, blk
+    return None
 
 
 def pace_class(name, kind, track):
-    """レース名 → ペースの基準のクラス。サイトの js/class-parts.js raceClassParts と同じ読み方
-    (pipeline/karte.py race_class と同じ守り)に、語のクラスを足したもの。
-      '重賞'(準重賞も)/ 'A1'〜'D3'(字+1 桁)/ 'A' 等(字だけ・名古屋笠松・字+2 桁)/ 'OP' / '新馬' / '未勝利' / '2歳' / '3歳' / None
+    """レース名 → ペースの基準のクラス。サイトの js/class-parts.js raceClassParts と同じ順で読む
+    (①後ろに数字等の続く級字 ②新馬・未勝利・未受賞・オープン ③続きを問わない級字 ④◯歳)。
+      '重賞'(準重賞も)/ 'A1'〜'D3'(字+1 桁)/ 'A'(名古屋笠松・字+2 桁・字だけ)/ 'AB'(混合)/ 'OP' / '新馬' / '未勝利' / '2歳' 等 / None
     ⛔推定はしない= 読めなければ None(場 × 距離の基準に戻る)"""
     if kind in ("重賞", "準重賞"):
         return "重賞"
-    s = str(name or "").translate(_Z2H)
-    if not s.strip():
+    h = re.sub(r"\s+", " ", str(name or "").translate(_Z2H)).strip()
+    if not h:
         return None
-    nk = track in NK_TRACKS
-    found = []
-    for m in _CLS_RE.finditer(s):
-        i, blk_end = m.start(), m.start() + 1
-        if blk_end < len(s) and s[blk_end].isascii() and s[blk_end].isalpha():
-            continue                                     # ＪＲＡ・ＣＵＰ・Ｋａｃｈｉ の中の字
-        if i > 0 and s[i - 1].isascii() and s[i - 1].isalpha():
-            ord_ok = re.search(r"[0-9](st|nd|rd|th)$", s[max(0, i - 6):i], re.I)
-            if not ord_ok and not re.match(r"[0-9]+([一二三四五六七八九十\-―‐−組]|$)", s[blk_end:]):
-                continue
-        letter, digits = m.group(1), m.group(2)
-        found.append(letter if nk or len(digits) != 1 else letter + digits)
-    if found:
-        return sorted(set(found), key=lambda c: ("ABCD".index(c[0]), int(c[1:] or 0)))[0]
-    for w, lab in (("新馬", "新馬"), ("初出走", "新馬"), ("未勝利", "未勝利"), ("未受賞", "未勝利"), ("オープン", "OP")):
-        if w in s:
-            return lab
-    m = re.search(r"([2-4])歳", s)
+    hit = _find_letter(h, True)
+    if not hit:
+        for w, lab in (("新馬", "新馬"), ("初出走", "新馬"), ("未勝利", "未勝利"), ("未受賞", "未勝利"), ("オープン", "OP")):
+            if w in h:
+                return lab
+        hit = _find_letter(h, False)
+    if hit:
+        i, blk = hit
+        if len(blk) >= 2 or track in NK_TRACKS:
+            return blk if len(blk) >= 2 else blk[0]
+        m = re.match(r"級?([0-9]+)", h[i + 1:])
+        return blk + m.group(1) if m and len(m.group(1)) == 1 and not h[i + 1:].startswith("級") else blk
+    m = re.search(r"([2-4])歳", h)
     return (m.group(1) + "歳") if m else None
 
 
@@ -1044,7 +1071,7 @@ def pace_class_up(c):
     if not c:
         return None
     if c[0] in "ABCD" and len(c) > 1:
-        return c[0]
+        return c[0]                                      # A1→A・AB→A(混合は上の字へ)
     if c in ("重賞", "OP"):
         return "上位"
     if c in ("新馬", "未勝利"):
