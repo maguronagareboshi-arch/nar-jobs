@@ -6,7 +6,8 @@
   手元(鍵があるとき):  python -X utf8 pipeline/ai/v3/si5_store.py push FILE.parquet   = FILE の行を書く
                      python -X utf8 pipeline/ai/v3/si5_store.py check FILE.parquet  = DB の値と FILE を照らす(書かない)
 
-- 値 = 便が予想の材料に作る t5_open.si5_of(U)(= t5_base.make_si5)の SI5 そのもの。新しい定数は足さない。
+- 値 = 便が予想の材料に作る t5_open.si5_of(U)(= t5_base.make_si5)の SI5 に、表示の直し(disp・2026-10-27・ユーザー承認:
+  流れと大井の砂替え)を足したもの。予想の材料の SI5 は変えない。直しの数は暗号化した定数のリリースに置く(公開のコードに数を置かない)。
 - 確定した日の値は後から動かない(2015〜21 の 25.5 万走で差 0)= 毎日は直近 DAYS 日だけ書き直す。
 - 表の nar_si5 は DB のトリガーで nar_runs.si5 に写り、サイトは今までの窓口(runs_*)で読む(sql/si5_store.sql)。
 - 2026-10-26 南関の「その日の馬場の速さ」D5(SI5 の計算に使う日×場の 1000m あたりの秒)も nar_meta nankan_d5 に書く
@@ -48,6 +49,43 @@ def install():
     t5_open.si5_of = f1
 
 
+def disp(U, R):
+    """表示の値 = SI5 + 大井の砂替えの直し + 流れの直し(2026-10-27・ユーザー承認・予想の材料の SI5 は変えない)。
+    数は暗号化した定数のリリース(sealed.get('si5_disp'))。作りと確かめは v3 の src/si5_disp_consts.py・out/si5_disp_consts.md。
+    流れ = レースの配分(r_F − 日×場の中央値)−(r_L − 日×場の中央値)の距離の帯ごとの分位 × 位置(前半の時計の順位 ÷ 頭数)の
+    升の値 − 帯の平均(MEAN)。砂替え = SAND の場・期間(n > 0)は (Draw − D) ×(D_proj があれば 0.5・無ければ 1)× 1000 / b。"""
+    import sealed
+    c = sealed.get('si5_disp')
+    rd = pd.to_datetime(U.race_date).dt.strftime('%Y-%m-%d')
+    W = pd.DataFrame({'track': U.track.to_numpy(), 'rd': rd.to_numpy(), 'race_no': U.race_no.astype(int).to_numpy(),
+                      'dtk': U.dtk.to_numpy(), 'dist': U.distance_m.to_numpy(float), 'rF': U.r_F.to_numpy(float),
+                      'rL': U.r_L.to_numpy(float), 'fv': (U.time_sec - U.last3f).to_numpy(float)})
+    K = ['track', 'rd', 'race_no']
+    RR = W.drop_duplicates(K).copy()
+    RR['split'] = (RR.rF - RR.groupby('dtk').rF.transform('median')) - (RR.rL - RR.groupby('dtk').rL.transform('median'))
+    RR['db'] = np.digitize(RR.dist, c['DB_CUT'])
+    pdec = np.full(len(RR), np.nan)
+    for b in range(3):
+        m = ((RR.db == b) & RR.split.notna()).to_numpy()
+        pdec[m] = np.digitize(RR.split.to_numpy()[m], c['CUT'][b])
+    X = W[K].merge(RR[K + ['db']].assign(pdec=pdec), on=K, how='left')
+    key = [W.track, W.rd, W.race_no]
+    p = W.fv.groupby(key).rank(method='average') / W.fv.notna().groupby(key).transform('sum')
+    pg = np.where(p.isna(), np.nan, np.where(p <= c['POS'][0], 0, np.where(p <= c['POS'][1], 1, 2)))
+    err = {(int(a), int(b), int(g)): float(v) for a, b, g, v in c['ERR']}
+    db, dc = X.db.to_numpy(float), X.pdec.to_numpy(float)
+    raw = np.array([err.get((int(a), int(b), int(g)), 0.0) if a == a and b == b and g == g else 0.0
+                    for a, b, g in zip(db, dc, pg)])
+    pace = raw - np.array([c['MEAN'][int(a)] if a == a else 0.0 for a in db])
+    pace[np.isnan(db)] = 0.0
+    sand = np.zeros(len(U))
+    f = np.where(R.D_proj.notna().to_numpy(), 0.5, 1.0)
+    for t, lo, hi in c['SAND']:
+        m = ((U.track == t).to_numpy() & (rd >= lo).to_numpy() & (rd <= hi).to_numpy() & (U.n_T > 0).to_numpy())
+        sand[m] = ((U.Draw_T - U.D_T).to_numpy(float) * f * 1000 / U.bc_T.to_numpy(float))[m]
+    return (R.SI5.to_numpy(float) + sand) + pace
+
+
 def frame(U=None, R=None):
     """→ 南関の SI5 のある走だけ(track・race_date 文字・race_no・runner_number・horse_key・si5 小数 1 桁)。"""
     U = CACHE['U'] if U is None else U.reset_index(drop=True)
@@ -55,7 +93,7 @@ def frame(U=None, R=None):
     assert len(U) == len(R), 'U と make_si5 の行数が違う'
     x = pd.DataFrame({'track': U.track.to_numpy(), 'race_date': pd.to_datetime(U.race_date).dt.strftime('%Y-%m-%d').to_numpy(),
                       'race_no': U.race_no.astype(int).to_numpy(), 'runner_number': U.runner_number.astype(int).to_numpy(),
-                      'horse_key': U.hk.astype(str).to_numpy(), 'si5': np.round(R.SI5.to_numpy(float), 1)})
+                      'horse_key': U.hk.astype(str).to_numpy(), 'si5': np.round(disp(U, R), 1)})
     x = x[x.track.isin(NANKAN) & np.isfinite(x.si5)]
     assert not x.duplicated(['track', 'race_date', 'race_no', 'runner_number']).any(), '同じ走が 2 行ある'
     return x.reset_index(drop=True)
