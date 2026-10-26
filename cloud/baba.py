@@ -18,6 +18,12 @@
           "days": {"2026-08-28": {"ooi": {"d": -0.8, "n": 9}, …}, …}}   # 直近90日+当日
           # まだ終わっていない日(=当日)は {"d":…,"n":…,"p":true}= 暫定。翌朝の便で確定して p が消える
 
+  ⛔2026-10-26 距離の直し(going/classfirst のセルに "d1"/"g1" を足す・d/g は今のまま)
+    d1/g1 = 1000m あたりの秒(小数 2 桁)。レース差を距離で割って日の中央値を作り、n/(n+SHRINK_K) で
+    場×主な馬場状態のふだん(前日までの 365 日)へ寄せる。補正タイムは 時計 − d1 × その走の距離 / 1000。
+    今までの d を距離によらず引くと 〜1200m で約 2 倍の引きすぎだった(docs/research-baba-distance/result.md)。
+    ⛔切替の初回だけ baba-rebuild 便(--rebuild-all)で確定済みの日にも d1/g1 を付ける。
+
   ⛔as-of(§17 監査 2026-09-22 で「as-of でない」と判定された点の直し)
     日 d の標準は **race_date < d**= その日も、その日より後も標準に入れない。
     さらに **一度確定した日の値は二度と上書きしない**。組み直すのは
@@ -111,6 +117,13 @@ DEFAULT_BASELINE = "classfirst"
 GOING_BASE = "良"          # going 版の d の物差し
 TOP_N = 5                # going 版(T5)で使う着順の上限(1〜5着)
 MIN_HORSES = 3           # going 版(T5): レース差を出す最少頭数
+# ⛔2026-10-26 距離の直し (c)(ユーザー決定)。d/g(その日の秒)は今のまま残し(札・言葉・閾値はこれ)、
+#   補正タイム用に d1/g1(1000m あたりの秒・小数 2 桁)を足す。画面は 時計 − d1 × その走の距離/1000。
+#   日の値を n/(n+SHRINK_K) だけ使い、残りを場×主な馬場状態のふだん(前日までの PRIOR_DAYS 日)へ寄せる。
+#   研究(全 14 場・2025-09〜2026-08)で次走の的中 69.14→69.52%・縮尺 k 0.75→1.00(docs/research-baba-distance)
+SHRINK_K = 5
+PRIOR_DAYS = 365
+PRIOR_MIN = 5
 
 Z = str.maketrans("ＡＢＣ０１２３４５６７８９", "ABC0123456789")
 
@@ -211,7 +224,7 @@ def fetch_days(baseline):
     if baseline == "season":
         return 365 * SEASON_YEARS + SEASON_PAD + 30
     if baseline == "classfirst":                      # 帯の 3 年の段のぶん(going 版の読み方は変えない)
-        return max(sp for _, sp in CLASSFIRST_STAGES) + 30
+        return max(sp for _, sp in CLASSFIRST_STAGES) + 30 + PRIOR_DAYS   # + d1/g1 のふだんの 365 日
     return (STD_DAYS_LEGACY if baseline == "1095" else STD_DAYS) + 30
 
 
@@ -324,10 +337,11 @@ def day_cell_going(day_rows, by_band_g, by_dist_g, d, stages=None, none_band="di
             info["reach_" + nm] = [0] * (len(stages) + 1)
             info["race_" + nm], info["stage_" + nm] = {}, {}
         info["drop"] = 0
-    per_d, per_g, st_d, st_g = {}, {}, {}, {}
+    per_d, per_g, st_d, st_g, dist_r = {}, {}, {}, {}, {}
     for dist, band, t, going, rno, fin in day_rows:
         if not fin or fin > TOP_N:
             continue
+        dist_r[rno] = dist
         if band is None and none_band == "drop":
             if info is not None:
                 info["drop"] += 1
@@ -351,16 +365,39 @@ def day_cell_going(day_rows, by_band_g, by_dist_g, d, stages=None, none_band="di
                 if len(v) >= MIN_HORSES:
                     info["race_" + nm][r_] = statistics.median(v)
                     info["stage_" + nm][r_] = st[r_]
-    dv = [statistics.median(v) for _, v in sorted(per_d.items(), key=lambda kv: str(kv[0]))
+    dr = [(r_, statistics.median(v)) for r_, v in sorted(per_d.items(), key=lambda kv: str(kv[0]))
           if len(v) >= MIN_HORSES]
-    gv = [statistics.median(v) for _, v in sorted(per_g.items(), key=lambda kv: str(kv[0]))
+    gr = [(r_, statistics.median(v)) for r_, v in sorted(per_g.items(), key=lambda kv: str(kv[0]))
           if len(v) >= MIN_HORSES]
+    dv, gv = [v for _, v in dr], [v for _, v in gr]
     out = {}
+    # d1r/g1r(2026-10-26 距離の直し)= レース差を 1000m あたりに直した中央値(寄せる前・小数 2 桁)
     if len(dv) >= MIN_RACES:
         out["d"], out["n"], out["devs"] = round(statistics.median(dv), 1), len(dv), dv
+        out["d1r"] = round(statistics.median([v * 1000.0 / dist_r[r_] for r_, v in dr]), 2)
     if len(gv) >= MIN_RACES:
         out["g"], out["ng"] = round(statistics.median(gv), 1), len(gv)
+        out["g1r"] = round(statistics.median([v * 1000.0 / dist_r[r_] for r_, v in gr]), 2)
     return out
+
+
+def shrink_1k(raw, k_of, d, n, mode):
+    """距離の直し (c)(2026-10-26 ユーザー決定・docs/research-baba-distance/result.md)。
+    raw= {日: {"d1r","g1r",…}}(1 場ぶん・寄せる前の 1000m あたりの値)・k_of= {日: 主な馬場状態}。
+    日 d の値 = (n·その日の値 + SHRINK_K·ふだん) / (n + SHRINK_K)。n= その日のレース数。
+    ふだん= 同じ場・同じ主な馬場状態の、前日までの 365 日の寄せる前の値の中央値(PRIOR_MIN 日未満なら場の全馬場・それも無ければ 0)"""
+    key = mode + "1r"
+    v = raw[d][key]
+    lo = (dt.date.fromisoformat(d) - dt.timedelta(days=PRIOR_DAYS)).isoformat()
+    past = [x for x in raw if lo <= x < d and key in raw[x]]
+    same = [raw[x][key] for x in past if k_of.get(x) == k_of.get(d)]
+    if len(same) >= PRIOR_MIN:
+        prior = statistics.median(same)
+    elif len(past) >= PRIOR_MIN:
+        prior = statistics.median([raw[x][key] for x in past])
+    else:
+        prior = 0.0
+    return round((n * v + SHRINK_K * prior) / (n + SHRINK_K), 2)
 
 
 def _main_going(rows):
@@ -403,9 +440,14 @@ def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=
         by_dist_all.setdefault(track, {}).setdefault((dist,), []).append((date, t))
         if band:
             by_band_all.setdefault(track, {}).setdefault((dist, band), []).append((date, t))
+    # going 版は d1/g1 のふだん(前日までの PRIOR_DAYS 日)のため、出す日より前の日も組む(出しはしない)
+    need_lo = need_hi = None
+    if baseline in GOING_LIKE and targets:
+        need_lo = (dt.date.fromisoformat(min(targets)) - dt.timedelta(days=PRIOR_DAYS)).isoformat()
+        need_hi = max(targets)
     per_day = {}
     for track, date, dist, band, t, _g, rno, fin in samples:
-        if date in targets:
+        if date in targets or (need_lo and need_lo <= date <= need_hi):
             per_day.setdefault((date, track), []).append((dist, band, t, _g, rno, fin))
     if baseline in GOING_LIKE:
         by_band_gg, by_dist_gg = {}, {}
@@ -417,6 +459,19 @@ def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=
                 by_band_gg.setdefault(track, {}).setdefault((dist, band, _g, fin), []).append((date, t))
                 if coarse_key(band):        # 退避 2 段目(字だけの粗い帯)
                     by_band_gg[track].setdefault((dist, coarse_key(band), _g, fin), []).append((date, t))
+
+    # going 版の日×場をまとめて先に組む(確定済みの日も= 後の日のふだんに要る)。raw_of= {場: {日: {d1r,g1r}}}
+    cell_of, raw_of, k_of = {}, {}, {}
+    if baseline in GOING_LIKE:
+        for (date, track), rows in per_day.items():
+            inf = {} if (info_of is not None and date in targets) else None
+            c = day_cell_going(rows, by_band_gg.get(track, {}), by_dist_gg.get(track, {}), dt.date.fromisoformat(date),
+                               stages=stages, none_band=none_band, info=inf)
+            cell_of[(date, track)] = (c, inf)
+            k_of.setdefault(track, {})[date] = _main_going(rows)
+            rr = {k: c[k] for k in ("d1r", "g1r") if k in c}
+            if rr:
+                raw_of.setdefault(track, {})[date] = rr
 
     out, rebuilt, devs_of = {}, 0, {}
     tstr = today.isoformat()
@@ -435,14 +490,16 @@ def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=
                 continue
             dd = dt.date.fromisoformat(date)
             if baseline in GOING_LIKE:
-                inf = {} if info_of is not None else None
-                c = day_cell_going(rows, by_band_gg.get(track, {}), by_dist_gg.get(track, {}), dd,
-                                   stages=stages, none_band=none_band, info=inf)
+                c, inf = cell_of[(date, track)]
                 if inf is not None:
                     info_of[(date, track)] = inf
                 if "d" not in c and "g" not in c:
                     continue
                 cell = {k: c[k] for k in ("d", "g", "n", "ng") if k in c}
+                if "d1r" in c:
+                    cell["d1"] = shrink_1k(raw_of[track], k_of[track], date, c["n"], "d")
+                if "g1r" in c:
+                    cell["g1"] = shrink_1k(raw_of[track], k_of[track], date, c["ng"], "g")
                 k = _main_going(rows)
                 if k:
                     cell["k"] = k

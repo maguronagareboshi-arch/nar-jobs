@@ -6,7 +6,8 @@ baba.py(nar_meta baba_diff= 直近 90 日だけ)と**同じ方式**(as-of・前�
 going 版の d= 良馬場比 / g= 同じ馬場状態比)で、データのある最初の日から今日までの日×場を組み、
 公開バケット cond-stats の v1/baba-hist/<prefix>.json に場ごとに 1 本で上げる。計算は baba.build_days をそのまま呼ぶ。
 
-  形 = {"v":1, "built":"YYYY-MM-DD", "track":"高知", "days": {"2026-02-02": {"d":-0.8, "g":0.1, "k":"重"}, …}}
+  形 = {"v":1, "built":"YYYY-MM-DD", "track":"高知", "days": {"2026-02-02": {"d":-0.8, "g":0.1, "d1":-0.45, "g1":0.05, "k":"重"}, …}}
+       d1/g1(2026-10-26)= 補正タイム用の 1000m あたりの秒(baba.py の SHRINK_K の寄せ込み)。画面は 時計 − d1×距離/1000
        当日(まだ終わっていない日)は "p":true(暫定)。翌朝の便で確定して p が消える。
 
   ⛔確定した日は組み直さない(baba.py の frozen と同じ)。組むのは ファイルに無い日・前回 p の日・当日 だけ。
@@ -38,7 +39,7 @@ import cond_stats  # noqa: E402
 DIR = "baba-hist/"
 FIRST_DATE = dt.date(2014, 1, 1)     # nar_races の最古(2026-10-17 実測)
 DAILY_DAYS = 14                      # 毎朝 組み直す候補の日数(確定済みは据え置くので実際は p と新しい日だけ)
-KEEP = ("d", "g", "k", "p")
+KEEP = ("d", "g", "d1", "g1", "k", "p")   # d1/g1= 補正タイム用の 1000m あたり(2026-10-26)
 
 
 def log(msg):

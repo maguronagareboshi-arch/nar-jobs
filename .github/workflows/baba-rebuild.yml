@@ -4,6 +4,7 @@
 #   3) q.json に差分があれば commit・push(rebase してから。失敗したら赤で止める)
 #   4) baba_trend.py --apply(--today なし= 90 日ぜんぶ組み直し・新しい閾値表で言葉を付け直す)
 #   5) baba_hist.py --apply --rebuild-all(持ちタイム表の全期間ファイルを 2014〜 で作り直す・10/25)
+# ⛔2026-10-26 距離の直し(d1/g1 を足した)の切替でも 1 回流す= 確定済みの日にも d1/g1 を付ける
 # ⛔nar-refresh と同じ concurrency group= 定時便と重ならない。nar-refresh.yml の権限は広げない(書き込みはこの便だけ)。
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
 name: baba-rebuild

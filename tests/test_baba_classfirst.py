@@ -188,6 +188,9 @@ class ClassFirstTest(unittest.TestCase):
             old = _old_day_cell_going(rows, bb, bd, dd)
             new = baba.day_cell_going(rows, bb, bd, dd)
             new2 = baba.day_cell_going(rows, bb, bd, dd, stages=baba.GOING_STAGES, none_band="dist", info={})
+            # d1r/g1r(10/26 距離の直しの材料)は足しただけ= それ以外は書き換え前と同じ
+            new = {k: v for k, v in new.items() if k not in ("d1r", "g1r")}
+            new2 = {k: v for k, v in new2.items() if k not in ("d1r", "g1r")}
             self.assertEqual(old, new, d)
             self.assertEqual(old, new2, d)
             n_cmp += 1 if old else 0
@@ -203,7 +206,7 @@ class ClassFirstTest(unittest.TestCase):
 
     def test_fetch_days(self):
         self.assertEqual(baba.fetch_days("going"), 395)
-        self.assertEqual(baba.fetch_days("classfirst"), 1125)
+        self.assertEqual(baba.fetch_days("classfirst"), 1125 + baba.PRIOR_DAYS)   # + d1/g1 のふだん(10/26)
         self.assertEqual(baba.fetch_days("365"), 395)
         self.assertEqual(baba.fetch_days("1095"), 1125)
         self.assertIn("classfirst", baba.BASELINES)
