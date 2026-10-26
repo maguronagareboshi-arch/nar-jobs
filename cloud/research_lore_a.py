@@ -187,7 +187,7 @@ def prepare(races, runs, jh, jr):
     R["bwc"] = pd.to_numeric(R.body_weight_change, errors="coerce")
     R["jk"] = R.jockey.map(norm_jockey)
     R["rn"] = pd.to_numeric(R.runner_number, errors="coerce")
-    R["gt"] = pd.to_numeric(R.gate, errors="coerce")
+    R["gate_n"] = pd.to_numeric(R.gate, errors="coerce")
     # 中央
     J = pd.DataFrame(columns=["horse", "date", "area", "src"])
     info["jra_horses"] = len(jh)
@@ -323,7 +323,7 @@ def compute(R, rc, facts, info, today=None, rest_samples=None, jra_ok=True):
     for tr, dist in sorted(keep, key=lambda k: (TRACKS.index(k[0]), k[1])):
         g = T[(T.track == tr) & (T.distance_m == dist)]
         for gt in range(1, 9):
-            s = g[g.gt == gt]
+            s = g[g.gate_n == gt]
             gate_rows.append({"track": tr, "distance": int(dist), "gate": gt, "runs": int(len(s)),
                               "top3_pct": pct((s.finish <= 3).sum(), len(s))})
         for p in ("内", "中", "外"):
@@ -391,7 +391,7 @@ def compute(R, rc, facts, info, today=None, rest_samples=None, jra_ok=True):
         pt = rc[(rc.track == tr) & (rc.race_date == d) & (rc.race_no == no)].post_time
         samp.append({"track": tr, "race_date": d, "race_no": int(no),
                      "post_time": str(pt.iloc[0]) if len(pt) else None,
-                     "runs": [{"rn": int(x.rn), "gate": None if pd.isna(x["gt"]) else int(x["gt"]),
+                     "runs": [{"rn": int(x.rn), "gate": None if pd.isna(x["gate_n"]) else int(x["gate_n"]),
                                "pop": None if pd.isna(x["pop"]) else int(x["pop"]),
                                "finish": None if pd.isna(x.finish) else int(x.finish),
                                "bw": None if pd.isna(x.bw) else int(x.bw),
