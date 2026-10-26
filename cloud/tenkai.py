@@ -1079,15 +1079,25 @@ def pace_class_up(c):
     return None
 
 
-def pace_std_cls(fastest, cls, before, years=PACE_STD_YEARS):
+# 10/27 記録の札の窓= 3 年(研究 docs/research-pace-class・金沢を除く全場で 25/50/25 にいちばん近い)。
+#   ⛔金沢は 2026 年に変わった(ユーザー 10/26)= 古いレースを混ぜないよう 1 年。⛔見込みの D は PACE_STD_YEARS(1 年)のまま
+PACE_LOG_YEARS = 1095
+PACE_LOG_YEARS_TRACK = {"金沢": 365}
+
+
+def pace_std_cls(fastest, cls, before, years=PACE_STD_YEARS, years_track=None):
     """クラス別の平年値と帯。→ (resolve, std_by_group, band_by_group)
     組= (場, 距離, クラス) → 30 走に満たなければ (場, 距離, まとめたクラス) → それも満たなければ (場, 距離, None)。
     resolve(場, 日, R, 距離) → 使う組 or None。⛔材料は before より前の years 日だけ・PACE_STD_MIN 未満の組は作らない。
     帯= その組のレースの (最速 − その組の平年値) の四分位(⛔判定と同じ量)"""
-    lo = (dt.date.fromisoformat(before) - dt.timedelta(days=years)).isoformat()
+    years_track = years_track or {}
+    los = {}
     by = {}
     mem = []
     for (t, d, no), (v, dm, _u) in fastest.items():
+        lo = los.get(t)
+        if lo is None:
+            lo = los[t] = (dt.date.fromisoformat(before) - dt.timedelta(days=years_track.get(t, years))).isoformat()
         if not (lo <= d < before):
             continue
         c = cls.get((t, d, no))
@@ -1120,7 +1130,8 @@ def pace_std_cls(fastest, cls, before, years=PACE_STD_YEARS):
 PACE_LEVELS = ("クラス", "まとめ", "場距離")
 
 
-def pace_rows(base, key, days, fastest=None, cls=None, years=PACE_STD_YEARS, by_class=True, kochi_fixed=True):
+def pace_rows(base, key, days, fastest=None, cls=None, years=PACE_STD_YEARS, by_class=True, kochi_fixed=True,
+              years_track=None):
     """対象日の並び → nar_race_pace の行。⛔平年値と四分位は**その月より前の years 日**のレースで作る
     (レースより後の走を混ぜない)。⛔値の出せないレースは行を作らない(「平均」で埋めない)。
     10/27 by_class= ふだんと帯を「場 × 距離 × クラス」で(少ない組はまとめる→場 × 距離)。False= 10/26 までの道(比べる用)。
@@ -1129,7 +1140,7 @@ def pace_rows(base, key, days, fastest=None, cls=None, years=PACE_STD_YEARS, by_
     if not ds_all:
         return [], {}, {}
     if fastest is None:
-        far = (dt.date.fromisoformat(ds_all[0]) - dt.timedelta(days=years)).isoformat()
+        far = (dt.date.fromisoformat(ds_all[0]) - dt.timedelta(days=max([years] + list((years_track or {}).values())))).isoformat()
         cls = {}
         fastest = pace_fastest(base, key, far, ds_all[-1], cls_out=cls)
         log("  レース %d 本ぶんの最速の前半(平年値の材料ごと)・要求 %d 回" % (len(fastest), N_REQ[0]))
@@ -1145,8 +1156,10 @@ def pace_rows(base, key, days, fastest=None, cls=None, years=PACE_STD_YEARS, by_
         ds = set(by_month[ym])
         start = ym + "-01"
         std_from = (dt.date.fromisoformat(start) - dt.timedelta(days=years)).isoformat()
+        yt = years_track or {}
+        from_of = {t: (dt.date.fromisoformat(start) - dt.timedelta(days=n)).isoformat() for t, n in yt.items()}
         if by_class:
-            resolve, std, band = pace_std_cls(fastest, cls, start, years)
+            resolve, std, band = pace_std_cls(fastest, cls, start, years, yt)
         else:
             std = pace_std(fastest, start, years)
             band = pace_band(fastest, std, start, years)
@@ -1176,7 +1189,7 @@ def pace_rows(base, key, days, fastest=None, cls=None, years=PACE_STD_YEARS, by_
             out.append({"track": t, "race_date": d, "race_no": int(no), "pace": w,
                         "lead_umaban": None if u is None else int(u),
                         "lead_ten": round(x, 2), "std_sec": round(base_v, 2),
-                        "std_from": std_from, "built": now})
+                        "std_from": from_of.get(t, std_from), "built": now})
         log("  %s 前半の取れたレース %d 本 → %d 行(平年値 %d 組・帯 %d)"
             % (ym, n_race, len(out) - n0, len(std), len(band)))
     return out, skip, levels
@@ -1192,7 +1205,9 @@ def pace_log(base, key, since=None, apply=False):
     days = [(lo + dt.timedelta(days=i)).isoformat() for i in range((hi - lo).days + 1)]
     log("■ 実際のペース %s 〜 %s(%d 日)" % (lo, hi, len(days)))
     t0 = dt.datetime.now()
-    rows, skip, levels = pace_rows(base, key, days)
+    # 10/27 クラス別・窓 3 年(金沢 1 年)・⛔高知も他の場と同じ四分位(±KOCHI_BAND は見込みの道だけに残る= ユーザー 10/26「他と統一」)
+    rows, skip, levels = pace_rows(base, key, days, years=PACE_LOG_YEARS, kochi_fixed=False,
+                                   years_track=PACE_LOG_YEARS_TRACK)
     log("  行 %d(飛ばした= %s・基準の段= %s)・要求 %d 回・%.0f 秒"
         % (len(rows), "・".join("%s %d" % (k, v) for k, v in skip.items() if v),
            "・".join("%s %d" % (k, levels[k]) for k in PACE_LEVELS if k in levels), N_REQ[0],
