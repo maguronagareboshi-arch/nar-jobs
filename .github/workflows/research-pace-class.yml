@@ -1,0 +1,55 @@
+# 研究用・1 回きり(10/27)。ペースの札の基準をクラス別にした時の窓 1/2/3 年の比べ(cloud/research_pace_class.py)。
+# ⛔本番 DB は REST の単純 select だけ・書き込みなし。見込み(--backtest 60 --pace)を枝と master で流して比べる。
+# 枝 wip/pace-class-* への push で走る(本番の枝ではない)。
+name: research-pace-class
+on:
+  push:
+    branches: ['wip/pace-class-*']
+    paths: ['cloud/research_pace_class.py', 'cloud/tenkai.py', '.github/workflows/research-pace-class.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: research-pace-class
+  cancel-in-progress: false
+jobs:
+  study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: pace class research
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          python cloud/tenkai.py --selftest
+          python cloud/research_pace_class.py
+      - name: backtest pace on branch and master
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          mkdir -p docs/research-pace-class
+          python cloud/tenkai.py --backtest 60 --pace 2>&1 | sed -E 's/[0-9]+ 秒//; s/要求 [0-9]+ 回//' > docs/research-pace-class/backtest_branch.txt
+          git worktree add -q /tmp/m origin/master
+          (cd /tmp/m && python cloud/tenkai.py --backtest 60 --pace 2>&1 | sed -E 's/[0-9]+ 秒//; s/要求 [0-9]+ 回//') > docs/research-pace-class/backtest_master.txt
+          if diff -q docs/research-pace-class/backtest_master.txt docs/research-pace-class/backtest_branch.txt; then echo "見込みの答え合わせ 同じ" > docs/research-pace-class/backtest_same.txt; else diff docs/research-pace-class/backtest_master.txt docs/research-pace-class/backtest_branch.txt > docs/research-pace-class/backtest_diff.txt || true; fi
+      - name: commit result
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/research-pace-class
+          git commit -m "ペースの札 クラス別 研究集計 $(TZ=Asia/Tokyo date +%F)" || exit 0
+          for i in 1 2 3; do
+            git fetch origin "${GITHUB_REF_NAME}"
+            git rebase "origin/${GITHUB_REF_NAME}"
+            if git push origin "HEAD:${GITHUB_REF_NAME}"; then break; fi
+            if [ "$i" = 3 ]; then exit 1; fi
+            sleep $((i * 15))
+          done

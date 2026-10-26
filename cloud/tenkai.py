@@ -42,6 +42,7 @@ import datetime as dt
 import io
 import json
 import os
+import re
 import statistics
 import sys
 import urllib.error
@@ -260,6 +261,24 @@ SELFTEST_PACE = [
 ]
 
 
+SELFTEST_CLASS = [
+    (("Ｃ２二三四", "", "大井"), "C2"),
+    (("Ｂ３（二）", "", "浦和"), "B3"),
+    (("Ａ１", "", "船橋"), "A1"),
+    (("東京記念", "重賞", "大井"), "重賞"),
+    (("Ｃ３－１", "", "高知"), "C3"),
+    (("Ｃ１０組", "", "高知"), "C"),          # 字+2 桁は割らない= 字だけ
+    (("Ｃ２７", "", "名古屋"), "C"),          # 名古屋・笠松は字が級・数字は組(#473)
+    (("Ａ１ａ特別", "", "名古屋"), "A"),
+    (("ＪＲＡ交流", "", "大井"), None),       # 英単語の中の字は拾わない
+    (("２歳新馬", "", "門別"), "新馬"),
+    (("３歳未勝利", "", "佐賀"), "未勝利"),
+    (("オープン", "", "高知"), "OP"),
+    (("３歳", "", "浦和"), "3歳"),
+    (("サラ系一般", "", "大井"), None),
+]
+
+
 def selftest(quiet=False):
     """通信なしの自己診断。本番でも毎回通してから走る(黙って通る)。
 
@@ -283,8 +302,15 @@ def selftest(quiet=False):
         bad += 0 if ok else 1
         if not quiet or not ok:
             log("  %s レースの最速の前半 %s → %s" % ("OK " if ok else "NG ", k[2], got.get(k)))
+    # 10/27 ペースの基準のクラス(サイトの js/class-parts.js と同じ読み方)
+    for args, want in SELFTEST_CLASS:
+        got = pace_class(*args)
+        ok = got == want
+        bad += 0 if ok else 1
+        if not quiet or not ok:
+            log("  %s クラス %s → %s" % ("OK " if ok else "NG ", args[0], got))
     if not quiet:
-        n = len(SELFTEST_PACE) + 2
+        n = len(SELFTEST_PACE) + 2 + len(SELFTEST_CLASS)
         log("読み方の selftest: %d/%d" % (n - bad, n))
     return 0 if not bad else 1
 
@@ -861,7 +887,7 @@ def race_fastest(items):
     return out
 
 
-def pace_fastest(base, key, lo, hi):
+def pace_fastest(base, key, lo, hi, cls_out=None):
     """[lo, hi] の全場のレース → race_fastest の表。
 
     §232b 前半= **距離 − 600m の通過**= 走破タイム − 上がり3F(公式の走にどちらもある実測・⛔按分の推定ではない)。
@@ -869,12 +895,16 @@ def pace_fastest(base, key, lo, hi):
     ⛔上がり3F の無い場(ばんえい)は材料がそろわず自然に外れる。⛔着順の付いた走だけ(取消・除外は数えない)。
     """
     dist = {}
+    sel = "track,race_date,race_no,distance_m" + (",race_name,race_kind" if cls_out is not None else "")
     for r in rows_window(base, key,
-                         "/rest/v1/nar_races?select=track,race_date,race_no,distance_m"
+                         "/rest/v1/nar_races?select=" + sel +
                          "&race_date=gte.{lo}&race_date=lte.{hi}"
                          "&order=race_date.asc,track.asc,race_no.asc", lo, hi):
         if r.get("distance_m"):
             dist[(r["track"], r["race_date"], int(r["race_no"]))] = int(r["distance_m"])
+        if cls_out is not None:
+            cls_out[(r["track"], r["race_date"], int(r["race_no"]))] = pace_class(
+                r.get("race_name"), r.get("race_kind"), r["track"])
 
     def items():
         for r in rows_window(base, key,
@@ -971,18 +1001,115 @@ def pace_band(fastest, std, before, years=PACE_STD_YEARS):
     return out
 
 
-def pace_rows(base, key, days, fastest=None):
-    """対象日の並び → nar_race_pace の行。⛔平年値と四分位は**その月より前の 1 年**のレースで作る
-    (レースより後の走を混ぜない)。⛔値の出せないレースは行を作らない(「平均」で埋めない)"""
+# 10/27 ふだんを「場 × 距離 × クラス」に(⛔記録の道 pace_rows だけ。見込みの D は pace_std のまま)
+NK_TRACKS = ("名古屋", "笠松")      # 字の後ろの数字は組(台帳 #473)= 級は字だけ
+_CLS_RE = re.compile(r"([A-D])([0-9]*)")
+_Z2H = {c: c - 0xFEE0 for c in range(0xFF01, 0xFF5F)}
+_Z2H[0x3000] = 0x20
+
+
+def pace_class(name, kind, track):
+    """レース名 → ペースの基準のクラス。サイトの js/class-parts.js raceClassParts と同じ読み方
+    (pipeline/karte.py race_class と同じ守り)に、語のクラスを足したもの。
+      '重賞'(準重賞も)/ 'A1'〜'D3'(字+1 桁)/ 'A' 等(字だけ・名古屋笠松・字+2 桁)/ 'OP' / '新馬' / '未勝利' / '2歳' / '3歳' / None
+    ⛔推定はしない= 読めなければ None(場 × 距離の基準に戻る)"""
+    if kind in ("重賞", "準重賞"):
+        return "重賞"
+    s = str(name or "").translate(_Z2H)
+    if not s.strip():
+        return None
+    nk = track in NK_TRACKS
+    found = []
+    for m in _CLS_RE.finditer(s):
+        i, blk_end = m.start(), m.start() + 1
+        if blk_end < len(s) and s[blk_end].isascii() and s[blk_end].isalpha():
+            continue                                     # ＪＲＡ・ＣＵＰ・Ｋａｃｈｉ の中の字
+        if i > 0 and s[i - 1].isascii() and s[i - 1].isalpha():
+            ord_ok = re.search(r"[0-9](st|nd|rd|th)$", s[max(0, i - 6):i], re.I)
+            if not ord_ok and not re.match(r"[0-9]+([一二三四五六七八九十\-―‐−組]|$)", s[blk_end:]):
+                continue
+        letter, digits = m.group(1), m.group(2)
+        found.append(letter if nk or len(digits) != 1 else letter + digits)
+    if found:
+        return sorted(set(found), key=lambda c: ("ABCD".index(c[0]), int(c[1:] or 0)))[0]
+    for w, lab in (("新馬", "新馬"), ("初出走", "新馬"), ("未勝利", "未勝利"), ("未受賞", "未勝利"), ("オープン", "OP")):
+        if w in s:
+            return lab
+    m = re.search(r"([2-4])歳", s)
+    return (m.group(1) + "歳") if m else None
+
+
+def pace_class_up(c):
+    """近いクラスへまとめる 1 段上= A1→A・重賞/OP→上位・新馬/未勝利→新馬未勝利。それ以上まとめられなければ None"""
+    if not c:
+        return None
+    if c[0] in "ABCD" and len(c) > 1:
+        return c[0]
+    if c in ("重賞", "OP"):
+        return "上位"
+    if c in ("新馬", "未勝利"):
+        return "新馬未勝利"
+    return None
+
+
+def pace_std_cls(fastest, cls, before, years=PACE_STD_YEARS):
+    """クラス別の平年値と帯。→ (resolve, std_by_group, band_by_group)
+    組= (場, 距離, クラス) → 30 走に満たなければ (場, 距離, まとめたクラス) → それも満たなければ (場, 距離, None)。
+    resolve(場, 日, R, 距離) → 使う組 or None。⛔材料は before より前の years 日だけ・PACE_STD_MIN 未満の組は作らない。
+    帯= その組のレースの (最速 − その組の平年値) の四分位(⛔判定と同じ量)"""
+    lo = (dt.date.fromisoformat(before) - dt.timedelta(days=years)).isoformat()
+    by = {}
+    mem = []
+    for (t, d, no), (v, dm, _u) in fastest.items():
+        if not (lo <= d < before):
+            continue
+        c = cls.get((t, d, no))
+        mem.append((t, dm, c, v))
+        for g in {c, pace_class_up(c), None}:
+            by.setdefault((t, dm, g), []).append(v)
+    std = {k: statistics.median(v) for k, v in by.items() if len(v) >= PACE_STD_MIN}
+
+    def resolve(t, d, no, dm):
+        """→ (組, 段) 段 0= そのクラス / 1= まとめたクラス / 2= 場 × 距離。組が無ければ (None, None)"""
+        c = cls.get((t, d, no))
+        for lvl, g in enumerate((c, pace_class_up(c), None)):
+            if (g is not None or lvl == 2) and (t, dm, g) in std:
+                return (t, dm, g), lvl
+        return None, None
+    pool = {}
+    for t, dm, c, v in mem:
+        for g in {c, pace_class_up(c), None}:
+            k = (t, dm, g)
+            if k in std:
+                pool.setdefault(k, []).append(v - std[k])
+    band = {}
+    for k, xs in pool.items():
+        if len(xs) >= PACE_STD_MIN:
+            q = statistics.quantiles(sorted(xs), n=4, method="inclusive")
+            band[k] = [round(q[0], 2), round(q[2], 2)]
+    return resolve, std, band
+
+
+PACE_LEVELS = ("クラス", "まとめ", "場距離")
+
+
+def pace_rows(base, key, days, fastest=None, cls=None, years=PACE_STD_YEARS, by_class=True, kochi_fixed=True):
+    """対象日の並び → nar_race_pace の行。⛔平年値と四分位は**その月より前の years 日**のレースで作る
+    (レースより後の走を混ぜない)。⛔値の出せないレースは行を作らない(「平均」で埋めない)。
+    10/27 by_class= ふだんと帯を「場 × 距離 × クラス」で(少ない組はまとめる→場 × 距離)。False= 10/26 までの道(比べる用)。
+    戻り= (行, 飛ばした数, 使った段の数 {段: 本数})"""
     ds_all = sorted({str(d) for d in days})
     if not ds_all:
-        return [], {}
+        return [], {}, {}
     if fastest is None:
-        far = (dt.date.fromisoformat(ds_all[0]) - dt.timedelta(days=PACE_STD_YEARS)).isoformat()
-        fastest = pace_fastest(base, key, far, ds_all[-1])
+        far = (dt.date.fromisoformat(ds_all[0]) - dt.timedelta(days=years)).isoformat()
+        cls = {}
+        fastest = pace_fastest(base, key, far, ds_all[-1], cls_out=cls)
         log("  レース %d 本ぶんの最速の前半(平年値の材料ごと)・要求 %d 回" % (len(fastest), N_REQ[0]))
+    cls = cls or {}
     out = []
     skip = {"平年値なし": 0, "帯なし": 0}
+    levels = {}
     by_month = {}
     for d in ds_all:
         by_month.setdefault(d[:7], []).append(d)
@@ -990,30 +1117,42 @@ def pace_rows(base, key, days, fastest=None):
     for ym in sorted(by_month):
         ds = set(by_month[ym])
         start = ym + "-01"
-        std_from = (dt.date.fromisoformat(start) - dt.timedelta(days=PACE_STD_YEARS)).isoformat()
-        std = pace_std(fastest, start)
-        band = pace_band(fastest, std, start)
+        std_from = (dt.date.fromisoformat(start) - dt.timedelta(days=years)).isoformat()
+        if by_class:
+            resolve, std, band = pace_std_cls(fastest, cls, start, years)
+        else:
+            std = pace_std(fastest, start, years)
+            band = pace_band(fastest, std, start, years)
         n0, n_race = len(out), 0
         for (t, d, no), (v, dm, u) in sorted(fastest.items()):
             if d not in ds:
                 continue
             n_race += 1
-            base_v = std.get((t, dm))
+            if by_class:
+                g, lvl = resolve(t, d, no, dm)
+                base_v = std.get(g) if g else None
+                b = {t: band[g]} if g in band else {}
+            else:
+                g, lvl = (t, dm), None
+                base_v = std.get(g)
+                b = band
             if base_v is None:
                 skip["平年値なし"] += 1
                 continue
             x = v - base_v
-            w = pace_word(t, x, band)
+            w = pace_word(t, x, b, kochi_fixed)
             if not w:
                 skip["帯なし"] += 1
                 continue
+            if lvl is not None:
+                levels[PACE_LEVELS[lvl]] = levels.get(PACE_LEVELS[lvl], 0) + 1
             out.append({"track": t, "race_date": d, "race_no": int(no), "pace": w,
                         "lead_umaban": None if u is None else int(u),
                         "lead_ten": round(x, 2), "std_sec": round(base_v, 2),
                         "std_from": std_from, "built": now})
-        log("  %s 前半の取れたレース %d 本 → %d 行(平年値 %d 組・帯 %d 場)"
+        log("  %s 前半の取れたレース %d 本 → %d 行(平年値 %d 組・帯 %d)"
             % (ym, n_race, len(out) - n0, len(std), len(band)))
-    return out, skip
+    return out, skip, levels
 
 
 def pace_log(base, key, since=None, apply=False):
@@ -1026,9 +1165,10 @@ def pace_log(base, key, since=None, apply=False):
     days = [(lo + dt.timedelta(days=i)).isoformat() for i in range((hi - lo).days + 1)]
     log("■ 実際のペース %s 〜 %s(%d 日)" % (lo, hi, len(days)))
     t0 = dt.datetime.now()
-    rows, skip = pace_rows(base, key, days)
-    log("  行 %d(飛ばした= %s)・要求 %d 回・%.0f 秒"
-        % (len(rows), "・".join("%s %d" % (k, v) for k, v in skip.items() if v), N_REQ[0],
+    rows, skip, levels = pace_rows(base, key, days)
+    log("  行 %d(飛ばした= %s・基準の段= %s)・要求 %d 回・%.0f 秒"
+        % (len(rows), "・".join("%s %d" % (k, v) for k, v in skip.items() if v),
+           "・".join("%s %d" % (k, levels[k]) for k in PACE_LEVELS if k in levels), N_REQ[0],
            (dt.datetime.now() - t0).total_seconds()))
     kinds = {}
     for r in rows:
