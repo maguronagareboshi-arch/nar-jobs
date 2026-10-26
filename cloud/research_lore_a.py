@@ -33,6 +33,25 @@ AREA = {"門別": "北海道", "盛岡": "岩手", "水沢": "岩手", "浦和":
         "川崎": "南関東", "金沢": "金沢", "笠松": "東海", "名古屋": "東海", "園田": "兵庫", "姫路": "兵庫",
         "高知": "高知", "佐賀": "佐賀"}
 JRA_AREA = "中央"
+# 所属地区(trainer_area の字)→ 約束の地区。字が無い・読めない走は走った場の地区で代える(件数を報告)
+AFF_MAP = {"北海道": "北海道", "門別": "北海道", "岩手": "岩手", "盛岡": "岩手", "水沢": "岩手",
+           "南関東": "南関東", "南関": "南関東", "浦和": "南関東", "船橋": "南関東", "大井": "南関東", "川崎": "南関東",
+           "埼玉": "南関東", "千葉": "南関東", "東京": "南関東", "神奈川": "南関東", "金沢": "金沢", "石川": "金沢",
+           "東海": "東海", "愛知": "東海", "岐阜": "東海", "笠松": "東海", "名古屋": "東海", "兵庫": "兵庫",
+           "園田": "兵庫", "姫路": "兵庫", "高知": "高知", "佐賀": "佐賀", "帯広": "帯広", "ばんえい": "帯広",
+           "JRA": "中央", "中央": "中央", "美浦": "中央", "栗東": "中央"}
+
+
+def aff_of(v):
+    s = re.sub(r"[\s　]", "", str(v or ""))
+    if not s or s in ("None", "nan"):
+        return None
+    if s in AFF_MAP:
+        return AFF_MAP[s]
+    for k, a in AFF_MAP.items():
+        if k in s:
+            return a
+    return None
 DROP_PAT = ("出走取消", "競走除外")
 INT_BINS = [(1, 13), (14, 20), (21, 27), (28, 41), (42, 62), (63, 90), (91, 180), (181, 365), (366, 10 ** 6)]
 INT_LBL = ["1〜13", "14〜20", "21〜27", "28〜41", "42〜62", "63〜90", "91〜180", "181〜365", "366以上"]
@@ -48,15 +67,15 @@ DECISIONS = [
     "前走の履歴は 2021-10-01 から読む(それより前の走は見えない= 3 年以上休んだ馬は初出走扱い)。帯広(ばんえい)の走は読まない(平地との行き来はほぼ無い)。",
     "前の走= そのレース日より前の日の、外さなかった走(地方 14 場+中央。中央は finish_note に取消・除外を含む走を外す)。",
     "人気比の期待値= 対象期間 2 年・14 場の外さなかった走のうち人気のある走で出した 場×人気 の 3 着内率。人気比= 実際の 3 着内数 ÷ 期待値の合計(人気のある走だけ)。",
-    "T1 の単勝の倍率= nar_run_facts.win_odds_close(発走直前の単勝の最終の点)。無い走は中央値から外し、取れた割合を書く。",
+    "T1 の単勝の倍率は出さない(約束 10/26 改訂)。",
     "T1 の 2 着内率= 着順 ≤ 2。年ごとの勝率は 1 年目/2 年目。",
     "T2 の距離の 100 レース= 対象 2 年に場×距離で数えた外さなかったレース数(1 着のあるレース)。枠番= nar_runs.gate。",
     "T3 の馬場差= cloud/baba.py の build_days を本番の既定(classfirst= 細かい帯 1 年→細かい帯 3 年→字だけの帯 1 年→字だけの帯 3 年→場×距離 1 年・帯の読めない走は外す)で as-of に組んだ、レースごとの 1〜5 着の差の中央値(3 頭以上)。良馬場比 d を主に、同じ馬場状態比 g も lore.json に。参考に 1 年の窓だけ(going 段・帯なしは外す)の d も lore.json に。",
     "T3 の時間帯= nar_races.post_time の時:分。昼 〜15:59・夕方 16:00〜17:59・夜 18:00〜。季節そろえ= 場×年月(YYYY-MM)で 2 つの時間帯がどちらも 10 レース以上の組だけ、平均の差(後−先)を 2 つのレース数の和で重み付けして平均。馬場状態はレースの going(良/良以外)。",
     "T4 の間隔= レース日 − 前の走の日(日数)。",
-    "T5 の地区= 走った場の地区(遠征・交流競走もその場の地区で数える)。地区が前の走と変わったら 1 走目から数え直す。初出走から始まる続きは移籍ではない。比べ相手= 見える範囲で移籍で始まっていない続きの 2 走目以降(前走も同じ地区)。前の地区の中央/地方= その続きが始まる直前の走の地区。",
+    "T5 の地区= 所属地区(約束 10/26 改訂)= nar_runs.trainer_area を約束の地区に読み替えた値(JRA・美浦・栗東は中央・中央の走は中央)。trainer_area が無い・読めない地方の走は走った場の地区で代えた(件数と元の字の内訳は lore.json の info)。地区が前の走と変わったら 1 走目から数え直す。初出走から始まる続きは移籍ではない。比べ相手= 見える範囲で移籍で始まっていない続きの 2 走目以降(前走も同じ地区)。前の地区の中央/地方= その続きが始まる直前の走の地区。",
     "T6 の増減= nar_runs.body_weight_change(発表)。無ければ 前の走(地方)の body_weight との差。前の走が中央で発表の増減も無い走は外す。区分の境は整数 kg。",
-    "T7 の騎手= nar_runs.jockey から空白と記号(▲△☆◇★)を除いた文字で比べる。前の走が同じ地区・間隔 62 日以内・両方の騎手名がある走だけ。",
+    "T7 の「前の走が同じ地区」= 走った場の地区で比べた(約束の T7 は改訂なし)。T7 の騎手= nar_runs.jockey から空白と記号(▲△☆◇★)を除いた文字で比べる。前の走が同じ地区・間隔 62 日以内・両方の騎手名がある走だけ。",
     "率は % を小数 1 位で四捨五入。人気比は小数 2 位。",
 ]
 
@@ -132,7 +151,7 @@ def years(since, until):
 
 
 def fetch(rest):
-    races, runs, facts = [], [], []
+    races, runs, facts = [], [], []  # facts は使わない(T1 の倍率は 10/26 改訂で出さない)
     for track in TRACKS:
         tq = cond_stats.enc(track)
         for lo, hi in years(H0, P1):
@@ -140,15 +159,8 @@ def fetch(rest):
             races += rest.paged("nar_races?select=track,race_date,race_no,distance_m,race_name,going,race_kind,post_time"
                                 + rng, "race_date.asc,race_no.asc")
             runs += rest.paged("nar_runs?select=track,race_date,race_no,runner_number,gate,horse_name,birth_date,finish,"
-                               "finish_note,popularity,jockey,body_weight,body_weight_change,time_sec" + rng,
+                               "finish_note,popularity,jockey,body_weight,body_weight_change,time_sec,trainer_area" + rng,
                                "race_date.asc,race_no.asc,runner_number.asc,horse_name.asc")
-        for lo, hi in years(P0, P1):
-            rng = f"&track=eq.{tq}&race_date=gte.{lo}&race_date=lte.{hi}"
-            try:
-                facts += rest.paged("nar_run_facts?select=track,race_date,race_no,umaban,win_odds_close" + rng,
-                                    "race_date.asc,race_no.asc,umaban.asc")
-            except Exception as e:                   # noqa: BLE001
-                log(f"⚠ nar_run_facts {track} {lo} を読めない({e})")
         log(f"{track} 読んだ(累計 レース {len(races):,}・走 {len(runs):,}・facts {len(facts):,})")
     jh, jr, jerr = [], [], None
     try:
@@ -181,6 +193,10 @@ def prepare(races, runs, jh, jr):
     R = R[R.horse_name.notna()].copy()
     R["date"] = pd.to_datetime(R.race_date)
     R["area"] = R.track.map(AREA)
+    R["aff"] = R.trainer_area.map(aff_of)
+    info["aff_raw_values"] = {str(k): int(v) for k, v in R.trainer_area.fillna("(空)").value_counts().items()}
+    info["aff_fallback_to_venue"] = int(R.aff.isna().sum())
+    R["aff"] = R.aff.fillna(R.area)
     R["src"] = "N"
     R["pop"] = pd.to_numeric(R.popularity, errors="coerce")
     R["bw"] = pd.to_numeric(R.body_weight, errors="coerce")
@@ -189,7 +205,7 @@ def prepare(races, runs, jh, jr):
     R["rn"] = pd.to_numeric(R.runner_number, errors="coerce")
     R["gate_n"] = pd.to_numeric(R.gate, errors="coerce")
     # 中央
-    J = pd.DataFrame(columns=["horse", "date", "area", "src"])
+    J = pd.DataFrame(columns=["horse", "date", "area", "aff", "src"])
     info["jra_horses"] = len(jh)
     info["jra_runs_read"] = len(jr)
     if jh and jr:
@@ -202,25 +218,26 @@ def prepare(races, runs, jh, jr):
         j = j.merge(h[["kb_horse_id", "horse"]], on="kb_horse_id", how="inner")
         j["date"] = pd.to_datetime(j.race_date)
         j["area"] = JRA_AREA
+        j["aff"] = JRA_AREA
         j["src"] = "J"
-        J = j[["horse", "date", "area", "src"]].drop_duplicates(["horse", "date"])
+        J = j[["horse", "date", "area", "aff", "src"]].drop_duplicates(["horse", "date"])
         nar_horses = set(R.horse)
         info["jra_runs_linked_to_nar_horses"] = int(J.horse.isin(nar_horses).sum())
         J = J[J.horse.isin(nar_horses)]
     R["idx"] = np.arange(len(R))
-    A = pd.concat([R[["horse", "date", "area", "src", "idx", "jk", "bw"]],
+    A = pd.concat([R[["horse", "date", "area", "aff", "src", "idx", "jk", "bw"]],
                    J.assign(idx=-1, jk=None, bw=np.nan)], ignore_index=True)
     A = A.sort_values(["horse", "date", "src"], kind="mergesort").reset_index(drop=True)
     # 同じ日の重なり(地方と中央)は地方を残す
     A = A[~A.duplicated(["horse", "date"], keep="last") | (A.src == "N")]
     A = A.drop_duplicates(["horse", "date", "idx"])
     g = A.groupby("horse", sort=False)
-    for c in ["date", "area", "src", "jk", "bw"]:
+    for c in ["date", "area", "aff", "src", "jk", "bw"]:
         A["p_" + c] = g[c].shift(1)
-    start = A.p_date.isna() | (A.area != A.p_area)
+    start = A.p_date.isna() | (A.aff != A.p_aff)
     A["streak"] = start.cumsum()
     A["n_in_area"] = A.groupby("streak").cumcount() + 1
-    A["origin"] = A.p_area.where(start).groupby(A.streak).transform("first")
+    A["origin"] = A.p_aff.where(start).groupby(A.streak).transform("first")
     A = A[A.idx >= 0].set_index("idx").sort_index()
     for c in ["p_date", "p_area", "p_src", "p_jk", "p_bw", "n_in_area", "origin"]:
         R[c] = A[c].values
@@ -275,15 +292,6 @@ def compute(R, rc, facts, info, today=None, rest_samples=None, jra_ok=True):
     # ---------- T1 ----------
     races_T = T.drop_duplicates(["track", "race_date", "race_no"])[["track", "race_date", "race_no", "fs"]]
     p1 = T[T["pop"] == 1].copy()
-    if facts:
-        f = pd.DataFrame(facts)
-        f["win_odds_close"] = pd.to_numeric(f.win_odds_close, errors="coerce")
-        f = f.rename(columns={"umaban": "rn"})
-        f["rn"] = pd.to_numeric(f.rn, errors="coerce")
-        p1 = p1.merge(f[["track", "race_date", "race_no", "rn", "win_odds_close"]].drop_duplicates(
-            ["track", "race_date", "race_no", "rn"]), on=["track", "race_date", "race_no", "rn"], how="left")
-    else:
-        p1["win_odds_close"] = np.nan
     cnt = p1.groupby(["track", "race_date", "race_no"]).size()
     ties = cnt[cnt >= 2]
     t1 = []
@@ -294,8 +302,6 @@ def compute(R, rc, facts, info, today=None, rest_samples=None, jra_ok=True):
         n = len(g)
         r = {"track": tr, "runs": n, "win_pct": pct((g.finish == 1).sum(), n),
              "top2_pct": pct((g.finish <= 2).sum(), n), "top3_pct": pct((g.finish <= 3).sum(), n),
-             "odds_median": round(float(g.win_odds_close.median()), 1) if g.win_odds_close.notna().any() else None,
-             "odds_coverage_pct": pct(g.win_odds_close.notna().sum(), n),
              "avg_field": round(float(races_T[races_T.track == tr].fs.mean()), 2),
              "races": int((races_T.track == tr).sum()), "tie_races": int((ties.reset_index().track == tr).sum())}
         for y in ("1年目", "2年目"):
@@ -480,9 +486,9 @@ def summary(o):
     t1 = o["T1"]
     L.append("## T1 1番人気がいちばん勝つ場は\n")
     L.append(f"1 番人気が 2 頭のレース {t1['tie_races_total']} 件({t1['tie_runs_total']} 走)・1 番人気の無いレース {t1['races_without_pop1']} 件。\n")
-    L.append(md_table(["場", "走数", "勝率", "2着内率", "3着内率", "単勝中央値", "倍率の取れた割合", "平均頭数", "1年目 勝率(走)", "2年目 勝率(走)",
+    L.append(md_table(["場", "走数", "勝率", "2着内率", "3着内率", "平均頭数", "1年目 勝率(走)", "2年目 勝率(走)",
                        "8頭以下 勝率(走)", "9〜10頭", "11頭以上", "同率2頭"],
-                      [[r["track"], r["runs"], r["win_pct"], r["top2_pct"], r["top3_pct"], r["odds_median"], r["odds_coverage_pct"],
+                      [[r["track"], r["runs"], r["win_pct"], r["top2_pct"], r["top3_pct"],
                         r["avg_field"], f"{r['win_pct_1年目']}({r['runs_1年目']})", f"{r['win_pct_2年目']}({r['runs_2年目']})"]
                        + [f"{r['win_pct_' + lb]}({r['runs_' + lb]})" for lb in FS_LBL] + [r["tie_races"]] for r in t1["by_track"]]))
     t2 = o["T2"]
