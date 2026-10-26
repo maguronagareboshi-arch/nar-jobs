@@ -1,0 +1,35 @@
+# 研究用・1 回きり。読み物「言い伝えをデータで確かめる」T1〜T7 の集計 実装 A(cloud/research_lore_a.py)。
+# 約束= nar-site research/lore-articles/SPEC.md。結果は artifact(out/A/lore.json・summary.md)。
+# ⛔本番 DB では REST の単純 select だけ。集計は全部 Python。書き込みなし。
+name: research-lore-a
+on:
+  push:
+    branches: [wip/lore-a-20261026]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: research-lore-a
+  cancel-in-progress: false
+jobs:
+  lore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install numpy==1.26.4 pandas==2.2.3
+      - name: lore research A
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/research_lore_a.py
+      - name: upload result
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: lore-a
+          path: out/A/
+          if-no-files-found: warn
