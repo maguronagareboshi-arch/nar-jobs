@@ -29,16 +29,17 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           python cloud/tenkai.py --selftest
-          python cloud/research_pace_class.py
+          if [ ! -f docs/research-pace-class/result.md ]; then python cloud/research_pace_class.py; fi
       - name: backtest pace on branch and master
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           mkdir -p docs/research-pace-class
-          python cloud/tenkai.py --backtest 60 --pace 2>&1 | sed -E 's/[0-9]+ 秒//; s/要求 [0-9]+ 回//' > docs/research-pace-class/backtest_branch.txt
           git worktree add -q /tmp/m origin/master
           (cd /tmp/m && python cloud/tenkai.py --backtest 60 --pace 2>&1 | sed -E 's/[0-9]+ 秒//; s/要求 [0-9]+ 回//') > docs/research-pace-class/backtest_master.txt
+          python cloud/tenkai.py --backtest 60 --pace 2>&1 | sed -E 's/[0-9]+ 秒//; s/要求 [0-9]+ 回//' > docs/research-pace-class/backtest_branch.txt
+          rm -f docs/research-pace-class/backtest_same.txt docs/research-pace-class/backtest_diff.txt
           if diff -q docs/research-pace-class/backtest_master.txt docs/research-pace-class/backtest_branch.txt; then echo "見込みの答え合わせ 同じ" > docs/research-pace-class/backtest_same.txt; else diff docs/research-pace-class/backtest_master.txt docs/research-pace-class/backtest_branch.txt > docs/research-pace-class/backtest_diff.txt || true; fi
       - name: commit result
         run: |
