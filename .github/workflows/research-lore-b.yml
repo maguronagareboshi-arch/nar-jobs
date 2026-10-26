@@ -1,0 +1,36 @@
+# 研究用・1 回きり。読み物 7 本の集計 実装 B(cloud/research_lore_b.py)。結果は artifact lore-b(out/B)。
+# ⛔本番 DB は REST の単純 select だけ。書き込みなし。commit しない。
+name: research-lore-b
+on:
+  push:
+    branches: [wip/lore-b-20261026]
+    paths: [cloud/research_lore_b.py, .github/workflows/research-lore-b.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: research-lore-b
+  cancel-in-progress: false
+jobs:
+  lore:
+    runs-on: ubuntu-latest
+    timeout-minutes: 150
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install numpy==1.26.4 pandas==2.2.3
+      - name: selftest
+        run: python cloud/research_lore_b.py --selftest && rm -rf out/B_selftest
+      - name: lore B research
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/research_lore_b.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: lore-b
+          path: out/B
+          if-no-files-found: warn
