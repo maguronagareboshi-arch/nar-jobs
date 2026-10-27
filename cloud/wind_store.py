@@ -8,6 +8,7 @@
 
 窓= 1R の発走 − 30 分 〜 最終 R の発走。掛かる 3 時間ファイル(<stationId>/<yyyymmdd>_<hh>.json)だけ取る(1 場最大 5 本)。
 点の規則は viewer の functions/api/wind/[venue].js の pointsOfFile と同じ(品質 0 だけ採用・dir は 1〜16 以外 null)。
+降水量 precip(10 分間 mm)は precipitation10m を風と同じ扱い(品質 0 だけ・負は null)で足す。
 ⛔標準ライブラリだけ。環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY(service_role)。
 """
 import argparse
@@ -80,18 +81,19 @@ def _q(row, key):
 
 
 def points_of_file(rows, ymd):
-    """上流 1 本分 → [{t, dir, speed, temp}](その日の分だけ・t は HH:MM)。品質 0 以外は null。"""
+    """上流 1 本分 → [{t, dir, speed, temp, precip}](その日の分だけ・t は HH:MM)。品質 0 以外は null。"""
     if not isinstance(rows, dict):
         raise ValueError("Invalid observations")
     out = []
     for key in sorted(k for k in rows if re.fullmatch(r"\d{14}", k) and k[:8] == ymd):
         r = rows[key]
-        d, sp = _q(r, "windDirection"), _q(r, "wind")
+        d, sp, pr = _q(r, "windDirection"), _q(r, "wind"), _q(r, "precipitation10m")
         out.append({
             "t": key[8:10] + ":" + key[10:12],
             "dir": int(d) if d is not None and float(d).is_integer() and 1 <= d <= 16 else None,
             "speed": sp if sp is not None and sp >= 0 else None,
             "temp": _q(r, "temp"),
+            "precip": pr if pr is not None and pr >= 0 else None,
         })
     return out
 
@@ -163,7 +165,7 @@ def run_day(date, now, dry):
                 log(f"⚠{name} {ymd}_{h:02d} 取れない: {type(e).__name__}: {str(e)[:80]}")
         pts = in_window(pts, lo, hi)
         rows = [{"venue": prefix, "obs_at": f"{date}T{p['t']}:00+09:00",
-                 "dir": p["dir"], "speed": p["speed"], "temp": p["temp"]} for p in pts]
+                 "dir": p["dir"], "speed": p["speed"], "temp": p["temp"], "precip": p["precip"]} for p in pts]
         if rows and not dry:
             for i in range(0, len(rows), 60):
                 rest("nar_wind_obs?on_conflict=venue,obs_at", rows[i:i + 60])

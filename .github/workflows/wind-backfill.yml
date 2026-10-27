@@ -1,18 +1,28 @@
-# 風の過去分の取り込み: 気象庁「過去の気象データ」の 10 分値から、過去の開催日の風を nar_wind_obs へ足す(手動便)。
-# 1 か月ずつ流す。heartbeat と /update-times には載せない(手動便のため)。
+# 風の過去分の取り込み: 気象庁「過去の気象データ」の 10 分値から、過去の開催日の風と雨量を nar_wind_obs へ足す(手動便)。
+# months に複数月(「2025-01,2025-02」か「2025-01..2026-09」)を渡すと 1 か月 1 本で全部同時に流す(最大 21 本)。
+# 旧来の month(YYYY-MM 1 つ)も使える。両方あれば合わせて重複を除く。
+# heartbeat と /update-times には載せない(手動便のため)。
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY(既存。**新しい secret は作らない**)
 name: wind-backfill
 
 on:
   workflow_dispatch:
     inputs:
+      months:
+        description: '取り込む月の並び(2025-01,2025-02 か 2025-01..2026-09)'
+        default: ''
+        type: string
       month:
-        description: '取り込む月(YYYY-MM)'
-        required: true
+        description: '取り込む月 1 つ(YYYY-MM・旧来の入力)'
+        default: ''
         type: string
       venue:
         description: 'この場だけ(kochi や 高知・空なら全場)'
         default: ''
+        type: string
+      sleep:
+        description: '取得の間隔(秒・小数可)'
+        default: '1'
         type: string
       dry:
         description: '書かずに行数だけ'
@@ -27,25 +37,76 @@ permissions:
   contents: read
 
 jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      months: ${{ steps.expand.outputs.months }}
+    steps:
+      - name: expand months
+        id: expand
+        env:
+          MONTHS: ${{ inputs.months }}
+          MONTH: ${{ inputs.month }}
+          SLEEP: ${{ inputs.sleep }}
+        run: |
+          python3 - <<'PY'
+          import json, os, re, sys
+          def bad(msg):
+              print(msg); sys.exit(1)
+          if not re.fullmatch(r"\d+(\.\d+)?", os.environ.get("SLEEP", "").strip()):
+              bad("sleep は 0 以上の秒数")
+          items = [x.strip() for x in os.environ.get("MONTHS", "").split(",") if x.strip()]
+          if os.environ.get("MONTH", "").strip():
+              items.append(os.environ["MONTH"].strip())
+          out = []
+          for it in items:
+              m = re.fullmatch(r"(\d{4})-(\d{2})(?:\.\.(\d{4})-(\d{2}))?", it)
+              if not m:
+                  bad(f"月の形が違う {it}(YYYY-MM か YYYY-MM..YYYY-MM)")
+              y, mo = int(m.group(1)), int(m.group(2))
+              ey, em = (int(m.group(3)), int(m.group(4))) if m.group(3) else (y, mo)
+              if not (1 <= mo <= 12 and 1 <= em <= 12) or (ey, em) < (y, mo):
+                  bad(f"月の範囲が違う {it}")
+              while (y, mo) <= (ey, em):
+                  out.append(f"{y:04d}-{mo:02d}")
+                  y, mo = (y + 1, 1) if mo == 12 else (y, mo + 1)
+          out = sorted(set(out))
+          if not out:
+              bad("months か month を入れる")
+          if len(out) > 256:
+              bad(f"月が多すぎる {len(out)}(matrix は 256 本まで)")
+          print("月", len(out), "本", ", ".join(out))
+          with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+              f.write("months=" + json.dumps(out) + "\n")
+          PY
+
   backfill:
+    needs: plan
     runs-on: ubuntu-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 21
+      matrix:
+        month: ${{ fromJSON(needs.plan.outputs.months) }}
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - name: backfill wind observations
+      - name: backfill wind observations ${{ matrix.month }}
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-          MONTH: ${{ inputs.month }}
+          MONTH: ${{ matrix.month }}
           VENUE: ${{ inputs.venue }}
+          SLEEP: ${{ inputs.sleep }}
           DRY: ${{ inputs.dry }}
         run: |
           set -o pipefail
           echo "$MONTH" | grep -Eq '^[0-9]{4}-[0-9]{2}$' || { echo "month は YYYY-MM"; exit 1; }
-          args=(--month "$MONTH")
+          args=(--month "$MONTH" --sleep "$SLEEP")
           [ -n "$VENUE" ] && args+=(--venue "$VENUE")
           [ "$DRY" = "true" ] && args+=(--dry)
           python3 cloud/wind_backfill.py "${args[@]}"
