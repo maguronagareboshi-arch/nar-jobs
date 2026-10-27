@@ -231,6 +231,40 @@ left join lateral (
     and exists (select 1 from unnest(h.aite) x, unnest(h.aite) z
                 where z <> x and p.c = array[h.hon, x, z])) st on true;
 
+-- 2026-10-28 ◎と「確定時の 1 番人気」の比べ(同じレース・◎が取消/除外のレースは tmp_ai_res の時点で無い)と、高配当の的中
+--   1 番人気が取消・除外・同率で 2 頭以上のレースは比べに入れない(1 頭に決まるレースだけ)
+drop table if exists tmp_ai_fav;
+create temp table tmp_ai_fav as
+select r.model, r.track, r.race_date, r.race_no, r.timing, r.num as hon, r.finish as hon_fin, r.tan_pay as hon_pay, r.fuku_pay as hon_fuku,
+       f.runner_number as fav, f.finish as fav_fin,
+       case when f.finish = 1 then coalesce((
+         select (p->>'y')::int from jsonb_array_elements(rp.payouts) p
+         where p->>'t' = 'win' and p->>'c' = f.runner_number::text limit 1), 0) else 0 end as fav_pay,
+       coalesce((
+         select (p->>'y')::int from jsonb_array_elements(rp.payouts) p
+         where p->>'t' = 'place' and p->>'c' = f.runner_number::text limit 1), 0) as fav_fuku
+from tmp_ai_res r
+join public.nar_runs f on (f.track, f.race_date, f.race_no) = (r.track, r.race_date, r.race_no) and f.popularity = 1
+  and coalesce(f.finish_note, '') !~ '取消|除外' and f.finish is not null
+left join public.nar_race_payouts rp on (rp.track, rp.race_date, rp.race_no) = (r.track, r.race_date, r.race_no)
+where r.pos = 1
+  and (select count(*) from public.nar_runs f2
+       where (f2.track, f2.race_date, f2.race_no) = (r.track, r.race_date, r.race_no) and f2.popularity = 1) = 1;
+insert into tmp_ai_fav
+select model, 'all', race_date, race_no, timing, hon, hon_fin, hon_pay, hon_fuku, fav, fav_fin, fav_pay, fav_fuku from tmp_ai_fav;
+create index on tmp_ai_fav (model, track, timing);
+
+-- 的中した払戻(1 レース 1 券種 1 行・100 円あたり)= ◎の単勝・◎から流した馬連/馬単/三連単
+drop table if exists tmp_ai_hit;
+create temp table tmp_ai_hit as
+select model, track, track as tr, race_date, race_no, timing, 'tan' as kind, tan_pay as pay, popularity as pop from tmp_ai_res where pos = 1 and tan_pay > 0
+union all select model, track, track, race_date, race_no, timing, 'umaren', um_pay, null from tmp_ai_ex where um_hit = 1
+union all select model, track, track, race_date, race_no, timing, 'umatan', ut_pay, null from tmp_ai_ex where ut_hit = 1
+union all select model, track, track, race_date, race_no, timing, 'sanrentan', st_pay, null from tmp_ai_ex where st_hit = 1;
+insert into tmp_ai_hit
+select model, 'all', tr, race_date, race_no, timing, kind, pay, pop from tmp_ai_hit;
+create index on tmp_ai_hit (model, track, timing);
+
 -- 場別と 'all' を同じ形で集計できるよう縦に重ねる
 drop table if exists tmp_ai_u;
 create temp table tmp_ai_u as
@@ -326,9 +360,28 @@ select g.model, g.track, g.timing,
                    count(*) filter (where finish <= 3) f, sum(tan_pay) tp
             from tmp_ai_u x
             where x.model = g.model and x.track = g.track and x.timing = g.timing and x.mark = '◎'
-            group by 1 order by 1 desc limit 30) dy),
+            group by 1 order by 1 desc limit 120) dy),   -- 10/28 30→120= 日別のグラフ(画面の表は直近 30 だけ)
     'exotic', pg_temp.ai_exotic(g.model, g.track, g.timing),
-    'evBands', pg_temp.ai_bands(g.model, g.track, g.timing, 'ev'),
+    'fav', (
+      select case when count(*) = 0 then null else jsonb_build_object('n', count(*),
+        'hon', jsonb_build_object('win', round(100.0 * count(*) filter (where hon_fin = 1) / count(*), 1),
+                                  'fuku', round(100.0 * count(*) filter (where hon_fin <= 3) / count(*), 1),
+                                  'tanRet', round(1.0 * sum(hon_pay) / count(*), 0), 'fukuRet', round(1.0 * sum(hon_fuku) / count(*), 0)),
+        'fav', jsonb_build_object('win', round(100.0 * count(*) filter (where fav_fin = 1) / count(*), 1),
+                                  'fuku', round(100.0 * count(*) filter (where fav_fin <= 3) / count(*), 1),
+                                  'tanRet', round(1.0 * sum(fav_pay) / count(*), 0), 'fukuRet', round(1.0 * sum(fav_fuku) / count(*), 0)),
+        'diffN', count(*) filter (where hon <> fav),
+        'diffHon', count(*) filter (where hon <> fav and hon_fin = 1),
+        'diffFav', count(*) filter (where hon <> fav and fav_fin = 1)) end
+      from tmp_ai_fav x where x.model = g.model and x.track = g.track and x.timing = g.timing),
+    'hits', (
+      select coalesce(jsonb_agg(jsonb_build_object('d', h.race_date, 'track', h.tr, 'no', h.race_no, 'name', h.race_name,
+               'kind', h.kind, 'pay', h.pay, 'pop', h.pop) order by h.pay desc, h.race_date desc), '[]'::jsonb)
+      from (select x.*, r.race_name from tmp_ai_hit x
+            join public.nar_races r on (r.track, r.race_date, r.race_no) = (x.tr, x.race_date, x.race_no)
+            where x.model = g.model and x.track = g.track and x.timing = g.timing
+            order by x.pay desc, x.race_date desc limit 6) h),
+
     'pBands', pg_temp.ai_bands(g.model, g.track, g.timing, 'p')
   ), now()
 from (select distinct model, track, timing from tmp_ai_u) g;
