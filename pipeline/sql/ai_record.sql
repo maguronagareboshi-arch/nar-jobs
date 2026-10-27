@@ -94,6 +94,91 @@ where coalesce(u.finish_note, '') !~ '取消|除外'
   -- 10/13: 当日分は払戻が入ってから数える(着順だけ先に入った回に回収 0 で数えない)
   and (k.race_date < (now() at time zone 'Asia/Tokyo')::date or rp.payouts is not null);
 
+-- 2026-10-28 期待値別・見込み別の成績(印の有無に関係なく、AI が 1 着の見込みを出した全頭)。
+--   期待値= AI の 1 着見込み × 発走 10 分前(より前で最後)の単勝 × ev_coef:v2 の係数(/ai の期待値の列と同じ式)。
+--   ⛔係数かオッズが無い馬は数えない(1 で代用しない)。見込みは base-v1 / v3n-1 = meta.p・南関特化 v3-9 = meta.runners[].p1
+drop table if exists tmp_ai_evh;
+create temp table tmp_ai_evh as
+select m.model, m.track, m.race_date, m.race_no, m.timing, x.num, x.pr,
+       substr(r.post_time, 1, 2)::int * 60 + substr(r.post_time, 3, 2)::int as pm
+from tmp_ai_src m
+join public.nar_races r on (r.track, r.race_date, r.race_no) = (m.track, m.race_date, m.race_no)
+cross join lateral (
+  select (e->>'num')::int as num, (e->>'p1')::float as pr
+  from jsonb_array_elements(case when jsonb_typeof(m.meta->'runners') = 'array' then m.meta->'runners' else '[]'::jsonb end) e
+  union all
+  select e.key::int, e.value::float
+  from jsonb_each_text(case when coalesce(jsonb_typeof(m.meta->'runners'), '') <> 'array' and jsonb_typeof(m.meta->'p') = 'object'
+                            then m.meta->'p' else '{}'::jsonb end) e
+) x
+where r.post_time ~ '^[0-9]{4}$'
+  and m.race_date <= (now() at time zone 'Asia/Tokyo')::date
+  and m.computed_at < ((r.race_date::text || ' ' || substr(r.post_time, 1, 2) || ':' || substr(r.post_time, 3, 2))::timestamp
+                       at time zone 'Asia/Tokyo')
+  and x.num is not null and x.pr is not null;
+
+drop table if exists tmp_ai_ev;
+create temp table tmp_ai_ev as
+with od as (
+  select h.*, t.o, h.pm - t.tm as mins
+  from tmp_ai_evh h
+  cross join lateral (
+    select (k.w->>h.num::text)::float as o, split_part(k.t, ':', 1)::int * 60 + split_part(k.t, ':', 2)::int as tm
+    from public.nar_odds_ticks k
+    where (k.track, k.race_date, k.race_no) = (h.track, h.race_date, h.race_no) and not k.f
+      and k.t ~ '^[0-9]{1,2}:[0-9]{2}$'
+      and split_part(k.t, ':', 1)::int * 60 + split_part(k.t, ':', 2)::int <= h.pm - 10
+    order by k.id desc limit 1) t
+  where t.o > 0
+), cf as (select value as c from public.nar_meta where key = 'ev_coef:v2')
+select od.model, od.track, od.race_date, od.race_no, od.timing, od.num, od.pr,
+       od.pr * od.o * ((select c from cf) -> 'win'
+         -> (case when od.o < 3 then '<3' when od.o < 10 then '3-9.9' when od.o < 30 then '10-29.9' else '>=30' end)
+         ->> (case when od.mins < 20 then '10-20' when od.mins < 30 then '20-30' when od.mins < 60 then '30-60' else '60+' end))::float as ev,
+       u.finish,
+       case when u.finish = 1 then coalesce((
+         select (p->>'y')::int from jsonb_array_elements(rp.payouts) p
+         where p->>'t' = 'win' and p->>'c' = od.num::text limit 1), 0) else 0 end as tan_pay,
+       coalesce((
+         select (p->>'y')::int from jsonb_array_elements(rp.payouts) p
+         where p->>'t' = 'place' and p->>'c' = od.num::text limit 1), 0) as fuku_pay
+from od
+join public.nar_runs u on (u.track, u.race_date, u.race_no, u.runner_number) = (od.track, od.race_date, od.race_no, od.num)
+left join public.nar_race_payouts rp on (rp.track, rp.race_date, rp.race_no) = (od.track, od.race_date, od.race_no)
+where coalesce(u.finish_note, '') !~ '取消|除外' and u.finish is not null
+  and exists (select 1 from public.nar_runs w
+              where w.track = od.track and w.race_date = od.race_date and w.race_no = od.race_no and w.finish = 1)
+  and (od.race_date < (now() at time zone 'Asia/Tokyo')::date or rp.payouts is not null);
+delete from tmp_ai_ev where ev is null;
+insert into tmp_ai_ev
+select model, 'all', race_date, race_no, timing, num, pr, ev, finish, tan_pay, fuku_pay from tmp_ai_ev;
+create index on tmp_ai_ev (model, track, timing);
+
+-- 帯ごとの成績(帯の名前・並び・頭数・勝率・3着内率・単勝/複勝の 100 円あたりの戻り・平均の見込み %)
+create or replace function pg_temp.ai_bands(p_model text, p_track text, p_timing text, p_kind text)
+returns jsonb language sql as $$
+  select coalesce(jsonb_agg(jsonb_build_object('band', band, 'n', n, 'w1', w1,
+           'win', round(100.0 * w1 / n, 1), 'fuku', round(100.0 * f / n, 1),
+           'tanRet', round(1.0 * tp / n, 0), 'fukuRet', round(1.0 * fp / n, 0), 'avgP', round(100.0 * ap::numeric, 1))
+           order by ord), '[]'::jsonb)
+  from (
+    select b.band, b.ord, count(*) n, count(*) filter (where finish = 1) w1, count(*) filter (where finish <= 3) f,
+           sum(tan_pay) tp, sum(fuku_pay) fp, avg(pr) ap
+    from tmp_ai_ev x
+    cross join lateral (select case when p_kind = 'ev' then
+        case when x.ev < 0.6 then 1 when x.ev < 0.8 then 2 when x.ev < 1.0 then 3 when x.ev < 1.2 then 4
+             when x.ev < 1.5 then 5 when x.ev < 2.0 then 6 else 7 end
+      else
+        case when x.pr < 0.05 then 1 when x.pr < 0.1 then 2 when x.pr < 0.2 then 3 when x.pr < 0.3 then 4
+             when x.pr < 0.5 then 5 else 6 end
+      end as ord) o
+    cross join lateral (select case when p_kind = 'ev' then
+        (array['0.6未満', '0.6〜0.8', '0.8〜1.0', '1.0〜1.2', '1.2〜1.5', '1.5〜2.0', '2.0以上'])[o.ord]
+      else (array['5%未満', '5〜10%', '10〜20%', '20〜30%', '30〜50%', '50%以上'])[o.ord] end as band, o.ord) b
+    where x.model = p_model and x.track = p_track and x.timing = p_timing
+    group by 1, 2) g
+$$;
+
 -- ◎から○▲△へ流した馬券(馬連・馬単・三連単)の成績(2026-09-10 追加)。
 -- 買い方はこれだけ= ◎を軸に相手全部(5 頭なら ○▲△△ の 4 頭= 馬連 4・馬単 4・三連単 12 点)へ流す・1組100円。⛔点数は規則で3点/6点に固定せず、
 -- **実際に買えた組の数**で持つ(印が少ないレースはその分だけ減る)。
@@ -247,7 +332,9 @@ select g.model, g.track, g.timing,
             from tmp_ai_u x
             where x.model = g.model and x.track = g.track and x.timing = g.timing and x.mark = '◎'
             group by 1 order by 1 desc limit 30) dy),
-    'exotic', pg_temp.ai_exotic(g.model, g.track, g.timing)
+    'exotic', pg_temp.ai_exotic(g.model, g.track, g.timing),
+    'evBands', pg_temp.ai_bands(g.model, g.track, g.timing, 'ev'),
+    'pBands', pg_temp.ai_bands(g.model, g.track, g.timing, 'p')
   ), now()
 from (select distinct model, track, timing from tmp_ai_u) g;
 
