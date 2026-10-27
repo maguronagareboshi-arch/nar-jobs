@@ -1,0 +1,36 @@
+# 研究用。「2026 年の地方競馬」まとめの数字 実装 B(cloud/year_review_b.py)。結果は docs/year_review_b/result.json をこの枝へ commit。
+# ⛔本番 DB は REST の単純 select だけ。書き込みなし。
+name: year-review-b
+on:
+  push:
+    branches: [wip/year-b-20261027]
+    paths: [cloud/year_review_b.py, .github/workflows/year-review-b.yml]
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: year-review-b
+  cancel-in-progress: false
+jobs:
+  yr:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: selftest
+        run: python cloud/year_review_b.py --selftest
+      - name: year review B
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/year_review_b.py
+      - name: commit result
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add docs/year_review_b/result.json
+          git commit -m "year review B result" || exit 0
+          git push origin HEAD:wip/year-b-20261027
