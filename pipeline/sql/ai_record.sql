@@ -120,17 +120,12 @@ where r.post_time ~ '^[0-9]{4}$'
 drop table if exists tmp_ai_ev;
 create temp table tmp_ai_ev as
 with od as (
-  select h.*, t.o, h.pm - t.tm as mins
+  -- 単勝は stats_local.py が本番から 1 レース 1 行に絞って写した public.ev_tick(発走 10 分前より前で最後の記録)
+  select h.*, (k.w->>h.num::text)::float as o, k.pm - k.tm as mins
   from tmp_ai_evh h
-  cross join lateral (
-    select (k.w->>h.num::text)::float as o, split_part(k.t, ':', 1)::int * 60 + split_part(k.t, ':', 2)::int as tm
-    from public.nar_odds_ticks k
-    where (k.track, k.race_date, k.race_no) = (h.track, h.race_date, h.race_no) and not k.f
-      and k.t ~ '^[0-9]{1,2}:[0-9]{2}$'
-      and split_part(k.t, ':', 1)::int * 60 + split_part(k.t, ':', 2)::int <= h.pm - 10
-    order by k.id desc limit 1) t
-  where t.o > 0
-), cf as (select value as c from public.nar_meta where key = 'ev_coef:v2')
+  join public.ev_tick k on (k.track, k.race_date, k.race_no) = (h.track, h.race_date, h.race_no)
+  where (k.w->>h.num::text)::float > 0
+), cf as (select value as c from public.ev_coef where key = 'ev_coef:v2')
 select od.model, od.track, od.race_date, od.race_no, od.timing, od.num, od.pr,
        od.pr * od.o * ((select c from cf) -> 'win'
          -> (case when od.o < 3 then '<3' when od.o < 10 then '3-9.9' when od.o < 30 then '10-29.9' else '>=30' end)

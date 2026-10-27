@@ -61,6 +61,18 @@ NO_ASOF = ("nar_horses", "nar_kd_pedigree", "auction_sales", "nar_horse_profiles
 # ⛔INPUTS に入れない= 手元の public.nar_meta は出力(big_payouts)の器で、入れると diff が「手元だけ」として本番へ書き戻す。
 #   手元では別の表 public.noken_meta に置き、cmd_shinba が noken_recs に開く。
 NOKEN_COPY = "select key, value, updated_at from public.nar_meta where key = 'noken_index'"
+# 10/28 AI 成績の期待値別(ai_record.sql)= 発走 10 分前より前で最後の単勝(1 レース 1 行に本番で絞る)と係数 ev_coef:v2。
+#   ⛔nar_odds_ticks を丸ごと写さない(重い)。手元では別の表 public.ev_tick / public.ev_coef に置く(nar_meta には入れない)
+EVTICK_COPY = ("select distinct on (k.track, k.race_date, k.race_no) k.track, k.race_date, k.race_no, "
+               "split_part(k.t, ':', 1)::int * 60 + split_part(k.t, ':', 2)::int as tm, "
+               "substr(r.post_time, 1, 2)::int * 60 + substr(r.post_time, 3, 2)::int as pm, k.w "
+               "from public.nar_odds_ticks k join public.nar_races r using (track, race_date, race_no) "
+               "where k.race_date >= date '2026-09-01' and not k.f and k.t ~ '^[0-9]{1,2}:[0-9]{2}$' "
+               "and r.post_time ~ '^[0-9]{4}$' "
+               "and split_part(k.t, ':', 1)::int * 60 + split_part(k.t, ':', 2)::int "
+               "<= substr(r.post_time, 1, 2)::int * 60 + substr(r.post_time, 3, 2)::int - 10 "
+               "order by k.track, k.race_date, k.race_no, k.id desc")
+EVCOEF_COPY = "select key, value, updated_at from public.nar_meta where key = 'ev_coef:v2'"
 NOKEN_KEYS = ("d", "r", "n", "dr", "dn", "ar", "t1", "t1r", "j", "w", "p", "dm", "ag", "sec")   # ⛔schema.sql の noken_recs の並び(horse_name, date の後)
 
 # 出力表= (主キー, 比べる列の式)。updated_at は now() なので比べない。
@@ -168,6 +180,8 @@ def cmd_dump(asof):
                  f" or race_date < ('{asof}'::timestamptz at time zone 'Asia/Tokyo')::date")
         lines.append(f"\\copy (select {cols} from public.{t}{w}) to '{DUMP}/in_{t}.tsv'")
     lines.append(f"\\copy ({NOKEN_COPY}) to '{DUMP}/in_noken_meta.tsv'")
+    lines.append(f"\\copy ({EVTICK_COPY}) to '{DUMP}/in_ev_tick.tsv'")
+    lines.append(f"\\copy ({EVCOEF_COPY}) to '{DUMP}/in_ev_coef.tsv'")
     missing = _prod_missing_outputs(env)
     with open(os.path.join(DUMP, "missing_out.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(missing))
@@ -215,6 +229,9 @@ def cmd_load():
     for t in INPUTS:
         psql_local(f"\\copy public.{t} from '{DUMP}/in_{t}.tsv'")
     psql_local(f"\\copy public.noken_meta from '{DUMP}/in_noken_meta.tsv'")
+    psql_local(f"\\copy public.ev_tick from '{DUMP}/in_ev_tick.tsv'")
+    psql_local(f"\\copy public.ev_coef from '{DUMP}/in_ev_coef.tsv'")
+    psql_local("create index on public.ev_tick (track, race_date, race_no)")
     for t, (_, ddl) in INPUTS.items():
         psql_local(ddl)
     psql_local("analyze")

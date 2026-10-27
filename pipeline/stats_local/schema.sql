@@ -50,6 +50,13 @@ create table public.auction_sales (
 create table public.noken_meta (
   key text primary key, value jsonb not null, updated_at timestamptz not null
 );
+-- 10/28 AI 成績の期待値別(ai_record.sql)の入力(⛔本番には作らない)= 1 レース 1 行の 10 分前の単勝・係数 ev_coef:v2
+create table public.ev_tick (
+  track text not null, race_date date not null, race_no integer not null, tm integer not null, pm integer not null, w jsonb
+);
+create table public.ev_coef (
+  key text primary key, value jsonb not null, updated_at timestamptz not null
+);
 create table public.noken_recs (
   horse_name text not null, date date not null, d text, r integer, n integer, dr integer, dn integer,
   ar integer, t1 numeric, t1r integer, j text, w integer,
