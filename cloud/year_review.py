@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
-# 「2026 年の地方競馬」まとめ(2026-10-27 試し・wip/year-review-20261027)。画面 nar-viewer /year/<年> の材料を作り、
-#   公開バケット cond-stats の v1/year-review-<年>.json へ上げる(便 .github/workflows/year-review.yml)。
+# 「<年> 年の地方競馬」まとめ(2026-10-27)。画面 nar-viewer /year/<年> の材料を作り、
+#   公開バケット cond-stats の v1/year-review-<年>.json へ上げる(便 .github/workflows/year-review.yml・毎朝 JST 06:10)。
 #   数え方は nar-site\research\year-review-2026\SPEC.md:
 #   期間= 1/1〜asof(既定= JST の前日)・地方の場だけ(nar_runs に中央は無い)・着順のある走だけ(取消・除外・中止を数えない)。
 #   暦= 場×日の最高払戻(単勝〜三連単の 9 券種・100 円あたり)・最多勝の馬/騎手(1 着の数・同数は全部)・最高払戻 5 位まで・
