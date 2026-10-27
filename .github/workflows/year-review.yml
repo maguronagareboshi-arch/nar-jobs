@@ -1,0 +1,33 @@
+# 「2026 年の地方競馬」まとめ(2026-10-27 試し)。台本 cloud/year_review.py が cond-stats/v1/year-review-<年>.json を上げる。
+# ⛔本番 DB では REST の単純 select だけ。cron は付けない(了承後に本番で毎朝へ)= 手動と wip 枝への push で走る。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
+name: year-review
+on:
+  workflow_dispatch:
+  push:
+    branches: ['wip/year-review-*']
+    paths: ['cloud/year_review.py', '.github/workflows/year-review.yml']
+permissions:
+  contents: read
+concurrency:
+  group: year-review
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: year review
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          python3 cloud/year_review.py --apply
+          python3 cloud/beat.py year_review ok
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py year_review fail 失敗
