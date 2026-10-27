@@ -69,7 +69,7 @@ def fetch(base, key, year, asof):
         w = "&race_date=gte.%s&race_date=lt.%s&race_date=lte.%s" % (d0, d1, asof)
         runs += fetch_all(base, key, "nar_runs?select=race_date,track,race_no,runner_number,horse_name,birth_date,age,finish,jockey,time_sec"
                           "&finish=not.is.null" + w + "&order=race_date.asc,track.asc,race_no.asc,runner_number.asc")
-        races += fetch_all(base, key, "nar_races?select=race_date,track,race_no,race_name,race_kind,distance_m,going"
+        races += fetch_all(base, key, "nar_races?select=race_date,track,race_no,race_name,race_kind,surface,distance_m,going"
                            + w + "&order=race_date.asc,track.asc,race_no.asc")
         pays += fetch_all(base, key, "nar_race_payouts?select=race_date,track,race_no,payouts"
                           + w + "&order=race_date.asc,track.asc,race_no.asc")
@@ -182,34 +182,35 @@ def build(runs, races, pays, asof, now):
     oldest = {"age": amax, "list": sorted([{"name": r.get("horse_name"), "date": r["race_date"], "venue": SLUG[r["track"]],
                                             "r": int(r["race_no"])} for a, r in aged if a == amax],
                                           key=lambda o: (o["date"], o["venue"], o["r"]))}
-    # 場×距離の最速(1 着の時計)
+    # 場×芝ダート×距離の最速(1 着の時計)。surface= nar_races の「芝」「ダート」(share_image.py と同じ読み方)
     best, cnt = {}, Counter()
     for r in wins:
         k = (r["race_date"], r["track"], int(r["race_no"]))
         ri = rinfo.get(k) or {}
         dist = num(ri.get("distance_m"))
+        surf = "芝" if (ri.get("surface") or "") == "芝" else "ダ"
         t = tsec(r.get("time_sec"))
         if not dist:
             continue
         s = SLUG[r["track"]]
-        if (s, dist, k) in cnt:
+        if (s, surf, dist, k) in cnt:
             continue
-        cnt[(s, dist, k)] = 1
+        cnt[(s, surf, dist, k)] = 1
         if t is None:
             continue
         o = (t, k[0], k[2])
-        cur = best.get((s, dist))
+        cur = best.get((s, surf, dist))
         if cur is None or o < cur[0]:
-            best[(s, dist)] = (o, {"dist": dist, "time": t, "name": r.get("horse_name"), "date": k[0], "r": k[2],
+            best[(s, surf, dist)] = (o, {"surf": surf, "dist": dist, "time": t, "name": r.get("horse_name"), "date": k[0], "r": k[2],
                                    "going": ri.get("going") or None, "cls": ri.get("race_name") or None, "kind": ri.get("race_kind") or None})
     nrace = Counter()
-    for (s, dist, _k) in cnt:
-        nrace[(s, dist)] += 1
+    for (s, surf, dist, _k) in cnt:
+        nrace[(s, surf, dist)] += 1
     fastest = {}
     for _t, s, _n in TRACKS:
-        lst = [dict(best[(s2, d)][1], n=nrace[(s2, d)]) for (s2, d) in best if s2 == s]
+        lst = [dict(best[b][1], n=nrace[b]) for b in best if b[0] == s]
         if lst:
-            fastest[s] = sorted(lst, key=lambda o: (-o["n"], o["dist"]))
+            fastest[s] = sorted(lst, key=lambda o: (-o["n"], o["surf"], o["dist"]))
     return {
         "v": 1, "year": int(year), "asof": asof, "made": now.strftime("%Y-%m-%dT%H:%M+09:00"),
         "venues": [{"slug": s, "name": n} for _t, s, n in TRACKS],
