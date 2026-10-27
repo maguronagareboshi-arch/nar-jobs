@@ -47,3 +47,58 @@ def line(codes):
         if cs:
             out.append(f'{name}: ' + '・'.join(LABEL[c] for c in cs))
     return ' / '.join(out)
+
+
+# 陣営の口ぶり + 話の中身 + 一言(2026-10-27)。数字は出さない(AI の見込みと食い違うため)。
+# 一言は口ぶりの中で 3 着内率が全体の 1.25 倍以上 / 0.75 倍以下で、前半(〜2022-06)・後半とも同じ向きの札だけ
+# (BERT の札 30.9 万頭・2018-05〜2026-08)。
+TONE_MK = {'◎': '強気', '○': '普通', '△': '控えめ'}
+HINT = {
+    '控えめ': ({'U2', 'B1', 'H1', 'A2', 'K1', 'R4', 'B4', 'C4', 'P1', 'Q1', 'H2'}, '理由のある控えめで、言葉ほど悪い形ではない',
+             {'L1', 'Y1', 'R3', 'C8'}, '言葉どおり苦しい形'),
+    '普通': ({'A1', 'Q2', 'P8', 'Q1', 'B4', 'H2'}, '中身は言葉以上に良い形',
+           {'L1', 'Y1', 'C8', 'T1', 'R3'}, '中身は言葉ほど良くない形'),
+}
+# 弱みの札が一緒にあるときは良い方の一言を出さない(食い違って見えるため)
+WEAK = {'S3', 'S4', 'K2', 'P7', 'L1', 'R6', 'T1', 'D1'}
+
+
+def say(c):
+    return ('前走は' if head(c) == 'P' else '') + LABEL[c]
+
+
+def tone(codes, mk=None):
+    """口ぶり = 強気・普通・控えめ(札の E・V が無ければ競馬ブックの印)。"""
+    c = set(codes)
+    if c & {'V1', 'E1'}:
+        return '強気'
+    if c & {'E3', 'E4'}:
+        return '控えめ'
+    if 'E2' in c:
+        return '普通'
+    return TONE_MK.get(mk, '普通')
+
+
+def sentence(codes, mk=None, n=3):
+    """→ '陣営は控えめ。話の中身は 休み明け。理由のある控えめで、言葉ほど悪い形ではない。'"""
+    codes = [c for c in codes if c in LABEL]
+    if 'D2' in codes and 'D1' in codes:
+        codes = [c for c in codes if c != 'D1']
+    t = tone(codes, mk)
+    body = [c for c in codes if head(c) not in ('E', 'V')]
+    hint = ''
+    keys = set()
+    if t in HINT:
+        up, up_txt, dn, dn_txt = HINT[t]
+        u, d = set(body) & up, set(body) & dn
+        if u and not d and not set(body) & WEAK:
+            hint, keys = up_txt, u
+        elif d and not u:
+            hint, keys = dn_txt, d
+    body = sorted(body, key=lambda c: (c not in keys, ORDER.index(c)))[:n]
+    out = f'陣営は{t}。'
+    if body:
+        out += '話の中身は ' + '・'.join(say(c) for c in body) + '。'
+    if hint:
+        out += hint + '。'
+    return out

@@ -16,7 +16,9 @@
   厩舎談話(競馬ブックの談話 = danwa_marks.LAST[day] の本文)= 研究 nankan-ai-v3 src/dw_tmpl.py(この場所の dw_tmpl.py と同じ)で
   欄(状態・上積み・事情・前走・条件・展開・気性・馬体・病気・結論)ごとの型に分ける(談話の 98% に型が付く・out/danwa_tmpl.md)。
   画面に出すかはサイトの旗で別に決める(公開はユーザーの承認後):
-      dw_sum  = 談話の札の要約 1 行「今: 順調 / 前走: 好内容 / 今回: 流れ次第 / 結論: 前向き」(2026-10-14 から)。
+      dw_sum  = 談話の札の要約 1 行「陣営は控えめ。話の中身は 休み明け。理由のある控えめで、言葉ほど悪い形ではない。」(2026-10-27 から・
+                dw_tags.sentence = 口ぶり(札の E・V か競馬ブックの印)+ 札 3 つまで + 一言。数字は出さない)。
+                2026-10-14〜10-27 は「今: 順調 / 前走: 好内容 / 今回: 流れ次第 / 結論: 前向き」(dw_tags.line)。
                 研究 nankan-ai-v3 src/dw_pat.py・dw_tags.py(この場所に同じもの)= 過去の談話 30.9 万件の言い回しの型にエージェントが札を
                 付けた辞書(dw_pat_dict.json.gz)+ 辞書から学んだ補助の読み手(dw_pat_fallback.json.gz)。Claude は使わない・素の Python だけ。
                 独立の採点で札の正しさ 96〜97%・拾い 83〜86%(out/dw_pat/report.md・audit*_report.md)。前の dw_tmpl.summary の置き換え。
@@ -89,7 +91,7 @@ DW_HI = {('状態', '停滞・きっかけ待ち'): '陣営の話: きっかけ�
 
 
 def dw_note(t, tx=None):
-    """談話の本文 → (目立つ札のリスト, 規則の版の要約 1 行)。病気の札 = 病名 + 結び(調整不足 0.53 倍 / 回復と明言 1.12 倍)。
+    """談話の本文 → (目立つ札のリスト, 規則の版の札の記号)。病気の札 = 病名 + 結び(調整不足 0.53 倍 / 回復と明言 1.12 倍)。
     tx = 札を読む形「見出し。本文」(dw_bert.text・研究の談話と同じ形)。無ければ「。本文」。"""
     tg = dw_tmpl.tags(t)
     s = set(tg)
@@ -100,7 +102,7 @@ def dw_note(t, tx=None):
     elif ill and ('病気', '→ 回復と明言') in s:
         hi.append(f'陣営の話: {ill}は回復と明言')
     hi += [txt for k, txt in DW_HI.items() if k in s]
-    return hi, dw_tags.line(dw_pat.read(_dw_pat(), tx if tx is not None else dw_bert.text('', t)))
+    return hi, dw_pat.read(_dw_pat(), tx if tx is not None else dw_bert.text('', t))
 SMALL = ('ハナ', 'アタマ', 'クビ')
 SLOW = re.compile('出遅|アオ|立ち遅|ダッシュ付かず')
 # 寸評 → 札(先に当たった方)。調べの組(src/f5_scripts/sunpyo/cls.py)のうち、字にしてよいものだけ。
@@ -234,7 +236,7 @@ def make(day, h, T, kb_rows=None, log=print, dw_rows=None):
                         nkb += 1
     # 厩舎談話(danwa_marks.load が控えた今日の本文)
     ndw = nsum = 0
-    dw_items = []  # (馬, 札を読む形の本文, 規則の版の要約)
+    dw_items = []  # (馬, 札を読む形の本文, 規則の版の札, 談話の印 ◎○△)
     if dw_rows is None:
         try:
             import danwa_marks
@@ -249,23 +251,27 @@ def make(day, h, T, kb_rows=None, log=print, dw_rows=None):
                 continue
             body = r.comment if isinstance(getattr(r, 'comment', None), str) and r.comment else getattr(r, 'raw', '')
             tx = dw_bert.text(getattr(r, 'headline', None), body)
-            hi, sm = dw_note(body, tx)
+            hi, cs = dw_note(body, tx)
             for txt in hi:
                 add(k, 'note_dw', txt)
             if hi:
                 ndw += 1
-            dw_items.append((k, tx, sm))
-    # 要約 1 行 dw_sum = BERT の札(読めなければ規則の版の札)
+            mk = getattr(r, 'dw_mk', '')
+            if not isinstance(mk, str) or not mk:
+                mk = str(getattr(r, 'raw', '') or '').strip()[:1]
+            dw_items.append((k, tx, cs, mk))
+    # 要約 1 行 dw_sum = 陣営の口ぶり + 話の中身 + 一言(dw_tags.sentence・2026-10-27)。札は BERT(読めなければ規則の版の札)
     how = '規則'
-    sums = [sm for _, _, sm in dw_items]
+    codes = [cs for _, _, cs, _ in dw_items]
     M = _dw_bert(log) if dw_items else False
     if M:
         try:
-            sums = [dw_tags.line(c) for c in dw_bert.read(M, [tx for _, tx, _ in dw_items])]
+            codes = dw_bert.read(M, [tx for _, tx, _, _ in dw_items])
             how = 'BERT'
         except Exception as e:  # noqa: BLE001
             log('談話の札 BERT 失敗(規則の版で読む)', type(e).__name__, str(e)[:200])
-    for (k, _, _), sm in zip(dw_items, sums):
+    sums = [dw_tags.sentence(c, mk) for c, (_, _, _, mk) in zip(codes, dw_items)]
+    for (k, _, _, _), sm in zip(dw_items, sums):
         if sm:
             notes.setdefault(k, {'note': [], 'note_kb': [], 'note_dw': []})['dw_sum'] = sm
             nsum += 1
