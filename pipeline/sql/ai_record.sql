@@ -257,10 +257,10 @@ create index on tmp_ai_fav (model, track, timing);
 -- 的中した払戻(1 レース 1 券種 1 行・100 円あたり)= ◎の単勝・◎から流した馬連/馬単/三連単
 drop table if exists tmp_ai_hit;
 create temp table tmp_ai_hit as
-select model, track, track as tr, race_date, race_no, timing, 'tan' as kind, tan_pay as pay, popularity as pop from tmp_ai_res where pos = 1 and tan_pay > 0
-union all select model, track, track, race_date, race_no, timing, 'umaren', um_pay, null from tmp_ai_ex where um_hit = 1
-union all select model, track, track, race_date, race_no, timing, 'umatan', ut_pay, null from tmp_ai_ex where ut_hit = 1
-union all select model, track, track, race_date, race_no, timing, 'sanrentan', st_pay, null from tmp_ai_ex where st_hit = 1;
+select model, track, track as tr, race_date, race_no, timing, '単勝' as kind, tan_pay as pay, popularity as pop from tmp_ai_res where pos = 1 and tan_pay > 0
+union all select model, track, track, race_date, race_no, timing, '馬連', um_pay, null from tmp_ai_ex where um_hit = 1
+union all select model, track, track, race_date, race_no, timing, '馬単', ut_pay, null from tmp_ai_ex where ut_hit = 1
+union all select model, track, track, race_date, race_no, timing, '三連単', st_pay, null from tmp_ai_ex where st_hit = 1;
 insert into tmp_ai_hit
 select model, 'all', tr, race_date, race_no, timing, kind, pay, pop from tmp_ai_hit;
 create index on tmp_ai_hit (model, track, timing);
