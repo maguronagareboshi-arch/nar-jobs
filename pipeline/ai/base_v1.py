@@ -46,6 +46,7 @@ TABLE = 'nar_ai_marks'
 CONFLICT = 'model,track,race_date,race_no,timing'
 MARKS = ['◎', '○', '▲', '△', '△']   # 2026-10-10 ユーザー決定: 印は 5 頭(◎○▲△△)
 NANKAN = {'浦和', '船橋', '大井', '川崎'}   # 2026-10-10 ユーザー決定: 南関 4 場は南関特化 AI だけ= base-v1 は書かない
+BANEI = {'帯広ば'}   # 2026-10-29 ユーザー決定: 帯広はばんえい 第 3 版(banei-3)だけ= base-v1 は書かない(第 3 版が書けない日は印なし)
 JST = dt.timezone(dt.timedelta(hours=9))
 
 KEY = ['track', 'race_date', 'race_no', 'runner_number', 'horse_key']
@@ -325,7 +326,7 @@ def build_marks(df, day, m, bst_b, bst_r, timing, bst_w=None):
     need = baba_tracks(df) if timing == 'last' else set()          # §143b 馬場が普段から入る場(1 回だけ数える)
     rows, skipped = [], {}
     for rid, g in d.groupby('rid', sort=False):
-        if rid.split('|')[0] in NANKAN:                          # ⛔write_marks は v3 系と共用= 絞り込みはここだけ
+        if rid.split('|')[0] in NANKAN | BANEI:                  # ⛔write_marks は v3 系と共用= 絞り込みはここだけ
             continue
         runnable = g[g['finish_note'].fillna('') == '']            # 発走前に分かる取消・除外は外す
         if len(runnable) < 4:

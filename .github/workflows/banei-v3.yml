@@ -7,7 +7,7 @@
 # 起動 = pg_cron の dispatch(ops/banei_v3_setup.sql): 07:20 JST mode=fit / 11:40 JST mode=loop(〜17:10)/ 17:15 JST mode=loop(〜21:00)。
 #   帯広の開催が無い日は最初の段で終わる。loop で今日の模型が見つからなければ、その便の中で ①② からやり直す。
 # ⛔本番への書き込みは nar_ai_marks(model='banei-3', timing='last' と 'morning')と nar_kb_banei の REST upsert だけ。SQL は流さない。
-#   書かない日(前の開催日の競馬ブックが無い・1R の水分が無い・学びが落ちた)は base-v1 の帯広の印が残る。
+#   書かない日(前の開催日の競馬ブックが無い・1R の水分が無い・学びが落ちた)は帯広の印が無い(2026-10-29 から base-v1 は帯広を書かない)。
 #   画面に出すかはサイトの旗で決める。それまでは見えない。
 # 固定ファイル = 暗号化リリース banei-v3-frozen-20261030(KDSCOPE 2005〜2013 の帯広・競馬ブック帯広 2017-02〜2026-10-26・
 #   第 2 版の外した予想 〜2026-10-05・第 2 版の列と学びの決め)。戻すときはこの yml を消す(他の便は触っていない)。
@@ -166,7 +166,7 @@ jobs:
           if [ "$WRITE" = "yes" ]; then W=--write; else W=; fi
           python -X utf8 -W ignore pipeline/ai/banei/banei_v3.py morning "$DAY" models $W
 
-      # ③ 直前の周。⛔1 周が落ちても周は続ける(書けなかったレースは base-v1 の印が残る)
+      # ③ 直前の周。⛔1 周が落ちても周は続ける(書けなかったレースは朝の版の印が残る)
       - name: predict last every 10 minutes
         if: steps.d.outputs.races != '0' && github.event.inputs.mode != 'fit'
         env:

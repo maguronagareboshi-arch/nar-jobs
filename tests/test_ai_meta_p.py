@@ -51,6 +51,9 @@ class MetaP(unittest.TestCase):
         # 2026-10-10 南関 4 場は base-v1 を書かない
         nk = self.df.assign(rid=self.df['rid'].str.replace('高知', '大井'), track='大井')
         self.assertEqual(base_v1.build_marks(nk, self.day, m, None, None, 'morning'), [], '南関 4 場を書いている')
+        # 2026-10-29 帯広も base-v1 を書かない(ばんえい 第 3 版だけ)
+        bn = self.df.assign(rid=self.df['rid'].str.replace('高知', '帯広ば'), track='帯広ば')
+        self.assertEqual(base_v1.build_marks(bn, self.day, m, None, None, 'morning'), [], '帯広を書いている')
         self.assertEqual(set(r['marks'][0]), {'num', 'mark', 'score'}, 'marks の形が変わった')
         self.assertAlmostEqual(r['marks'][0]['score'], round(p['2'] * 100, 1), delta=0.05)
 
