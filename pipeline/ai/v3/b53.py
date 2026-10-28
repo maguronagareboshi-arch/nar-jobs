@@ -7,6 +7,8 @@
   かつ 市場の組の値段 pm(= 払戻率 ÷ 市場の組の率)≤ 上限(倍)。
 出力 = {'ver', 'n', 券種: [[組, 値段(倍), 割安度], …]}(割安度の大きい順)。単勝・複勝の組は馬番・値段は 10 分前の単勝オッズ。
 枠連・枠単は出走する全馬の枠番が分かるときだけ作る(分からなければ鍵ごと無い = 画面は「なし」と言わない)。
+2026-10-28 ユーザー「想定オッズがめちゃくちゃ」→ 選びはそのまま、attach_board() で選んだ組に 10 分前の実際のオッズ(板)を 4 つ目に添える
+  (単勝・枠連・枠単・馬連・馬単・3連複・3連単 = 倍率 / 複勝・ワイド = [下限, 上限] / 板に無い組 = None)。値段(2 つ目)は物差しで、画面には出さない。
 ⛔公開 repo のログに候補は出さない(件数だけ)。使う側は v29_gap.live()(行の value.b53)。
 
   python -X utf8 pipeline/ai/v3/b53.py selftest     # 率の合計が 1 になる等の自己検査(通信なし)
@@ -135,6 +137,73 @@ def make(runners, gates=None):
     return out
 
 
+# 板の 1 行の並び(nar_odds_full_ticks.combos): 馬番 or 枠番の数・倍率の位置・上限の位置(ワイドだけ)・順不同か
+BOARD = {
+    'wakuren': (2, 2, None, True),     # [a, b, 倍率]
+    'wakutan': (2, 2, None, False),
+    'umaren': (2, 2, None, True),      # [a, b, 倍率, 人気]
+    'umatan': (2, 2, None, False),
+    'wide': (2, 2, 4, True),           # [a, b, 下限, 人気, 上限]
+    'sanrenpuku': (3, 3, None, True),  # [a, b, c, 倍率, 人気]
+    'sanrentan': (3, 3, None, False),
+}
+
+
+def _odds(x):
+    try:
+        v = float(x)
+    except (TypeError, ValueError):
+        return None
+    return v if v > 0 else None
+
+
+def board_map(kind, combos):
+    """板の combos → {'a-b(-c)': 倍率 or [下限, 上限]}(順不同の券種は小さい順の鍵)"""
+    n, io, ih, un = BOARD[kind]
+    out = {}
+    for e in combos or []:
+        try:
+            nums = [int(v) for v in e[:n]]
+        except (TypeError, ValueError):
+            continue
+        lo = _odds(e[io]) if len(e) > io else None
+        if lo is None:
+            continue
+        key = '-'.join(str(v) for v in (sorted(nums) if un else nums))
+        if ih is None:
+            out[key] = lo
+        else:
+            hi = _odds(e[ih]) if len(e) > ih else None
+            out[key] = [lo, hi if hi is not None else lo]
+    return out
+
+
+def attach_board(b53, boards, win=None, place=None):
+    """選んだ組の行 [組, 値段, 割安度] に 4 つ目 = 10 分前の実際のオッズを足す(選びは変えない)。
+    boards = {券種: combos}・win = {馬番: 単勝}・place = {馬番: [下限, 上限]}。板の無い組は None。"""
+    if not b53:
+        return b53
+    for kind in KINDS:
+        rows = b53.get(kind)
+        if not isinstance(rows, list):
+            continue
+        if kind == 'tan':
+            m = {str(k): _odds(v) for k, v in (win or {}).items()}
+        elif kind == 'fuku':
+            m = {}
+            for k, v in (place or {}).items():
+                lo = _odds(v[0]) if isinstance(v, (list, tuple)) and v else None
+                if lo is not None:
+                    hi = _odds(v[1]) if len(v) > 1 else None
+                    m[str(k)] = [lo, hi if hi is not None else lo]
+        else:
+            m = board_map(kind, (boards or {}).get(kind))
+        for r in rows:
+            del r[3:]
+            r.append(m.get(str(r[0])))
+    return b53
+
+
 def count(b53):
     """全券種の点数(ログ用・中身は出さない)"""
     return sum(len(v) for k, v in (b53 or {}).items() if k in SPEC and isinstance(v, list))
@@ -169,6 +238,21 @@ def selftest():
         g2.pop(1)
         b2 = make(rows, g2)
         assert 'wakuren' not in b2 and 'wakutan' not in b2 and 'umaren' in b2
+    # 板を添えても選び(組・値段・割安度)は変わらない・順不同の鍵は小さい順・板に無い組は None
+    rows = [{'num': i, 'pg1': p, 'odds': o} for i, p, o in ((1, .40, 4.0), (2, .05, 3.0), (3, .05, 8.0), (4, .30, 9.0), (5, .20, 6.0))]
+    b = make(rows, {1: 1, 2: 2, 3: 3, 4: 4, 5: 4})
+    before = {k: [list(r) for r in b[k]] for k in KINDS}
+    boards = {'umaren': [[4, 1, 7.7, 3]], 'wide': [[1, 4, 2.1, 1, 2.9]], 'wakutan': [[4, 4, 30.5]], 'sanrentan': [[1, 4, 5, 55.0, 9]]}
+    attach_board(b, boards, win={1: 4.0, 4: 9.0}, place={1: [1.2, 1.5]})
+    attach_board(b, boards, win={1: 4.0, 4: 9.0}, place={1: [1.2, 1.5]})  # 2 回足しても 4 つ目は 1 つ
+    for k in KINDS:
+        assert [r[:3] for r in b[k]] == before[k] and all(len(r) == 4 for r in b[k]), k
+    assert board_map('umaren', boards['umaren']) == {'1-4': 7.7}
+    assert board_map('wide', boards['wide']) == {'1-4': [2.1, 2.9]}
+    assert board_map('wakutan', boards['wakutan']) == {'4-4': 30.5}
+    assert board_map('sanrentan', [[3, 1, 2, 0, 1], [3, 1, 2, 120.5, 4]]) == {'3-1-2': 120.5}  # 0 倍(取消など)は無いとする
+    assert all(r[3] == (4.0 if r[0] == 1 else 9.0 if r[0] == 4 else None) for r in b['tan'])
+    assert all(r[3] in ([1.2, 1.5], None) for r in b['fuku'])
     assert make([{'num': i, 'pg1': 0.25, 'odds': 4.0} for i in range(1, 5)]) is None  # 4 頭
     assert make([{'num': i, 'pg1': 0.2, 'odds': 5.0} for i in range(1, 5)] + [{'num': 5, 'pg1': 0, 'odds': 5.0}]) is None  # pg1 = 0 の馬は数えない
     print('selftest OK', file=sys.stderr)

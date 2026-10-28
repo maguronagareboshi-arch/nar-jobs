@@ -517,8 +517,17 @@ def race_gates(track, day, rno):
     return {int(x['runner_number']): int(x['gate']) for x in r if x.get('runner_number') is not None and x.get('gate') is not None}
 
 
-def add_b53(val, tr, day, rno):
-    """決め 53(2026-10-24): val['b53'] に全券種の参考の買い目を足す。いま書く行の val['runners'] と枠番だけから作る(組のオッズは使わない)。
+def latest_place(track, day, rno):
+    """複勝の最新の 1 本(確定前)= {馬番: [下限, 上限]}。全券種の参考の複勝に実際のオッズを添える(2026-10-28)。"""
+    t = urllib.parse.quote(track)
+    r = _get(f'/rest/v1/nar_odds_ticks?track=eq.{t}&race_date=eq.{day}&race_no=eq.{rno}&f=eq.false'
+             '&select=id,p&order=id.desc&limit=1')
+    return {int(k): v for k, v in ((r[0].get('p') or {}) if r else {}).items() if isinstance(v, list) and v}
+
+
+def add_b53(val, tr, day, rno, cmb=None):
+    """決め 53(2026-10-24): val['b53'] に全券種の参考の買い目を足す。いま書く行の val['runners'] と枠番だけから作る(組のオッズは選びに使わない)。
+    2026-10-28: 選んだ組に 10 分前の実際のオッズを添える(cmb = 単勝の行で読んだ板・足りない券種と複勝はここで読む)。板が読めなくても選びは書く。
     作れなくても val はそのまま = 単勝・組の記録は書く。⛔ログには点数だけ(候補は出さない)。"""
     try:
         try:
@@ -528,6 +537,15 @@ def add_b53(val, tr, day, rno):
             log(f'{tr}{rno}R: 枠番 読めない {type(e).__name__}(枠連・枠単なし)')
         b = B53.make(val['runners'], gts)
         if b:
+            try:
+                boards = dict(cmb or {})
+                miss = [k for k in B53.BOARD if k not in boards and isinstance(b.get(k), list) and b[k]]
+                if miss:
+                    boards.update(latest_combos(tr, day, rno, tuple(miss)))
+                plc = latest_place(tr, day, rno) if b.get('fuku') else {}
+                B53.attach_board(b, boards, {int(x['num']): x['odds'] for x in val['runners']}, plc)
+            except Exception as e:  # noqa: BLE001  実際のオッズが読めなくても選びは書く(画面は「—」)
+                log(f'{tr}{rno}R: 参考(決め 53)の実際のオッズ 読めない {type(e).__name__}')
             val['b53'] = b
     except Exception as e:  # noqa: BLE001
         log(f'{tr}{rno}R: 参考(決め 53) 失敗 {type(e).__name__} {str(e)[:120]}')
@@ -838,7 +856,7 @@ def live(day, base_csv, mdir, write, until):
                 if tri:
                     val['tri_model'] = {'tri': tri_name, 'trio': 'c8', 'ev_min': TRI.EV_MIN, 'cols': ['組', 'オッズ', '期待値', '模型の率', '市場の率']}
                     val.update(tri)
-                add_b53(val, tr, day, rno)  # 決め 53: 全券種の参考の買い目(失敗しても単勝・組の記録はそのまま書く)
+                add_b53(val, tr, day, rno, cmb)  # 決め 53: 全券種の参考の買い目(失敗しても単勝・組の記録はそのまま書く)
                 try:
                     st = put_gap(k, val, tr, day, rno) if write else 'dry'
                 except Exception as e:  # noqa: BLE001
