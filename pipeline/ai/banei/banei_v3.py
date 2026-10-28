@@ -6,6 +6,7 @@ z = 0.8 × logit(第 2 版の木 355 列) + 0.2 × 平らな模型 + 並び読�
 
   python -X utf8 pipeline/ai/banei/banei_v3.py fit DAY <模型の置き場>                    # 朝: 前の日までで学ぶ(木・並び読み 3 種・平ら)
   python -X utf8 pipeline/ai/banei/banei_v3.py predict DAY <模型の置き場> [--write]      # 直前の周: 当日の体重・1R の水分で当てて書く
+  python -X utf8 pipeline/ai/banei/banei_v3.py morning DAY <模型の置き場> [--write]      # 朝: 体重 = 前走・1R の水分と天候 = 前の開催日の 1R で当てて書く
   python -X utf8 pipeline/ai/banei/banei_v3.py selftest DAY                              # 手元: 分けた学び・当ては研究の run と同じ値か
 置き場の環境変数: BANEI_V3 = 表の根(official/・banei_kb/・banei_kb/prod/v2_oof.parquet・banei_kb/banei_v2_lock.json)。
   便では fit・predict の頭で公式の表を REST から落とし(bn_dl)、競馬ブックの表を固めた表 + DB の nar_kb_banei で作る(bn_kb)。
@@ -17,7 +18,9 @@ z = 0.8 × logit(第 2 版の木 355 列) + 0.2 × 平らな模型 + 並び読�
 
 止まる(書かない)= base-v1 の帯広の印が残る:
   当日の行が無い・前の開催日の競馬ブックが無い・1R の水分が無い・率に空。レースごとには、取消でない馬の体重がそろっていないレースは書かない。
-⛔本番に書くのは nar_ai_marks の model='banei-3'・timing='last' だけ(base_v1.write_marks・発走 15 分前を過ぎた行は DB のトリガーが捨てる)。
+朝の版(2026-10-28 ユーザー承認・v3 の out/banei_morning_v3.md): 模型は直前版と同じ。当日の行だけ 体重 → その馬の前走の体重(増減 0・
+  前走の無い馬は空)・1R の水分と天候 → 前の開催日の 1R の値 に差し替えて当てる。選びの期間 716 R で本命 3 着内 直前 65.9% → 朝 64.7%。
+⛔本番に書くのは nar_ai_marks の model='banei-3'・timing='last' と 'morning'(朝は凍結 = 既にある行は触らない)だけ(base_v1.write_marks・発走 15 分前を過ぎた行は DB のトリガーが捨てる)。
 """
 import datetime as dt
 import json
@@ -297,17 +300,35 @@ def score(day, mdir, drop_race=None, no_going=False):
     return out, info
 
 
-def rows_of(out, info, day):
+def morning_frames(frames, day):
+    """朝の版: 当日の行だけ、体重 = その馬の前走の体重・1R の水分と天候 = 前の開催日(水分のある最後の 1R)の値。"""
+    ru, ra, pr, kd = frames
+    ru, ra = ru.copy(), ra.copy()
+    ds = ru.race_date.astype(str)
+    hk = ru.horse_name.astype(str) + '|' + ru.birth_date.astype(str)
+    h = ru[(ds < day) & ru.body_weight.notna()].assign(hk=hk).sort_values(['race_date', 'race_no'])
+    t = ds == day
+    ru.loc[t, 'body_weight'] = hk[t].map(h.groupby('hk').body_weight.last()).to_numpy()
+    rs = ra.race_date.astype(str)
+    first = ra[(rs < day) & ra.cancelled.isna()].sort_values(['race_date', 'race_no']).groupby('race_date').first()
+    first = first[pd.to_numeric(first.going, errors='coerce').notna()]
+    r1 = first.iloc[-1]
+    ra.loc[rs == day, ['going', 'weather']] = [r1.going, r1.weather]
+    log('朝の埋め', '体重 前走', int(ru.loc[t, 'body_weight'].notna().sum()), '/', int(t.sum()), '頭', '水分', r1.going, r1.weather, '=', r1.name)
+    return ru, ra, pr, kd
+
+
+def rows_of(out, info, day, need_bw=True, timing='last'):
     rows, skip = [], []
     for rno, g in out.groupby('race_no'):
-        if not g.bw_ok.all():
+        if need_bw and not g.bw_ok.all():
             skip.append(f'{rno}R(体重 {int((~g.bw_ok).sum())} 頭空)'); continue
         g = g.sort_values('runner_number')
         order = np.argsort(-g.p3.to_numpy(), kind='stable')
         sc_ = g.p3.to_numpy() / g.p3.sum()
         nums = g.runner_number.to_numpy()
         marks = [{'num': int(nums[i]), 'mark': MARKS[k], 'score': round(float(sc_[i]) * 100, 1)} for k, i in enumerate(order[:5])]
-        meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM, 'trained_to': info['prev'], 'going_day': g.going_day.iloc[0],
+        meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM, 'timing': timing, 'trained_to': info['prev'], 'going_day': g.going_day.iloc[0],
                 'runners': [{'num': int(n), 'p1': round(float(a), 4), 'p3': round(float(b), 4)} for n, a, b in zip(nums, g.p1, g.p3)],
                 'p_v2': {str(int(n)): round(float(x), 6) for n, x in zip(nums, g.p_v2)},
                 'p': {str(int(n)): round(float(x), 4) for n, x in zip(nums, g.p)}}
@@ -342,6 +363,31 @@ def predict(day, mdir, write=False, drop_race=None, no_going=False):
     import base_v1 as B1
     B1.MODEL_ID = MODEL_ID  # ⛔write_marks が見る先をここで差し替える(v3n_daily と同じ作法)
     B1.write_marks(rows, day, 'last')
+    return 0
+
+
+def morning(day, mdir, write=False):
+    """朝: 当日の行を取り直し、体重と 1R の水分・天候を朝に分かる値で埋めて当て、全レースを timing='morning' で書く(凍結)。"""
+    get_inputs(day, refresh_today_only=True)
+    orig = f1.load
+    f1.load = lambda: morning_frames(orig(), day)
+    try:
+        out, info = score(day, mdir)
+    finally:
+        f1.load = orig
+    if out is None:
+        return 2
+    rows, _ = rows_of(out, info, day, need_bw=False, timing='morning')
+    for r in rows:
+        print(f"朝 帯広ば{r['race_no']}R " + ' '.join(f"{m['mark']}{m['num']}({m['score']})" for m in r['marks']), flush=True)
+    log('朝 書ける', len(rows), 'R')
+    Path(mdir, f'banei3_morning_{day}.json').write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding='utf-8')
+    if not write or not rows:
+        return 0
+    sys.path.insert(0, str(HERE.parent))
+    import base_v1 as B1
+    B1.MODEL_ID = MODEL_ID  # ⛔write_marks が見る先をここで差し替える(朝 = 既にある行は触らない)
+    B1.write_marks(rows, day, 'morning')
     return 0
 
 
@@ -384,5 +430,7 @@ if __name__ == '__main__':
     elif a[0] == 'predict':
         dr = int(a[a.index('--drop-race') + 1]) if '--drop-race' in a else None
         sys.exit(predict(a[1], a[2], '--write' in a, dr, '--no-going' in a))
+    elif a[0] == 'morning':
+        sys.exit(morning(a[1], a[2], '--write' in a))
     elif a[0] == 'selftest':
         sys.exit(selftest(a[1]))

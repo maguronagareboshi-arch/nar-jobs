@@ -2,10 +2,11 @@
 #   オッズ・人気を見ず、公式の帯広の成績 + 競馬ブックの区間タイム・通過順だけで 3 着内率と勝つ率を出す。
 # 段: ① 競馬ブック帯広の前の開催日の成績 → 表 nar_kb_banei(DB に無い日だけ)
 #     ② 前の日までで学ぶ(第 2 版の木・並び読み 3 種・平らな模型)→ 成果物 banei-v3-models-DAY(暗号化)
+#     ②b 朝の版(学んだ便で 1 回・体重 = 前走・1R の水分と天候 = 前の開催日の 1R)→ nar_ai_marks(banei-3・morning・凍結)
 #     ③ 直前の周(10 分おき): 当日の行を取り直し・公式の当日 ZIP の体重と 1R の水分を重ね・当てて書く
 # 起動 = pg_cron の dispatch(ops/banei_v3_setup.sql): 07:20 JST mode=fit / 11:40 JST mode=loop(〜17:10)/ 17:15 JST mode=loop(〜21:00)。
 #   帯広の開催が無い日は最初の段で終わる。loop で今日の模型が見つからなければ、その便の中で ①② からやり直す。
-# ⛔本番への書き込みは nar_ai_marks(model='banei-3', timing='last')と nar_kb_banei の REST upsert だけ。SQL は流さない。
+# ⛔本番への書き込みは nar_ai_marks(model='banei-3', timing='last' と 'morning')と nar_kb_banei の REST upsert だけ。SQL は流さない。
 #   書かない日(前の開催日の競馬ブックが無い・1R の水分が無い・学びが落ちた)は base-v1 の帯広の印が残る。
 #   画面に出すかはサイトの旗で決める。それまでは見えない。
 # 固定ファイル = 暗号化リリース banei-v3-frozen-20261028(KDSCOPE 2005〜2013 の帯広・競馬ブック帯広 2017-02〜2026-10-26・
@@ -151,6 +152,17 @@ jobs:
           path: sealed/
           retention-days: 3
           if-no-files-found: error
+
+      # ②b 朝の版(学んだ便で 1 回): 体重 = 前走・1R の水分と天候 = 前の開催日の 1R で当て、timing='morning' で書く(凍結 = 既にある行は触らない)。
+      #     ⛔落ちても ③ は回す
+      - name: predict morning (once, after fit)
+        if: steps.d.outputs.races != '0' && steps.m.outputs.fitted == '1'
+        continue-on-error: true
+        env:
+          DAY: ${{ steps.d.outputs.day }}
+        run: |
+          if [ "$WRITE" = "yes" ]; then W=--write; else W=; fi
+          python -X utf8 -W ignore pipeline/ai/banei/banei_v3.py morning "$DAY" models $W
 
       # ③ 直前の周。⛔1 周が落ちても周は続ける(書けなかったレースは base-v1 の印が残る)
       - name: predict last every 10 minutes
