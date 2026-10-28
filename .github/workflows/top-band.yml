@@ -9,7 +9,11 @@
 name: top-band
 on:
   schedule:
-    - cron: '10 13 * * *'        # JST 22:10= 前の晩の回(翌日分を top_band_next と auction_next へ)
+    # 10/29 夜の回を 3 本に= GitHub の予約は 4〜6 時間遅れて起きる日がある(10/26・10/27 は 22:10 の予約が翌 3〜4 時)
+    #   ユーザー「日付が変わって 5 分後には出ていてほしい」= 早い 2 本のどれかが 0 時までに済めばよい(冪等= 後の回が上書き)
+    - cron: '10 8 * * *'         # JST 17:10= 前の晩の回(翌日分を top_band_next と auction_next へ)
+    - cron: '10 11 * * *'        # JST 20:10= 前の晩の回
+    - cron: '10 13 * * *'        # JST 22:10= 前の晩の回(取消・追加の反映)
     - cron: '50 21 * * *'        # JST 06:50= 朝の回(移籍の表が 05:33 の便で 06:15 ごろまでに入った後)
     - cron: '40 0 * * *'         # JST 09:40(取消の反映)
     - cron: '40 3 * * *'         # JST 12:40(念のため)
@@ -55,7 +59,7 @@ jobs:
           H=$(TZ=Asia/Tokyo date +%H)
           # 夜の回= 22:10 の予定の便か、手動で night を選んだとき
           # ⛔起きた時刻で見分けない= 10/20・10/21 は予定の便が 4 時間 46〜49 分遅れて翌 02:56 に起き、朝の回と数えて top_band_next が赤
-          if [ "$NIGHT_IN" = "true" ] || [ "$SCHED" = "10 13 * * *" ]; then NIGHT=1; else NIGHT=0; fi
+          if [ "$NIGHT_IN" = "true" ] || [ "$SCHED" = "10 8 * * *" ] || [ "$SCHED" = "10 11 * * *" ] || [ "$SCHED" = "10 13 * * *" ]; then NIGHT=1; else NIGHT=0; fi
           if [ -z "$DAY" ]; then
             # 夜の回が日付をまたいで起きたら、もう「翌日」は今日
             if [ "$NIGHT" = "1" ] && { [ -z "$SCHED" ] || [ $((10#$H)) -ge 12 ]; }; then DAY=$(TZ=Asia/Tokyo date -d tomorrow +%F); else DAY=$(TZ=Asia/Tokyo date +%F); fi
@@ -66,7 +70,9 @@ jobs:
             # 10/16 移籍の表(nar_horse_changes)は朝 05:33 の便でしか作っていなかった= 翌日の出走表は前日に揃っている
             #   (10/17 分 341 行・所属の空 0 を確認)ので、夜にも作ってから数える(冪等= 朝の便と重ねても増えない)
             pip install -q -r cloud/requirements.txt
-            if [ "$DRY" = "true" ]; then python3 cloud/horse_changes.py; else python3 cloud/horse_changes.py --apply; fi
+            # 10/29 移籍の表が作れなくても翌日分の頭数は書く(10/26〜10/28 は scramp 1.5 で接続が落ち、翌日分ごと止まっていた)
+            #   移籍の数は朝 06:50 の回が付け直す
+            if [ "$DRY" = "true" ]; then python3 cloud/horse_changes.py || echo "::warning::horse_changes 失敗"; else python3 cloud/horse_changes.py --apply || echo "::warning::horse_changes 失敗"; fi
             python3 cloud/top_band.py $W --date "$DAY" --key top_band_next
             python3 cloud/auction_today.py $W --date "$DAY" --key auction_next
             JOB=top_band_next
