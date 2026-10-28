@@ -46,8 +46,13 @@ def fetch(root, day):
     """帯広ばの runs・races(2014-01〜その日)と profiles(全部)。"""
     o = Path(root) / 'official'
     o.mkdir(parents=True, exist_ok=True)
-    ru = by_month('nar_runs', RUN_SEL, 'race_no,runner_number', day)
-    ra = by_month('nar_races', RACE_SEL, 'race_no', day)
+    # ⛔order= は一意の列の組(月の中で日付を入れないと、ページの切れ目で行が重なったり抜けたりする = 10/28 の試しの便で落ちた)
+    ru = by_month('nar_runs', RUN_SEL, 'race_date,race_no,runner_number', day)
+    ra = by_month('nar_races', RACE_SEL, 'race_date,race_no', day)
+    for name, x, k in (('runs', ru, ['race_date', 'race_no', 'runner_number']), ('races', ra, ['race_date', 'race_no'])):
+        dup = int(x.duplicated(k).sum())
+        if dup:
+            raise SystemExit(f'⛔{name} に同じ行が {dup} 本(取り方の誤り)= 止まる')
     pr = K0.whole('nar_horse_profiles', 'horse_name,birth_date')
     ru.to_parquet(o / 'runs.parquet', index=False); ra.to_parquet(o / 'races.parquet', index=False); pr.to_parquet(o / 'profiles.parquet', index=False)
     log('runs', len(ru), 'races', len(ra), 'profiles', len(pr), '最後の日', ru.race_date.max())
