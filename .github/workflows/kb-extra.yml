@@ -79,15 +79,15 @@ jobs:
           if [ "$APPLY" = "1" ]; then python cloud/kb/push_fukuchan.py --all
           else python cloud/kb/push_fukuchan.py --all --dry-run; fi
       - name: hyogo noken split
-        if: "!cancelled() && github.event_name != 'schedule'"
+        if: "!cancelled()"
         env:
           KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}
           KEIBABOOK_PASSWORD: ${{ secrets.KEIBABOOK_PASSWORD }}
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: python cloud/kb/fetch_kb_noken_hyogo.py --since "$(date +%Y%m)01"
+        run: python cloud/kb/fetch_kb_noken_hyogo.py --since "$(date +%Y%m)01" --refresh
       - name: hyogo noken split push
-        if: "!cancelled() && github.event_name != 'schedule'"
+        if: "!cancelled()"
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}

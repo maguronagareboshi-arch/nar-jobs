@@ -3554,6 +3554,12 @@ def hyogo_split_day(day, sp):
                 row["kind"] = g["kind"]                       # 行に種別を移す(レースには付けない)
             flat.append({"row": row, "dist": g.get("dist")})
     kb_races = sp.get("races") or []
+    # 10/28 板(映像)で確かめていない日(sp["unverified"])= 提供データの区切りだけ使う。
+    #   ⛔提供データの通し番号は R ではない(5/12・6/8 で実測)= no は付けず、組の順番 group_seq だけ持たせる
+    unverified = bool(sp.get("unverified"))
+    if unverified:
+        kb_races = [dict(r, no=r.get("seq") if r.get("seq") is not None else i + 1)
+                    for i, r in enumerate(kb_races)]
     kb_no = name_to_no([(r.get("no"), [x.get("name") for x in (r.get("rows") or [])]) for r in kb_races])
     kb_row, kb_at = {}, {}
     for r in kb_races:
@@ -3630,9 +3636,15 @@ def hyogo_split_day(day, sp):
         if dist:
             race["dist"] = dist
         races.append(race)
+    stat["races"] = len(races)
+    if unverified:
+        stat["mode"] = "組の順番(R 未確認)"
+        for race in races:
+            race["group_seq"] = race["no"]                     # 1,2,3…= 提供データの組の順番
+            race["no"] = None                                  # ⛔R 番号は付けない
+        day["unverified"] = True
     if unknown:
         races.append({"no": None, "kind": UNKNOWN_KIND, "rows": [x["row"] for x in unknown]})
-    stat["races"] = len([r for r in races if r.get("no") is not None])
     stat["unknown"] = len(unknown)
     # ⛔公式の塊も残す(情報を潰さない)。⚠2 度目からは day["races"] が組み直し済みなので
     #   **すでにある official_groups を上書きしない**(でないと公式の塊が消える)

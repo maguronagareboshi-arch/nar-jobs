@@ -186,6 +186,17 @@ def collect_day(client, date, code, refresh=False):
     return day, None
 
 
+def unverified_day(day):
+    """10/28 板(映像)と照らせない日= 提供データの区切りだけ。⛔no(R)は付けない= 組の順番 seq(1,2,3…)。"""
+    races = []
+    for i, r in enumerate(day.get("races") or []):
+        x = {k: v for k, v in r.items() if k != "no"}
+        x["seq"] = i + 1
+        races.append(x)
+    return {"date": day["date"], "venue": day["venue"], "kb_id": day["kb_id"],
+            "races": races, "unverified": True}
+
+
 def month_days(client, ym, refresh=False):
     """/chihou/nouken/{YYYYMM} の一覧から (日付, 場コード) を拾う(園田・西脇だけ)。"""
     try:
@@ -258,7 +269,7 @@ def main():
     seed_from_meta()
     store = read_json(SPLIT, {"days": {}})
     already = set() if a.redo else done_keys()
-    n_ok = n_mis = n_nob = 0
+    n_ok = n_mis = n_nob = n_unv = 0
     for date, code in targets:
         if date + code in already:
             log(f"{date} {TRACKS[code]}: 済み(done.tsv)スキップ")
@@ -276,7 +287,13 @@ def main():
         if not (day.get("boards") or []) and not NOKEN_OUT.exists():
             # cloud(2026-09-30): 板の出どころ(PC の映像の読み)がこの環境に無い= 判定できない。
             #   既存の日は消さず、済みにもしない(PC の「板が無い日は出さない」は板の出どころがある所でだけ)
-            log(f"− {day['date']} {day['venue']}: 板の出どころが無い環境= 触らない(既存 {'あり' if day['date'] in store['days'] else 'なし'})")
+            if day["date"] in store["days"]:
+                log(f"− {day['date']} {day['venue']}: 板の出どころが無い環境= 既存あり・触らない")
+                continue
+            # 10/28 まだ無い日だけ「区切りだけ」(unverified)で入れる。⛔R 番号は付けない= no を外して組の順番 seq
+            store["days"][day["date"]] = unverified_day(day)
+            n_unv += 1
+            log(f"? {day['date']} {day['venue']}: 板なし= 区切りだけ(R 未確認・{len(day['races'])}組 {rows}行)")
             continue
         if not (day.get("boards") or []):
             store["days"].pop(day["date"], None)
@@ -296,8 +313,8 @@ def main():
             "/".join(str(len(r["rows"])) for r in day["races"]), secs))
         mark_done(date, code, len(day["races"]), rows, nb, secs)
     write_json(SPLIT, store)
-    log("おわり: そろった %d 日 / 板の R で組む(ずれ)%d 日 / 板が無くて出さない %d 日 → %s(全 %d 日)"
-        % (n_ok, n_mis, n_nob, SPLIT.name, len(store["days"])))
+    log("おわり: そろった %d 日 / 板の R で組む(ずれ)%d 日 / 板が無くて出さない %d 日 / 区切りだけ(R 未確認)%d 日"
+        " → %s(全 %d 日)" % (n_ok, n_mis, n_nob, n_unv, SPLIT.name, len(store["days"])))
     return 0
 
 
