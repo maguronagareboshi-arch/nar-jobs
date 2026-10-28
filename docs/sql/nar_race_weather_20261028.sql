@@ -1,0 +1,2 @@
+-- 2026-10-28 本番に流した版= migration nar_race_weather_20261028(Supabase の履歴が正)。
+-- 元の案は nar-site\docs\sql\nar_race_weather_view_v2.sql。違い= 観測は発走前 10 分以内(画面の atPostTime と同じ)・gust_dir/pressure/sunshine も出す・security_invoker・anon/authenticated から revoke。
