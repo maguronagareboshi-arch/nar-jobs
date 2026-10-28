@@ -194,7 +194,7 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
-          if [ "$MORNING" = 1 ]; then for v in monbetsu ooi funabashi kawasaki urawa; do python cloud/noken_public.py --venue $v || echo "⚠ $v の能検が取れない(続行)"; done; else echo "5場の能検は朝の便だけ(JST $H)=スキップ"; fi
+          if [ "$MORNING" = 1 ]; then for v in monbetsu ooi funabashi kawasaki urawa hyogo; do python cloud/noken_public.py --venue $v || echo "⚠ $v の能検が取れない(続行)"; done; else echo "5場の能検は朝の便だけ(JST $H)=スキップ"; fi
 
       # §45 能検組の初出走(今日+明日の出馬表×能検索引 → nar_meta 'noken_debuts')。3〜5クエリ・数秒・冪等。
       # daily でも回す=明日の出馬表は日中に入るため(⛔出馬表は翌日ぶんまでしか出ない #146)
