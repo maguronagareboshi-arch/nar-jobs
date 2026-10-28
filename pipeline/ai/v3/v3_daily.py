@@ -40,6 +40,8 @@ STAMP_DEB = '+初出走の層(寸評・時計 35 列の木・学び 2023-01〜20
 MK = ['◎', '○', '▲', '△']
 STAMP_TPL = '+短評の層(段・型・前走の段 15 列の木 2 本・学び 2023-01〜2026-08)'  # 決め 30(勝つ率の直しの後・足せた日だけ)
 TPL_TAG = 'tpl 決め30 短評の層'  # tanpyo_live.TAG と同じ字
+STAMP_AW = '+併せの相手(最終追いの先着/遅れ + 秒差)'  # 決め 60(短評の層の後・相手の行のあるレースだけ)
+AW_TAG = '決め60 併せの相手'  # awase_live.TAG と同じ字
 
 
 def log(*a):
@@ -63,6 +65,9 @@ def build_rows(csv_path, day, src, stamp=STAMP):
             meta['p1f'] = p1_follow.TAG['pre']
         if 'tpl_u3' in g.columns and (g.tpl_u3.fillna(0) != 0).any():  # 短評の層(決め 30)を足したレース = 元の率は p3p_tpl0・p1_tpl0
             meta['tpl'] = TPL_TAG
+        if 'aw60_n' in g.columns and g.aw60_n.fillna(0).max() > 0:  # 併せの相手(決め 60)を足したレース = 元の率は p3p_aw0・p1_aw0
+            meta['aw60'] = AW_TAG
+            meta['aw60_n'] = int(g.aw60_n.max())
         rows.append({'track': tr, 'race_date': str(day), 'race_no': int(rno), 'marks': marks, 'meta': meta})
     return rows
 
@@ -259,6 +264,16 @@ def main():
             f3_live.run(day, cap['h'], out / f'{day}_v29_base.csv', log=log)
         except Exception as e:  # noqa: BLE001
             log('F3 の材料 失敗(当日は前の段のまま)', type(e).__name__, str(e)[:200])
+    naw = 0
+    if nt:  # 併せ馬の相手の層(決め 60・研究 nankan-ai-v3 awase60_pre.py・ユーザー承認 2026-10-28 = 前日版は例外で採る): 短評の層の後の最後の段。
+        #   その日の nar_kb_works の相手の行(partners)・前日版の上で学んだ重み(暗号化の定数)。失敗しても前の段のまま
+        try:
+            import awase_live
+            A, n_aw = awase_live.load(day)
+            log('併せの相手', f'相手の行のある馬 {len(A)} / 調教の行 {n_aw}')
+            naw = awase_live.apply_csv_pre(A, csv_path, log=log)
+        except Exception as e:  # noqa: BLE001
+            log('併せの相手 失敗(前の段のまま)', type(e).__name__, str(e)[:200])
     notes = {}
     try:  # ひとこと(表示だけ・予想の計算には使わない・失敗しても予想の表と書き込みは止めない)
         import v3_notes
@@ -266,8 +281,8 @@ def main():
     except Exception as e:  # noqa: BLE001
         log('ひとこと 失敗', type(e).__name__, str(e)[:200])
     del cap
-    ver = '南関 第15版 前日版' if b12 and nt else '南関 第12版 前日版' if b12 else '南関 第11版 前日版' if bundle else '南関 第10版 前日版'  # 版の名前(研究 nankan-ai-v3 VERSIONS.md)
-    rows = build_rows(csv_path, day, src, ver + ' = ' + ((STAMP12 + (STAMP_DEB if nd else '') + (STAMP_TPL if nt else '')) if b12 else (STAMP11 if bundle else STAMP)))
+    ver = '南関 第19版 前日版' if b12 and nt and naw else '南関 第15版 前日版' if b12 and nt else '南関 第12版 前日版' if b12 else '南関 第11版 前日版' if bundle else '南関 第10版 前日版'  # 版の名前(研究 nankan-ai-v3 VERSIONS.md)
+    rows = build_rows(csv_path, day, src, ver + ' = ' + ((STAMP12 + (STAMP_DEB if nd else '') + (STAMP_TPL if nt else '') + (STAMP_AW if naw else '')) if b12 else (STAMP11 if bundle else STAMP)))
     if notes:
         log('ひとこと 付けた', v3_notes.attach(rows, notes), '頭')
     log('races', len(rows), '◎', ' '.join(f"{r['track']}{r['race_no']}R:{r['marks'][0]['num']}" for r in rows[:12] if r['marks']))
