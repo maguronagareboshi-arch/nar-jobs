@@ -9,11 +9,15 @@
 時刻は「その 10 分の終わり」(24:00 は翌日 0:00 なので、その日の分には入れない= 毎晩の便と同じ)。
 風向は 16 方位の漢字 → 1〜16(北北東=1 … 北=16)。「静穏」と欠測・品質記号付きの値は null(毎晩の便は品質 0 だけ採用)。
 降水量(precip・10 分間 mm)は見出し「降水量」の列。数字だけの値を採用・「--」(降水なし)は 0・品質記号付き・///・× は null。
+10/28 追加: 最大瞬間風速 gust_speed・その風向 gust_dir(dir と同じ 1〜16)・相対湿度 humidity(%)・現地気圧 pressure(hPa・
+海面気圧は使わない)・日照 sunshine(10 分間の分)。見出しの名前で引き、無い列(a1 の気圧など)は null。値は _num と同じ扱い。
+今日以降の日は表がまだ無いので読まない(10/27 当日の「表が無い」で failure)。
 取得の間隔は --sleep 秒(既定 2)。429/503/接続失敗は 5→15→45 秒待って 3 回まで取り直す。取れなかった日は最後に一覧で出す。
 手動便なので heartbeat は呼ばない。⛔標準ライブラリだけ。
 """
 import argparse
 import calendar
+import datetime as dt
 import html as htmllib
 import re
 import sys
@@ -23,7 +27,7 @@ import urllib.request
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from wind_store import venue_of, rest, races_of, window_of, in_window, log, _env, UA  # noqa: E402
+from wind_store import venue_of, rest, races_of, window_of, in_window, log, _env, UA, JST, obs_row  # noqa: E402
 
 ETRN = "https://www.data.jma.go.jp/stats/etrn/view/10min_{kind}1.php?prec_no={prec}&block_no={block}" \
        "&year={y}&month={m}&day={d}&view="
@@ -96,10 +100,10 @@ def _columns(head_rows):
 def _pick(cols):
     """列の番号 (時刻, 気温, 平均風速, 平均風向, 降水量)。s1 と a1 で並びが違うので見出しの名前で引く。"""
     def first(pred, start=0):
-        for i in range(start, len(cols)):
-            if pred(cols[i]):
-                return i
-        raise ValueError(f"列が見つからない: {cols}")
+        i = _first(cols, pred, start)
+        if i is None:
+            raise ValueError(f"列が見つからない: {cols}")
+        return i
     wind = lambda p: any(x.startswith("風向・風速") for x in p)   # noqa: E731
     i_t = first(lambda p: p[-1] == "時分")
     i_temp = first(lambda p: p[-1].startswith("気温"))
@@ -107,6 +111,26 @@ def _pick(cols):
     i_dir = first(lambda p: wind(p) and p[-1] == "風向", i_sp + 1)
     i_pr = first(lambda p: p[0].startswith("降水量"))
     return i_t, i_temp, i_sp, i_dir, i_pr
+
+
+def _first(cols, pred, start=0):
+    for i in range(start, len(cols)):
+        if pred(cols[i]):
+            return i
+    return None
+
+
+def _pick_more(cols):
+    """足した列の番号 {gust_speed, gust_dir, humidity, pressure, sunshine}。無い列は None(行では null)。
+    s1= 気圧(hPa)/現地・相対湿度(%)・風向・風速(m/s)/最大瞬間 → 次の 風向・日照時間(分)。
+    a1= 相対湿度(%)・風向・風速/最大瞬間/風速(m/s) → 風向・日照時間(min)。気圧は無い(海面気圧で代えない)。"""
+    wind = lambda p: any(x.startswith("風向・風速") for x in p)   # noqa: E731
+    i_gs = _first(cols, lambda p: wind(p) and "最大瞬間" in p and p[-1] != "風向")
+    i_gd = None if i_gs is None else _first(cols, lambda p: wind(p) and p[-1] == "風向", i_gs + 1)
+    return {"gust_speed": i_gs, "gust_dir": i_gd,
+            "humidity": _first(cols, lambda p: p[0].startswith("相対湿度")),
+            "pressure": _first(cols, lambda p: p[0].startswith("気圧") and p[-1] == "現地"),
+            "sunshine": _first(cols, lambda p: p[0].startswith("日照時間"))}
 
 
 def _precip(s):
@@ -119,13 +143,16 @@ def _precip(s):
 
 
 def parse_page(page):
-    """過去データ 10 分値のページ → [{t, dir, speed, temp, precip}](t は HH:MM・24:00 は翌日なので落とす)。"""
+    """過去データ 10 分値のページ → [{t, dir, speed, temp, precip, gust_speed, gust_dir, humidity, pressure, sunshine}]
+    (t は HH:MM・24:00 は翌日なので落とす)。"""
     rows = [_CELL.findall(m) for m in _TR.findall(page)]
     head = [r for r in rows if r and all(tag == "th" for tag, _, _ in r)]
     body = [r for r in rows if r and any(tag == "td" for tag, _, _ in r)]
     if not head or not body:
         raise ValueError("表が無い")
-    i_t, i_temp, i_sp, i_dir, i_pr = _pick(_columns(head))
+    cols = _columns(head)
+    i_t, i_temp, i_sp, i_dir, i_pr = _pick(cols)
+    more = _pick_more(cols)
     out = []
     for r in body:
         v = [_text(x[2]) for x in r]
@@ -133,8 +160,16 @@ def parse_page(page):
         if not re.fullmatch(r"\d{2}:\d{2}", t) or t >= "24:00":
             continue
         sp = _num(v[i_sp])
+        cell = lambda k: None if more[k] is None or more[k] >= len(v) else v[more[k]]   # noqa: E731
+        gs, hu, pa, su = (_num(cell(k)) if cell(k) is not None else None
+                          for k in ("gust_speed", "humidity", "pressure", "sunshine"))
         out.append({"t": t, "dir": DIR_CODE.get(v[i_dir]), "speed": sp if sp is not None and sp >= 0 else None,
-                    "temp": _num(v[i_temp]), "precip": _precip(v[i_pr])})
+                    "temp": _num(v[i_temp]), "precip": _precip(v[i_pr]),
+                    "gust_speed": gs if gs is not None and gs >= 0 else None,
+                    "gust_dir": DIR_CODE.get(cell("gust_dir")) if cell("gust_dir") is not None else None,
+                    "humidity": hu if hu is not None and 0 <= hu <= 100 else None,
+                    "pressure": pa if pa is not None and pa > 0 else None,
+                    "sunshine": su if su is not None and 0 <= su <= 10 else None})
     return out
 
 
@@ -190,7 +225,12 @@ def main(argv=None):
         log("要判断: SUPABASE_URL / SUPABASE_SERVICE_KEY が無い(nar_races が読めない)")
         return 2
     y, m = (int(x) for x in a.month.split("-"))
+    today = dt.datetime.now(JST).date().isoformat()
     dates = [f"{y:04d}-{m:02d}-{d:02d}" for d in range(1, calendar.monthrange(y, m)[1] + 1)]
+    n_skip = sum(d >= today for d in dates)
+    dates = [d for d in dates if d < today]           # 今日以降は表がまだ無い= 読まない
+    if n_skip:
+        log(f"{a.month} 今日以降の {n_skip} 日は読まない")
     n_fetch, n_rows, n_vd, failed, last = 0, 0, 0, [], 0.0
     for date in dates:
         races = races_of(date)
@@ -222,9 +262,7 @@ def main(argv=None):
             if pts is None:
                 failed.append(f"{date} {name}")
                 continue
-            rows = [{"venue": prefix, "obs_at": f"{date}T{p['t']}:00+09:00",
-                     "dir": p["dir"], "speed": p["speed"], "temp": p["temp"], "precip": p["precip"]}
-                    for p in in_window(pts, lo, hi)]
+            rows = [obs_row(prefix, date, p) for p in in_window(pts, lo, hi)]
             if rows and not a.dry:
                 for i in range(0, len(rows), 60):
                     rest("nar_wind_obs?on_conflict=venue,obs_at", rows[i:i + 60])

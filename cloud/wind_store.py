@@ -9,6 +9,9 @@
 窓= 1R の発走 − 30 分 〜 最終 R の発走。掛かる 3 時間ファイル(<stationId>/<yyyymmdd>_<hh>.json)だけ取る(1 場最大 5 本)。
 点の規則は viewer の functions/api/wind/[venue].js の pointsOfFile と同じ(品質 0 だけ採用・dir は 1〜16 以外 null)。
 降水量 precip(10 分間 mm)は precipitation10m を風と同じ扱い(品質 0 だけ・負は null)で足す。
+10/28 追加: humidity(%)・pressure(現地気圧 hPa・normalPressure= 海面は使わない)・sunshine(sun10m= 10 分間の日照 分)も
+同じ扱いで足す(アメダスで要素が無い地点は null)。gust_speed・gust_dir は書かない(null): 上流の gust はその日の
+最大瞬間(gustTime 付き)で 10 分間の値ではない(10/28 実ファイルで確認)。
 ⛔標準ライブラリだけ。環境変数: SUPABASE_URL / SUPABASE_SERVICE_KEY(service_role)。
 """
 import argparse
@@ -88,14 +91,28 @@ def points_of_file(rows, ymd):
     for key in sorted(k for k in rows if re.fullmatch(r"\d{14}", k) and k[:8] == ymd):
         r = rows[key]
         d, sp, pr = _q(r, "windDirection"), _q(r, "wind"), _q(r, "precipitation10m")
+        hu, pa, su = _q(r, "humidity"), _q(r, "pressure"), _q(r, "sun10m")
         out.append({
             "t": key[8:10] + ":" + key[10:12],
             "dir": int(d) if d is not None and float(d).is_integer() and 1 <= d <= 16 else None,
             "speed": sp if sp is not None and sp >= 0 else None,
             "temp": _q(r, "temp"),
             "precip": pr if pr is not None and pr >= 0 else None,
+            "humidity": hu if hu is not None and 0 <= hu <= 100 else None,
+            "pressure": pa if pa is not None and pa > 0 else None,
+            "sunshine": su if su is not None and 0 <= su <= 10 else None,
         })
     return out
+
+
+OBS_COLS = ("dir", "speed", "temp", "precip", "gust_speed", "gust_dir", "humidity", "pressure", "sunshine")
+
+
+def obs_row(prefix, date, p):
+    """点 → nar_wind_obs の 1 行。足した列も常に送る(無い値は null)= 1 回の POST で全行の鍵をそろえる。"""
+    row = {"venue": prefix, "obs_at": f"{date}T{p['t']}:00+09:00"}
+    row.update({k: p.get(k) for k in OBS_COLS})
+    return row
 
 
 def in_window(points, lo, hi):
@@ -164,8 +181,7 @@ def run_day(date, now, dry):
             except Exception as e:                        # noqa: BLE001
                 log(f"⚠{name} {ymd}_{h:02d} 取れない: {type(e).__name__}: {str(e)[:80]}")
         pts = in_window(pts, lo, hi)
-        rows = [{"venue": prefix, "obs_at": f"{date}T{p['t']}:00+09:00",
-                 "dir": p["dir"], "speed": p["speed"], "temp": p["temp"], "precip": p["precip"]} for p in pts]
+        rows = [obs_row(prefix, date, p) for p in pts]
         if rows and not dry:
             for i in range(0, len(rows), 60):
                 rest("nar_wind_obs?on_conflict=venue,obs_at", rows[i:i + 60])

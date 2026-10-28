@@ -22,9 +22,9 @@ class WindPoints(unittest.TestCase):
         }
         got = ws.points_of_file(rows, "20260924")
         self.assertEqual([p["t"] for p in got], ["15:00", "15:10", "15:20"])
-        self.assertEqual(got[0], {"t": "15:00", "dir": 5, "speed": 3.2, "temp": 22.1})
-        self.assertEqual(got[1], {"t": "15:10", "dir": None, "speed": None, "temp": None})
-        self.assertEqual(got[2], {"t": "15:20", "dir": None, "speed": None, "temp": None})
+        self.assertEqual(got[0], {"t": "15:00", "dir": 5, "speed": 3.2, "temp": 22.1, "precip": None, "humidity": None, "pressure": None, "sunshine": None})
+        self.assertEqual(got[1], {"t": "15:10", "dir": None, "speed": None, "temp": None, "precip": None, "humidity": None, "pressure": None, "sunshine": None})
+        self.assertEqual(got[2], {"t": "15:20", "dir": None, "speed": None, "temp": None, "precip": None, "humidity": None, "pressure": None, "sunshine": None})
 
     def test_window(self):
         lo, hi = ws.window_of(["15:05", "20:50", "16:40"])

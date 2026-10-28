@@ -1,5 +1,5 @@
 # 風の過去分の取り込み: 気象庁「過去の気象データ」の 10 分値から、過去の開催日の風と雨量を nar_wind_obs へ足す(手動便)。
-# months に複数月(「2025-01,2025-02」か「2025-01..2026-09」)を渡すと 1 か月 1 本で全部同時に流す(最大 21 本)。
+# months に複数月(「2025-01,2025-02」か「2025-01..2026-09」)を渡すと 1 か月 1 本で同時 20 本で流す(154 か月= 「2014-01..2026-09」も可・matrix は 256 本まで)。
 # 旧来の month(YYYY-MM 1 つ)も使える。両方あれば合わせて重複を除く。
 # heartbeat と /update-times には載せない(手動便のため)。
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY(既存。**新しい secret は作らない**)
@@ -87,7 +87,7 @@ jobs:
     timeout-minutes: 60
     strategy:
       fail-fast: false
-      max-parallel: 21
+      max-parallel: 20
       matrix:
         month: ${{ fromJSON(needs.plan.outputs.months) }}
     steps:
