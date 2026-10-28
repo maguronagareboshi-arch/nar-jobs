@@ -38,13 +38,14 @@ import feat_v1 as f1  # noqa: E402
 import feat_v2 as f2  # noqa: E402
 import class_fix as cf  # noqa: E402
 import seq_core as sc  # noqa: E402
+import noken as nkm  # noqa: E402
 
 V = f1.OUT
 OUTD = V + 'prod/'
 K = ['race_date', 'race_no', 'runner_number']
 MODEL_ID = 'banei-3'
 MARKS = ['◎', '○', '▲', '△', '△']
-FORM = 'banei-3: v2tree355 0.8 + flat 0.2 + seq res / clsfix / p3 sum3 / p1 = p3 share'
+FORM = 'banei-4: v2tree355 0.8 + flat 0.2 + seq res + b*noken(debut) / clsfix / p3 sum3 / p1 = p3 share'
 GAP_FROM = '2026-09-01'   # 固めた表の前の版(〜2026-08)より後 = 月ごとの埋めの対象
 LOCAL = os.environ.get('BANEI_LOCAL') == '1'
 JST = dt.timezone(dt.timedelta(hours=9))
@@ -286,7 +287,16 @@ def score(day, mdir, drop_race=None, no_going=False):
     out = pd.DataFrame({'race_date': Z['date'][cur], 'race_no': Z['race_no'][cur].astype(int), 'runner_number': Z['umaban'][cur].astype(int),
                         'rkey': Z['rkey'][cur], 'res': res[cur], 'flat': fl[cur]})
     out = out.merge(v2, on=K, how='left', validate='1:1')
-    z = (1 - sc.W_FLAT) * lg(out.p_v2.to_numpy(float)) + sc.W_FLAT * out.flat + out.res
+    out = out.merge(today[K + ['horse_name', 'a12_runs']], on=K, how='left', validate='1:1')
+    P = nkm.params()
+    try:
+        out['nk'], hit, deb, nt = nkm.nk_of(out, P)
+        log('能検', '新馬', deb, '頭のうち結べた', hit, '・合格の回', nt, '・b', P['b'])
+    except Exception as e:  # noqa: BLE001  ⛔能検が読めない日は 0(= 第 3 版と同じ)で続け、meta.nk_src に残す
+        out['nk'] = 0.0; P = dict(P, src='none')
+        log('能検が読めない = 足さない', repr(e)[:200])
+    info = dict(info, nk_b=P['b'], nk_src=P.get('src', 'ok'))
+    z = (1 - sc.W_FLAT) * lg(out.p_v2.to_numpy(float)) + sc.W_FLAT * out.flat + out.res + float(P['b']) * out.nk
     out['p'] = 1 / (1 + np.exp(-z))
     out['p3'] = (out.p / out.groupby('rkey').p.transform('sum') * 3).clip(1e-4, 1 - 1e-4)      # 案 1: 割り直すだけ
     out['p1'] = out.p3 / out.groupby('rkey').p3.transform('sum')                               # ア: 強さの割合
@@ -331,7 +341,8 @@ def rows_of(out, info, day, need_bw=True, timing='last'):
         meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM, 'timing': timing, 'trained_to': info['prev'], 'going_day': g.going_day.iloc[0],
                 'runners': [{'num': int(n), 'p1': round(float(a), 4), 'p3': round(float(b), 4)} for n, a, b in zip(nums, g.p1, g.p3)],
                 'p_v2': {str(int(n)): round(float(x), 6) for n, x in zip(nums, g.p_v2)},
-                'p': {str(int(n)): round(float(x), 4) for n, x in zip(nums, g.p)}}
+                'p': {str(int(n)): round(float(x), 4) for n, x in zip(nums, g.p)},
+                'nk': {str(int(n)): round(float(x), 4) for n, x in zip(nums, g.nk) if x != 0}, 'nk_b': info.get('nk_b'), 'nk_src': info.get('nk_src')}
         rows.append({'track': '帯広ば', 'race_date': day, 'race_no': int(rno), 'marks': marks, 'meta': meta})
     return rows, skip
 

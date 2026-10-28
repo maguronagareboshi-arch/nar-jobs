@@ -9,8 +9,9 @@
 # ⛔本番への書き込みは nar_ai_marks(model='banei-3', timing='last' と 'morning')と nar_kb_banei の REST upsert だけ。SQL は流さない。
 #   書かない日(前の開催日の競馬ブックが無い・1R の水分が無い・学びが落ちた)は base-v1 の帯広の印が残る。
 #   画面に出すかはサイトの旗で決める。それまでは見えない。
-# 固定ファイル = 暗号化リリース banei-v3-frozen-20261028(KDSCOPE 2005〜2013 の帯広・競馬ブック帯広 2017-02〜2026-10-26・
+# 固定ファイル = 暗号化リリース banei-v3-frozen-20261029(KDSCOPE 2005〜2013 の帯広・競馬ブック帯広 2017-02〜2026-10-26・
 #   第 2 版の外した予想 〜2026-10-05・第 2 版の列と学びの決め)。戻すときはこの yml を消す(他の便は触っていない)。
+#   2026-10-29 から 20261029 = 同じ中身 + banei_kb/banei_noken.json(第 4 版の能検の重み b・ばんえい 決め 8 例外採用・毎年 9 月に学び直す)。
 name: banei-v3
 
 on:
@@ -79,7 +80,7 @@ jobs:
           echo "day=$DAY 帯広のレース $N 本 mode=${{ github.event.inputs.mode }} write=$WRITE"
           [ "$N" -gt 0 ] || echo "::notice::$DAY は帯広の開催なし = 何もしない"
 
-      - name: download frozen tables (banei-v3-frozen-20261028)
+      - name: download frozen tables (banei-v3-frozen-20261029)
         if: steps.d.outputs.races != '0'
         env:
           V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
@@ -90,14 +91,14 @@ jobs:
           : "${V3_ASSET_KEY:?secrets.V3_ASSET_KEY が無い}"
           mkdir -p in work
           for i in 1 2 3; do
-            gh release download banei-v3-frozen-20261028 -p 'banei_v3_frozen.tar.gz.enc' -D in --clobber && break
-            [ "$i" = 3 ] && { echo "::error::⛔ 固めた表(banei-v3-frozen-20261028)を 3 回取れなかった"; exit 1; }
+            gh release download banei-v3-frozen-20261029 -p 'banei_v3_frozen.tar.gz.enc' -D in --clobber && break
+            [ "$i" = 3 ] && { echo "::error::⛔ 固めた表(banei-v3-frozen-20261029)を 3 回取れなかった"; exit 1; }
             sleep 20
           done
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/banei_v3_frozen.tar.gz.enc | tar -C work -xzf -
           rm -f in/banei_v3_frozen.tar.gz.enc
           for f in banei_kb/kd_banei_runs.parquet banei_kb/kb_runs_frozen.parquet banei_kb/feat_v1_cols.json banei_kb/feat_v2_cols.json \
-                   banei_kb/banei_v2_lock.json banei_kb/prod/v2_oof.parquet; do
+                   banei_kb/banei_v2_lock.json banei_kb/prod/v2_oof.parquet banei_kb/banei_noken.json; do
             [ -s "work/$f" ] || { echo "::error::⛔ 固めた表に $f が無い"; exit 1; }
           done
           ls -lR work | head -30
