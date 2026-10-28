@@ -50,6 +50,7 @@ DAY_META = 't11_day.json'  # 当日版の印の上乗せ(51 本 + 当日の体�
 SEQ2 = None  # 並び読み(決め 24・seq2_live.load の戻り)。live() が読む。無ければ当日版は第12版のまま
 TPLM = None  # 全馬の短評の層(決め 30・tanpyo_live.load の戻り)。live() が mdir/tanpyo から読む。無ければ足さない
 F3M, F3W = None, None  # 平らな模型 F3 の混ぜ(決め 49・f3_live.load の戻りと混ぜの重み)。live() が mdir/f3 から読む。無ければ足さない
+AW = None  # 併せ馬の相手(決め 60・awase_live.load の戻り = (track, race_no, 馬番) → (res, mar))。live() がその日の nar_kb_works から読む。無ければ足さない
 PREB = {}  # (場, R) → {馬番: (p1, p3′)} = F3 の混ぜの前の直前版(買いの模型 決め38-1 はこの率で学んだので、買いにはこれを渡す)
 DAY_MIN = 30      # 当日版の印は発走 30 分前から出す(体重はもう出ている・ユーザー 2026-10-01)
 DAY_LAST_MIN = 16  # 発走 15 分前を過ぎた印は DB のトリガーが捨てるので、その手前まで
@@ -262,14 +263,26 @@ def day_marks(Bk, odds, w, going, dm, day):
                 used.append('f3')
         except Exception as e:  # noqa: BLE001  混ぜが落ちても前の段の印は出す
             log('F3 の混ぜ 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
+    naw = 0
+    if AW and 'f3' in used and len(b) > 3:
+        try:  # 併せ馬の相手の層(決め 60・研究 nankan-ai-v3 awase60_judge.py・2026-10-28): F3 の混ぜの後の最後の段
+            import awase_live
+            r_ = awase_live.apply(AW, Bk.track.iloc[0], int(Bk.race_no.iloc[0]), b.umaban.astype(int).to_numpy(), p1, p3)
+            if r_ is not None:
+                p1, p3, naw = r_
+                p3p = _sum3(p3)
+                used.append('aw60')
+        except Exception as e:  # noqa: BLE001  層が落ちても前の段の印は出す
+            log('併せの相手の層 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
     stamp ='v3-9 当日版(第10版 + 当日の体重 15 本・t11 + 談話の印 3 定数)' if not [c for c in used if c != 'p1f'] else \
         'v3-9 当日版(第12版 = 当日の体重 15 本と馬場・t11 + 談話の印 + 束 ' + '・'.join({'b14_u': 't14', 'b19_u': 'f10k'}[c] for c in used if c in ('b14_u', 'b19_u')) + \
         (' + 並び読み' if 'seq2' in used else '') + (' + 初出走の層' if 'debut' in used else '') + ')'
     stamp += ' + 勝つ率の直し' if 'p1f' in used else ''
     stamp += ' + 短評の層' if 'tpl' in used else ''
     stamp += ' + F3 の混ぜ' if 'f3' in used else ''
+    stamp += ' + 併せの相手' if 'aw60' in used else ''
     day8 = 'tpl' in used and getattr(sys.modules.get('tanpyo_live'), 'LAST_VER', None) == 'day8'
-    ver = ('南関 第17版' if 'f3' in used else '南関 第16版' if day8 else
+    ver = ('南関 第19版' if 'aw60' in used else '南関 第17版' if 'f3' in used else '南関 第16版' if day8 else
            '南関 第15版' if 'seq2' in used and {'debut', 'p1f', 'tpl'} & set(used) else '南関 第14版' if 'seq2' in used else
            '南関 第12版' if 'b19_u' in used else '南関 第11版' if 'b14_u' in used else '南関 第10版')  # 版の名前(研究 nankan-ai-v3 VERSIONS.md)
     stamp = f'{ver} 直前版 = {stamp}'
@@ -291,6 +304,9 @@ def day_marks(Bk, odds, w, going, dm, day):
             meta['sitb'] = '決め36 状況の印'  # tanpyo_live.TAG8 と同じ字(8 列入りの模型を使った)
     if 'f3' in used:
         meta['f3'] = f3_live.TAG
+    if 'aw60' in used:
+        meta['aw60'] = sys.modules['awase_live'].TAG
+        meta['aw60_n'] = naw  # 相手の行で率を動かした頭数
     return {'track': tr, 'race_date': day, 'race_no': rno, 'marks': marks, 'meta': meta}
 
 
@@ -669,6 +685,14 @@ def live(day, base_csv, mdir, write, until):
     except Exception as e:  # noqa: BLE001
         F3M, F3W = None, None
         log('F3 の混ぜ 読めない(足さない)', type(e).__name__, str(e)[:200])
+    global AW
+    try:  # 併せ馬の相手の層(決め 60): その日の nar_kb_works の相手の行(partners)・定数 = 暗号化の定数。無ければ足さない
+        import awase_live
+        AW, n_aw = awase_live.load(day)
+        log('併せの相手の層', f'相手の行のある馬 {len(AW)} / 調教の行 {n_aw}')
+    except Exception as e:  # noqa: BLE001
+        AW = None
+        log('併せの相手の層 読めない(足さない)', type(e).__name__, str(e)[:200])
     global NEW
     try:  # 決め 38-1: 直前版の勝つ率で学んだ買いの模型(mdir/buy38_new.json・種 3 本)。無ければ全部 v31
         NEW = load_new(mdir)

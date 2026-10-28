@@ -107,7 +107,7 @@ jobs:
           rm -f in/v3_fixed.tar.gz.enc
           du -sh v3/*; df -h / | tail -n 1
 
-      # 2026-10-15 予想の学んだ定数・表(勝つ率の直し・談話の印・他場の曲線など)= 暗号化したリリース v3-consts-20261027(公開のコードに置かない)。
+      # 2026-10-15 予想の学んだ定数・表(勝つ率の直し・談話の印・他場の曲線など)= 暗号化したリリース v3-consts-20261028(公開のコードに置かない)。
       #   取れない・開けない・中身が欠けている時は止める(黙って別の値で予想を出さない)。中身の確かめ = pipeline/ai/sealed.py check
       - name: download sealed constants
         id: sc
@@ -121,8 +121,8 @@ jobs:
           : "${V3_ASSET_KEY:?secrets.V3_ASSET_KEY が無い}"
           mkdir -p in sealed_consts
           for i in 1 2 3; do
-            gh release download v3-consts-20261027 -p 'v3_consts.tar.gz.enc' -D in --clobber && break
-            [ "$i" = 3 ] && { echo "::error::⛔ 予想の定数(v3-consts-20261027)を 3 回取れなかった"; exit 1; }
+            gh release download v3-consts-20261028 -p 'v3_consts.tar.gz.enc' -D in --clobber && break
+            [ "$i" = 3 ] && { echo "::error::⛔ 予想の定数(v3-consts-20261028)を 3 回取れなかった"; exit 1; }
             sleep 20
           done
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_consts.tar.gz.enc | tar -C sealed_consts -xzf -

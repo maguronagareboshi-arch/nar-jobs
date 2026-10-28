@@ -17,7 +17,8 @@ FILES = ['consts.json', 'v3n_one_p5.json', 'k26_cal_table.json', 'dw_pat_dict.js
 NEED = {'p1_follow': ['FORM', 'TAG'], 'danwa_marks': ['CONST'], 't14_bundle': ['M_GLOB', 'V0'],
         'v3n_p1': ['K', 'TAG'], 'v3n_e1': ['B_E1', 'S_NOKEN', 'BETA_NOKEN'], 'v3n_p1mix': ['AB', 'TAG'],
         'v3n_f41': ['NAMES', 'BETA', 'B', 'TAG', 'CUT'], 'f3_blend': ['W'],
-        'si5_disp': ['TAG', 'DB_CUT', 'POS', 'CUT', 'ERR', 'MEAN', 'SAND']}   # 2026-10-27 サイトの指数の表示の直し(si5_store.disp)   # 2026-10-22 決め 49 F3 の混ぜの重み
+        'si5_disp': ['TAG', 'DB_CUT', 'POS', 'CUT', 'ERR', 'MEAN', 'SAND'],
+        'awase60': ['W1', 'W3', 'SD', 'TAG']}   # 2026-10-28 決め 60 併せ馬の相手の層(awase_live)   # 2026-10-27 サイトの指数の表示の直し(si5_store.disp)   # 2026-10-22 決め 49 F3 の混ぜの重み
 _C = None
 
 
