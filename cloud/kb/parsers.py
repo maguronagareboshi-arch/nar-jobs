@@ -443,8 +443,16 @@ def parse_cyokyo(html, race_id=None):
             "arrow": _clean(_text(info[4])) if len(info) > 4 else None,
             "works": [],
         }
+        last = None   # 直前の追い切り(相手の行を付ける先)
         for tr in t.select("table.cyokyodata tr"):
             tds = tr.find_all("td")
+            if len(tds) == 2 and last is not None:
+                # 併せ馬の相手の行「相手（級）脚色の内0.2秒遅れ」を直前の追い切りに付ける(南関 AI v3 決め 60・2026-10-28)
+                p = _clean(_text(tds[1]))
+                if p:
+                    last.setdefault("partners", []).append(p)
+                continue
+            last = None
             if len(tds) != len(_CYOKYO_COLS):
                 continue
             cells = [_text(td) for td in tds]
@@ -465,6 +473,7 @@ def parse_cyokyo(html, race_id=None):
             }
             if work["date"] or any(v is not None for v in work["times"].values()):
                 horse["works"].append(work)
+                last = work
         if horse["umaban"] is not None:
             horses.append(horse)
     return {"race_id": race_id, "race_date": race_date, "horses": horses}
