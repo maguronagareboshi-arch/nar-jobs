@@ -277,7 +277,7 @@ jobs:
         with:
           name: nar-ai-feat-${{ github.run_number }}
           path: sealed/
-          retention-days: 14
+          retention-days: 3   # 10/29 1 回 316MB×14 日で置き場(約 4.5GB)が満杯= 読むのは最新(無ければ前日)だけ
           if-no-files-found: error
 
       - name: stop local postgres
