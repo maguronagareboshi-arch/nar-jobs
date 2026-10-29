@@ -62,7 +62,8 @@ jobs:
           if [ "$NIGHT_IN" = "true" ] || [ "$SCHED" = "10 8 * * *" ] || [ "$SCHED" = "10 11 * * *" ] || [ "$SCHED" = "10 13 * * *" ]; then NIGHT=1; else NIGHT=0; fi
           if [ -z "$DAY" ]; then
             # 夜の回が日付をまたいで起きたら、もう「翌日」は今日
-            if [ "$NIGHT" = "1" ] && { [ -z "$SCHED" ] || [ $((10#$H)) -ge 12 ]; }; then DAY=$(TZ=Asia/Tokyo date -d tomorrow +%F); else DAY=$(TZ=Asia/Tokyo date +%F); fi
+            # 10/30 DB(pg_cron)から 20:10・22:10・06:50 に手動の形で起こす= 手動の夜の回も 0 時を過ぎたら今日分(以前は手動なら常に翌日)
+            if [ "$NIGHT" = "1" ] && [ $((10#$H)) -ge 12 ]; then DAY=$(TZ=Asia/Tokyo date -d tomorrow +%F); else DAY=$(TZ=Asia/Tokyo date +%F); fi
           fi
           if [ "$DRY" = "true" ]; then W=--dry-run; else W=--apply; fi
           echo "夜の回= $NIGHT・日= $DAY・$W"
