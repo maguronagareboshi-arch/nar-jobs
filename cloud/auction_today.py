@@ -12,6 +12,8 @@ value= {built, date, rows:[{track, no, umaban, name, post_time, note, sales:[{da
         category, url, runs_after, first_after}]}]}。rows は取引が 1 件以上ある出走だけ・sales は新しい順。
 ⛔note= nar_runs の finish_note(無ければ margin)の字そのまま(取消・除外の読み取りは画面)。
 ⛔開催が無い日も rows=[] を**書く**(前日の残りを使わせない)。⛔読み取りに失敗したら書かない(前の値が残る)。
+10/30 通信量: 同じ 1 本で件数だけの小さい鍵 '<鍵>_n'= {built, date, n, m} も書く(トップは 211 KB の行でなく件数だけ読む)。
+  数え方は画面の auctionTodayCounts / auctionFirstAfter と同じ(count_first_after)。/auction は今までどおり大きい鍵を読む。
 """
 from __future__ import annotations
 
@@ -74,6 +76,27 @@ def build(base, key, today):
     return out
 
 
+DATE_RE = re.compile(r"^\d{4}-\d{2}-\d{2}$")
+NOT_STARTER_RE = re.compile(r"(取消|除外)")
+
+
+def count_first_after(out, today):
+    """トップの件数(画面 js/pages/top.js auctionTodayCounts と js/data.js parseAuctionToday・auctionFirstAfter と同じ)。
+    n= 一番新しい取引がセリ市場でなく取消・除外でない出走・m= そのうち落札後の初出走(落札 2022-11-01 以降・今日より前・
+    落札後 0 走か落札後の最初の出走が今日)。⛔日付の読めない取引は先に落とす(画面と同じ)"""
+    n = m = 0
+    for x in out:
+        sales = [s for s in (x.get("sales") or []) if s and DATE_RE.match(str(s.get("date") or ""))]
+        if not sales or sales[0].get("source") in ("jrha", "hba") or NOT_STARTER_RE.search(str(x.get("note") or "")):
+            continue
+        n += 1
+        a = sales[0]
+        d, fa = str(a["date"]), str(a.get("first_after") or "")
+        if a.get("sold") and "2022-11-01" <= d < today and (a.get("runs_after") == 0 or fa == today):
+            m += 1
+    return {"n": n, "m": m}
+
+
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--env")
@@ -98,13 +121,18 @@ def main():
     not_sale = sum(1 for x in out if x["sales"][0]["source"] not in ("jrha", "hba"))
     log(f"取引のある出走 {len(out)}行(一番新しい取引がセリ市場でない {not_sale}・発走時刻なし "
         f"{sum(1 for x in out if not x['post_time'])}・note あり {sum(1 for x in out if x['note'])})")
-    value = {"built": dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).isoformat(timespec="seconds"), "date": today, "rows": out}
+    built = dt.datetime.now(dt.timezone(dt.timedelta(hours=9))).isoformat(timespec="seconds")
+    value = {"built": built, "date": today, "rows": out}
+    small = {"built": built, "date": today, **count_first_after(out, today)}
+    log(f"件数の鍵 {a.key}_n: n={small['n']}・m={small['m']}")
     if not a.apply or a.dry_run:
         log(f"ドライラン(--apply で書く・鍵 {a.key}・{today})"); return 0
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    # ⛔2 つの鍵は同じ 1 本で書く(片方だけ新しい状態を作らない)
     st, _ = req(base, key, "/rest/v1/nar_meta?on_conflict=key", "POST",
-                json.dumps([{"key": a.key, "value": value,
-                             "updated_at": dt.datetime.now(dt.timezone.utc).isoformat()}], ensure_ascii=False).encode("utf-8"))
-    log(f"nar_meta/{a.key}({today})更新 {st}")
+                json.dumps([{"key": a.key, "value": value, "updated_at": now},
+                            {"key": a.key + "_n", "value": small, "updated_at": now}], ensure_ascii=False).encode("utf-8"))
+    log(f"nar_meta/{a.key}・{a.key}_n({today})更新 {st}")
     return 0 if st in (200, 201) else 1
 
 
