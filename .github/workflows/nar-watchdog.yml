@@ -310,6 +310,8 @@ jobs:
   #   ③ JST 09:30 以降に ai_feat・stats の last_ok が今日でない
   #   ④ JST 10:30 以降に votes の last_ok が今日でない
   #   ⑥ JST 08:00 以降に k43_daily の last_ok が今日でない(馬柱の指標・便は毎朝 06:47)
+  #   ⑦ 開催中に直前の便(ai_last・v3_gap_live)の生存が 30 分より古い(まだ発走前のレースがあるとき)・2026-10-30
+  #   ⑧ 今日、DB の時計 private.nar_live_guard が直前の便を回し直した(live_guard)・2026-10-30 = 中身は cloud/live_watch.py
   #   表がまだ無い/読めないときは警告だけで緑(本番 DB に表を当てる前でも赤にしない)。
   heartbeat:
     if: github.event.schedule != '40 23 * * *'
@@ -322,7 +324,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: cloud/beat.py
+          sparse-checkout: |
+            cloud/beat.py
+            cloud/live_watch.py
           sparse-checkout-cone-mode: false
       - name: check job heartbeats
         id: c
@@ -442,6 +446,14 @@ jobs:
                   t = last_ok(job)
                   if t is None or t.date() != today:
                       bad.append(f"{job} が今日まだ成功していない(最終 {t})")
+          # 2026-10-30 ⑦⑧ 直前の便の生存(10/29 12:29 に便が GitHub 側で消え、fail も書けずに 2.5 時間抜けた)
+          import live_watch
+          try:
+              rc = beat._req(f"nar_races?select=track,post_time,cancelled&race_date=eq.{today.isoformat()}") or []
+          except Exception as e:
+              rc = None
+              print(f"::warning::nar_races が読めない= 直前の便の生存は見ない({e})")
+          bad += live_watch.live_bad(got, rc, now)
           import re
           m = re.search(r'見込み=(\d{4}-\d{2}-\d{2})', str((got.get('monbetsu_class') or {}).get('note') or ''))
           if m:

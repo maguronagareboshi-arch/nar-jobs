@@ -23,9 +23,14 @@ on:
         description: '模型のリリース tag'
         required: false
         default: 'v3-gap-model-20261001'
+      guard:
+        description: 'yes = DB の時計(private.nar_live_guard)からの回し直し。同じ便が動いていれば何もしない'
+        required: false
+        default: 'no'
 
 concurrency:
-  group: v3-gap-live-${{ github.event.inputs.part }}
+  # 2026-10-30 回し直し(guard=yes)は別の列 = 動いている便の後ろに並ばず、入口(job guard)で同じ便が動いていないかを見る
+  group: v3-gap-live-${{ github.event.inputs.part }}${{ github.event.inputs.guard == 'yes' && '-guard' || '' }}
   cancel-in-progress: false
 
 permissions:
@@ -33,7 +38,29 @@ permissions:
   actions: read
 
 jobs:
+  # 2026-10-30 10/29 12:29 に便が GitHub 側の内部エラーで消え、fail も書けずに大井 1〜3R の直前版が抜けた。
+  #   DB の時計(private.nar_live_guard・5 分おき)が生存(nar_job_heartbeat の v3_gap_live・v29_gap.py が 5 分おきに書く)の
+  #   途切れを見て guard=yes で起こす。同じ便がまだ動いている/待っているなら何もしない(ops/live_guard_check.sh)。
+  #   pg_cron のふだんの起動(guard なし)はこの job を飛ばす
+  guard:
+    if: github.event.inputs.guard == 'yes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.g.outputs.go }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: ops/live_guard_check.sh
+          sparse-checkout-cone-mode: false
+      - id: g
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash ops/live_guard_check.sh v3-gap-live.yml
+
   live:
+    needs: guard
+    if: ${{ !cancelled() && (github.event.inputs.guard != 'yes' || needs.guard.outputs.go == 'yes') }}
     runs-on: ubuntu-latest
     timeout-minutes: 358
     env:
@@ -185,6 +212,7 @@ jobs:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
           WRITE: ${{ github.event.inputs.write }}
+          LIVE_GUARD: ${{ github.event.inputs.guard }}
         run: |
           if [ "$WRITE" = "yes" ]; then W=--write; else W=; fi
           python -X utf8 pipeline/ai/v3/v29_gap.py live "${{ steps.d.outputs.day }}" in/v29_base.csv gapm $W --until "${{ steps.d.outputs.until }}"

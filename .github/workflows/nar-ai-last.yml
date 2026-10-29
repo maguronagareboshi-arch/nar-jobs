@@ -26,10 +26,15 @@ on:
         description: '1 回だけ回して終わる(yes/no)。試運転用'
         required: false
         default: 'yes'
+      guard:
+        description: 'yes = DB の時計(private.nar_live_guard)からの回し直し。同じ便が動いていれば何もしない'
+        required: false
+        default: 'no'
 
 concurrency:
   # 2026-10-15 master 以外の枝の試しの便は別の列(本番の待ちを消さない・本番は今までどおり nar-ai-last)
-  group: nar-ai-last${{ github.ref_name != 'master' && format('-{0}', github.ref_name) || '' }}
+  # 2026-10-30 回し直し(guard=yes)は別の列 = 動いている便の後ろに並ばず、入口(job guard)で同じ便が動いていないかを見る
+  group: nar-ai-last${{ github.ref_name != 'master' && format('-{0}', github.ref_name) || '' }}${{ github.event.inputs.guard == 'yes' && '-guard' || '' }}
   cancel-in-progress: false
 
 permissions:
@@ -37,7 +42,28 @@ permissions:
   actions: read               # 朝便の成果物(模型)を取るため
 
 jobs:
+  # 2026-10-30 10/29 12:29 に便が GitHub 側の内部エラーで消え、fail も書けずに 2.5 時間抜けた。
+  #   DB の時計(private.nar_live_guard・5 分おき)が生存(nar_job_heartbeat の ai_last)の途切れを見て guard=yes で起こす。
+  #   同じ便がまだ動いている/待っているなら何もしない(ops/live_guard_check.sh)。pg_cron のふだんの起動(guard なし)はこの job を飛ばす
+  guard:
+    if: github.event.inputs.guard == 'yes'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      go: ${{ steps.g.outputs.go }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: ops/live_guard_check.sh
+          sparse-checkout-cone-mode: false
+      - id: g
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash ops/live_guard_check.sh nar-ai-last.yml
+
   last:
+    needs: guard
+    if: ${{ !cancelled() && (github.event.inputs.guard != 'yes' || needs.guard.outputs.go == 'yes') }}
     runs-on: ubuntu-latest
     timeout-minutes: 358
     env:
@@ -196,6 +222,7 @@ jobs:
           WRITE: ${{ github.event.inputs.write }}
           ONCE: ${{ github.event.inputs.once }}
           V3N_SEQ_DAY: v3n_seq_day
+          GUARD_NOTE: ${{ github.event.inputs.guard == 'yes' && '・回し直し' || '' }}
         run: |
           set -o pipefail
           DAY=$(TZ=Asia/Tokyo date +%F)
@@ -240,7 +267,7 @@ jobs:
             # 2026-10-11 他場版 v3n の直前 = 朝の行から取消・除外の馬を外して割り直すだけ(模型なし・REST だけ)。⛔失敗しても周は続ける
             python -X utf8 pipeline/ai/kochi/v3n_last.py "$DAY" $W || echo "v3n last: 失敗(周は続ける)"
             # 監査 A8(2026-09-24) 各周の成功= heartbeat 'ai_last'(書く便だけ)。⛔表が無くても落ちない
-            if [ "$WRITE" = "yes" ]; then python3 cloud/beat.py ai_last ok "round $n${MODEL_NOTE:+・$MODEL_NOTE}"; fi
+            if [ "$WRITE" = "yes" ]; then python3 cloud/beat.py ai_last ok "round $n${MODEL_NOTE:+・$MODEL_NOTE}${GUARD_NOTE}"; fi
             echo "round $n took $(( $(date +%s) - T0 )) s"
             echo "::endgroup::"
             [ "$ONCE" = "yes" ] && break

@@ -60,10 +60,24 @@ REC_FROM_MIN = 15  # 答え合わせは最後の発走の 15 分後から(払戻
 REC_TO_MIN = 45    # 払戻待ちが残っても最後の発走の 45 分後で打ち切る(残りは翌日の便で作り直す)
 REC_POLL_S = 120
 JOB_MAX_S = 340 * 60  # 便の上限(timeout-minutes 358)より手前で必ず終える
+ALIVE_S = 300     # 2026-10-30 生存の記録(nar_job_heartbeat の v3_gap_live)を 5 分おきに書く
 
 
 def log(*a):
     print('[v29]', *a, flush=True)
+
+
+def alive(note):
+    """2026-10-30 生存の記録。10/29 12:29 に便が GitHub 側で消えたとき、終わりの段(heartbeat ok/fail)は走らず、
+    見張りの表は一日中「前の晩に成功」のままだった。DB の時計 private.nar_live_guard はこの記録が 15 分途切れたら
+    便を回し直す。書けなくても止めない(True = 書けた)。"""
+    try:
+        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'cloud'))
+        import beat
+        return beat.beat('v3_gap_live', True, note)
+    except Exception as e:  # noqa: BLE001
+        log('生存の記録: 書けない', type(e).__name__, str(e)[:120])
+        return False
 
 
 def _nk(d):
@@ -733,8 +747,13 @@ def live(day, base_csv, mdir, write, until):
     wt, go, wt_at = {}, {}, None
     n_w = n_buy = n_day = 0
     t_start, last_at = time.monotonic(), None
+    alive_at = None
+    guard = '・回し直し' if os.environ.get('LIVE_GUARD') == 'yes' else ''
     while True:
         now = dt.datetime.now(JST)
+        if write and (alive_at is None or time.monotonic() - alive_at >= ALIVE_S):
+            alive_at = time.monotonic()
+            alive(f'生存 {now:%H:%M}・書いた {n_w} R{guard}')
         try:
             races = [r for r in races_of(day) if not str(r.get('cancelled') or '').strip()]
         except Exception as e:  # noqa: BLE001  読めない回は飛ばす(次の回で読み直す)
