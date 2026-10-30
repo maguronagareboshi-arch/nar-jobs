@@ -3,7 +3,7 @@
 --   updated_at は上書きで変わらない(トリガーが付けない)= 書けば必ず変わる xmin(行の版番号)も入れる。
 --   便 cloud/marks_bundle.py は版から置き場の名前(marks/v1/<日>/<model>/<行数>-<xmin>-<時刻の数字>.json)を作って上げ、
 --   サイト(nar-viewer js/data.js marksFromBundle)は DB の今の版から同じ名前を作って読む= 古い束は読みようがない。
---   返すのはサイトが日ごとに読む 3 つの model だけ(影の model の名前を出さない)。増やすときはサイトの MARKS_BUNDLE_SEL も。
+--   返すのはサイトが日ごとに読む 3 つの model だけ(影の model の名前を出さない)。増やすときはサイトの MARKS_BUNDLE_MODELS と便の MODELS も。
 --   返すのは時刻・行数・版番号だけ(中身は出さない)。
 -- ⛔10/30 から public の新しいものは自動で API に出ない= grant を同じ所に書く。
 -- 流し方: Supabase の SQL Editor にこのファイルの中身を貼って Run(何度流しても同じ)。
