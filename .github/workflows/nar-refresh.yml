@@ -113,6 +113,17 @@ jobs:
         run: |
           if [ "$MODE" = "daily" ]; then NX=--next-day; else NX=; fi
           python cloud/refresh.py --mode "$MODE" $NX
+      # 10/30 通信量 F1: 取り込み(上の refresh)の直後に、今日・明日の一覧と結果の束を公開の置き場 cond-stats/day/v1/ へ上げる。
+      #   サイトは DB の版(rpc/day_ver)と同じ束だけ使う= 落ちても画面は DB を読むだけ(便は赤くしない・heartbeat 'day_bundle')。
+      #   ⛔sql/day_ver.sql を流す前は上げずに緑で抜ける
+      - name: day bundle
+        if: '!cancelled()'
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          if python cloud/day_bundle.py; then python3 cloud/beat.py day_bundle ok; else python3 cloud/beat.py day_bundle fail "束が上がらない"; exit 1; fi
       # §291 チェック馬のお知らせ(web push): 取り込み(上の refresh)の直後に A= 出走が決まった / C= 結果が出た を送る。
       #   nar_push_sent に先に入れた分だけ送る(二重送信なし)。⛔secret NAR_VAPID_PRIVATE が無ければ送らず緑で抜ける。
       #   落ちても便は赤くしない(continue-on-error)・heartbeat 'push_notify'(台本の中で書く)
