@@ -124,6 +124,18 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
           if python cloud/day_bundle.py; then python3 cloud/beat.py day_bundle ok; else python3 cloud/beat.py day_bundle fail "束が上がらない"; exit 1; fi
+      # 10/30 通信量 F3: 今日・明日の AI の印の日ごとの一覧の束を cond-stats/marks/v1/ へ(版が変わった model だけ・古い日を消す)。
+      #   直前の便(nar-ai-last の各周・v3-gap-live の裏の見張り)も書いた後に上げる= ここは朝の便などの拾い漏れ。
+      #   サイトは DB の版(rpc/marks_ver)から名前を作って読む= 落ちても画面は DB を読むだけ(便は赤くしない・heartbeat 'marks_bundle')。
+      #   ⛔sql/marks_ver.sql を流す前は上げずに緑で抜ける
+      - name: marks bundle
+        if: '!cancelled()'
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          if python cloud/marks_bundle.py; then python3 cloud/beat.py marks_bundle ok; else python3 cloud/beat.py marks_bundle fail "印の束が上がらない"; exit 1; fi
       # §291 チェック馬のお知らせ(web push): 取り込み(上の refresh)の直後に A= 出走が決まった / C= 結果が出た を送る。
       #   nar_push_sent に先に入れた分だけ送る(二重送信なし)。⛔secret NAR_VAPID_PRIVATE が無ければ送らず緑で抜ける。
       #   落ちても便は赤くしない(continue-on-error)・heartbeat 'push_notify'(台本の中で書く)

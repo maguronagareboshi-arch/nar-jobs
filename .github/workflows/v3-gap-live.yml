@@ -215,7 +215,13 @@ jobs:
           LIVE_GUARD: ${{ github.event.inputs.guard }}
         run: |
           if [ "$WRITE" = "yes" ]; then W=--write; else W=; fi
+          # 10/30 通信量 F3: 直前の印(v3-9)は数十秒おきに書かれる= 裏で 60 秒ごとに版だけ見て、変わった model の束を上げる
+          #   (書く便だけ・出力はファイルへ・落ちても live は続く・次の段で末尾を見せる)
+          if [ "$WRITE" = "yes" ]; then python -X utf8 cloud/marks_bundle.py --watch 60 --until "${{ steps.d.outputs.until }}" > marks_watch.log 2>&1 & fi
           python -X utf8 pipeline/ai/v3/v29_gap.py live "${{ steps.d.outputs.day }}" in/v29_base.csv gapm $W --until "${{ steps.d.outputs.until }}"
+      - name: marks bundle watch log
+        if: always()
+        run: tail -n 30 marks_watch.log 2>/dev/null || true
       # 2026-10-03 監査 A-2: heartbeat を書く(見張りの fail 検査に載る)
       - name: heartbeat ok
         if: success()

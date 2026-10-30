@@ -266,6 +266,8 @@ jobs:
             python -X utf8 pipeline/ai/base_v1.py predict --feat today/feat.csv --model base_v1.model.json --date "$DAY" --timing last $W
             # 2026-10-11 他場版 v3n の直前 = 朝の行から取消・除外の馬を外して割り直すだけ(模型なし・REST だけ)。⛔失敗しても周は続ける
             python -X utf8 pipeline/ai/kochi/v3n_last.py "$DAY" $W || echo "v3n last: 失敗(周は続ける)"
+            # 10/30 通信量 F3: この周に書いた直前の印の束を上げる(版が変わった model だけ・書く便だけ)。⛔失敗しても周は続ける
+            if [ "$WRITE" = "yes" ]; then python -X utf8 cloud/marks_bundle.py || echo "marks bundle: 失敗(周は続ける)"; fi
             # 監査 A8(2026-09-24) 各周の成功= heartbeat 'ai_last'(書く便だけ)。⛔表が無くても落ちない
             if [ "$WRITE" = "yes" ]; then python3 cloud/beat.py ai_last ok "round $n${MODEL_NOTE:+・$MODEL_NOTE}${GUARD_NOTE}"; fi
             echo "round $n took $(( $(date +%s) - T0 )) s"
