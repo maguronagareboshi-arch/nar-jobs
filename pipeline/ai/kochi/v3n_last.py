@@ -6,6 +6,9 @@
 2026-10-12 直前版: 材料と重み(V3N_SEQ_DAY)があれば、体重と馬場が全頭そろったレースで並び読みを当日の値で計算し直す(meta.direct = true)。
 2026-10-17 決め 41: 直前版(direct)の第 10 版の行だけ、E1・能検の後の 3 着内率に「今日と同じ騎手で走った時の成績」など 29 個の直線のずらしを足す
 (v3n_f41.py・材料は --prep で today/v3n_f41.npz・定数は暗号化の consts.json の v3n_f41・meta.f41)。朝の行・直前版でない行は今までどおり。
+2026-10-31 決め 61(第 12 版・meta.rb61 のある朝の行): 取消の後の馬で 2 本目の木の割合 meta.rb61.pm も割り直して混ぜ、勝つ率の直しの k は mo4/di4。
+最後に朝の便が数えた有利 a(直前版 = meta.rb61.a_di・直前版でない行 = meta.rb61.a)を印の率と勝つ率に足す(v3n_rb61.shift)。
+直す前の率は meta.rb61.fin0・q0・g0 に書き直す(次の日からの直前の窓の元)。DB はここでは読まない。
 
 確かめ(v3 の out/v3n_last3.md): 本番 base-v1 朝 9/8〜10/10・他場 763 R で取消・除外のあるレース 8.7%・
 取消の馬に 11.5% が割り振られていた・◎ が取消 12 R → 割り直しで ◎ 71.95 → 73.39%。直前の材料(体重・当日の偏り)は
@@ -74,12 +77,19 @@ def relabel(meta, gone, ud=None, sf=None, rk=None):
     else:
         import k26_cal as cal  # 朝(v3n_daily)と同じ 3 着内の率の曲線
     q3 = dict(zip(keep, cal.p3([c[n] for n in keep], len(keep))))
+    rb = meta.get('rb61') or None   # 第 12 版(決め 61)の朝の行 = 2 本目の木の割合を割り直して logit で混ぜる
+    if rb is not None:
+        import v3n_rb61
+        pm = {int(k): float(v) for k, v in (rb.get('pm') or {}).items()}
+        assert all(n in pm for n in keep), ('meta.rb61.pm に無い馬', rk)
+        sm = sum(pm[n] for n in keep) or 1.0
+        q3 = dict(zip(keep, v3n_rb61.lmix([q3[n] for n in keep], v3n_rb61.p3([pm[n] / sm for n in keep], len(keep)))))
     u = {int(k): float(v) for k, v in (ud if ud is not None else (meta.get('u') or {})).items()}
     if u and all(n in u for n in keep):  # 第 6 版: 朝の並び読みの外した分を足す(朝と同じ式・取消の後の頭数で計算し直すのは未対応)
         q3 = {n: min(max(1 / (1 + np.exp(-(np.log(q3[n] / (1 - q3[n])) + u[n]))), 0.001), 0.999) for n in keep}
         key = q3
     else:
-        key = c
+        key = q3 if rb is not None else c   # 混ぜた後は今の木の割合 c と並びが同じとは限らない
     # 2026-10-13 第 7 版: 取消の後の頭数で E1 + 能検(朝の meta.noken_z・4 頭未満はかけない)。q3 は meta.p から作り直すので 2 度かからない
     import v3n_e1
     nz = {int(k): float(v) for k, v in (meta.get('noken_z') or {}).items() if int(k) not in gone}
@@ -103,18 +113,30 @@ def relabel(meta, gone, ud=None, sf=None, rk=None):
             key = q3
     # 勝つ率の直し(決め 29): 朝の meta.p1c(直す前の c1)を取消の後の馬で割り直し、x = 並び読み u(直前は u_day)+ 能検 β·z を掛け直す。
     #   表示の p3 = max(p3, p1)(印は key の順のまま)。p1c の無い古い朝の行は今までどおり runners の p1 を割り直す。
-    p1n = p1r = mv = None
+    p1n = p1r = mv = rb_new = None
     pc = {int(k): float(v) for k, v in (meta.get('p1c') or {}).items()}
     if pc and all(n in pc for n in keep):
         import v3n_p1
         xs = np.array([(u[n] if (u and all(m in u for m in keep)) else 0.0) + (v3n_e1.BETA_NOKEN * nz.get(n, 0.0) if e1on else 0.0) + (fs[n] if fs is not None else 0.0) for n in keep])
-        ver = ('di' if ud is not None else 'mo') + ('3' if meta.get('trees54') else '2' if meta.get('one15') else '1' if one else '')  # 第 10 版(決め 32)の朝の行 = k mo2・di2・第 11 版(決め 54)= mo3・di3
+        ver = ('di' if ud is not None else 'mo') + ('4' if rb is not None else '3' if meta.get('trees54') else '2' if meta.get('one15') else '1' if one else '')  # 第 10 版(決め 32)の朝の行 = k mo2・di2・第 11 版(決め 54)= mo3・di3・第 12 版(決め 61)= mo4・di4
         p1n = dict(zip(keep, v3n_p1.follow([pc[n] for n in keep], xs, ver)))
         import v3n_p1mix
         if meta.get('one15') and len(keep) >= v3n_p1mix.MIN_N:  # 決め 40: 画面の勝つ率を 3 着内率(E1・能検の後・max の前)と混ぜる。第 10 版の行だけ・印は key の順のまま
             mv = ('di' if ud is not None else 'mo') + ('3' if meta.get('trees54') else '')  # 決め 54 の行 = 学び直した混ぜ
             p1r = dict(p1n)
             p1n = dict(zip(keep, v3n_p1mix.mix([p1r[n] for n in keep], [q3[n] for n in keep], mv)))
+        rb_new = None
+        if rb is not None:   # 決め 61: 有利 a を印の率と勝つ率に足す(印もこの順)。直す前の率を残す
+            fin0, q0 = dict(q3), dict(p1n)
+            av = rb.get('a_di' if ud is not None else 'a') or {}
+            a_ = [float(av.get(str(n), 0.0)) for n in keep]
+            f2, q2 = v3n_rb61.shift([fin0[n] for n in keep], [q0[n] for n in keep], a_)
+            q3, p1n, key = dict(zip(keep, f2)), dict(zip(keep, q2)), dict(zip(keep, f2))
+            rb_new = {**{k: ({kk: vv for kk, vv in v.items() if int(kk) not in gone} if isinstance(v, dict) and k not in ('win', 'win_di') else v)
+                         for k, v in rb.items()},
+                      'tag': v3n_rb61.TAG['di' if ud is not None else 'mo'],
+                      'fin0': {str(n): round(float(fin0[n]), 6) for n in keep}, 'q0': {str(n): round(float(q0[n]), 6) for n in keep},
+                      'g0': {str(n): round(float(max(fin0[n], q0[n])), 6) for n in keep}}
         q3 = {n: max(q3[n], p1n[n]) for n in keep}
     f0 = str(meta.get('form') or '').replace('+e1+noken', '').replace('+e1', '')
     ks = sum(key.values()) or 1.0
@@ -138,6 +160,7 @@ def relabel(meta, gone, ud=None, sf=None, rk=None):
         **({'u_day': {str(k): round(float(v), 4) for k, v in ud.items()}} if ud is not None else {}),
         **({'seq_day': SEQ_FORM} if ud is not None and SEQ_FORM else {}),
         **({'f41': F41_TAG, 'f41_s': {str(n): round(fs[n], 4) for n in keep}} if fs is not None else {}),
+        **({'rb61': rb_new} if rb_new is not None else {}),
     })
     return marks, new
 
@@ -269,6 +292,7 @@ def main():
           '・書く行', len(rows), '(前の回と同じは書かない)')
     print('勝つ率の混ぜ(決め 40)', sum(1 for r in rows if r['meta'].get('p1mix')), '/', len(rows), 'R')
     print('決め 41 のずらし', sum(1 for r in rows if r['meta'].get('f41')), '/', len(rows), 'R')
+    print('決め 61 の有利の直し', sum(1 for r in rows if (r['meta'].get('rb61') or {}).get('fin0')), '/', len(rows), 'R')
     if write and rows:
         sys.path.insert(0, os.environ.get('NAR_JOBS_AI', str(HERE.parent)))
         import base_v1 as B1

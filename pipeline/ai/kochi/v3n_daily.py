@@ -13,6 +13,8 @@
    γ・曲線・並び読みの重みは B15 の p5 で決め直し・勝つ率の直しの k も B15 で決め直し(meta.one15)。
    2026-10-25 第 11 版(決め 54・v3 の out/v3n_trees_judge.md): 同じ作りの木の本数を 3 着内 2 値 2550・順位 1140・勝ち 1040 本に(form が trees54)。
    γ・曲線・並び読み・E1・能検・勝つ率の直しの k(mo3)・混ぜ(mo3)を新しい木で決め直し(meta.trees54・meta.one15 も残す = 混ぜ・f41 の入口は同じ)。
+   2026-10-31 第 12 版(決め 61・v3 の out/v3n_rb61_judge.md・v3n_rb61.py): 直近 2 年の木 M を p5 と勝つ率で 2 割混ぜ(勝つ率の直しの k は mo4)、
+   最後に場 × 枠の群の前 56 日の (実際 − 直す前の表示の率) の有利を印の率と勝つ率に足す(meta.rb61・直す前の率は meta.rb61.fin0・q0・g0)。
 5. --write のときだけ nar_ai_marks に model='v3n-1'・timing='morning' で書く(base_v1.write_marks = 朝の行は凍結・読み直し)。
    meta.runners = [{num, p1, p3}](南関 v3 と同じ形)。画面に出すかはサイト側の旗で決める(出すまでは見えない)。
 対象 = out/nation.md で「入れ替えてよい」の場から南関を除いた 8 場 + 盛岡・姫路(2026-10-10 ユーザー・線は通っていない)= 10 場。
@@ -33,7 +35,7 @@ MODEL_ID = 'v3n-1'
 W = {30: 0.75, 35: 0.75, 36: 0.5, 46: 0.5, 47: 0.75, 48: 0.5, 50: 0.75, 51: 0.5, 54: 0.75, 55: 0.5}  # 対象 10 場(第 9 版から混ぜの割合は使わない・場の一覧として残す)
 MARKS = ['◎', '○', '▲', '△', '△']  # 2026-10-10 ユーザー決定: 印は 5 頭(◎○▲△△)
 NO_MORNING = ['e_baba', 'e_tenko']  # 当日の馬場・天気 = 公式の表は前の日まで空欄 = 朝の模型に入れない(入れて空で当てると確率がずれる)
-FORM = 'v3n-11: trees54 (base-v1 + v_ + trk・2015〜・木 2550/1140/1040) + seq-trees54'  # meta に残す作りの名前(model の名前は v3n-1 のまま = サイト・成績の読み口を変えない)・v3n_one.FORM と同じ
+FORM = 'v3n-12: rb61 (trees54 + 直近 2 年の木 2 割 + 内外の有利 56 日) + seq-trees54'  # meta に残す作りの名前(model の名前は v3n-1 のまま = サイト・成績の読み口を変えない)・v3n_one.FORM と同じ
 # γ(頭数の帯ごとの s^γ ÷ Σ)と 3 着内の曲線は第 9 版から v3n_one_p5.json(イの選びで決め直した値)
 
 
@@ -117,11 +119,25 @@ def main():
     ONE = v3n_one.load()
     T54 = str(ONE.get('form', '')).endswith('trees54')  # 第 11 版の木(決め 54)= k と混ぜを mo3・行に meta.trees54
     ONE15 = T54 or str(ONE.get('form', '')).endswith('one15')  # 第 10 版の木(決め 32)= 勝つ率の直しの k を mo2・行に meta.one15
-    VK = 'mo3' if T54 else 'mo2' if ONE15 else 'mo1'
+    # 2026-10-31 第 12 版(決め 61): 2 本目の木 M(直近 2 年)と最近の内外の有利。⛔木が読めなければ何も書かない(落ちる)
+    import v3n_rb61
+    RB = v3n_rb61.load()
+    assert T54, '決め 61 は第 11 版の木(trees54)の上で決めた'
+    VK = 'mo4' if T54 else 'mo2' if ONE15 else 'mo1'   # mo4 = 決め 61 の混ぜた勝つ率で決めた k
     MV = 'mo3' if T54 else 'mo'  # 混ぜの定数(決め 40 = mo・決め 54 で学び直し = mo3)
     feat = arg('--feat', os.environ.get('V3N_FEAT', 'feat/nar_ai_feat_run.csv.gz'))
     FD = v3n_one.feat_day(feat, day, [name[j] for j in tracks])
-    print('材料表', feat, 'その日の行', len(FD), '・木', ONE['cut'], '切り(〜', ONE['trained_to'], ')', flush=True)
+    print('材料表', feat, 'その日の行', len(FD), '・木', ONE['cut'], '切り(〜', ONE['trained_to'], ')・2 本目の木', RB['cut'], '切り(',
+          RB['trained_from'], '〜', RB['trained_to'], ')', flush=True)
+    # 有利の直しの窓(前 56 日の朝の行・直前の行と公式の答え)。⛔読めなければ a = 0 で書く(meta.rb61.win = 'err')
+    ru_all = pd.read_parquet(off / 'runs.parquet')
+    try:
+        AT = v3n_rb61.tables(k0_dl.sb.get, ru_all, day, log=lambda *a: print(*a, flush=True))
+    except Exception as e:  # noqa: BLE001
+        print('有利の直しの窓を読めない = a 0 で書く', type(e).__name__, str(e)[:200], flush=True)
+        AT = None
+    gate = {(r.track, int(r.race_no), int(r.num)): r.gate for r in ru_all.loc[ru_all.race_date.astype(str).str[:10] == day]
+            .assign(num=pd.to_numeric(ru_all.runner_number, errors='coerce')).dropna(subset=['num']).itertuples()}
     TE, VT = {}, []
     for j in tracks:
         d = k9.ALT / f't{j}'
@@ -143,35 +159,39 @@ def main():
                                 **{c: (te[c].astype('float32').to_numpy() if c in te.columns else np.full(len(te), np.nan, 'float32'))
                                    for c in ONE['vcols']}}))
         print(name[j], '・その日の出走', len(te), '・場の材料の欠け列', sum(c not in te.columns for c in ONE['vcols']), flush=True)
-    PR = {}
+    PR, PM = {}, {}
     if VT and not FD.empty:
         pr = v3n_one.predict(ONE, FD, pd.concat(VT, ignore_index=True))
         PR = {(t_, int(r_)): g_.set_index('runner_number') for (t_, r_), g_ in pr.groupby(['track', 'race_no'])}
+        pm = v3n_one.predict(RB, FD, pd.concat(VT, ignore_index=True))
+        PM = {(t_, int(r_)): g_.set_index('runner_number') for (t_, r_), g_ in pm.groupby(['track', 'race_no'])}
     trained_to = ONE['trained_to']
     for j, te in TE.items():
         trk = name[j]
         for rno, g in te.groupby('race'):
             g = g.sort_values('umaban')
             nums = g.umaban.astype(int).to_numpy()
-            P = PR.get((trk, int(rno)))
-            if P is None or not all(n in P.index for n in nums):
+            P, Pm = PR.get((trk, int(rno))), PM.get((trk, int(rno)))
+            if P is None or Pm is None or not all(n in P.index and n in Pm.index for n in nums):
                 show.append(f'{trk}{int(rno)}R base-v1 の材料表に無い・馬番がそろわない = 書かない')
                 continue
             g3, pwg = P.loc[nums, 'g3'].to_numpy(float), P.loc[nums, 'pwg'].to_numpy(float)
             s3 = g3 / g3.sum()
-            c1 = pwg / pwg.sum()
+            c1t = pwg / pwg.sum()
             gm = v3n_one.gamma(len(g))
             c = v3n_one.sharpen(s3, len(g))
-            p3 = v3n_one.p3(c, len(g))  # 第 9 版: イの頭数 3 帯の曲線(v3n_one_p5.json)
+            p3t = v3n_one.p3(c, len(g))  # 第 9 版: イの頭数 3 帯の曲線(v3n_one_p5.json)
+            # 第 12 版(決め 61): M の p5(M の γ・曲線)と logit で混ぜ・勝つ率も対数で混ぜる(meta.p は今の木の割合のまま = 直前の割り直しに使う)
+            g3m, pwm = Pm.loc[nums, 'g3'].to_numpy(float), Pm.loc[nums, 'pwg'].to_numpy(float)
+            cm = v3n_rb61.sharpen(g3m / g3m.sum(), len(g))
+            p3 = v3n_rb61.lmix(p3t, v3n_rb61.p3(cm, len(g)))
+            c1m = pwm / pwm.sum()
+            c1 = v3n_rb61.cmix(c1t, c1m)
             u = k29_seq_live.resid(SQ, trk, rno, nums)  # 並び読みの外した分(イの p5 で仕上げた重み・無ければ足さない)
             if u is not None:
                 p3 = np.clip(1 / (1 + np.exp(-(np.log(p3 / (1 - p3)) + u))), 0.001, 0.999)
             nz = NZ.get((trk, int(rno)), {})
             p3, e1on = v3n_e1.apply(p3, np.array([nz.get(int(n), 0.0) for n in nums]))  # 第 7 版: 取消の前の頭数で E1 + 能検(4 頭未満はかけない)
-            key = p3 if (u is not None or (e1on and nz)) else c   # 印 = 並び読み・能検を足した 3 着内の率の順(E1 は並びを変えない)
-            sc = key / key.sum()
-            order = np.argsort(-key, kind='stable')
-            marks = [{'num': int(nums[i]), 'mark': MARKS[k_], 'score': round(float(sc[i]) * 100, 1)} for k_, i in enumerate(order[:5])]
             # 勝つ率の直し(決め 29・第 9 版の k = 決め 31): c1 = イの勝ち(帯の表の後)に 並び読み u + 能検 β·z を付いて行かせる。表示の p3 = max(p3, p1)
             zz = np.array([nz.get(int(n), 0.0) for n in nums]) if e1on else np.zeros(len(nums))
             q1 = v3n_p1.follow(c1, (np.asarray(u, float) if u is not None else 0.0) + v3n_e1.BETA_NOKEN * zz, VK)
@@ -179,8 +199,28 @@ def main():
             mixed = ONE15 and len(nums) >= v3n_p1mix.MIN_N  # 混ぜの定数は第 10 版(B15)で学んだ = 第 10 版の行だけ・4 頭以下は混ぜない
             if mixed:
                 q1 = v3n_p1mix.mix(q1, p3, MV)  # 画面の勝つ率を 3 着内率と混ぜる(決め 40)。印は上で決めたまま
+            # 第 12 版(決め 61): 最近の内外の有利 a を印の率の logit と勝つ率の対数に足す(勝つ率は合計 1 に)。直す前の率を meta.rb61 に残す(窓の元)
+            fin0, q0 = p3, q1
+            gts = v3n_rb61.groups([gate.get((trk, int(rno), int(n))) for n in nums])
+            am = np.array([(AT['morning'][0].get((trk, x), 0.0) if AT and x else 0.0) for x in gts])
+            ad = np.array([(AT['last'][0].get((trk, x), 0.0) if AT and x else 0.0) for x in gts])
+            p3, q1 = v3n_rb61.shift(fin0, q0, am)
+            key = p3   # 印 = 直した印の率の順(混ぜた後は今の木の割合 c と並びが同じとは限らない)
+            sc = key / key.sum()
+            order = np.argsort(-key, kind='stable')
+            marks = [{'num': int(nums[i]), 'mark': MARKS[k_], 'score': round(float(sc[i]) * 100, 1)} for k_, i in enumerate(order[:5])]
             p3s = np.maximum(p3, q1)
-            meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM + (('+e1+noken' if nk_ok else '+e1') if e1on else ''), 'one': ONE['cut'], **({'one15': True} if ONE15 else {}), **({'trees54': True} if T54 else {}),
+            rb = {'tag': v3n_rb61.TAG['mo'], 'm': RB['cut'], 'win': (AT['morning'][1] if AT else 'err'), 'win_di': (AT['last'][1] if AT else 'err'),
+                  'gt': {str(int(n)): x for n, x in zip(nums, gts)},
+                  'a': {str(int(n)): round(float(x), 5) for n, x in zip(nums, am)},
+                  'a_di': {str(int(n)): round(float(x), 5) for n, x in zip(nums, ad)},
+                  'pm': {str(int(n)): round(float(x), 6) for n, x in zip(nums, cm)},
+                  'c1t': {str(int(n)): round(float(x), 6) for n, x in zip(nums, c1t)},
+                  'c1m': {str(int(n)): round(float(x), 6) for n, x in zip(nums, c1m)},
+                  'fin0': {str(int(n)): round(float(x), 6) for n, x in zip(nums, fin0)},
+                  'q0': {str(int(n)): round(float(x), 6) for n, x in zip(nums, q0)},
+                  'g0': {str(int(n)): round(float(x), 6) for n, x in zip(nums, np.maximum(fin0, q0))}}
+            meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM + (('+e1+noken' if nk_ok else '+e1') if e1on else ''), 'one': ONE['cut'], **({'one15': True} if ONE15 else {}), **({'trees54': True} if T54 else {}), 'rb61': rb,
                     'gamma': gm, 'trained_to': trained_to, 'seq': u is not None,
                     **({'u': {str(int(n)): round(float(x), 4) for n, x in zip(nums, u)}} if u is not None else {}),
                     **({'noken_z': {str(k_): float(v) for k_, v in sorted(nz.items())}} if nz else {}),
@@ -188,13 +228,15 @@ def main():
                     'p1c': {str(int(n)): round(float(a), 6) for n, a in zip(nums, c1)}, 'p1f': v3n_p1.TAG[VK],
                     **({'p1_raw': {str(int(n)): round(float(a), 6) for n, a in zip(nums, q1r)}, 'p1mix': v3n_p1mix.TAG[MV]} if mixed else {}),
                     'p': {str(int(n)): round(float(x), 4) for n, x in zip(nums, c)},
-                    'own': {str(int(n)): [round(float(a), 4), round(float(b_), 4)] for n, a, b_ in zip(nums, c1, g3)}}
+                    'own': {str(int(n)): [round(float(a), 4), round(float(b_), 4)] for n, a, b_ in zip(nums, c1t, g3)}}
             rows.append({'track': trk, 'race_date': day, 'race_no': int(rno), 'marks': marks, 'meta': meta})
             show.append(f"{trk}{int(rno)}R " + ' '.join(f"{x['mark']}{x['num']}({x['score']})" for x in marks))
     (work / f'v3n_{day}.json').write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding='utf-8')
     print('\n'.join(show))
     print('書く行', len(rows))
     print('勝つ率の混ぜ(決め 40)', sum(1 for r in rows if r['meta'].get('p1mix')), '/', len(rows), 'R')
+    print('決め 61(2 本目の木 + 内外の有利)', sum(1 for r in rows if r['meta'].get('rb61')), '/', len(rows), 'R・a が 0 でない馬',
+          sum(sum(1 for v in r['meta']['rb61']['a'].values() if v) for r in rows if r['meta'].get('rb61')))
     if write and rows:
         sys.path.insert(0, os.environ.get('NAR_JOBS_AI', 'pipeline/ai'))
         import base_v1 as B1
