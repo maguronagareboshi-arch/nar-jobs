@@ -2,7 +2,7 @@
 """ばんえい(帯広)第 3 版の便(2026-10-28・v3 の src/banei/prod/banei_v3.py を便の形に・ばんえい 決め 6 の形)。
 
 z = 0.8 × logit(第 2 版の木 355 列) + 0.2 × 平らな模型 + 並び読みの外した分 → 3 着内率 = 合計 3 に割り直すだけ(案 1・ユーザー 10/28)
-→ 勝つ率 = 3 着内率をレースの中で合計 1 に割る(ア)。級は class_fix.parse_class_fixed で読む。オッズ・人気は使わない。
+→ 勝つ率 = exp(b1 × z) をレースの中で合計 1 に(イ・2026-10-30 から。前は 3 着内率の割合 = ア)。級は class_fix.parse_class_fixed で読む。オッズ・人気は使わない。
 
   python -X utf8 pipeline/ai/banei/banei_v3.py fit DAY <模型の置き場>                    # 朝: 前の日までで学ぶ(木・並び読み 3 種・平ら)
   python -X utf8 pipeline/ai/banei/banei_v3.py predict DAY <模型の置き場> [--write]      # 直前の周: 当日の体重・1R の水分で当てて書く
@@ -45,7 +45,7 @@ OUTD = V + 'prod/'
 K = ['race_date', 'race_no', 'runner_number']
 MODEL_ID = 'banei-3'
 MARKS = ['◎', '○', '▲', '△', '△']
-FORM = 'banei-4: v2tree355 0.8 + flat 0.2 + seq res + b*noken(debut) / clsfix / p3 sum3 / p1 = p3 share'
+FORM = 'banei-4: v2tree355 0.8 + flat 0.2 + seq res + b*noken(debut) / clsfix / p3 sum3 / p1 = exp(b1*z) share'
 GAP_FROM = '2026-09-01'   # 固めた表の前の版(〜2026-08)より後 = 月ごとの埋めの対象
 LOCAL = os.environ.get('BANEI_LOCAL') == '1'
 JST = dt.timezone(dt.timedelta(hours=9))
@@ -299,7 +299,9 @@ def score(day, mdir, drop_race=None, no_going=False):
     z = (1 - sc.W_FLAT) * lg(out.p_v2.to_numpy(float)) + sc.W_FLAT * out.flat + out.res + float(P['b']) * out.nk
     out['p'] = 1 / (1 + np.exp(-z))
     out['p3'] = (out.p / out.groupby('rkey').p.transform('sum') * 3).clip(1e-4, 1 - 1e-4)      # 案 1: 割り直すだけ
-    out['p1'] = out.p3 / out.groupby('rkey').p3.transform('sum')                               # ア: 強さの割合
+    out['p1'], b1, src = p1_of(out, z)                                                          # イ: exp(b1 × z) の割合
+    info = dict(info, p1_b=b1, p1_src=src)
+    log('勝つ率', src, 'b1', b1)
     bad = int(out[['res', 'flat', 'p_v2']].isna().any(axis=1).sum())
     log('当て', len(out), '頭', out.rkey.nunique(), 'R', '空', bad)
     if out[['p', 'p3', 'p1']].isna().any().any():
@@ -308,6 +310,32 @@ def score(day, mdir, drop_race=None, no_going=False):
     out['bw_ok'] = [bool(pd.notna(bw.get((r, n))) and bw.get((r, n)) > 0) for r, n in zip(out.race_no, out.runner_number)]
     out['going_day'] = float(today.b17_going_day.dropna().iloc[0])
     return out, info
+
+
+def p1_params():
+    return json.load(open(os.environ.get('BANEI_P1', f1.OUT + 'banei_p1.json'), encoding='utf-8'))
+
+
+def p1_of(out, z):
+    """勝つ率 イ = exp(b1 × z) をレースの中で合計 1 に(2026-10-30・v3 の out/banei_p1_check.md・b1 は固めた表 banei_kb/banei_p1.json)。
+    ア(3 着内率の割合)は強い馬を低く・人気薄を高く見ていた(確かめ 3,295 R: 本命の見込み 22.7% に実際 34.8%)。
+    ⛔係数が読めない日は ア で続け、meta.p1_src='share' に残す。印の順(3 着内率の順)は変わらない。"""
+    try:
+        b1 = float(p1_params()['b1'])
+    except Exception as e:  # noqa: BLE001
+        log('勝つ率の係数が読めない = 3 着内率の割合(ア)で出す', repr(e)[:200])
+        return out.p3 / out.groupby('rkey').p3.transform('sum'), None, 'share'
+    zz = pd.Series(np.asarray(z, float), index=out.index)
+    s = np.exp(b1 * (zz - zz.groupby(out.rkey).transform('max')))
+    p1 = (s / s.groupby(out.rkey).transform('sum')).to_numpy()
+    p3, rk = out.p3.to_numpy(float), out.rkey.to_numpy()
+    for r in np.unique(rk[p1 > p3]):  # ⛔3 着内率を超える馬(確かめ 46,029 頭に 1 頭)は 3 着内率で止め、余りを同じ R の他の馬へ割合で配る
+        m = rk == r
+        o = m & (p1 > p3)
+        ex = float((p1[o] - p3[o]).sum())
+        p1[o] = p3[o]
+        p1[m & ~o] *= 1 + ex / float(p1[m & ~o].sum())
+    return pd.Series(p1, index=out.index), b1, 'ok'
 
 
 def morning_frames(frames, day):
@@ -342,7 +370,8 @@ def rows_of(out, info, day, need_bw=True, timing='last'):
                 'runners': [{'num': int(n), 'p1': round(float(a), 4), 'p3': round(float(b), 4)} for n, a, b in zip(nums, g.p1, g.p3)],
                 'p_v2': {str(int(n)): round(float(x), 6) for n, x in zip(nums, g.p_v2)},
                 'p': {str(int(n)): round(float(x), 4) for n, x in zip(nums, g.p)},
-                'nk': {str(int(n)): round(float(x), 4) for n, x in zip(nums, g.nk) if x != 0}, 'nk_b': info.get('nk_b'), 'nk_src': info.get('nk_src')}
+                'nk': {str(int(n)): round(float(x), 4) for n, x in zip(nums, g.nk) if x != 0}, 'nk_b': info.get('nk_b'), 'nk_src': info.get('nk_src'),
+                'p1_b': info.get('p1_b'), 'p1_src': info.get('p1_src')}
         rows.append({'track': '帯広ば', 'race_date': day, 'race_no': int(rno), 'marks': marks, 'meta': meta})
     return rows, skip
 
