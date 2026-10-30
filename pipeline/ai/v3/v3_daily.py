@@ -42,6 +42,8 @@ STAMP_TPL = '+短評の層(段・型・前走の段 15 列の木 2 本・学び 
 TPL_TAG = 'tpl 決め30 短評の層'  # tanpyo_live.TAG と同じ字
 STAMP_AW = '+併せの相手(最終追いの先着/遅れ + 秒差)'  # 決め 60(短評の層の後・相手の行のあるレースだけ)
 AW_TAG = '決め60 併せの相手'  # awase_live.TAG と同じ字
+STAMP_SQ = '+並び読みの前日分(当日の 8 列を空にして前日の木の上で学び直し)'  # 決め 63(併せの相手の層の後・足せたレースだけ)
+SQ_TAG = '決め63 前日版の並び読み'
 
 
 def log(*a):
@@ -68,6 +70,8 @@ def build_rows(csv_path, day, src, stamp=STAMP):
         if 'aw60_n' in g.columns and g.aw60_n.fillna(0).max() > 0:  # 併せの相手(決め 60)を足したレース = 元の率は p3p_aw0・p1_aw0
             meta['aw60'] = AW_TAG
             meta['aw60_n'] = int(g.aw60_n.max())
+        if 'sq_u' in g.columns and g.sq_u.notna().any():  # 前日版の並び読み(決め 63)を足したレース = 元の率は p3p_sq0・p1_sq0
+            meta['sq63'] = SQ_TAG
         rows.append({'track': tr, 'race_date': str(day), 'race_no': int(rno), 'marks': marks, 'meta': meta})
     return rows
 
@@ -274,6 +278,19 @@ def main():
             naw = awase_live.apply_csv_pre(A, csv_path, log=log)
         except Exception as e:  # noqa: BLE001
             log('併せの相手 失敗(前の段のまま)', type(e).__name__, str(e)[:200])
+    nsq = 0
+    if nt:  # 前日版の並び読み(決め 63・研究 nankan-ai-v3 pre_seq_judge_1030.py・pre_seq_prod_fit.py・ユーザー承認 2026-10-30): 併せの相手の層の後の最後の段。
+        #   上の並び読みの材料(out/DAY_seq2.npz)を前日版の重み(V3_SEQ2 の seqpre_*)で読む。失敗しても前の段のまま
+        try:
+            import seq2_live
+            import seqpre_live
+            SQ = seqpre_live.load(seq2_live.SEQ2, out / f'{day}_seq2.npz')
+            if SQ is None:
+                log('前日版の並び読み 重みか材料なし(前の段のまま)')
+            else:
+                nsq = seqpre_live.apply_csv_pre(SQ, csv_path, log=log)
+        except Exception as e:  # noqa: BLE001
+            log('前日版の並び読み 失敗(前の段のまま)', type(e).__name__, str(e)[:200])
     notes = {}
     try:  # ひとこと(表示だけ・予想の計算には使わない・失敗しても予想の表と書き込みは止めない)
         import v3_notes
@@ -281,8 +298,8 @@ def main():
     except Exception as e:  # noqa: BLE001
         log('ひとこと 失敗', type(e).__name__, str(e)[:200])
     del cap
-    ver = '南関 第19版 前日版' if b12 and nt and naw else '南関 第15版 前日版' if b12 and nt else '南関 第12版 前日版' if b12 else '南関 第11版 前日版' if bundle else '南関 第10版 前日版'  # 版の名前(研究 nankan-ai-v3 VERSIONS.md)
-    rows = build_rows(csv_path, day, src, ver + ' = ' + ((STAMP12 + (STAMP_DEB if nd else '') + (STAMP_TPL if nt else '') + (STAMP_AW if naw else '')) if b12 else (STAMP11 if bundle else STAMP)))
+    ver = '南関 第20版 前日版' if b12 and nt and nsq else '南関 第19版 前日版' if b12 and nt and naw else '南関 第15版 前日版' if b12 and nt else '南関 第12版 前日版' if b12 else '南関 第11版 前日版' if bundle else '南関 第10版 前日版'  # 版の名前(研究 nankan-ai-v3 VERSIONS.md)
+    rows = build_rows(csv_path, day, src, ver + ' = ' + ((STAMP12 + (STAMP_DEB if nd else '') + (STAMP_TPL if nt else '') + (STAMP_AW if naw else '') + (STAMP_SQ if nsq else '')) if b12 else (STAMP11 if bundle else STAMP)))
     if notes:
         log('ひとこと 付けた', v3_notes.attach(rows, notes), '頭')
     log('races', len(rows), '◎', ' '.join(f"{r['track']}{r['race_no']}R:{r['marks'][0]['num']}" for r in rows[:12] if r['marks']))
