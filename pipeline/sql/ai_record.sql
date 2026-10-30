@@ -361,6 +361,28 @@ select g.model, g.track, g.timing,
             from tmp_ai_u x
             where x.model = g.model and x.track = g.track and x.timing = g.timing and x.mark = '◎'
             group by 1 order by 1 desc limit 120) dy),   -- 10/28 30→120= 日別のグラフ(画面の表は直近 30 だけ)
+    'weekly', (
+      -- 10/31 開催週ごと(月曜始まり・新しい週が先・最大 20 週)。場名は 'all' 行でも tmp_ai_res の元の場から引く・1番人気は 'fav' と同じ tmp_ai_fav
+      select coalesce(jsonb_agg(jsonb_build_object('wk', wq.wk, 'd1', wq.d1, 'd2', wq.d2,
+               'tracks', (select coalesce(jsonb_agg(t.track order by t.c desc, t.track), '[]'::jsonb)
+                          from (select r.track, count(*) c from tmp_ai_res r
+                                where r.model = g.model and r.timing = g.timing and r.mark = '◎'
+                                  and (g.track = 'all' or r.track = g.track)
+                                  and date_trunc('week', r.race_date)::date = wq.wk
+                                group by 1) t),
+               'days', wq.days, 'n', wq.n, 'w1', wq.w1,
+               'win', round(100.0 * wq.w1 / wq.n, 1), 'ren', round(100.0 * wq.r2 / wq.n, 1), 'fuku', round(100.0 * wq.f / wq.n, 1),
+               'tanRet', round(1.0 * wq.tp / wq.n, 0), 'favN', fv.fn, 'favW1', fv.fw)
+               order by wq.wk desc), '[]'::jsonb)
+      from (select date_trunc('week', race_date)::date wk, min(race_date) d1, max(race_date) d2, count(distinct race_date) days,
+                   count(*) n, count(*) filter (where finish = 1) w1, count(*) filter (where finish <= 2) r2,
+                   count(*) filter (where finish <= 3) f, sum(tan_pay) tp
+            from tmp_ai_u x
+            where x.model = g.model and x.track = g.track and x.timing = g.timing and x.mark = '◎'
+            group by 1 order by 1 desc limit 20) wq
+      cross join lateral (select count(*) fn, count(*) filter (where f.fav_fin = 1) fw from tmp_ai_fav f
+                          where f.model = g.model and f.track = g.track and f.timing = g.timing
+                            and date_trunc('week', f.race_date)::date = wq.wk) fv),
     'exotic', pg_temp.ai_exotic(g.model, g.track, g.timing),
     'fav', (
       select case when count(*) = 0 then null else jsonb_build_object('n', count(*),
