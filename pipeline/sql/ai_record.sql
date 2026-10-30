@@ -354,7 +354,13 @@ select g.model, g.track, g.timing,
             group by 1) mth),
     'daily', (
       select coalesce(jsonb_agg(jsonb_build_object('d', d, 'n', n, 'w1', w1,
-               'win', round(100.0 * w1 / n, 1), 'fuku', round(100.0 * f / n, 1), 'tanRet', round(1.0 * tp / n, 0))
+               'win', round(100.0 * w1 / n, 1), 'fuku', round(100.0 * f / n, 1), 'tanRet', round(1.0 * tp / n, 0),
+               -- 10/31 その日の開催場(レース数の多い順・カレンダーの場の札)。'weekly' と同じく tmp_ai_res の元の場から
+               'tracks', (select coalesce(jsonb_agg(t.track order by t.c desc, t.track), '[]'::jsonb)
+                          from (select r.track, count(*) c from tmp_ai_res r
+                                where r.model = g.model and r.timing = g.timing and r.mark = '◎'
+                                  and (g.track = 'all' or r.track = g.track) and r.race_date = dy.d
+                                group by 1) t))
                order by d desc), '[]'::jsonb)
       from (select race_date d, count(*) n, count(*) filter (where finish = 1) w1,
                    count(*) filter (where finish <= 3) f, sum(tan_pay) tp
