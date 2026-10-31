@@ -1,0 +1,62 @@
+# 研究用・1 回きり(11/1)。高知の騎手コメントの「話」が後の走で当たっているか(research/kc-talk-check-20261101/SPEC.md)。
+# ⛔本番 DB は REST の単純 select だけ・書き込みなし。生データ(runs.csv・talks.csv)は /tmp だけ= commit も artifact もしない(公開 repo)。
+# 枝 wip/kc-talk-check-* への push と手動で走る(本番の枝ではない)。集計 A と B を別々に出して突き合わせる。
+name: research-kc-talk
+on:
+  push:
+    branches: ['wip/kc-talk-check-*']
+    paths: ['cloud/research_kc_talk_*.py', '.github/workflows/research-kc-talk.yml']
+  workflow_dispatch:
+permissions:
+  contents: write
+concurrency:
+  group: research-kc-talk
+  cancel-in-progress: false
+jobs:
+  study:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: export runs and talks
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          KC_TALK_DATA: /tmp/kc_talk
+        run: python cloud/research_kc_talk_export.py
+      - name: aggregate A
+        env:
+          KC_TALK_DATA: /tmp/kc_talk
+        run: |
+          python cloud/research_kc_talk_a.py --selftest
+          python cloud/research_kc_talk_a.py
+      - name: aggregate B
+        env:
+          KC_TALK_DATA: /tmp/kc_talk
+        run: |
+          if [ -f cloud/research_kc_talk_b.py ]; then
+            python cloud/research_kc_talk_b.py --selftest
+            python cloud/research_kc_talk_b.py
+          else
+            echo "B なし"
+          fi
+      - name: compare A and B
+        run: python cloud/research_kc_talk_compare.py
+      - name: commit result
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/research-kc-talk
+          git commit -m "騎手の話の当たり 研究集計 $(TZ=Asia/Tokyo date +%F)" || exit 0
+          for i in 1 2 3; do
+            git fetch origin "${GITHUB_REF_NAME}"
+            git rebase "origin/${GITHUB_REF_NAME}"
+            if git push origin "HEAD:${GITHUB_REF_NAME}"; then break; fi
+            if [ "$i" = 3 ]; then exit 1; fi
+            sleep $((i * 15))
+          done
