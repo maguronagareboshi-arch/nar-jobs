@@ -120,8 +120,11 @@ def whole(table, order, by_date=False):
     df = pd.DataFrame(rows)
     if not by_date:
         return df
-    if base is not None:   # 丸ごとの並び = order の列の順(一意)
-        df = _merge(base[base.race_date < since], df, sort=lambda d: [d[c] for c in order.split(',')])
+    if base is not None:   # 丸ごとの並び = order の列の順。頭の列(文字)は DB の照合順なので、控えにある値は控えの順を使う(新しい値だけ後ろ)
+        c0, rest = order.split(',')[0], order.split(',')[1:]
+        rank = {v: i for i, v in enumerate(base[c0].drop_duplicates())}
+        df = _merge(base[base.race_date < since], df,
+                    sort=lambda d: [d[c0].map(rank).fillna(len(rank)), d[c0].where(~d[c0].isin(rank), '')] + [d[c] for c in rest])
     return _keep(table, '*', df, base is None)
 def main(argv):
     global D
