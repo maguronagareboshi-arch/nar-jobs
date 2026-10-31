@@ -1,0 +1,40 @@
+# 騎手コメントの分類(taxonomy v2・22,515 行)を nar_comment_labels へ入れる 1 回きりの手動便(2026-10-31)。
+# - 入力は data/comment_labels_v2.jsonl.gz。台本= cloud/load_comment_labels.py。
+# - 既定はドライラン(件数だけ)。confirm に apply と書いたときだけ本番へ upsert(on_conflict=hid・1,000 行ずつ・冪等)。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY(nar-refresh と同じもの)
+name: comment-labels-load
+
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'apply と書くと本番へ書きます(空ならドライラン)'
+        required: false
+        default: ''
+
+concurrency:
+  group: comment-labels-load
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  load:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: load comment labels
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          CONFIRM: ${{ github.event.inputs.confirm }}
+        run: |
+          set -eu
+          ARGS=""
+          if [ "$CONFIRM" != "apply" ]; then ARGS="--dry-run"; fi
+          python -X utf8 cloud/load_comment_labels.py $ARGS
