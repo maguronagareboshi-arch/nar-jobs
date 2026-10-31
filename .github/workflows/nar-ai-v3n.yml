@@ -205,8 +205,7 @@ jobs:
         env:
           V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
         run: |
-          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '
-'); export V3_ASSET_KEY
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
           mkdir -p k0cache
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in k0enc/k0.tar.gz.enc | tar -C k0cache -xzf - || { echo "k0 cache: 開けない → 丸ごと読む"; rm -rf k0cache; }
       - name: v3n 10 tracks (fetch → features → one model → write)
@@ -231,8 +230,7 @@ jobs:
         env:
           V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
         run: |
-          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '
-'); export V3_ASSET_KEY
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
           mkdir -p k0enc
           tar -C k0cache -czf - . | openssl enc -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -out k0enc/k0.tar.gz.enc
       - name: save k0 cache
