@@ -315,9 +315,22 @@ jobs:
         run: python -X utf8 pipeline/ai/v3/nk_pedjra.py "${{ steps.d.outputs.day }}" "$V3_KD" 2>&1 | tee -a out_log.txt
 
       # ---------------------------------------------------------------- 前日版の表と書き込み(ここだけ本番の鍵を渡す)
+      # 2026-10-31 通信量: 公式の表(k0_dl)の前回分を便のキャッシュで持ち越し、直近の月だけ読み直す(7 日に 1 回は丸ごと)。
+      # 1 日 1 つ(k0-UTC の日付)だけ残す。無ければ k0_dl は今まで通り丸ごと読む(安全側)。
+      - name: k0 cache key
+        id: k0k
+        run: echo "k=k0-$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - name: restore k0 cache
+        id: k0r
+        uses: actions/cache/restore@v6
+        with:
+          path: k0cache
+          key: ${{ steps.k0k.outputs.k }}
+          restore-keys: k0-
       - name: table (pre) and write marks (REST upsert only)
         if: steps.pc.outputs.run == 'yes'
         env:
+          K0_CACHE: ${{ github.workspace }}/k0cache
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
           WRITE: ${{ github.event_name == 'schedule' && 'yes' || github.event.inputs.write }}
@@ -339,6 +352,12 @@ jobs:
           echo "day=${{ steps.d.outputs.day }} write=$WRITE"
           python -X utf8 pipeline/ai/v3/v3_daily.py "${{ steps.d.outputs.day }}" out $W 2>&1 | tee -a out_log.txt
 
+      - name: save k0 cache
+        if: "!cancelled() && steps.k0r.outputs.cache-hit != 'true' && hashFiles('k0cache/meta.json') != ''"
+        uses: actions/cache/save@v6
+        with:
+          path: k0cache
+          key: ${{ steps.k0k.outputs.k }}
       - name: seal outputs (A3)
         if: always() && steps.pc.outputs.run == 'yes'
         env:

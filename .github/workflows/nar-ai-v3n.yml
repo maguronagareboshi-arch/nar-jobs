@@ -187,8 +187,21 @@ jobs:
           V3_CONSTS="$PWD/sealed_consts" python -X utf8 pipeline/ai/sealed.py check
           echo "V3_CONSTS=$PWD/sealed_consts" >> "$GITHUB_ENV"
 
+      # 2026-10-31 通信量: 公式の表(k0_dl)の前回分を便のキャッシュで持ち越し、直近の月だけ読み直す(7 日に 1 回は丸ごと)。
+      # 1 日 1 つ(k0-UTC の日付)だけ残す。無ければ k0_dl は今まで通り丸ごと読む(安全側)。
+      - name: k0 cache key
+        id: k0k
+        run: echo "k=k0-$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - name: restore k0 cache
+        id: k0r
+        uses: actions/cache/restore@v6
+        with:
+          path: k0cache
+          key: ${{ steps.k0k.outputs.k }}
+          restore-keys: k0-
       - name: v3n 10 tracks (fetch → features → one model → write)
         env:
+          K0_CACHE: ${{ github.workspace }}/k0cache
           V3N_SEQ: v3n_seq
           V3N_ONE: v3n_one
           V3N_RB61: v3n_rb61
@@ -203,3 +216,9 @@ jobs:
           echo "day=${{ steps.d.outputs.day }} write=$WRITE"
           python -X utf8 -W ignore pipeline/ai/kochi/v3n_daily.py "${{ steps.d.outputs.day }}" work $W 2>&1 | tee out_log.txt
           df -h / | tail -n 1
+      - name: save k0 cache
+        if: "!cancelled() && steps.k0r.outputs.cache-hit != 'true' && hashFiles('k0cache/meta.json') != ''"
+        uses: actions/cache/save@v6
+        with:
+          path: k0cache
+          key: ${{ steps.k0k.outputs.k }}

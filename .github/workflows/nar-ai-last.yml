@@ -189,9 +189,22 @@ jobs:
       # 2026-10-14 第 9 版(決め 31): 同じ作りの重みをイ' 全国 1 本の p5 で仕上げ直した v3n-seq-day-one-20261014(戻すときは第 8 版と v3n_daily を一緒に)。
       # 公式の表を落として(k0_dl・約 3 分)今日の出走馬の材料を作る。戻すときはリリース名を v3n-seq-day-20261012 に(材料は重みの添え書き new で切り替わる)。
       # ⛔失敗しても周は続ける(v3n_last.py は取消の割り直しだけになる)
+      # 2026-10-31 通信量: 公式の表(k0_dl)の前回分を便のキャッシュで持ち越し、直近の月だけ読み直す(7 日に 1 回は丸ごと)。
+      # 1 日 1 つ(k0-UTC の日付)だけ残す。無ければ k0_dl は今まで通り丸ごと読む(安全側)。
+      - name: k0 cache key
+        id: k0k
+        run: echo "k=k0-$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - name: restore k0 cache
+        id: k0r
+        uses: actions/cache/restore@v6
+        with:
+          path: k0cache
+          key: ${{ steps.k0k.outputs.k }}
+          restore-keys: k0-
       - name: v3n seq day prep
         continue-on-error: true
         env:
+          K0_CACHE: ${{ github.workspace }}/k0cache
           V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
           GH_TOKEN: ${{ github.token }}
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -214,6 +227,12 @@ jobs:
       # 1 回= 今日の 2 表を写し直す(⛔読むだけ)→ 地元で今日の行を差し替え → 公式の当日 ZIP を地元に重ねる
       #        → 今日以降の特徴量を作り直す → 全列の模型で直前予想 → REST upsert(--write のときだけ)。
       # 終わり= 便の終了時刻(JST 14:55 / 20:55 のうち近い方)。once=yes なら 1 回で終わる。
+      - name: save k0 cache
+        if: "!cancelled() && steps.k0r.outputs.cache-hit != 'true' && hashFiles('k0cache/meta.json') != ''"
+        uses: actions/cache/save@v6
+        with:
+          path: k0cache
+          key: ${{ steps.k0k.outputs.k }}
       - name: predict last every 5 minutes
         env:
           PGPASSWORD_PROD: ${{ secrets.NAR_DB_PASSWORD }}
