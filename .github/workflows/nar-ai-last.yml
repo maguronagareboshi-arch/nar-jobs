@@ -191,6 +191,7 @@ jobs:
       # ⛔失敗しても周は続ける(v3n_last.py は取消の割り直しだけになる)
       # 2026-10-31 通信量: 公式の表(k0_dl)の前回分を便のキャッシュで持ち越し、直近の月だけ読み直す(7 日に 1 回は丸ごと)。
       # 1 日 1 つ(k0-UTC の日付)だけ残す。無ければ k0_dl は今まで通り丸ごと読む(安全側)。
+      # 公開の repo の cache は他人の PR の便からも読める = 中身は V3_ASSET_KEY で暗号化して置く(鍵が違えば丸ごとに戻るだけ)。
       - name: k0 cache key
         id: k0k
         run: echo "k=k0-$(date -u +%F)" >> "$GITHUB_OUTPUT"
@@ -198,9 +199,18 @@ jobs:
         id: k0r
         uses: actions/cache/restore@v6
         with:
-          path: k0cache
+          path: k0enc
           key: ${{ steps.k0k.outputs.k }}
           restore-keys: k0-
+      - name: open k0 cache
+        if: steps.k0r.outputs.cache-matched-key != ''
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '
+'); export V3_ASSET_KEY
+          mkdir -p k0cache
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in k0enc/k0.tar.gz.enc | tar -C k0cache -xzf - || { echo "k0 cache: 開けない → 丸ごと読む"; rm -rf k0cache; }
       - name: v3n seq day prep
         continue-on-error: true
         env:
@@ -227,11 +237,20 @@ jobs:
       # 1 回= 今日の 2 表を写し直す(⛔読むだけ)→ 地元で今日の行を差し替え → 公式の当日 ZIP を地元に重ねる
       #        → 今日以降の特徴量を作り直す → 全列の模型で直前予想 → REST upsert(--write のときだけ)。
       # 終わり= 便の終了時刻(JST 14:55 / 20:55 のうち近い方)。once=yes なら 1 回で終わる。
-      - name: save k0 cache
+      - name: seal k0 cache
         if: "!cancelled() && steps.k0r.outputs.cache-hit != 'true' && hashFiles('k0cache/meta.json') != ''"
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '
+'); export V3_ASSET_KEY
+          mkdir -p k0enc
+          tar -C k0cache -czf - . | openssl enc -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -out k0enc/k0.tar.gz.enc
+      - name: save k0 cache
+        if: "!cancelled() && steps.k0r.outputs.cache-hit != 'true' && hashFiles('k0enc/k0.tar.gz.enc') != ''"
         uses: actions/cache/save@v6
         with:
-          path: k0cache
+          path: k0enc
           key: ${{ steps.k0k.outputs.k }}
       - name: predict last every 5 minutes
         env:
