@@ -40,7 +40,7 @@ def done_keys():
 
 
 def fetch(jyo=None, gap=0.5):
-    """jyo を与えるとその場だけ(4 本並列用・ユーザー承認 2026-09-27)。守り: 429・503・接続拒否・タイムアウトが 5 回続いたら
+    """jyo を与えるとその場だけ(4 本並列用・ユーザー承認 2026-09-27)。守り: 403・429・503・接続拒否・タイムアウトが 5 回続いたら
     _STOP を置いて止まる(他の本も _STOP を見て止まる)。jyo なし・gap 2 秒が戻し用の 1 本。HTML の保存だけ(表にしない)。"""
     HD.mkdir(parents=True, exist_ok=True)
     done = done_keys()
@@ -76,7 +76,7 @@ def fetch(jyo=None, gap=0.5):
                         f.write(k + '\n')
                     n404 += 1; streak = 0
                     break
-                if r.status_code in (429, 503):
+                if r.status_code in (403, 429, 503):  # 403 = 2026-11-01 から GitHub の機械を門前払い
                     streak += 1
                 raise RuntimeError(f'status {r.status_code}')
             except (requests.ConnectionError, requests.Timeout) as e:
@@ -84,9 +84,11 @@ def fetch(jyo=None, gap=0.5):
                 err = e
             except Exception as e:  # noqa: BLE001
                 err = e
-            if jyo and streak >= 5:
-                STOP.write_text(f'{jyo} {k} {err}', encoding='utf-8')
-                print('⛔ 5 回続いた: _STOP', k, err, flush=True); return
+            if streak >= 5:
+                if jyo:
+                    STOP.write_text(f'{jyo} {k} {err}', encoding='utf-8')
+                # 1 本のときも止まる(11/1 は 1 日分 1 分×268 日で便が時間切れ。手持ちの表で先へ進める)
+                print('⛔ 5 回続いた: 止まる', k, err, flush=True); return
             if t == 3:
                 nerr += 1
                 print('失敗', k, err, flush=True)
