@@ -303,6 +303,20 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: python -X utf8 pipeline/ai/v3/t7e_forecast.py fetch "${{ steps.d.outputs.day }}" 2>&1 | tee -a out_log.txt
 
+      - name: ability trial pages read on the PC (v3-nk-html)
+        if: steps.pc.outputs.run == 'yes'
+        # 公式サイトは GitHub の機械に 403(2026-11-01〜)。PC が読んで置いた頁を先に入れ、便は足りない日だけ取りに行く。無ければ続行
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          mkdir -p in/nk "$V3_DATA/nk_html"
+          gh release download v3-nk-html -p 'v3_nk_html.tar.gz.enc' -D in/nk --clobber
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/nk/v3_nk_html.tar.gz.enc | tar -C "$V3_DATA/nk_html" -xzf -
+          echo "PC の能力試験の頁: $(ls "$V3_DATA/nk_html" | grep -c '\.html$') 頁・最後 $(ls "$V3_DATA/nk_html" | grep '\.html$' | sort | tail -n 1)"
+
       - name: fetch ability trials (nk_shiken)
         if: steps.pc.outputs.run == 'yes'
         # 失敗しても次に進む(2026-11-01 公式サイトが GitHub の機械に 403 → 60 分の時間切れで印が出なかった。手持ちの表で予想する)
