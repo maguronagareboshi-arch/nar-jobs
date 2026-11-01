@@ -11,6 +11,7 @@
 """
 import io
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -41,7 +42,9 @@ def pack(out):
         ti = tarfile.TarInfo('_404_pc.txt'); ti.size = len(b)
         t.addfile(ti, io.BytesIO(b))
     key = KEYF.read_text(encoding='utf-8').strip()
-    r = subprocess.run(['openssl', 'enc', '-aes-256-cbc', '-pbkdf2', '-pass', 'env:V3_ASSET_KEY', '-out', str(out)],
+    # PATH に無い端末がある(11/2 ユーザーの PowerShell)→ Git に付いている openssl を使う
+    ossl = shutil.which('openssl') or r'C:\Program Files\Git\mingw64\bin\openssl.exe'
+    r = subprocess.run([ossl, 'enc', '-aes-256-cbc', '-pbkdf2', '-pass', 'env:V3_ASSET_KEY', '-out', str(out)],
                        input=buf.getvalue(), env={**os.environ, 'V3_ASSET_KEY': key}, capture_output=True)
     if r.returncode:
         raise SystemExit('⛔ 暗号化に失敗 ' + r.stderr.decode(errors='replace'))
