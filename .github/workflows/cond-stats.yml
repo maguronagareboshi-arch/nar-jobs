@@ -61,9 +61,9 @@ jobs:
           FULL: ${{ github.event.inputs.baba_full }}
         run: |
           if [ "$FULL" = "true" ]; then
-            python3 cloud/baba_hist.py --apply --full
+            python3 cloud/baba_hist.py --apply --full --baseline projhalf
           else
-            python3 cloud/baba_hist.py --apply
+            python3 cloud/baba_hist.py --apply --baseline projhalf
           fi
 
       # 失敗の印(表 nar_job_heartbeat)。⛔表が無くても落ちない

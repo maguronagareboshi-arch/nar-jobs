@@ -30,7 +30,7 @@ jobs:
       - run: pip install -r cloud/requirements.txt
 
       - name: baba diff rebuild all
-        run: python cloud/baba.py --apply --rebuild-all
+        run: python cloud/baba.py --apply --rebuild-all --baseline projhalf
 
       - name: baba trend calibrate
         run: python cloud/baba_trend.py --calibrate
@@ -54,4 +54,4 @@ jobs:
 
       # 2026-10-25 持ちタイム表の全期間ファイル(cond-stats/v1/baba-hist/)も同じ方式で全期間を作り直す
       - name: baba hist rebuild all
-        run: python cloud/baba_hist.py --apply --rebuild-all
+        run: python cloud/baba_hist.py --apply --rebuild-all --baseline projhalf

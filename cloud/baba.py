@@ -127,7 +127,9 @@ MIN_HORSES = 3           # going 版(T5): レース差を出す最少頭数
 AI_META_KEY = "nankan_d5"
 AI_TRACKS = ("浦和", "船橋", "大井", "川崎")
 # ⛔2026-11-01 試し(既定ではない・wip/baba-projection-20261101)= --baseline projhalf
-#   classfirst の d1 と「出走馬の力の見積もりからの日の値(②)」の半々。d/g/g1 は classfirst のまま。南関 4 場は当てない(AI で上書き)。
+#   classfirst の値と「出走馬の力の見積もりからの日の値(②・1000m あたり)」の半々。南関 4 場は当てない(AI で上書き)。
+#     d1/g1 = (classfirst + ②) / 2(小数 2 桁)。d/g = (classfirst + ② × その日のその場のレースの平均距離 / 1000) / 2(小数 1 桁)
+#     = d と d1 の関係(d ≒ d1 × 平均距離 / 1000)は overlay_ai と同じ考え方で保つ。②が出ない日(4 R 未満)は classfirst のまま。
 #   ②: 各走 x =(時計 − 場×芝ダ×距離の 1〜5着の中央値(月初めより前の 365 日・8 本以上))÷ 距離 × 1000(±8 で切る)。
 #       馬(馬名+生年月日)の力= 前日までの近 5 走のうち直近 365 日(3 走未満なら 730 日)の x − その日の②の値 の重み付き平均
 #       (新しい順に 1, 0.8, 0.64, 0.51, 0.41・3 走以上)。レースの値= 力の分かった馬 3 頭以上の x − 力 の中央値、日の値= 4 R 以上の中央値。
@@ -656,24 +658,48 @@ def proj_days(runs, targets):
     return out
 
 
-def blend_proj(days, frozen, proj, rebuild_all=False):
-    """組み直したセルの d1 を (classfirst の d1 + ②) / 2 にする。南関 4 場・据え置きのセル・②の無い日は触らない。戻り= 当てた場日の数"""
+def blend_proj(days, frozen, proj, rebuild_all=False, samples=None):
+    """組み直したセルを classfirst と②の半々にする(d1/g1= 1000m あたりの半々・d/g= ② × 平均距離 / 1000 との半々)。
+    南関 4 場・据え置きのセル・②の無い日は触らない。samples= 1〜5着の samples(平均距離用)。戻り= 当てた場日の数"""
+    dist_of = {}
+    for track, date, dist, _b, _t, _g, rno, _fin in _norm(samples or []):
+        dist_of.setdefault((date, track), {})[rno] = dist
     n = 0
     for date, cells in days.items():
         for track, pf in TRACK2PREFIX.items():
             if track in AI_TRACKS:
                 continue
             c = cells.get(pf)
-            if not c or "d1" not in c:
+            if not c or ("d1" not in c and "g1" not in c):
                 continue
             if not rebuild_all and c is (frozen.get(date) or {}).get(pf):
                 continue
             v = proj.get((date, track))
             if v is None:
                 continue
-            c["d1"] = round(0.5 * float(c["d1"]) + 0.5 * v, 2)
+            ds = dist_of.get((date, track))
+            vs = v * statistics.mean(ds.values()) / 1000.0 if ds else None
+            for k1, k0 in (("d1", "d"), ("g1", "g")):
+                if k1 in c:
+                    c[k1] = round(0.5 * float(c[k1]) + 0.5 * v, 2)
+                    if k0 in c and vs is not None:
+                        c[k0] = round(0.5 * float(c[k0]) + 0.5 * vs, 1)
             n += 1
     return n
+
+
+def proj_runs_of(allruns, meta):
+    """REST の行(全着順)→ proj_days の runs。馬= (馬名, 生年月日)・芝ダ= nar_races.surface・ばんえいは捨てる"""
+    runs = []
+    for w in allruns:
+        if w["track"] == BANEI or w["track"] not in TRACK2PREFIX:   # 南関の走も馬の力には使う(半々は当てない)
+            continue
+        m = meta.get((w["track"], w["race_date"], w["race_no"]))
+        if not m or not m.get("distance_m") or not w.get("horse_name"):
+            continue
+        runs.append((w["track"], w["race_date"], w["race_no"], (w["horse_name"], w.get("birth_date")),
+                     int(m["distance_m"]), m.get("surface"), int(w["finish"]), float(w["time_sec"])))
+    return runs
 
 
 def read_ai(base, key):
@@ -693,7 +719,7 @@ def main():
     ap.add_argument("--verify", action="store_true", help="公式の馬場状態(going)との相関を出す")
     ap.add_argument("--apply", action="store_true", help="nar_meta へ upsert(既定はドライラン)")
     ap.add_argument("--baseline", choices=BASELINES, default=DEFAULT_BASELINE,
-                    help="標準の窓。classfirst=クラス優先 5 段・帯なしは外す(既定・10/25)/ going=良馬場比 d+同じ馬場状態比 g(直近1年) / season=同じ暦±45日×3年 / 365=前日までの直近1年 / 1095=旧§104")
+                    help="標準の窓。projhalf=classfirst と出走馬の力の見積もりの半々(11/1)/ classfirst=クラス優先 5 段・帯なしは外す(既定・10/25)/ going=良馬場比 d+同じ馬場状態比 g(直近1年) / season=同じ暦±45日×3年 / 365=前日までの直近1年 / 1095=旧§104")
     ap.add_argument("--rebuild-all", action="store_true",
                     help="⛔確定済みの日も作り直す(定義を変えたときだけ。ふだんは付けない)")
     ap.add_argument("--env")
@@ -773,18 +799,10 @@ def main():
     if proj:
         todo = {d for d, cells in days.items()
                 for pf, c in cells.items() if a.rebuild_all or c is not (frozen.get(d) or {}).get(pf)}
-        runs = []
-        for w in allruns:
-            if w["track"] == BANEI or w["track"] not in TRACK2PREFIX:   # 南関の走も馬の力には使う(半々は当てない)
-                continue
-            m = meta.get((w["track"], w["race_date"], w["race_no"]))
-            if not m or not m.get("distance_m") or not w.get("horse_name"):
-                continue
-            runs.append((w["track"], w["race_date"], w["race_no"], (w["horse_name"], w.get("birth_date")),
-                         int(m["distance_m"]), m.get("surface"), int(w["finish"]), float(w["time_sec"])))
+        runs = proj_runs_of(allruns, meta)
         t1 = time.time()
         pv = proj_days(runs, todo) if todo else {}
-        log(f"②(力の見積もり)と半々: {blend_proj(days, frozen, pv, a.rebuild_all)} 場日"
+        log(f"②(力の見積もり)と半々: {blend_proj(days, frozen, pv, a.rebuild_all, samples)} 場日"
             f"(全着順 {len(runs)}行・組んだ日 {len(todo)}・{time.time() - t1:.0f}秒)")
     if bl in GOING_LIKE:
         log(f"南関 4 場を予想 AI の日の値にそろえた: {overlay_ai(days, samples, read_ai(base, key))} 場日")
