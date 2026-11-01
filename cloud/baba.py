@@ -103,7 +103,7 @@ STD_DAYS = 365
 STD_DAYS_LEGACY = 1095   # 旧版(§104)。--baseline 1095 で使える
 SEASON_YEARS = 3         # season 版: 何年ぶん遡るか
 SEASON_PAD = 45          # season 版: 同じ暦日の前後 何日
-BASELINES = ("365", "1095", "season", "going", "classfirst")
+BASELINES = ("365", "1095", "season", "going", "classfirst", "projhalf")
 # going 版の退避の段(段= (層, 窓の日数))。層 b= 細かい帯・c= 字だけの帯・d= 場×距離
 GOING_STAGES = (("b", STD_DAYS), ("c", STD_DAYS), ("d", STD_DAYS))
 # classfirst(2026-10-25 研究用・既定ではない)= クラスを先に守る 5 段。帯の窓だけ 3 年まで延ばす
@@ -126,6 +126,21 @@ MIN_HORSES = 3           # going 版(T5): レース差を出す最少頭数
 #   ({"days": {日: {prefix: D5}}}・1000m あたり・走破指数 SI5 の計算に使う値そのもの)
 AI_META_KEY = "nankan_d5"
 AI_TRACKS = ("浦和", "船橋", "大井", "川崎")
+# ⛔2026-11-01 試し(既定ではない・wip/baba-projection-20261101)= --baseline projhalf
+#   classfirst の d1 と「出走馬の力の見積もりからの日の値(②)」の半々。d/g/g1 は classfirst のまま。南関 4 場は当てない(AI で上書き)。
+#   ②: 各走 x =(時計 − 場×芝ダ×距離の 1〜5着の中央値(月初めより前の 365 日・8 本以上))÷ 距離 × 1000(±8 で切る)。
+#       馬(馬名+生年月日)の力= 前日までの近 5 走のうち直近 365 日(3 走未満なら 730 日)の x − その日の②の値 の重み付き平均
+#       (新しい順に 1, 0.8, 0.64, 0.51, 0.41・3 走以上)。レースの値= 力の分かった馬 3 頭以上の x − 力 の中央値、日の値= 4 R 以上の中央値。
+#       古い日から順に積み上げる。積み上げの始め= 出したい日の月初めの 730 日前(月ごとに積み直す= 読む量を 3 年強に抑える)。
+#   研究: nar-site の RESULT_baba_projection_window_20261101.md
+PROJ_BASE = "projhalf"
+PROJ_ANCHOR = 730
+PROJ_WINS = (365, 730)
+PROJ_WT = (1.0, 0.8, 0.64, 0.51, 0.41)
+PROJ_CLIP = 8.0
+PROJ_PAR_DAYS = 365
+PROJ_PAR_MIN = 8
+PROJ_MIN_H = 3
 
 Z = str.maketrans("ＡＢＣ０１２３４５６７８９", "ABC0123456789")
 
@@ -227,6 +242,8 @@ def fetch_days(baseline):
         return 365 * SEASON_YEARS + SEASON_PAD + 30
     if baseline == "classfirst":                      # 帯の 3 年の段のぶん(going 版の読み方は変えない)
         return max(sp for _, sp in CLASSFIRST_STAGES) + 30
+    if baseline == PROJ_BASE:                         # 積み上げの始め(月初め − 730)+ その基準の 365 日
+        return max(max(sp for _, sp in CLASSFIRST_STAGES) + 30, PROJ_ANCHOR + PROJ_PAR_DAYS + 31)
     return (STD_DAYS_LEGACY if baseline == "1095" else STD_DAYS) + 30
 
 
@@ -523,6 +540,142 @@ def overlay_ai(days, samples, ai):
     return n
 
 
+def _ms(d):
+    return d.replace(day=1)
+
+
+def proj_pars(top5, months):
+    """top5= [(track, date, surf, dist, time)](1〜5着・同着は速い方 1 本)。months= 月初めの集合
+    → {(月初め, track, surf, dist): 月初めより前の 365 日の中央値(8 本以上)}"""
+    by = {}
+    for track, d, surf, dist, t in sorted(top5, key=lambda r: r[1]):
+        k = (track, surf, dist)
+        if k not in by:
+            by[k] = ([], [])
+        by[k][0].append(d)
+        by[k][1].append(t)
+    out = {}
+    for ms in months:
+        lo = ms - dt.timedelta(days=PROJ_PAR_DAYS)
+        for k, (ds, ts) in by.items():
+            i, j = bisect.bisect_left(ds, lo), bisect.bisect_left(ds, ms)
+            if j - i >= PROJ_PAR_MIN:
+                out[(ms,) + k] = statistics.median(ts[i:j])
+    return out
+
+
+def proj_run(xs, start, end):
+    """xs= [(date, track, race_no, horse, x)]。start〜end を古い日から積み上げる
+    → (日の値 {(track, date): v}, レースの値 {(track, date): {race_no: v}})"""
+    by_date = {}
+    for r in xs:
+        if start <= r[0] <= end:
+            by_date.setdefault(r[0], []).append(r)
+    hist, day, rv = {}, {}, {}
+    for d in sorted(by_date):
+        lo1 = d - dt.timedelta(days=PROJ_WINS[0])
+        lo2 = d - dt.timedelta(days=PROJ_WINS[1])
+        per = {}
+        for _d, track, rno, h, x in by_date[d]:
+            hh = hist.get(h) if h is not None else None
+            if not hh:
+                continue
+            last = hh[-5:]
+            prev = [(dk, xp) for dp, dk, xp in last if dp >= lo1]
+            if len(prev) < 3:
+                prev = [(dk, xp) for dp, dk, xp in last if dp >= lo2]
+            if len(prev) < 3:
+                continue
+            f = []
+            for dk, xp in reversed(prev):
+                if dk in day:
+                    b = day[dk]
+                elif rv.get(dk):
+                    b = statistics.median(list(rv[dk].values()))
+                else:
+                    b = 0.0
+                f.append(xp - b)
+            wt = PROJ_WT[:len(f)]
+            a = sum(w * v for w, v in zip(wt, f)) / sum(wt)
+            per.setdefault((track, rno), []).append(x - a)
+        for (track, rno), es in per.items():
+            if len(es) >= PROJ_MIN_H:
+                rv.setdefault((track, d), {})[rno] = statistics.median(es)
+        for track in {r[1] for r in by_date[d]}:
+            dd = rv.get((track, d))
+            if dd and len(dd) >= MIN_RACES:
+                day[(track, d)] = statistics.median(list(dd.values()))
+        for _d, track, _rno, h, x in by_date[d]:
+            if h is not None:
+                hist.setdefault(h, []).append((d, (track, d), x))
+    return day, rv
+
+
+def proj_days(runs, targets):
+    """②の日の値(1000m あたり)。runs= [(track, date, race_no, horse, dist, surf, finish, time)]
+    (注記なしの全着順・時計あり。date は dt.date か 'YYYY-MM-DD')。targets= 出したい日の集合。
+    戻り {('YYYY-MM-DD', track): v}。出したい日の月ごとに、月初めの 730 日前から積み直す(その日より後の走は入らない)"""
+    rr = []
+    for track, d, rno, h, dist, surf, fin, t in runs:
+        if not dist or t is None or track == BANEI:
+            continue
+        d = d if isinstance(d, dt.date) else dt.date.fromisoformat(d)
+        rr.append((track, d, rno, h, int(dist), surf, int(fin), float(t)))
+    best = {}
+    for r in rr:
+        if 1 <= r[6] <= TOP_N:
+            k = (r[0], r[1], r[2], r[6])
+            if k not in best or r[7] < best[k][7]:
+                best[k] = r
+    top5 = [(r[0], r[1], r[5], r[4], r[7]) for r in best.values()]
+    tds = sorted(t if isinstance(t, dt.date) else dt.date.fromisoformat(t) for t in targets)
+    by_m = {}
+    for t in tds:
+        by_m.setdefault(_ms(t), []).append(t)
+    need = set()
+    for ms, ts in by_m.items():
+        m = _ms(ms - dt.timedelta(days=PROJ_ANCHOR))
+        while m <= ts[-1]:
+            need.add(m)
+            m = (m + dt.timedelta(days=32)).replace(day=1)
+    par = proj_pars(top5, need)
+    xs = []
+    for track, d, rno, h, dist, surf, _fin, t in rr:
+        p = par.get((_ms(d), track, surf, dist))
+        if p is None:
+            continue
+        x = max(-PROJ_CLIP, min(PROJ_CLIP, (t - p) / dist * 1000.0))
+        xs.append((d, track, rno, h, x))
+    out = {}
+    for ms, ts in sorted(by_m.items()):
+        day, _ = proj_run(xs, ms - dt.timedelta(days=PROJ_ANCHOR), ts[-1])
+        tset = set(ts)
+        for (track, d), v in day.items():
+            if d in tset:
+                out[(d.isoformat(), track)] = v
+    return out
+
+
+def blend_proj(days, frozen, proj, rebuild_all=False):
+    """組み直したセルの d1 を (classfirst の d1 + ②) / 2 にする。南関 4 場・据え置きのセル・②の無い日は触らない。戻り= 当てた場日の数"""
+    n = 0
+    for date, cells in days.items():
+        for track, pf in TRACK2PREFIX.items():
+            if track in AI_TRACKS:
+                continue
+            c = cells.get(pf)
+            if not c or "d1" not in c:
+                continue
+            if not rebuild_all and c is (frozen.get(date) or {}).get(pf):
+                continue
+            v = proj.get((date, track))
+            if v is None:
+                continue
+            c["d1"] = round(0.5 * float(c["d1"]) + 0.5 * v, 2)
+            n += 1
+    return n
+
+
 def read_ai(base, key):
     """nar_meta nankan_d5 の days。読めなければ {}(南関もサイトの計算のまま)"""
     try:
@@ -559,10 +712,21 @@ def main():
     # ⛔T5= 1〜5着を読む(約 10 万行・100 ページ前後・1〜2 分)。旧版の窓でも読み方は同じで build_days が finish=1 に絞る。
     #   order は一意になるよう runner_number まで(PostgREST offset は order= 一意)
     #   ⛔finish_note=is.null= 降着・失格等の注記がある馬を除く(検証 baba_4way の ijo==0 と同じ・監査 1f)
-    wins = rows_all(base, key, "/rest/v1/nar_runs?select=track,race_date,race_no,finish,runner_number,time_sec"
-                               f"&finish=gte.1&finish=lte.{TOP_N}&time_sec=not.is.null&finish_note=is.null&race_date=gte.{since}"
-                               "&order=race_date.asc,track.asc,race_no.asc,finish.asc,runner_number.asc")
+    proj = a.baseline == PROJ_BASE
+    bl = "classfirst" if proj else a.baseline     # projhalf は classfirst を組んでから d1 を半々にする
+    if proj:
+        # ⛔projhalf だけ全着順を読む(馬の見分け= 馬名+生年月日)。1〜5着は同じ行から取る
+        allruns = rows_all(base, key, "/rest/v1/nar_runs?select=track,race_date,race_no,finish,runner_number,time_sec,"
+                                      "horse_name,birth_date"
+                                      f"&finish=gte.1&time_sec=not.is.null&finish_note=is.null&race_date=gte.{since}"
+                                      "&order=race_date.asc,track.asc,race_no.asc,finish.asc,runner_number.asc")
+        wins = [w for w in allruns if int(w["finish"]) <= TOP_N]
+    else:
+        wins = rows_all(base, key, "/rest/v1/nar_runs?select=track,race_date,race_no,finish,runner_number,time_sec"
+                                   f"&finish=gte.1&finish=lte.{TOP_N}&time_sec=not.is.null&finish_note=is.null&race_date=gte.{since}"
+                                   "&order=race_date.asc,track.asc,race_no.asc,finish.asc,runner_number.asc")
     races = rows_all(base, key, "/rest/v1/nar_races?select=track,race_date,race_no,distance_m,race_name,going,race_kind"
+                                + (",surface" if proj else "") +
                                 f"&race_date=gte.{since}&order=race_date.asc,track.asc,race_no.asc")
     meta = {(r["track"], r["race_date"], r["race_no"]): r for r in races}
     log(f"1〜{TOP_N}着の時計 {len(wins)}行 / レース {len(races)}行({since}〜・標準={a.baseline})")
@@ -603,10 +767,26 @@ def main():
     targets = {s[1] for s in samples if lo <= s[1] <= today.isoformat()}
     # 前回の blob に居る日も候補に入れる(確定済みを取りこぼして消してしまわない)
     targets |= {d for d in frozen if lo <= d <= today.isoformat()}
-    days, rebuilt, devs = build_days(samples, targets, a.baseline, today=today,
+    days, rebuilt, devs = build_days(samples, targets, bl, today=today,
                                      frozen=frozen, rebuild_all=a.rebuild_all)
     days = {d: v for d, v in days.items() if d >= lo}      # 90日の窓から出た日は落とす
-    if a.baseline in GOING_LIKE:
+    if proj:
+        todo = {d for d, cells in days.items()
+                for pf, c in cells.items() if a.rebuild_all or c is not (frozen.get(d) or {}).get(pf)}
+        runs = []
+        for w in allruns:
+            if w["track"] == BANEI or w["track"] not in TRACK2PREFIX:   # 南関の走も馬の力には使う(半々は当てない)
+                continue
+            m = meta.get((w["track"], w["race_date"], w["race_no"]))
+            if not m or not m.get("distance_m") or not w.get("horse_name"):
+                continue
+            runs.append((w["track"], w["race_date"], w["race_no"], (w["horse_name"], w.get("birth_date")),
+                         int(m["distance_m"]), m.get("surface"), int(w["finish"]), float(w["time_sec"])))
+        t1 = time.time()
+        pv = proj_days(runs, todo) if todo else {}
+        log(f"②(力の見積もり)と半々: {blend_proj(days, frozen, pv, a.rebuild_all)} 場日"
+            f"(全着順 {len(runs)}行・組んだ日 {len(todo)}・{time.time() - t1:.0f}秒)")
+    if bl in GOING_LIKE:
         log(f"南関 4 場を予想 AI の日の値にそろえた: {overlay_ai(days, samples, read_ai(base, key))} 場日")
     n_cells = sum(len(v) for v in days.values())
     n_prov = sum(1 for v in days.values() for c in v.values() if c.get("p"))
