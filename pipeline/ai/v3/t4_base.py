@@ -260,6 +260,34 @@ def races_table(races):
     return R
 
 
+def _sand_spans():
+    """決め 67-1(2026-11-03): 馬場差 D を寄せない場・期間(暗号化した定数 sealed.get('c67_sand'))。数は公開のコードに書かない。
+    無い・読めない時は止める(黙って寄せる前の作りで指数を出さない)。便は sealed.py check で c67_sand を確かめる。"""
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
+    import sealed
+    c = sealed.get('c67_sand')
+    return [tuple(x) for x in c['SPANS']], c['Q']
+
+
+def _sand(D, Draw, n, Ry, q):
+    """決め 67-1 形 A: 砂替えの場・期間の日(n > 0)は D = Draw(前 3 年のふだん Dm へ寄せない)。研究 correct67_1_base._sand と同じ。"""
+    global SAND
+    if SAND is None:
+        SAND = _sand_spans()
+    spans, Q = SAND
+    if not spans or q not in Q:
+        return D
+    D = np.asarray(D, float).copy()
+    rd = Ry.race_date.astype(str).str[:10]
+    for t, lo, hi in spans:
+        m = ((Ry.track == t) & (rd >= lo) & (rd <= hi) & (n > 0)).to_numpy()
+        D[m] = np.asarray(Draw, float)[m]
+    return D
+
+
+SAND = None  # build の最初の呼び出しで読む(import だけの部品は定数を要らない)
+
+
 def build(runs, races, log=print):
     R = races_table(races)
     U = runs[~runs.finish_note.isin(['取消', '除外'])].copy()
@@ -302,6 +330,7 @@ def build(runs, races, log=print):
             Dm = pd.Series([Dm_tg.get((t, gg), Dm_t.get(t, 0.0)) for t, gg in zip(Ry.track, Ry.gmode)],
                            index=iy).fillna(0.0)
             D = np.where(n > 0, n / (n + 5) * Draw + 5 / (n + 5) * Dm, Dm)
+            D = _sand(D, Draw, n, Ry, q)
             R.loc[iy, 'bc_' + q] = bc.values
             R.loc[iy, 'dl_' + q] = dl.values
             R.loc[iy, 'r_' + q] = r.values
