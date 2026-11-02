@@ -288,16 +288,28 @@ def day_marks(Bk, odds, w, going, dm, day):
                 used.append('aw60')
         except Exception as e:  # noqa: BLE001  層が落ちても前の段の印は出す
             log('併せの相手の層 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
-    stamp ='v3-9 当日版(第10版 + 当日の体重 15 本・t11 + 談話の印 3 定数)' if not [c for c in used if c != 'p1f'] else \
+    ncap = 0
+    try:  # 勝つ率 ≦ 3 着内の率 の守り(決め 67-2・研究 nankan-ai-v3 correct67_2_guard.py・ユーザー承認 2026-11-01): 全部の段の後
+        import p1cap
+        q_ = p1cap.cap(p1, p3p)
+        ncap = int((q_ != np.asarray(p1, float)).sum())
+        p1 = q_
+        used.append('p1cap')
+    except Exception as e:  # noqa: BLE001  守りが落ちても前の段の印は出す
+        log('勝つ率の守り 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
+    stamp ='v3-9 当日版(第10版 + 当日の体重 15 本・t11 + 談話の印 3 定数)' if not [c for c in used if c not in ('p1f', 'p1cap')] else \
         'v3-9 当日版(第12版 = 当日の体重 15 本と馬場・t11 + 談話の印 + 束 ' + '・'.join({'b14_u': 't14', 'b19_u': 'f10k'}[c] for c in used if c in ('b14_u', 'b19_u')) + \
         (' + 並び読み' if 'seq2' in used else '') + (' + 初出走の層' if 'debut' in used else '') + ')'
     stamp += ' + 勝つ率の直し' if 'p1f' in used else ''
     stamp += ' + 短評の層' if 'tpl' in used else ''
     stamp += ' + F3 の混ぜ' if 'f3' in used else ''
     stamp += ' + 併せの相手' if 'aw60' in used else ''
+    stamp += ' + 勝つ率の守り' if 'p1cap' in used else ''
     day8 = 'tpl' in used and getattr(sys.modules.get('tanpyo_live'), 'LAST_VER', None) == 'day8'
     # 第19版 = その日に相手の行のある馬がいれば層で動かないレースも同じ名前(前日版の名前と同じく日の単位)。F3 の混ぜまで = 第18版(決め 51 の重み・c8901ae〜)
-    ver = ('南関 第19版' if 'aw60' in used or (AW and 'f3' in used) else '南関 第18版' if 'f3' in used else '南関 第16版' if day8 else
+    # 第21版 = 第19版 + 勝つ率の守り(決め 67-2)
+    ver = ('南関 第21版' if 'p1cap' in used and ('aw60' in used or (AW and 'f3' in used)) else
+           '南関 第19版' if 'aw60' in used or (AW and 'f3' in used) else '南関 第18版' if 'f3' in used else '南関 第16版' if day8 else
            '南関 第15版' if 'seq2' in used and {'debut', 'p1f', 'tpl'} & set(used) else '南関 第14版' if 'seq2' in used else
            '南関 第12版' if 'b19_u' in used else '南関 第11版' if 'b14_u' in used else '南関 第10版')  # 版の名前(研究 nankan-ai-v3 VERSIONS.md)
     stamp = f'{ver} 直前版 = {stamp}'
@@ -322,6 +334,9 @@ def day_marks(Bk, odds, w, going, dm, day):
     if 'aw60' in used:
         meta['aw60'] = sys.modules['awase_live'].TAG
         meta['aw60_n'] = naw  # 相手の行で率を動かした頭数
+    if 'p1cap' in used:
+        meta['p1cap'] = sys.modules['p1cap'].TAG
+        meta['p1cap_n'] = ncap  # 勝つ率を動かした頭数
     return {'track': tr, 'race_date': day, 'race_no': rno, 'marks': marks, 'meta': meta}
 
 
