@@ -1,0 +1,34 @@
+# 研究用・1 回きり。馬場差を前の出し方(classfirst)と今の出し方(projhalf)で組み、日ごとに並べる(2026-11-03)。
+# ⛔読み取りだけ(baba_hist.py --dry-run)。公開バケットにも DB にも書かない。結果は artifact。
+name: research-baba-oldnew
+on:
+  workflow_dispatch:
+    inputs:
+      venue:
+        description: "場の URL 名(カンマ区切り)"
+        required: false
+        default: "kochi"
+permissions:
+  contents: read
+jobs:
+  oldnew:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install numpy==1.26.4 pandas==2.2.3
+      - name: baba old and new
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          VENUE: ${{ github.event.inputs.venue }}
+        run: |
+          python cloud/baba_hist.py --dry-run --rebuild-all --venue "$VENUE" --baseline classfirst --out out/classfirst
+          python cloud/baba_hist.py --dry-run --rebuild-all --venue "$VENUE" --baseline projhalf --out out/projhalf
+      - uses: actions/upload-artifact@v7
+        with:
+          name: baba-oldnew
+          path: out/
