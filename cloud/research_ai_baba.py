@@ -147,7 +147,7 @@ def metrics_boot(m):
     return out, R, len(m)
 
 
-def cmd_compare(a, b, match, out, meta):
+def cmd_compare(a, b, match, out, meta, title=None, lb='サイト'):
     import base_v1 as Bv
     A = pd.read_parquet(a)
     Bp = pd.read_parquet(b)
@@ -160,12 +160,12 @@ def cmd_compare(a, b, match, out, meta):
         ('試験 1 年全体', '全場', m),
         ('試験 1 年全体', '南関 4 場', m[nk]),
         ('試験 1 年全体', '他場(ばんえい除く)', m[~nk & ~bn]),
-        ('試験 1 年全体', 'ばんえい(値は A と同じ)', m[bn]),
+        ('試験 1 年全体', 'ばんえい' if title else 'ばんえい(値は A と同じ)', m[bn]),
         ('2026-10-01 以降(初見)', '全場', m[m['race_date'] >= FRESH_FROM]),
         ('2026-10-01 以降(初見)', '南関 4 場', m[(m['race_date'] >= FRESH_FROM) & nk]),
         ('2026-10-01 以降(初見)', '他場(ばんえい除く)', m[(m['race_date'] >= FRESH_FROM) & ~nk & ~bn]),
     ]
-    L = ['# 予想 AI base-v1 の馬場差= 今の作り方(A) と サイトの馬場差(B) の比べ(2026-11-03)', '']
+    L = ['# ' + (title or '予想 AI base-v1 の馬場差= 今の作り方(A) と サイトの馬場差(B) の比べ(2026-11-03)'), '']
     L += ['- ' + x for x in meta]
     L += ['- 学習= 〜2025-10-31・試験= 2025-11-01〜%s・模型= base_v1 の PARAMS(seed 7)・ROUNDS_BIN %d・ROUNDS_WIN %d・列= morning'
           % (m['race_date'].max().date(), Bv.ROUNDS_BIN, Bv.ROUNDS_WIN),
@@ -177,7 +177,7 @@ def cmd_compare(a, b, match, out, meta):
             continue
         res, R, n = metrics_boot(g)
         L += ['## %s・%s(%d レース・%d 頭)' % (per, ven, R, n), '',
-              '| 指標 | A 今 | B サイト | B−A | 95% 区間 |', '|---|---:|---:|---:|---|']
+              '| 指標 | A 今 | B %s | B−A | 95%% 区間 |' % lb, '|---|---:|---:|---:|---|']
         for k, (va, vb, d, lo, hi) in res.items():
             L.append('| %s | %.5f | %.5f | %+.5f | %+.5f 〜 %+.5f |' % (k, va, vb, d, lo, hi))
         L.append('')
@@ -209,13 +209,14 @@ def main():
     c = sp.add_parser('compare')
     c.add_argument('--a', required=True); c.add_argument('--b', required=True)
     c.add_argument('--match'); c.add_argument('--out', required=True); c.add_argument('--meta', action='append', default=[])
+    c.add_argument('--title'); c.add_argument('--lb', default='サイト')
     a = ap.parse_args()
     if a.cmd == 'site':
         cmd_site(a.out)
     elif a.cmd == 'fit':
         cmd_fit(a.feat, a.out)
     else:
-        cmd_compare(a.a, a.b, a.match, a.out, a.meta)
+        cmd_compare(a.a, a.b, a.match, a.out, a.meta, a.title, a.lb)
 
 
 if __name__ == '__main__':
