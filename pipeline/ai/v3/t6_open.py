@@ -70,6 +70,7 @@ import t6_base  # noqa: E402
 import t6_day3  # noqa: E402
 from day5_forward_features import _align  # noqa: E402
 from load_outcomes import load_archive  # noqa: E402
+import c67_cancel  # noqa: E402  決め 67-1 取りやめのレースを落とす
 
 V3 = o.V3
 REPO = o.REPO
@@ -508,8 +509,8 @@ def safe_sources(parts, hi, extra=()):
     """RAW + DB の写し(parts)を結果でない列だけで読む(extra は RAW・2020〜2021 の写しでだけ使う)。"""
     ra, fa = load_archive('runs'), load_archive('facts')
     rc = RUN6 + list(extra)
-    runs = pd.concat([ra[rc]] + [_align(pd.read_parquet(V3 / f'db_runs_{p}_{t3_open.FILES[p]}.parquet', columns=rc), ra)
-                                 for p in parts], ignore_index=True)
+    runs = pd.concat([ra[rc]] + [_align(c67_cancel.drop(pd.read_parquet(V3 / f'db_runs_{p}_{t3_open.FILES[p]}.parquet', columns=rc)), ra)
+                                 for p in parts], ignore_index=True)  # 決め 67-1
     facts = pd.concat([fa[FACT6]] + [_align(pd.read_parquet(V3 / f'db_facts_{p}_{t3_open.FILES[p]}.parquet', columns=FACT6), fa)
                                      for p in parts], ignore_index=True)
     for d in (runs, facts):

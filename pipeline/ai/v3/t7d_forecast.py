@@ -46,6 +46,7 @@ import v7c_run as vc  # noqa: E402
 import v7d_run as v7d  # noqa: E402
 from day5_forward_features import _align  # noqa: E402
 from load_outcomes import load_archive  # noqa: E402
+import c67_cancel  # noqa: E402  決め 67-1 取りやめのレースを落とす
 
 V3 = v7d.V3
 MD = o.MD
@@ -72,6 +73,8 @@ def raw7(part, date):
                       ignore_index=True)
         d['race_no'] = d.race_no.astype(int)
         assert d.race_date.max() < hi, name
+        if name in ('runs', 'races'):  # 決め 67-1
+            d = c67_cancel.drop(d)
         out[name] = d[d.race_date <= date].copy()
     runs, facts, races = out['runs'], out['facts'], out['races']
     runs['finish_note'] = runs.finish_note.replace(t3_open.NOTE)

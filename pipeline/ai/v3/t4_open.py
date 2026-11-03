@@ -54,6 +54,7 @@ import t4_day3 as d3  # noqa: E402
 from day2_features import RACE_COLS, build as build3  # noqa: E402
 from day5_forward_features import _align  # noqa: E402
 from load_outcomes import load_archive  # noqa: E402
+import c67_cancel  # noqa: E402  決め 67-1 取りやめのレースを落とす
 from t3_day2_features import finish_table, targets3  # noqa: E402
 
 V3 = Path(__import__('os').environ.get('V3_DATA', 'C:/Users/kouki/nankan_ai/v3'))
@@ -162,6 +163,8 @@ def parse_pt(x):
 
 def db_races(p, ref, cols=None, strict=True):
     raw = pd.read_parquet(V3 / f'db_races_{p}_{FILES[p]}.parquet', columns=cols)
+    if {'track', 'race_date', 'race_no'} <= set(raw.columns):  # 決め 67-1(列を絞った読みは鍵があるときだけ)
+        raw = c67_cancel.drop(raw)
     return prep(_align(raw, ref), raw, strict)
 
 

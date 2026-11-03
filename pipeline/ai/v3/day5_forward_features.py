@@ -29,6 +29,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from day2_db_copy import NANKAN, SPEC, req, tracks  # noqa: E402
 from day2_features import ENTRY_COLS, KEY, RACE_COLS, build, targets  # noqa: E402
 from load_outcomes import load_archive  # noqa: E402
+import c67_cancel  # noqa: E402  決め 67-1 取りやめのレースを落とす
 
 V3 = Path(__import__('os').environ.get('V3_DATA', 'C:/Users/kouki/nankan_ai/v3'))
 REPO = Path(__file__).resolve().parent.parent
@@ -86,7 +87,7 @@ def load_all(name):
     parts.append(pd.read_parquet(V3 / f'db_{name}_forward.parquet'))
     d = pd.concat([a] + [_align(p, a) for p in parts], ignore_index=True)
     d['race_no'] = d.race_no.astype(int)
-    return d
+    return c67_cancel.drop(d) if name in ('runs', 'races') else d  # 決め 67-1
 
 
 def sources():
