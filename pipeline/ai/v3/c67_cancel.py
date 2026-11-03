@@ -11,7 +11,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import pyarrow.parquet as pq
 
 V3 = Path(os.environ.get('V3_DATA', 'C:/Users/kouki/nankan_ai/v3'))
 PARTS = ('confirm_2022-01_2025-08', 'sealed_2025-09_2026-08', 'forward_t3')
@@ -27,7 +26,7 @@ def keys(v3=None):
         for p in PARTS:
             f = v3 / f'db_races_{p}.parquet'
             if p != 'forward_t3' or f.exists():
-                ra.append(pq.read_table(f, columns=KEY + ['cancelled']).to_pandas())  # pyarrow で直接(読み手を包む照合の入口でも印を落とさない)
+                ra.append(pd.read_parquet(f, columns=KEY + ['cancelled']))
         ra = pd.concat(ra)
         ra = ra[ra.cancelled.notna()]
         _KEYS[v3] = set(zip(ra.track, ra.race_date.astype(str).str[:10], ra.race_no.astype(int)))
@@ -42,15 +41,3 @@ def drop(d, v3=None):
     k = zip(d.track, d.race_date.astype(str).str[:10], pd.to_numeric(d.race_no, errors='coerce').fillna(-1).astype(int))
     m = np.fromiter((x in c for x in k), bool, len(d))
     return d[~m].reset_index(drop=True) if m.any() else d
-
-
-def c67_tag():
-    """決め 67-1 の定数(c67_sand)が入っていればその記録の字(版の名前「南関 第22版」と meta.c67 に使う)・無ければ None。"""
-    import sys
-    try:
-        sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
-        import sealed
-        c = sealed.get('c67_sand')
-    except (FileNotFoundError, KeyError):
-        return None
-    return c['TAG'] if c['SPANS'] else None

@@ -312,11 +312,6 @@ def day_marks(Bk, odds, w, going, dm, day):
            '南関 第19版' if 'aw60' in used or (AW and 'f3' in used) else '南関 第18版' if 'f3' in used else '南関 第16版' if day8 else
            '南関 第15版' if 'seq2' in used and {'debut', 'p1f', 'tpl'} & set(used) else '南関 第14版' if 'seq2' in used else
            '南関 第12版' if 'b19_u' in used else '南関 第11版' if 'b14_u' in used else '南関 第10版')  # 版の名前(研究 nankan-ai-v3 VERSIONS.md)
-    import c67_cancel
-    c67 = c67_cancel.c67_tag()  # 決め 67-1(砂替えと取りやめの直し・直した重み)の定数が入っていれば 第21版 → 第22版
-    if c67 and ver == '南関 第21版':
-        ver = '南関 第22版'
-        stamp += ' + 砂替えと取りやめの直し'
     stamp = f'{ver} 直前版 = {stamp}'
     d = pd.DataFrame({'num': b.umaban.astype(int).to_numpy(), 'p1': p1, 'p3': p3p, 'p3_raw': p3})
     d = d.sort_values(['p3', 'p1', 'num'], ascending=[False, False, True], kind='mergesort').reset_index(drop=True)
@@ -342,8 +337,6 @@ def day_marks(Bk, odds, w, going, dm, day):
     if 'p1cap' in used:
         meta['p1cap'] = sys.modules['p1cap'].TAG
         meta['p1cap_n'] = ncap  # 勝つ率を動かした頭数
-    if c67 and ver == '南関 第22版':
-        meta['c67'] = c67
     return {'track': tr, 'race_date': day, 'race_no': rno, 'marks': marks, 'meta': meta}
 
 

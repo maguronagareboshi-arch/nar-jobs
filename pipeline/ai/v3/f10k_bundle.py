@@ -71,7 +71,6 @@ def runs(h, U, day):
     d = d[(d.race_date >= DB0) & (d.race_date <= day)].drop_duplicates(Q4)
     for c in ('jockey', 'trainer'):
         d[c] = d[c].map(_nfkc)
-    d['jt'] = np.where(d.jockey.notna() & d.trainer.notna(), d.jockey.astype(str) + '×' + d.trainer.astype(str), None)  # 騎手 × 調教師(研究 f10k_gen 143 行・決め 67-1 で列に入った)
     d.loc[d.race_date == day, 'body_weight'] = np.nan  # 当日の馬体重は前日には無い
     d['body_weight'] = pd.to_numeric(d.body_weight, errors='coerce')
     d['gate'] = pd.to_numeric(d.gate, errors='coerce')
@@ -202,8 +201,6 @@ def feats(day, h, U, log=log0):
     same = Rh.horse_key.eq(Rh.horse_key.shift(1)).to_numpy()
     prev = Rh.trainer.shift(1).where(same)
     base['c|trainer_chg'] = (Rh.trainer != prev).astype(float).where(prev.notna() & Rh.trainer.notna()).to_numpy()
-    if any('c|b_lv-x5' in c for c in C):  # 格 − 前 5 走の格の最高(研究 f10k_gen.contrast_block・決め 67-1 で列に入った)
-        base['c|b_lv-x5'] = Rh.b_lv.to_numpy() - hist(Rh, 'none', {('b_lv', 'x5')})['h|none|b_lv|x5']
     pm = Rh.msh.shift(1).where(same)
     base['f53_male_share_chg'] = (Rh.msh - pm).to_numpy()
     X = Rh.loc[tmask_h, Q4 + ['rid']].reset_index(drop=True)

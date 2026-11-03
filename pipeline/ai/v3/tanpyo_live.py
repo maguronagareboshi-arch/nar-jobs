@@ -118,8 +118,6 @@ def history(M, parsed, day, H=None, flat=None):
     D = runs_of(_flat(parsed) if flat is None else flat)
     if len(D):
         D = D[(D.race_date < day) & (D.race_date > D.track.map(last).fillna('0000'))].dropna(subset=['hn'])
-        import c67_cancel  # 決め 67-1: 取りやめのレースの調教の行は前走にしない(固定の表 tanpyo_hist も同じ作り)
-        D = c67_cancel.drop(D)
         D['v'] = [grade(s, M)[0] for s in D.tp_h]
         H = pd.concat([H, D[['hn', 'track', 'race_date', 'race_no', 'umaban', 'v']]], ignore_index=True)
     return H.sort_values(['hn', 'race_date', 'race_no'], kind='mergesort').drop_duplicates(['hn', 'race_date'], keep='last')
