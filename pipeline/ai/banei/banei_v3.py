@@ -20,7 +20,7 @@ z = 0.8 × logit(第 2 版の木 355 列) + 0.2 × 平らな模型 + 並び読�
   当日の行が無い・前の開催日の競馬ブックが無い・1R の水分が無い・率に空。レースごとには、取消でない馬の体重がそろっていないレースは書かない。
 朝の版(2026-10-28 ユーザー承認・v3 の out/banei_morning_v3.md): 模型は直前版と同じ。当日の行だけ 体重 → その馬の前走の体重(増減 0・
   前走の無い馬は空)・1R の水分と天候 → 前の開催日の 1R の値 に差し替えて当てる。選びの期間 716 R で本命 3 着内 直前 65.9% → 朝 64.7%。
-⛔本番に書くのは nar_ai_marks の model='banei-3'・timing='last' と 'morning'(朝は凍結 = 既にある行は触らない)だけ(base_v1.write_marks・発走 15 分前を過ぎた行は DB のトリガーが捨てる)。
+⛔本番に書くのは nar_ai_marks の model='banei-3'・timing='last' と 'morning'(朝は凍結 = 既にある行は触らない)だけ(ai_common.write_marks・発走 15 分前を過ぎた行は DB のトリガーが捨てる)。
 """
 import datetime as dt
 import json
@@ -400,9 +400,8 @@ def predict(day, mdir, write=False, drop_race=None, no_going=False):
     if not rows:
         log('前の回と同じ = 書かない'); return 0
     sys.path.insert(0, str(HERE.parent))
-    import base_v1 as B1
-    B1.MODEL_ID = MODEL_ID  # ⛔write_marks が見る先をここで差し替える(v3n_daily と同じ作法)
-    B1.write_marks(rows, day, 'last')
+    import ai_common
+    ai_common.write_marks(rows, day, 'last', model=MODEL_ID)
     return 0
 
 
@@ -425,9 +424,8 @@ def morning(day, mdir, write=False):
     if not write or not rows:
         return 0
     sys.path.insert(0, str(HERE.parent))
-    import base_v1 as B1
-    B1.MODEL_ID = MODEL_ID  # ⛔write_marks が見る先をここで差し替える(朝 = 既にある行は触らない)
-    B1.write_marks(rows, day, 'morning')
+    import ai_common
+    ai_common.write_marks(rows, day, 'morning', model=MODEL_ID)  # 朝 = 既にある行は触らない
     return 0
 
 

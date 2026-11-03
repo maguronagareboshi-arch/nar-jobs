@@ -38,9 +38,9 @@ def load(path=None):
 
 
 def feat_day(path, day, tracks):
-    """nar_ai_feat_run(csv / csv.gz)のその日・その場の行 → base_v1.load_feat と同じ形(数値化・float32・rid・R 内の相対値)。
+    """nar_ai_feat_run(csv / csv.gz)のその日・その場の行 → 材料表の読み(load_feat)と同じ形(数値化・float32・rid・R 内の相対値)。
     相対値は R の中だけで計算する = 全期間を読んでから切るのと同じ値"""
-    import base_v1 as B
+    import ai_common as B
     parts = []
     for c in pd.read_csv(path, low_memory=False, chunksize=200_000, dtype={'race_date': str, 'track': str}):
         parts.append(c[(c.race_date.str[:10] == day) & c.track.isin(tracks)])
@@ -60,7 +60,7 @@ def feat_day(path, day, tracks):
 def predict(m, F, Vt):
     """F = feat_day の行・Vt = 場の材料(track・race_date(文字)・race_no・runner_number・元の列名)
     → F の鍵 + g3(3 着内の見込み)・pw_raw(R で合計 1)・pwg(帯の表の後 R で合計 1)"""
-    import base_v1 as B
+    import ai_common as B
     X = F.copy()
     X['race_no'], X['runner_number'] = X.race_no.astype('int64'), X.runner_number.astype('int64')
     v = Vt.rename(columns={c: 'v_' + c for c in m['vcols']})

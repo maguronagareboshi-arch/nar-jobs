@@ -19,7 +19,7 @@
    残りの馬で割り直す(p3 = 3 × 割合・朝と同じ式)。印 5 頭を付け直す。
 3. --write のときだけ timing='last' で書く。前の回と外した馬が同じレースは書かない(5 分おきに呼ばれても書くのは変わった時だけ)。
    既定は朝の行のある全レースを書く(取消の無いレースは朝と同じ中身・meta.scratched=[])。--only-scratched で取消のあるレースだけ。
-⛔本番に書くのは nar_ai_marks の model='v3n-1'・timing='last' だけ(base_v1.write_marks)。発走 15 分前を過ぎた行は
+⛔本番に書くのは nar_ai_marks の model='v3n-1'・timing='last' だけ(ai_common.write_marks)。発走 15 分前を過ぎた行は
   DB のトリガー(nar_ai_marks_guard)が捨てる = 最後に通った値が残る。
 """
 import datetime as dt
@@ -295,9 +295,8 @@ def main():
     print('決め 61 の有利の直し', sum(1 for r in rows if (r['meta'].get('rb61') or {}).get('fin0')), '/', len(rows), 'R')
     if write and rows:
         sys.path.insert(0, os.environ.get('NAR_JOBS_AI', str(HERE.parent)))
-        import base_v1 as B1
-        B1.MODEL_ID = MODEL_ID  # ⛔write_marks が見る先をここで差し替える(v3n_daily と同じ作法)
-        took = B1.write_marks(rows, day, 'last')
+        import ai_common
+        took = ai_common.write_marks(rows, day, 'last', model=MODEL_ID)
         print('書いた', took, '/', len(rows))
     return 0
 

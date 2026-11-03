@@ -11,7 +11,7 @@ import pandas as pd
 ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(ROOT / "pipeline/ai/v3"))
 sys.path.insert(0, str(ROOT / "pipeline/ai"))
-import base_v1 as B1  # noqa: E402
+import ai_common as B1  # noqa: E402
 import si5_store as S  # noqa: E402
 import sealed  # noqa: E402
 

@@ -101,7 +101,7 @@ def frame(U=None, R=None):
 
 def _push(x):
     sys.path.insert(0, str(HERE.parent))
-    import base_v1 as B1
+    import ai_common as B1
     base, key = B1.creds()
     recs = x.to_dict('records')
     for i in range(0, len(recs), CHUNK):
@@ -116,7 +116,7 @@ def _push(x):
 def read_back(lo, hi):
     """DB の nar_si5 の [lo, hi) を読む(照合用)。"""
     sys.path.insert(0, str(HERE.parent))
-    import base_v1 as B1
+    import ai_common as B1
     base, key = B1.creds()
     out, off = [], 0
     while True:
@@ -173,7 +173,7 @@ def write_d5(day, days=DAYS):
     """便の中: [day − days, day) の D5 を nar_meta nankan_d5 に足す(days=None・まだ無い = 前日までの全期間)。→ 書いた日数"""
     import datetime as dt
     sys.path.insert(0, str(HERE.parent))
-    import base_v1 as B1
+    import ai_common as B1
     base, key = B1.creds()
     new = d5_days()
     rows = B1.sb_get(base, key, f'nar_meta?select=value&key=eq.{META}')

@@ -9,7 +9,7 @@
 2b. 談話の印 3 定数(danwa_marks)→ 束 t14(t14_bundle・第11版・2026-10)を前日の表に足す(どちらも失敗したら前のまま)。
 2c. 束 t14 を足せた日だけ、束 f10k(f10k_bundle・第12版・材料 1 万個のふるいの 60 列の木・2026-10)を足す(失敗・見張りで止まったら第11版のまま)。
 2a. --write のときだけ、走破指数 SI5(表の材料と同じ値)の直近 21 日分を nar_si5 に書く(si5_store・サイトの「指数」の列)。
-3. --write のときだけ nar_ai_marks に model='v3-9'・timing='morning' で書く(base_v1.write_marks = 朝の行は凍結・読み直し)。
+3. --write のときだけ nar_ai_marks に model='v3-9'・timing='morning' で書く(ai_common.write_marks = 朝の行は凍結・読み直し)。
    marks = 印の付いた馬(◎○▲△・順位の順)・score = 3 着以内の確率 p3′ × 100。
    meta = n・model・stamp・works の元・runners(全馬の num・p1 = 勝つ確率・p3 = 3 着以内の確率 p3′(表の値)・p3_raw = 上乗せ後の p3)。
    runners には札のある馬だけ note(公式の成績と発走状況から)・note_kb(競馬ブックの寸評から)を足す(v3_notes・表示だけ)。
@@ -319,9 +319,8 @@ def main():
     (out / f'{day}_v3-9_marks.json').write_text(json.dumps(rows, ensure_ascii=False), encoding='utf-8')
     if write and rows:
         sys.path.insert(0, str(HERE.parent))
-        import base_v1 as B1
-        B1.MODEL_ID = MODEL_ID  # ⛔write_marks が見る先をここで差し替える(predict_v2 と同じ作法)
-        took = B1.write_marks(rows, day, TIMING)
+        import ai_common
+        took = ai_common.write_marks(rows, day, TIMING, model=MODEL_ID)
         log('took', took)
 
 

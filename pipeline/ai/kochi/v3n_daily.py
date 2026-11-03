@@ -15,10 +15,10 @@
    γ・曲線・並び読み・E1・能検・勝つ率の直しの k(mo3)・混ぜ(mo3)を新しい木で決め直し(meta.trees54・meta.one15 も残す = 混ぜ・f41 の入口は同じ)。
    2026-10-31 第 12 版(決め 61・v3 の out/v3n_rb61_judge.md・v3n_rb61.py): 直近 2 年の木 M を p5 と勝つ率で 2 割混ぜ(勝つ率の直しの k は mo4)、
    最後に場 × 枠の群の前 56 日の (実際 − 直す前の表示の率) の有利を印の率と勝つ率に足す(meta.rb61・直す前の率は meta.rb61.fin0・q0・g0)。
-5. --write のときだけ nar_ai_marks に model='v3n-1'・timing='morning' で書く(base_v1.write_marks = 朝の行は凍結・読み直し)。
+5. --write のときだけ nar_ai_marks に model='v3n-1'・timing='morning' で書く(ai_common.write_marks = 朝の行は凍結・読み直し)。
    meta.runners = [{num, p1, p3}](南関 v3 と同じ形)。画面に出すかはサイト側の旗で決める(出すまでは見えない)。
 対象 = out/nation.md で「入れ替えてよい」の場から南関を除いた 8 場 + 盛岡・姫路(2026-10-10 ユーザー・線は通っていない)= 10 場。
-環境変数: SUPABASE_URL・SUPABASE_ANON_KEY か SUPABASE_SERVICE_KEY・NAR_JOBS_AI(base_v1.py の場所・既定 pipeline/ai)。
+環境変数: SUPABASE_URL・SUPABASE_ANON_KEY か SUPABASE_SERVICE_KEY・NAR_JOBS_AI(ai_common.py の場所・既定 pipeline/ai)。
 """
 import json
 import os
@@ -30,7 +30,7 @@ import pandas as pd
 
 HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE))
-sys.path.insert(1, os.environ.get('NAR_JOBS_AI', str(HERE.parent)))  # base_v1(材料表の読み・帯の表)
+sys.path.insert(1, os.environ.get('NAR_JOBS_AI', str(HERE.parent)))  # ai_common(書き込み・帯の表)
 MODEL_ID = 'v3n-1'
 W = {30: 0.75, 35: 0.75, 36: 0.5, 46: 0.5, 47: 0.75, 48: 0.5, 50: 0.75, 51: 0.5, 54: 0.75, 55: 0.5}  # 対象 10 場(第 9 版から混ぜの割合は使わない・場の一覧として残す)
 MARKS = ['◎', '○', '▲', '△', '△']  # 2026-10-10 ユーザー決定: 印は 5 頭(◎○▲△△)
@@ -239,9 +239,8 @@ def main():
           sum(sum(1 for v in r['meta']['rb61']['a'].values() if v) for r in rows if r['meta'].get('rb61')))
     if write and rows:
         sys.path.insert(0, os.environ.get('NAR_JOBS_AI', 'pipeline/ai'))
-        import base_v1 as B1
-        B1.MODEL_ID = MODEL_ID  # ⛔write_marks が見る先をここで差し替える(v3_daily と同じ作法)
-        took = B1.write_marks(rows, day, 'morning')
+        import ai_common
+        took = ai_common.write_marks(rows, day, 'morning', model=MODEL_ID)
         print('書いた', took, '/', len(rows))
 
 

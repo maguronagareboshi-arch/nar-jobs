@@ -343,9 +343,8 @@ def day_marks(Bk, odds, w, going, dm, day):
 def write_day(row, day):
     """当日版の印を nar_ai_marks(model v3-9・timing last = 直前予想の枠・毎回上書き)に書く。前日の印(morning)は凍結のまま。"""
     sys.path.insert(0, str(HERE.parent))
-    import base_v1 as B1
-    B1.MODEL_ID = 'v3-9'
-    return B1.write_marks([row], day, 'last')
+    import ai_common
+    return ai_common.write_marks([row], day, 'last', model='v3-9')
 
 
 def load_model(mdir):

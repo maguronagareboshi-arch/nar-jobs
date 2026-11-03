@@ -1,16 +1,14 @@
-# 予想AI base-v1 の「直前予想」(2026-09-09 §143)。
-# 朝便 nar-ai-feat.yml は当日の馬体重・馬場が出る前に動くので、それを抜いた模型で「朝予想」だけ書く。
-# この便は日中に **5 分おき**(§202・9/17)で、体重と馬場が全頭そろったレースだけ全列の模型で「直前予想」を上書きする。
+# 他場版 AI(v3n)の「直前予想」(2026-09-09 §143 に base-v1 用に作った便・2026-11-03 段 1 で base-v1 を外した)。
+# この便は日中に **5 分おき**(§202・9/17)で、v3n の朝の行から取消・除外の馬を外して割り直す(pipeline/ai/kochi/v3n_last.py)。
 # 周の中で公式の当日 ZIP を 1 回取り、**手元の**当日行に体重と馬場を重ねる(cloud/ai_last_today.py・本番には書かない)。
+#   v3n_last.py の day_inputs が手元の当日の nar_runs・nar_races を読む= 手元の DB は器(表の定義)と当日の 2 表だけ。
 # 起動は pg_cron の dispatch(09:08 / 15:08 JST・write=yes・once=no)だけ(§202 で schedule を外した=
 #   GitHub の schedule は数時間遅れて dispatch と concurrency で押し合い、15:08 の便が cancelled になっていた)。
 # 発走 15 分前を過ぎた行は DB のトリガー(nar_ai_marks_guard)が静かに捨てる= 最後に通った値が残る。
 #
 # 作り: 1 日 2 本の長い便(09:00〜14:55 / 15:00〜20:55 JST)。
-#   ⛔30 分おきに材料を全部写すと 1 日 6GB(月 180GB)になるので、全量の写しは便の頭で 1 回だけ。
-#   以後の回は「今日の nar_runs / nar_races」だけ写し直し(小さい)、地元で今日の行を作り直して予想する。
-#   全列の模型は朝便(schedule)の最新の成果物から取る(学習はしない)。
-#   ⛔本番への書き込みは nar_ai_marks(model='base-v1' と 'v3n-1', timing='last')の REST upsert だけ。SQL は流さない。
+#   各回は「今日の nar_runs / nar_races」だけ写し直す(小さい)。全量の写し・材料表の作り直し・base-v1 の模型は使わない。
+#   ⛔本番への書き込みは nar_ai_marks(model='v3n-1', timing='last')の REST upsert だけ。SQL は流さない。
 # 監査 A3(2026-09-24) 公開 repo なので成果物は暗号化して置く(*.tar.gz.enc・鍵= SUPABASE_SERVICE_KEY の sha256)。手元で戻す 1 行:
 #   ARTIFACT_KEY=$(printf '%s' "$SUPABASE_SERVICE_KEY" | sha256sum | cut -c1-64) openssl enc -d -aes-256-cbc -pbkdf2 -pass env:ARTIFACT_KEY -in X.tar.gz.enc | tar -xzf -
 name: nar-ai-last
@@ -39,7 +37,7 @@ concurrency:
 
 permissions:
   contents: read
-  actions: read               # 朝便の成果物(模型)を取るため
+  actions: read
 
 jobs:
   # 2026-10-30 10/29 12:29 に便が GitHub 側の内部エラーで消え、fail も書けずに 2.5 時間抜けた。
@@ -80,38 +78,6 @@ jobs:
       - name: install
         run: pip install -q "pg8000>=1.30" "lightgbm>=4.3" "pandas>=2.2" "pyarrow==25.0.1" "numpy<2" "requests>=2.31"
 
-      # ---------------------------------------------------------------- 全列の模型= nar-ai-feat の最新の成功から(event 不問)
-      # 監査 A4(2026-09-24): 元は `-e schedule` の便だけ= 予備 schedule の朝便は 09:08 の起動より後に終わるので常に前日以前のモデルだった。
-      #   今は event を問わず最新の成功便。今日(JST)の便でなければ log と heartbeat の note に「前日のモデル」と残す(止めない)。
-      - name: fetch morning-run artifact (model)
-        env:
-          GH_TOKEN: ${{ github.token }}
-          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: |
-          # 9/25 実例: 遅れた予備 schedule は build を飛ばした success(成果物 0)になる= 成果物のある最新の便まで戻る
-          R=""
-          for L in $(gh run list -R "$GITHUB_REPOSITORY" -w nar-ai-feat.yml -s success -L 20 --json databaseId,createdAt,event,headBranch,displayTitle --jq '.[] | select((.headBranch == "master") and (.event == "schedule" or (.displayTitle | test("本番")) or .displayTitle == "nar-ai-feat")) | "\(.databaseId)|\(.createdAt)|\(.event)"'); do
-            N=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/${L%%|*}/artifacts" --jq .total_count)
-            if [ "$N" -gt 0 ]; then R=$(echo "$L" | tr '|' ' '); break; fi
-            echo "run ${L%%|*} は成果物 0 本= 飛ばす"
-          done
-          ID=${R%% *}
-          { [ -n "$ID" ] && [ "$ID" != "null" ]; } || { echo "朝便の成功が見つからない"; exit 1; }
-          CREATED=$(echo "$R" | cut -d' ' -f2)
-          RUN_DAY=$(TZ=Asia/Tokyo date -d "$CREATED" +%F)
-          echo "morning run = $R(JST $RUN_DAY)"
-          if [ "$RUN_DAY" != "$(TZ=Asia/Tokyo date +%F)" ]; then
-            echo "::warning::今日の nar-ai-feat の成功便が無い= 前日のモデル(run $ID・$RUN_DAY)で続ける"
-            echo "MODEL_NOTE=前日のモデル $RUN_DAY" >> "$GITHUB_ENV"
-          fi
-          gh run download "$ID" -R "$GITHUB_REPOSITORY" -p 'nar-ai-feat-*' -D model
-          bash ops/artifact_seal.sh unseal model   # 監査 A3: *.tar.gz.enc を戻す(平文の古い成果物はそのまま)
-          M=$(ls model/*/base_v1.model.json | head -n 1)
-          [ -n "$M" ] || { echo "base_v1.model.json が無い"; exit 1; }
-          cp "$M" base_v1.model.json
-          python -X utf8 -c "import json; m=json.load(open('base_v1.model.json')); print('variant', m.get('variant','(none=last)'), 'trained_to', m['trained_to'], 'cols', len(m['cols']))"
-          rm -rf model
-
       # ---------------------------------------------------------------- 器を立てる(nar-ai-feat.yml と同じ)
       - name: start local postgres
         run: |
@@ -124,45 +90,15 @@ jobs:
           done
           pg_isready -h localhost -p 5432 -U postgres
 
-      # ---------------------------------------------------------------- 本番から材料を写す(⛔読むだけ・便の頭で 1 回)
-      # ⛔この step で流してよいのは `\copy (select * from …) to` だけ(nar-ai-feat.yml と同じ約束)。
-      - name: dump source tables from production (read only)
-        env:
-          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
-          PGSSLMODE: require
-        run: |
-          mkdir -p dump
-          # ⛔列は `pipeline/sql/ai_feat_local_schema.sql` の並びをそのまま書く(select * にしない)=
-          #   本番に列が 1 つ増えた日に地元への読み込みが「extra data after last expected column」で落ちるため。
-          #   ⛔列を増やすときは schema.sql と ここ の両方を同じ並びで直す(§156 F1・2026-09-22 の監査)。
-          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 \
-            -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X <<'SQL'
-          set statement_timeout = '10min';
-          \copy (select track, race_date, race_no, runner_number, gate, horse_name, sex, age, jockey, trainer, carried_weight, body_weight, body_weight_change, finish, finish_note, time_raw, time_sec, margin, last3f, popularity, updated_at, birth_date, trainer_area, weight_mark from public.nar_runs where (race_date >= '2022-11-01' or track = '高知')) to 'dump/nar_runs.tsv'
-          \copy (select track, race_date, race_no, post_time, race_name, surface, direction, distance_m, weather, going, field_size, condition, prize_yen, race_last4f, race_last3f, furlongs, corners, source, source_snapshot_hash, updated_at, race_kind, cancelled, cancel_note, nankan from public.nar_races where (race_date >= '2022-11-01' or track = '高知')) to 'dump/nar_races.tsv'
-          \copy (select source, item_id, horse_name, display_name, sex, age, birth_date, category, auction_date, round_no, start_price, price, bids, sold, seller, tags, other_n, jbis_id, url, fetched_at, updated_at, runs_after, first_after, sire, dam, buyer from public.auction_sales) to 'dump/auction_sales.tsv'
-          \copy (select horse_name, sex, sire, dam, broodmare_sire, owner, breeder, first_date, last_date, runs, updated_at from public.nar_horses) to 'dump/nar_horses.tsv'
-          \copy (select track, race_date, race_no, umaban, horse_name, kb_race_id, blinker, gear, first3f, avg_f, pace, kimete, start_note, updated_at from public.nar_kb_runs) to 'dump/nar_kb_runs.tsv'
-          \copy (select event_id, horse_name, birth_date, horse_code, jbis_id, track, race_date, race_no, runner_number, event_date, reported_date, stage, event_type, condition_group, race_status, detail, restriction_from, restriction_through, source_kind, source_ref, source_url, source_hash, source_line_hash, match_method, displayable, parser_version, created_at, updated_at, event_key, support_detail, support_condition_group, support_reported_date, support_restriction_from, support_restriction_through, support_source_kind, support_source_ref, support_source_url, racing_ability_lost, condition_term from public.nar_horse_health_events) to 'dump/nar_horse_health_events.tsv'
-          \copy (select penalty_id, track, race_date, race_no, person_kind, person_name, kind, detail, suspension_from, suspension_through, source_url, source_hash, parser_version, created_at, updated_at, horse_name from public.nar_penalties) to 'dump/nar_penalties.tsv'
-          \copy (select track, race_date, race_no, votes, refunds, updated_at from public.nar_sales) to 'dump/nar_sales.tsv'
-          \copy (select key, value, updated_at from public.nar_meta where key = 'noken_index') to 'dump/nar_meta.tsv'
-          SQL
-          ls -l dump | sed -n '2,20p'
-
-      - name: load into local postgres
+      # ---------------------------------------------------------------- 器だけ作る(2026-11-03 段 1: 全量の本番ダンプはやめた)
+      # 当日の nar_runs・nar_races は下の周で本番から写す(⛔読むだけ)。ほかの表は空のまま(誰も読まない)。
+      - name: create local tables
         run: |
           export PGPASSWORD="$LOCAL_PGPASSWORD"
           psql -v ON_ERROR_STOP=1 -X -f pipeline/sql/ai_feat_local_schema.sql
-          for t in nar_runs nar_races auction_sales nar_horses nar_kb_runs \
-                   nar_horse_health_events nar_penalties nar_sales nar_meta; do
-            psql -v ON_ERROR_STOP=1 -X -c "\copy public.$t from 'dump/$t.tsv'"
-          done
-          psql -v ON_ERROR_STOP=1 -X -c "analyze"
-          psql -v ON_ERROR_STOP=1 -X -f pipeline/sql/ai_feat_20260908.sql
 
       # 2026-10-15 予想の学んだ定数・表(勝つ率の直し・談話の印・他場の曲線など)= 暗号化したリリース v3-consts-20261031(公開のコードに置かない)。
-      #   この便は base-v1 の直前も回すので、取れない時も周は続ける(v3n の直前だけ止まり、朝の行のまま)→ 最後の段で便を赤にする。中身の確かめ = pipeline/ai/sealed.py check
+      #   取れない時も周は続ける(v3n の直前だけ止まり、朝の行のまま)→ 最後の段で便を赤にする。中身の確かめ = pipeline/ai/sealed.py check
       - name: download sealed constants
         id: sc
         continue-on-error: true
@@ -234,7 +170,7 @@ jobs:
       # ---------------------------------------------------------------- 5 分おきに回す(2026-09-11 30→15・§202 9/17 15→5)
       # ⚠1 周 ≈220 秒で印を書くのは周の終わり= 15 分おきだと :31 の周が発走 15 分前の締切を跨いで捨てられていた
       # 1 回= 今日の 2 表を写し直す(⛔読むだけ)→ 地元で今日の行を差し替え → 公式の当日 ZIP を地元に重ねる
-      #        → 今日以降の特徴量を作り直す → 全列の模型で直前予想 → REST upsert(--write のときだけ)。
+      #        → v3n の直前(取消の割り直し)→ REST upsert(--write のときだけ)。
       # 終わり= 便の終了時刻(JST 14:55 / 20:55 のうち近い方)。once=yes なら 1 回で終わる。
       - name: seal k0 cache
         if: "!cancelled() && steps.k0r.outputs.cache-hit != 'true' && hashFiles('k0cache/meta.json') != ''"
@@ -295,17 +231,12 @@ jobs:
               -c "\copy o_r from 'today/official_races.tsv'" \
               -c "update public.nar_races r set going = o.going from o_r o where (r.track, r.race_date, r.race_no) = (o.track, o.race_date, o.race_no) and o.going <> '' and coalesce(r.going, '') = ''" \
               || echo "official today: 地元への重ねに失敗(周は続ける)"
-            psql -v ON_ERROR_STOP=1 -X -c "set statement_timeout = '25min'" \
-              -c "select * from public.refresh_nar_ai_feat('$DAY')"
-            psql -v ON_ERROR_STOP=1 -X \
-              -c "\copy (select * from public.nar_ai_feat_run where race_date = '$DAY') to 'today/feat.csv' with (format csv, header)"
-            python -X utf8 pipeline/ai/base_v1.py predict --feat today/feat.csv --model base_v1.model.json --date "$DAY" --timing last $W
             # 2026-10-11 他場版 v3n の直前 = 朝の行から取消・除外の馬を外して割り直すだけ(模型なし・REST だけ)。⛔失敗しても周は続ける
             python -X utf8 pipeline/ai/kochi/v3n_last.py "$DAY" $W || echo "v3n last: 失敗(周は続ける)"
             # 10/30 通信量 F3: この周に書いた直前の印の束を上げる(版が変わった model だけ・書く便だけ)。⛔失敗しても周は続ける
             if [ "$WRITE" = "yes" ]; then python -X utf8 cloud/marks_bundle.py || echo "marks bundle: 失敗(周は続ける)"; fi
             # 監査 A8(2026-09-24) 各周の成功= heartbeat 'ai_last'(書く便だけ)。⛔表が無くても落ちない
-            if [ "$WRITE" = "yes" ]; then python3 cloud/beat.py ai_last ok "round $n${MODEL_NOTE:+・$MODEL_NOTE}${GUARD_NOTE}"; fi
+            if [ "$WRITE" = "yes" ]; then python3 cloud/beat.py ai_last ok "round $n${GUARD_NOTE}"; fi
             echo "round $n took $(( $(date +%s) - T0 )) s"
             echo "::endgroup::"
             [ "$ONCE" = "yes" ] && break
