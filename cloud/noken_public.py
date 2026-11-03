@@ -44,6 +44,8 @@ import time
 import unicodedata
 import urllib.error
 import urllib.request
+
+import jp_fetch
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -71,6 +73,8 @@ def get(url, tries=1, enc="utf-8"):
         if wait > 0:
             time.sleep(wait)
         try:
+            if jp_fetch.via_db(url):      # 11/3 南関公式は国外の GitHub を 403= 本番 DB(東京)から取る
+                return jp_fetch.fetch(url).decode(enc, "replace")
             req = urllib.request.Request(url, headers={"User-Agent": UA})
             return urllib.request.urlopen(req, timeout=25).read().decode(enc, "replace")
         except urllib.error.HTTPError as e:
@@ -3778,6 +3782,7 @@ def main():
         return rc
 
     rc = 0
+    down = []
     for name in (ORDER if args.venue == "all" else [args.venue]):
         meta_key, collect, key_set, day_key = VENUES[name]
         stored = (sb_get_meta(base, key, meta_key) if base and key else None) or {"days": []}
@@ -3790,7 +3795,10 @@ def main():
                 new_days = noken_day_guard(name, new_days)
         except Exception as e:
             log(f"{name}: 索引の取得に失敗 {type(e).__name__}: {str(e)[:150]}")
-            rc = 2
+            if args.venue == "all":             # 11/3 1 場のサイト停止(佐賀 503 が 10/27〜毎朝)で月次の段ごと赤にしない
+                down.append(name)
+            else:
+                rc = 2
             continue
         if not args.replace and len(new_days) < len(stored["days"]):
             log(f"{name}: ⚠ 取れた日 {len(new_days)} < 既存 {len(stored['days'])}= 合流して書く(消さない)")
@@ -3870,6 +3878,10 @@ def main():
                 rc = 1
             else:
                 log(f"{name}: nar_meta/{meta_key}_offsets 更新")
+    if down:
+        log(f"⚠ 索引が取れない場 {len(down)}/{len(ORDER)}: {', '.join(down)}(ほかは書いた・全場だめなら終了コード 2)")
+        if len(down) == len(ORDER):
+            rc = 2
     if MONBETSU_GUARD:
         log(f"門別: 番人が止めた日 {len(MONBETSU_GUARD)}(書いていない)= 終了コード 1")
         rc = rc or 1

@@ -22,6 +22,8 @@ import sys
 import time
 import urllib.parse
 import urllib.request
+
+import jp_fetch
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
@@ -47,6 +49,8 @@ PAGE_TICKETS = {"単勝": "win", "複勝": "place", "馬連複": "quinella", "�
 
 
 def _get(url, enc="utf-8"):
+    if jp_fetch.via_db(url):              # 11/3 南関公式は国外の GitHub を 403= 本番 DB(東京)から取る
+        return jp_fetch.fetch(url, timeout=TIMEOUT).decode(enc, "replace")
     req = urllib.request.Request(url, headers={"User-Agent": UA, "Accept-Language": "ja"})
     with urllib.request.urlopen(req, timeout=TIMEOUT) as r:
         return r.read().decode(enc, "replace")

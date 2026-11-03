@@ -45,6 +45,8 @@ from odds import JST, log                                  # noqa: E402
 import urllib.parse
 import urllib.request
 
+import jp_fetch
+
 BASE = "https://www.nankankeiba.com"
 # nankankeiba の場コードは公式(keiba.go.jp)の babaCode と同じ(/calendar/000000.do で 18/19/20/21 を実測 2026-09-04)
 BA = {"浦和": "18", "船橋": "19", "大井": "20", "川崎": "21"}
@@ -62,10 +64,15 @@ def get(url):
     gap = time.monotonic() - _last[0]
     if gap < SLEEP:
         time.sleep(SLEEP - gap)
-    req = urllib.request.Request(url, headers={"User-Agent": UA})
-    with urllib.request.urlopen(req, timeout=30) as r:
-        raw = r.read()
-    _last[0] = time.monotonic()
+    try:
+        if jp_fetch.via_db(url):          # 11/3 国外の GitHub は 403= 本番 DB(東京)から取る
+            raw = jp_fetch.fetch(url)
+        else:
+            req = urllib.request.Request(url, headers={"User-Agent": UA})
+            with urllib.request.urlopen(req, timeout=30) as r:
+                raw = r.read()
+    finally:
+        _last[0] = time.monotonic()
     return raw.decode("cp932", errors="replace")
 
 
