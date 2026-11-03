@@ -105,6 +105,7 @@ jobs:
           key: kb-done-${{ github.run_id }}
           restore-keys: kb-done-
       - name: gear six tracks seiseki
+        id: gearfetch
         env:
           KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}
           KEIBABOOK_PASSWORD: ${{ secrets.KEIBABOOK_PASSWORD }}
@@ -113,6 +114,7 @@ jobs:
         if: '!cancelled()'
         run: python cloud/kb/kb_counts.py /tmp/kbdata/kb_all --since "$W"
       - name: gear push
+        id: gearpush
         if: '!cancelled()'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -121,8 +123,9 @@ jobs:
           if [ "$APPLY" = "1" ]; then python cloud/kb/push_kb_runs.py --since "$W"
           else python cloud/kb/push_kb_runs.py --since "$W" --dry-run; fi
       # apply のときだけ done.tsv を残す(dry-run で「済み」にすると、次の apply がその日を飛ばして書かないため)
+      # 11/3 監査: 取得か投入が落ちた回は残さない(残すと次の便がその日を飛ばし、6 場 1 日分が欠けたままになる)
       - name: save done marks
-        if: env.APPLY == '1' && !cancelled()
+        if: env.APPLY == '1' && !cancelled() && steps.gearfetch.outcome == 'success' && steps.gearpush.outcome == 'success'
         uses: actions/cache/save@v6
         with:
           path: /tmp/kbdata/kb_all/done.tsv

@@ -732,14 +732,19 @@ def main(argv=None):
             errs[h["fetch_error"]] = errs.get(h["fetch_error"], 0) + 1
     if errs:
         log(f"失敗の種類: {json.dumps(errs, ensure_ascii=False)}")
+    # 11/3 監査: 全頭失敗でも成功の記録を打ち、見張りが赤くならなかった
+    all_failed = bool(horses) and not ok
     if push:
         flush()
         log("本番へ upsert 済み")
         if not args.no_heartbeat:
-            Nar(args.nar_env).heartbeat(True, summary_line)
+            Nar(args.nar_env).heartbeat(not all_failed, ("⛔全頭失敗・" if all_failed else "") + summary_line)
     else:
         for p in write_outputs(args.out_dir, runs, horses, targets):
             log(f"dry-run 出力: {p}")
+    if all_failed:
+        log(f"⛔馬 {len(horses)} 頭すべて読めない= 失敗で終わる")
+        return 1
     return guard_rc()
 
 

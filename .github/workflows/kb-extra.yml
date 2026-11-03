@@ -66,11 +66,13 @@ jobs:
               sys.exit(1)
           EOF
       - name: fukuchan fetch
+        id: fukufetch
         if: steps.reach.outcome == 'success'
         env:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: python cloud/kb/fetch_fukuchan.py
       - name: fukuchan push
+        id: fukupush
         if: steps.reach.outcome == 'success' && !cancelled()
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -79,6 +81,7 @@ jobs:
           if [ "$APPLY" = "1" ]; then python cloud/kb/push_fukuchan.py --all
           else python cloud/kb/push_fukuchan.py --all --dry-run; fi
       - name: hyogo noken split
+        id: hyofetch
         if: "!cancelled()"
         env:
           KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}
@@ -87,6 +90,7 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: python cloud/kb/fetch_kb_noken_hyogo.py --since "$(date +%Y%m)01" --refresh
       - name: hyogo noken split push
+        id: hyopush
         if: "!cancelled()"
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
@@ -95,8 +99,9 @@ jobs:
           python -c "import json;d=json.load(open('/tmp/kbdata/kb_noken/hyogo_split.json',encoding='utf-8'))['days'];print('日',len(d),'レース',sum(len(x['races']) for x in d.values()),'行',sum(len(r['rows']) for x in d.values() for r in x['races']))" || true
           if [ "$APPLY" = "1" ]; then python cloud/kb/push_kb_noken_split.py
           else python cloud/kb/push_kb_noken_split.py --dry-run; fi
+      # 11/3 監査: 取得か投入が落ちた回は印を残さない(残すと次の便がその日を飛ばす)
       - name: save done marks
-        if: env.APPLY == '1' && !cancelled()
+        if: env.APPLY == '1' && !cancelled() && steps.fukufetch.outcome != 'failure' && steps.fukupush.outcome != 'failure' && steps.hyofetch.outcome != 'failure' && steps.hyopush.outcome != 'failure'
         uses: actions/cache/save@v6
         with:
           path: |

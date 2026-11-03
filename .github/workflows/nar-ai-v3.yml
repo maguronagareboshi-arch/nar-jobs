@@ -301,7 +301,9 @@ jobs:
         if: steps.pc.outputs.run == 'yes'
         env:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: python -X utf8 pipeline/ai/v3/t7e_forecast.py fetch "${{ steps.d.outputs.day }}" 2>&1 | tee -a out_log.txt
+        run: |
+          set -o pipefail  # 11/3 監査: tee が取得の失敗を隠し、予想の段へ進んでいた
+          python -X utf8 pipeline/ai/v3/t7e_forecast.py fetch "${{ steps.d.outputs.day }}" 2>&1 | tee -a out_log.txt
 
       - name: ability trial pages read on the PC (v3-nk-html)
         if: steps.pc.outputs.run == 'yes'

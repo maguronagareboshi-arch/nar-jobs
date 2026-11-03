@@ -347,8 +347,16 @@ def main(argv=None):
         rest = Rest(base, key)
         people = rest_people(rest)
         marks = fetch_marks([p["lic"] for p in people], cache)
+        # 11/3 監査: 読めなかった騎手は下の絞り込みで消えるため、後の「読めない人が多すぎる」が効かなかった= 絞る前に数える
+        unread = [p["lic"] for p in people if (marks.get(p["lic"]) or {}).get("wins") is None]
+        if len(unread) > max(10, len(people) // 5):
+            log("⚠個票が読めない人が多すぎる(%d/%d)= 上げない: %s" % (len(unread), len(people), unread[:20]))
+            return 1
         people = [p for p in people if active_recent(marks.get(p["lic"]) or {}, today.year)]
         log("騎手 %d 人(当年か前年に騎乗)" % len(people))
+        if not people:
+            log("⚠騎手 0 人= 上げない")
+            return 1
         find_kth, starts_after, rides, year_wins = rest_sources(rest, today)
         doc, miss = build_doc(today, people, marks, rides, find_kth, starts_after, year_wins)
     log("載せた %d 人・読めない %d・あと10以内 %d・最近の達成 %d・照合できない %d(%s)" % (

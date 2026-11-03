@@ -47,6 +47,8 @@ def pages(path):
 # 控えが FULL_DAYS 日より古い・列が違う・無いときは丸ごと読む(古い月の後からの直しは最長 FULL_DAYS 日で入る)。K0_CACHE が無ければ今まで通り。
 CACHE = os.environ.get('K0_CACHE', '')
 DIFF_DAYS, FULL_DAYS = 92, 7
+# 控えの版: 2 = 月の取り方に日付の並びを入れた(11/3)。前の版の控えはページの切れ目で行が抜けている恐れ= 丸ごと読み直す
+CACHE_VER = 2
 
 
 def _meta():
@@ -62,7 +64,7 @@ def _base(table, sel):
         return None, None
     m, f = _meta().get(table, {}), Path(CACHE) / f'{table}.parquet'
     today = dt.date.today()
-    if not f.exists() or m.get('sel') != sel or not m.get('full') or (today - dt.date.fromisoformat(m['full'])).days >= FULL_DAYS:
+    if not f.exists() or m.get('sel') != sel or m.get('ver') != CACHE_VER or not m.get('full') or (today - dt.date.fromisoformat(m['full'])).days >= FULL_DAYS:
         print(table, '控え 無し/古い → 丸ごと', m.get('full'), flush=True)
         return None, None
     since = (today - dt.timedelta(days=DIFF_DAYS)).replace(day=1).isoformat()
@@ -82,7 +84,7 @@ def _keep(table, sel, df, full):
         Path(CACHE).mkdir(parents=True, exist_ok=True)
         df.to_parquet(Path(CACHE) / f'{table}.parquet', index=False)
         m = _meta()
-        m[table] = {'sel': sel, 'full': dt.date.today().isoformat() if full else m.get(table, {}).get('full')}
+        m[table] = {'sel': sel, 'ver': CACHE_VER, 'full': dt.date.today().isoformat() if full else m.get(table, {}).get('full')}
         (Path(CACHE) / 'meta.json').write_text(json.dumps(m, ensure_ascii=False), encoding='utf-8')
     return df
 
@@ -95,7 +97,8 @@ def by_track_month(table, sel, order):
     jobs = [(t, a, b) for t in TR for a, b in months() if base is None or a >= since]
     def one(j):
         t, a, b = j
-        return pages(f'/rest/v1/{table}?select={sel}&track=eq.{q(t)}&race_date=gte.{a}&race_date=lte.{b}&order={order}')
+        # ⛔order= は一意の列の組(月の中で日付を入れないと、ページの切れ目で行が重なったり抜けたりする= ばんえい 27984e3 と同じ・11/3 監査)
+        return pages(f'/rest/v1/{table}?select={sel}&track=eq.{q(t)}&race_date=gte.{a}&race_date=lte.{b}&order=race_date,{order}')
     rows, t0 = [], time.time()
     with ThreadPoolExecutor(6) as ex:
         for i, r in enumerate(ex.map(one, jobs)):
@@ -104,6 +107,10 @@ def by_track_month(table, sel, order):
     df = pd.DataFrame(rows)
     if base is not None:   # 古い月は控えのまま・新しい月だけ差し替える。並びは丸ごとと同じ(場の順 → 月 → 月の中は読んだ順)
         df = _merge(base[base.race_date < since], df, sort=lambda d: [d.track.map(TR.index), d.race_date.str[:7]])
+    k = ['track', 'race_date'] + order.split(',')
+    dup = int(df.duplicated(k).sum())
+    if dup:
+        raise SystemExit(f'⛔{table} に同じ行が {dup} 本(取り方の誤り)= 止まる')
     return _keep(table, sel, df, base is None)
 def whole(table, order, by_date=False):
     base, since = _base(table, '*') if by_date else (None, None)

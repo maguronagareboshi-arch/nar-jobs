@@ -85,10 +85,12 @@ def main(argv=None):
         if i < len(ids) - 1:
             time.sleep(a.wait)
     log(f"読めた {got} 頭 / 読めない {bad} 頭" + ("" if a.push else "(dry-run= 書かない)"))
+    # 11/3 監査: 全頭読めなくても成功で終わっていた
+    failed = got == 0 and bad > 0
     if a.push:
         fetch_jra_runs.HB_JOB = "jra_career"
-        nar.heartbeat(True, f"read {got} / unreadable {bad}")
-    return 0
+        nar.heartbeat(not failed, f"read {got} / unreadable {bad}")
+    return 1 if failed else 0
 
 
 if __name__ == "__main__":

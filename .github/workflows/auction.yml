@@ -170,6 +170,7 @@ jobs:
         env:
           PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
         run: |
+          set -o pipefail  # 11/3 監査: tail が psql の失敗を隠していた
           psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/auction_after.sql | tail -n 6
       - name: commit data   # 途中失敗でも撮れた分は残す
         if: always()

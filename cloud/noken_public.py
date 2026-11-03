@@ -284,11 +284,16 @@ def body_rows(rws, head_i, keys):
 def sb_get_meta(base, key, meta_key, table="nar_meta"):
     url = f"{base}/rest/v1/{table}?select=value&key=eq.{meta_key}"
     req = urllib.request.Request(url, headers={"apikey": key, "Authorization": f"Bearer {key}"})
-    try:
-        rows = json.loads(urllib.request.urlopen(req, timeout=25).read().decode("utf-8"))
-        return rows[0]["value"] if rows else None
-    except Exception:
-        return None
+    # 11/3 監査: 読み取りの失敗を「行が無い」と同じ None にしていた= 呼び手が空とみなし、取れた日だけで書き直して過去の日を消した。
+    # None は「行が無い」ときだけ。失敗はやり直したうえで止める(書かない)。
+    for i in range(3):
+        try:
+            rows = json.loads(urllib.request.urlopen(req, timeout=25).read().decode("utf-8"))
+            return rows[0]["value"] if rows else None
+        except Exception as e:  # noqa: BLE001
+            if i == 2:
+                raise SystemExit(f"⛔{table}.{meta_key} を読めない({e})= 上書きせず止まる")
+            time.sleep(5 * (i + 1))
 
 
 # ---------------------------------------------------------------- 岩手(盛岡・水沢)
