@@ -1,0 +1,200 @@
+# 研究用・1 回きり(2026-11-03)。予想 AI base-v1 の馬場差を「今の作り方(A)」と「サイトの馬場差(B)」で比べる。
+#   A= pipeline/sql/ai_feat_20260908.sql のまま / B= t_baba だけ差し替えた写し pipeline/sql/research_ai_feat_babasite.sql
+#   比べ= cloud/research_ai_baba.py(base_v1 の PARAMS・ROUNDS・feature_cols morning をそのまま・学習 〜2025-10-31・試験 2025-11-01〜)
+# ⛔本番 DB へは `\copy (select …) to` だけ(nar-ai-feat.yml と同じ 10 表を 1 回だけ・1 表ずつ)。書き込みゼロ。結果は artifact。
+# ⛔公開 repo なので材料と特徴量は暗号化して置く(ops/artifact_seal.sh・保持 1 日)。
+name: research-ai-baba
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  dump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - name: dump source tables from production (read only)
+        env:
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+          PGSSLMODE: require
+        run: |
+          mkdir -p dump
+          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 \
+            -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '10min';
+          \copy (select track, race_date, race_no, runner_number, gate, horse_name, sex, age, jockey, trainer, carried_weight, body_weight, body_weight_change, finish, finish_note, time_raw, time_sec, margin, last3f, popularity, updated_at, birth_date, trainer_area, weight_mark from public.nar_runs where (race_date >= '2022-11-01' or track = '高知')) to 'dump/nar_runs.tsv'
+          \copy (select track, race_date, race_no, post_time, race_name, surface, direction, distance_m, weather, going, field_size, condition, prize_yen, race_last4f, race_last3f, furlongs, corners, source, source_snapshot_hash, updated_at, race_kind, cancelled, cancel_note, nankan from public.nar_races where (race_date >= '2022-11-01' or track = '高知')) to 'dump/nar_races.tsv'
+          \copy (select source, item_id, horse_name, display_name, sex, age, birth_date, category, auction_date, round_no, start_price, price, bids, sold, seller, tags, other_n, jbis_id, url, fetched_at, updated_at, runs_after, first_after, sire, dam, buyer from public.auction_sales) to 'dump/auction_sales.tsv'
+          \copy (select horse_name, sex, sire, dam, broodmare_sire, owner, breeder, first_date, last_date, runs, updated_at from public.nar_horses) to 'dump/nar_horses.tsv'
+          \copy (select track, race_date, race_no, umaban, horse_name, kb_race_id, blinker, gear, first3f, avg_f, pace, kimete, start_note, updated_at from public.nar_kb_runs) to 'dump/nar_kb_runs.tsv'
+          \copy (select event_id, horse_name, birth_date, horse_code, jbis_id, track, race_date, race_no, runner_number, event_date, reported_date, stage, event_type, condition_group, race_status, detail, restriction_from, restriction_through, source_kind, source_ref, source_url, source_hash, source_line_hash, match_method, displayable, parser_version, created_at, updated_at, event_key, support_detail, support_condition_group, support_reported_date, support_restriction_from, support_restriction_through, support_source_kind, support_source_ref, support_source_url, racing_ability_lost, condition_term from public.nar_horse_health_events) to 'dump/nar_horse_health_events.tsv'
+          \copy (select penalty_id, track, race_date, race_no, person_kind, person_name, kind, detail, suspension_from, suspension_through, source_url, source_hash, parser_version, created_at, updated_at, horse_name from public.nar_penalties) to 'dump/nar_penalties.tsv'
+          \copy (select track, race_date, race_no, votes, refunds, updated_at from public.nar_sales) to 'dump/nar_sales.tsv'
+          \copy (select key, value, updated_at from public.nar_meta where key = 'noken_index') to 'dump/nar_meta.tsv'
+          \copy (select race_date, track, race_no, umaban, horse_key, horse_name, c1, n1, c2, n2, c3, n3, c4, n4, style, style_p, style_n, first3f, first3f_src, last3f, win_odds_close, src, computed_at from public.nar_run_facts where (race_date >= '2022-11-01' or track = '高知')) to 'dump/nar_run_facts.tsv'
+          SQL
+          ls -l dump | sed -n '2,20p'
+      - name: seal dumps
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: bash ops/artifact_seal.sh seal dump sealed/dump.tar.gz.enc
+      - uses: actions/upload-artifact@v7
+        with:
+          name: research-ai-baba-dump
+          path: sealed/
+          retention-days: 1
+          if-no-files-found: error
+
+  build:
+    needs: dump
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    strategy:
+      fail-fast: false
+      matrix:
+        v: [A, B]
+    env:
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGDATABASE: postgres
+      LOCAL_PGPASSWORD: feat
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: install packages
+        run: pip install -q "pg8000>=1.30" "lightgbm>=4.3" "pandas>=2.2" "pyarrow==25.0.1" "numpy<2"
+      - uses: actions/download-artifact@v7
+        with:
+          name: research-ai-baba-dump
+          path: dump/
+      - name: unseal dumps
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: bash ops/artifact_seal.sh unseal dump && ls -l dump
+      - name: start local postgres
+        run: |
+          docker run -d --name feat -e POSTGRES_PASSWORD=feat -p 127.0.0.1:5432:5432 mirror.gcr.io/library/postgres:16 \
+            -c work_mem=256MB -c maintenance_work_mem=512MB -c shared_buffers=1GB \
+            -c max_wal_size=4GB -c fsync=off -c synchronous_commit=off -c full_page_writes=off
+          for i in $(seq 1 60); do
+            if pg_isready -h localhost -p 5432 -U postgres -q; then echo "ready ($i)"; break; fi
+            sleep 2
+          done
+          pg_isready -h localhost -p 5432 -U postgres
+      - name: load into local postgres
+        run: |
+          export PGPASSWORD="$LOCAL_PGPASSWORD"
+          psql -v ON_ERROR_STOP=1 -X -f pipeline/sql/ai_feat_local_schema.sql
+          for t in nar_runs nar_races auction_sales nar_horses nar_kb_runs \
+                   nar_horse_health_events nar_penalties nar_sales nar_meta nar_run_facts; do
+            psql -v ON_ERROR_STOP=1 -X -c "\copy public.$t from 'dump/$t.tsv'"
+          done
+          psql -v ON_ERROR_STOP=1 -X -c "analyze"
+      - name: load site baba (B only)
+        if: matrix.v == 'B'
+        run: |
+          set -o pipefail
+          export PGPASSWORD="$LOCAL_PGPASSWORD"
+          python -X utf8 cloud/research_ai_baba.py site --out dump/site_baba.tsv
+          psql -v ON_ERROR_STOP=1 -X -c "create table public.research_baba_site (track text, race_date date, d real, d1 real, primary key (track, race_date))"
+          psql -v ON_ERROR_STOP=1 -X -c "\copy public.research_baba_site from 'dump/site_baba.tsv'"
+          psql -v ON_ERROR_STOP=1 -X -c "analyze public.research_baba_site"
+          mkdir -p out
+          psql -v ON_ERROR_STOP=1 -X -At -F $'\t' -c "
+            with d as (select distinct track, race_date from public.nar_runs
+                        where finish = 1 and track in ('門別','盛岡','水沢','浦和','船橋','大井','川崎','金沢','笠松','名古屋','園田','姫路','高知','佐賀'))
+            select p, count(*), count(s.d) from (
+              select '全期間' p, track, race_date from d
+              union all select '2022-11 以降', track, race_date from d where race_date >= '2022-11-01'
+              union all select '試験 2025-11-01 以降', track, race_date from d where race_date >= '2025-11-01'
+              union all select '2026-10-01 以降', track, race_date from d where race_date >= '2026-10-01') x
+            left join public.research_baba_site s using (track, race_date)
+            group by p order by p" > out/match.tsv
+          cat out/match.tsv
+      - name: apply feature sql (local only)
+        run: |
+          export PGPASSWORD="$LOCAL_PGPASSWORD"
+          if [ "${{ matrix.v }}" = "B" ]; then F=pipeline/sql/research_ai_feat_babasite.sql; else F=pipeline/sql/ai_feat_20260908.sql; fi
+          echo "sql= $F"
+          psql -v ON_ERROR_STOP=1 -X -f "$F"
+      - name: build features (local only)
+        run: |
+          export PGPASSWORD="$LOCAL_PGPASSWORD"
+          T0=$SECONDS
+          psql -v ON_ERROR_STOP=1 -X -c "set statement_timeout = '60min'" -c "select * from public.refresh_nar_ai_feat(null, 365)"
+          echo "refresh $((SECONDS - T0)) 秒"
+      - name: check
+        continue-on-error: true
+        run: python -X utf8 tests/ai_feat_check.py --dsn "postgresql://postgres:$LOCAL_PGPASSWORD@localhost:5432/postgres"
+      - name: dump features
+        run: |
+          set -o pipefail
+          export PGPASSWORD="$LOCAL_PGPASSWORD"
+          mkdir -p out
+          psql -v ON_ERROR_STOP=1 -X -c "\copy (select * from public.nar_ai_feat_run) to 'out/feat_${{ matrix.v }}.csv' with (format csv, header)"
+          ls -l out
+      - name: stop local postgres
+        run: docker rm -f feat || true
+      - name: fit and predict test year
+        run: python -X utf8 cloud/research_ai_baba.py fit --feat out/feat_${{ matrix.v }}.csv --out out/pred_${{ matrix.v }}.parquet
+      - name: seal outputs
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          set -o pipefail
+          gzip -6 out/feat_${{ matrix.v }}.csv
+          mkdir -p pred feat
+          mv out/pred_${{ matrix.v }}.parquet pred/
+          if [ -f out/match.tsv ]; then mv out/match.tsv pred/; fi
+          mv out/feat_${{ matrix.v }}.csv.gz feat/
+          bash ops/artifact_seal.sh seal pred sealed_pred/pred_${{ matrix.v }}.tar.gz.enc
+          bash ops/artifact_seal.sh seal feat sealed_feat/feat_${{ matrix.v }}.tar.gz.enc
+      - uses: actions/upload-artifact@v7
+        with:
+          name: research-ai-baba-pred-${{ matrix.v }}
+          path: sealed_pred/
+          retention-days: 3
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: research-ai-baba-feat-${{ matrix.v }}
+          path: sealed_feat/
+          retention-days: 1
+          if-no-files-found: error
+
+  compare:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: install packages
+        run: pip install -q "pg8000>=1.30" "pandas>=2.2" "pyarrow==25.0.1" "numpy<2"
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: research-ai-baba-pred-*
+          merge-multiple: true
+          path: pred/
+      - name: unseal
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: bash ops/artifact_seal.sh unseal pred && ls -l pred
+      - name: compare
+        run: |
+          mkdir -p res
+          python -X utf8 cloud/research_ai_baba.py compare --a pred/pred_A.parquet --b pred/pred_B.parquet \
+            --match pred/match.tsv --out res/RESULT_ai_baba.md \
+            --meta "run ${{ github.run_number }}(id ${{ github.run_id }})・commit ${{ github.sha }}"
+          cat res/RESULT_ai_baba.md
+      - uses: actions/upload-artifact@v7
+        with:
+          name: research-ai-baba-result
+          path: res/
+          retention-days: 14
