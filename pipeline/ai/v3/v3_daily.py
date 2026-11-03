@@ -46,6 +46,7 @@ STAMP_SQ = '+並び読みの前日分(当日の 8 列を空にして前日の木
 SQ_TAG = '決め63 前日版の並び読み'
 STAMP_CAP = '+勝つ率の守り(勝つ率 ≦ 3 着内の率)'  # 決め 67-2(全部の段の後・守りを通した日)
 CAP_TAG = '決め67-2 勝つ率の守り'  # p1cap.TAG と同じ字
+STAMP_G68 = '+枠の内外の有利の直し(場 × 枠の前 56 日 + 同じ開催の前の日まで・前の日を含まない)'  # 決め 68(前日版の並び読みの後・勝つ率の守りの前)
 
 
 def log(*a):
@@ -74,6 +75,11 @@ def build_rows(csv_path, day, src, stamp=STAMP):
             meta['aw60_n'] = int(g.aw60_n.max())
         if 'sq_u' in g.columns and g.sq_u.notna().any():  # 前日版の並び読み(決め 63)を足したレース = 元の率は p3p_sq0・p1_sq0
             meta['sq63'] = SQ_TAG
+        if 'g68_a' in g.columns and g.g68_a.notna().all():  # 枠の内外の有利の直し(決め 68)を足したレース = 元の率は p3p_g0・p1_g0(次の日からの窓の元)
+            import gate68_live  # 記録の字 = gate68_live.tag()(暗号化した定数)
+            meta['g68'] = {'tag': gate68_live.tag(), 'lag': 1, 'a': {str(int(r.umaban)): round(float(r.g68_a), 4) for r in g.itertuples()},
+                           'p0': {str(int(r.umaban)): round(float(r.p3p_g0), 6) for r in g.itertuples()},
+                           'q0': {str(int(r.umaban)): round(float(r.p1_g0), 6) for r in g.itertuples()}}
         if 'p1_cap0' in g.columns:  # 勝つ率の守り(決め 67-2)を通したレース = 元の勝つ率は p1_cap0・動かした頭数
             meta['p1cap'] = CAP_TAG
             meta['p1cap_n'] = int((g.p1 != g.p1_cap0).sum())
@@ -296,6 +302,14 @@ def main():
                 nsq = seqpre_live.apply_csv_pre(SQ, csv_path, log=log)
         except Exception as e:  # noqa: BLE001
             log('前日版の並び読み 失敗(前の段のまま)', type(e).__name__, str(e)[:200])
+    ng = 0
+    if b12 and nt and nsq:  # 枠の内外の有利の直し(決め 68・研究 nankan-ai-v3 gate68_judge.py・ユーザー採用 2026-11-03 = 前日版にも §8 の条件で入れる): 前日版の並び読みの後・
+        #   勝つ率の守りの前。前 56 日の朝の行(meta.g68.p0 か runners の p3)と nar_runs の結果から場 × 枠の a(前の日を含まない)。失敗しても前の段のまま
+        try:
+            import gate68_live
+            ng = gate68_live.apply_csv_pre(gate68_live.load(day, 'morning', log=log), csv_path, log=log)
+        except Exception as e:  # noqa: BLE001
+            log('枠の内外の有利の直し 失敗(前の段のまま)', type(e).__name__, str(e)[:200])
     ncap = None
     try:  # 勝つ率 ≦ 3 着内の率 の守り(決め 67-2・研究 nankan-ai-v3 correct67_2_guard.py・ユーザー承認 2026-11-01): 全部の段の後
         import p1cap
@@ -313,8 +327,8 @@ def main():
     import c67_cancel
     c67 = c67_cancel.c67_tag() if ver == '南関 第21版 前日版' else None  # 決め 67-1(砂替えと取りやめの直し・直した重み)
     if c67:
-        ver = '南関 第22版 前日版'
-    rows = build_rows(csv_path, day, src, ver + ' = ' + ((STAMP12 + (STAMP_DEB if nd else '') + (STAMP_TPL if nt else '') + (STAMP_AW if naw else '') + (STAMP_SQ if nsq else '') + (STAMP_CAP if ncap is not None else '')) if b12 else (STAMP11 if bundle else STAMP)))
+        ver = '南関 第23版 前日版' if ng else '南関 第22版 前日版'  # 第23版 = 第22版 + 枠の内外の有利の直し(決め 68)
+    rows = build_rows(csv_path, day, src, ver + ' = ' + ((STAMP12 + (STAMP_DEB if nd else '') + (STAMP_TPL if nt else '') + (STAMP_AW if naw else '') + (STAMP_SQ if nsq else '') + (STAMP_G68 if ng else '') + (STAMP_CAP if ncap is not None else '')) if b12 else (STAMP11 if bundle else STAMP)))
     for r in rows if c67 else ():
         r['meta']['c67'] = c67
     if notes:

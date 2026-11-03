@@ -51,6 +51,7 @@ SEQ2 = None  # 並び読み(決め 24・seq2_live.load の戻り)。live() が�
 TPLM = None  # 全馬の短評の層(決め 30・tanpyo_live.load の戻り)。live() が mdir/tanpyo から読む。無ければ足さない
 F3M, F3W = None, None  # 平らな模型 F3 の混ぜ(決め 49・f3_live.load の戻りと混ぜの重み)。live() が mdir/f3 から読む。無ければ足さない
 AW = None  # 併せ馬の相手(決め 60・awase_live.load の戻り = (track, race_no, 馬番) → (res, mar))。live() がその日の nar_kb_works から読む。無ければ足さない
+G68 = None  # 枠の内外の有利の直し(決め 68・gate68_live.load の戻り = 場 × 枠の a)。live() が便の始めに DB の前 56 日の直前の行と結果から作る。無ければ足さない
 PREB = {}  # (場, R) → {馬番: (p1, p3′)} = F3 の混ぜの前の直前版(買いの模型 決め38-1 はこの率で学んだので、買いにはこれを渡す)
 DAY_MIN = 30      # 当日版の印は発走 30 分前から出す(体重はもう出ている・ユーザー 2026-10-01)
 DAY_LAST_MIN = 16  # 発走 15 分前を過ぎた印は DB のトリガーが捨てるので、その手前まで
@@ -288,6 +289,20 @@ def day_marks(Bk, odds, w, going, dm, day):
                 used.append('aw60')
         except Exception as e:  # noqa: BLE001  層が落ちても前の段の印は出す
             log('併せの相手の層 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
+    g68m = None
+    if G68 is not None:
+        try:  # 枠の内外の有利の直し(決め 68・研究 nankan-ai-v3 gate68_judge.py・ユーザー採用 2026-11-03): 最後の割り直しの後・勝つ率の守りの前。
+            #   p3′ = sig(logit p3′ + a)(合計 3 に割り直さない)・p1 = p1 × e^a を合計 1 に。直しの前の率は meta.g68.p0・q0(次の日からの窓の元)
+            import gate68_live
+            nums = b.umaban.astype(int).to_numpy()
+            a_ = gate68_live.race_a(G68, Bk.track.iloc[0], nums)
+            if a_ is not None:
+                p1_0, p3_0 = np.asarray(p1, float), np.asarray(p3p, float)
+                p1, p3p = gate68_live.shift(p1_0, p3_0, a_)
+                g68m = gate68_live.meta(G68, Bk.track.iloc[0], nums, a_, p1_0, p3_0)
+                used.append('g68')
+        except Exception as e:  # noqa: BLE001  直しが落ちても前の段の印は出す
+            log('枠の内外の有利の直し 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
     ncap = 0
     try:  # 勝つ率 ≦ 3 着内の率 の守り(決め 67-2・研究 nankan-ai-v3 correct67_2_guard.py・ユーザー承認 2026-11-01): 全部の段の後
         import p1cap
@@ -304,6 +319,7 @@ def day_marks(Bk, odds, w, going, dm, day):
     stamp += ' + 短評の層' if 'tpl' in used else ''
     stamp += ' + F3 の混ぜ' if 'f3' in used else ''
     stamp += ' + 併せの相手' if 'aw60' in used else ''
+    stamp += ' + 枠の内外の有利の直し' if 'g68' in used else ''
     stamp += ' + 勝つ率の守り' if 'p1cap' in used else ''
     day8 = 'tpl' in used and getattr(sys.modules.get('tanpyo_live'), 'LAST_VER', None) == 'day8'
     # 第19版 = その日に相手の行のある馬がいれば層で動かないレースも同じ名前(前日版の名前と同じく日の単位)。F3 の混ぜまで = 第18版(決め 51 の重み・c8901ae〜)
@@ -317,6 +333,8 @@ def day_marks(Bk, odds, w, going, dm, day):
     if c67 and ver == '南関 第21版':
         ver = '南関 第22版'
         stamp += ' + 砂替えと取りやめの直し'
+    if ver == '南関 第22版' and 'g68' in used:  # 第23版 = 第22版 + 枠の内外の有利の直し(決め 68)
+        ver = '南関 第23版'
     stamp = f'{ver} 直前版 = {stamp}'
     d = pd.DataFrame({'num': b.umaban.astype(int).to_numpy(), 'p1': p1, 'p3': p3p, 'p3_raw': p3})
     d = d.sort_values(['p3', 'p1', 'num'], ascending=[False, False, True], kind='mergesort').reset_index(drop=True)
@@ -342,8 +360,10 @@ def day_marks(Bk, odds, w, going, dm, day):
     if 'p1cap' in used:
         meta['p1cap'] = sys.modules['p1cap'].TAG
         meta['p1cap_n'] = ncap  # 勝つ率を動かした頭数
-    if c67 and ver == '南関 第22版':
+    if c67 and ver in ('南関 第22版', '南関 第23版'):
         meta['c67'] = c67
+    if g68m is not None:
+        meta['g68'] = g68m
     return {'track': tr, 'race_date': day, 'race_no': rno, 'marks': marks, 'meta': meta}
 
 
@@ -747,6 +767,13 @@ def live(day, base_csv, mdir, write, until):
     except Exception as e:  # noqa: BLE001
         AW = None
         log('併せの相手の層 読めない(足さない)', type(e).__name__, str(e)[:200])
+    global G68
+    try:  # 枠の内外の有利の直し(決め 68): 前 56 日の直前の行(meta.g68.p0 か runners の p3)と nar_runs の結果から場 × 枠の a。前の日の結果がそろわない場は前日版と同じ窓
+        import gate68_live
+        G68 = gate68_live.load(day, 'last', log=log)
+    except Exception as e:  # noqa: BLE001
+        G68 = None
+        log('枠の内外の有利の直し 読めない(足さない)', type(e).__name__, str(e)[:200])
     global NEW
     try:  # 決め 38-1: 直前版の勝つ率で学んだ買いの模型(mdir/buy38_new.json・種 3 本)。無ければ全部 v31
         NEW = load_new(mdir)
@@ -824,6 +851,9 @@ def live(day, base_csv, mdir, write, until):
                         took = write_day(row, day) if write else 'dry'
                         n_day += 1
                         pb = PREB.get((tr, rno)) if row['meta'].get('f3') else None  # F3 を混ぜた行は、買いには混ぜの前の率(決め 49 は予想だけ)
+                        g0 = row['meta'].get('g68') if pb is None else None  # 枠の直し(決め 68)も予想だけ = F3 の無い行の買いには直しの前の率
+                        if g0:
+                            pb = {int(n): (g0['q0'][n], g0['p0'][n]) for n in g0['p0']}
                         DAYP[(tr, rno)] = {'p': {int(x['num']): ((round(float(pb[int(x['num'])][0]), 4), round(float(pb[int(x['num'])][1]), 4)) if pb else
                                                                  (float(x['p1']), float(x['p3']))) for x in row['meta']['runners']},
                                            'meta': {**{k: row['meta'][k] for k in ('p1f', 'tpl', 'sitb') if k in row['meta']},
