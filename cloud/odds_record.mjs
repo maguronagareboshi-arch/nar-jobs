@@ -29,7 +29,7 @@ const ymd = (d) => d.toISOString().slice(0, 10);
 const addDays = (s, n) => { const d = new Date(s + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() + n); return ymd(d); };
 const today = ymd(jstNow());
 const stamp = Date.now();
-const FROM = opt('--from', addDays(today, -2));
+let FROM = opt('--from', addDays(today, -2));
 const TO = opt('--to', today);
 const LIB = opt('--lib', `https://yukochi.com/viewer-data/odds-forecast/odds-final.mjs?v=${stamp}`);
 const MODEL = opt('--model', `https://yukochi.com/viewer-data/odds-forecast/model.json?v=${stamp}`);
@@ -79,6 +79,13 @@ try {
   model = JSON.parse(await fetchText(MODEL));
   if (!model || typeof model !== 'object') throw new Error('空');
 } catch (e) { die('model が取れない: ' + e.message); }
+// 11/4 本番の模型を 28 特徴へ切り替えた。⛔それより前の日は前の模型の行を残す(作り直すと前の模型の記録が消える)。--force で外す
+const N28_FROM = '2026-11-04';
+if (Array.isArray(model.feats) && model.feats.length === 28 && FROM < N28_FROM && !FORCE) {
+  console.log(`from=${FROM} → ${N28_FROM}(28 特徴の模型は ${N28_FROM} から。前の日は前の模型の行を残す)`);
+  FROM = N28_FROM;
+  if (FROM > TO) { console.log('作り直す日なし'); process.exit(0); }
+}
 const { judgeRace, recordRows, postMinOf, REC_COLS, modelLabel, recordPopRows, POP_COLS } = lib;
 // 並走の模型(取れなければ並走だけ止める= 既存の記録は今まで通り)
 let model24 = null;

@@ -33,5 +33,5 @@ jobs:
           TO: ${{ inputs.to }}
         run: |
           mkdir -p out
-          node cloud/odds_record.mjs --from "$FROM" --to "$TO" --lib "$LIB" --model cloud/odds_combo28_model.json --dry-run --out out/rec.json
+          node cloud/odds_record.mjs --from "$FROM" --to "$TO" --lib "$LIB" --model cloud/odds_combo28_model.json --dry-run --force --out out/rec.json
           node tests/odds_record_n28_match.mjs out/rec.json "$FROM" "$TO"
