@@ -1,0 +1,55 @@
+# 研究用・1 回きり。馬場差の前の出し方(classfirst)と今の出し方(projhalf)を全 14 場で組み、
+# 本番 DB の nar_runs で次走の先着を比べる(2026-11-03・cloud/research_baba_retest.py)。
+# ⛔読み取りだけ(baba_hist.py --dry-run・REST の単純 select)。公開バケットにも DB にも書かない。結果は artifact。
+name: research-baba-retest
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    strategy:
+      fail-fast: false
+      matrix:
+        baseline: [classfirst, projhalf]
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install numpy==1.26.4 pandas==2.2.3
+      - name: baba all venues
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/baba_hist.py --dry-run --rebuild-all --baseline ${{ matrix.baseline }} --out out/${{ matrix.baseline }}
+      - uses: actions/upload-artifact@v7
+        with:
+          name: baba-${{ matrix.baseline }}
+          path: out/
+  retest:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install numpy==1.26.4 pandas==2.2.3
+      - uses: actions/download-artifact@v7
+        with:
+          pattern: baba-*
+          merge-multiple: true
+          path: out/
+      - name: retest
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/research_baba_retest.py --old out/classfirst --new out/projhalf --out out/RESULT_baba_retest.md
+      - uses: actions/upload-artifact@v7
+        with:
+          name: baba-retest
+          path: out/
