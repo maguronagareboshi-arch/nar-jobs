@@ -126,14 +126,14 @@ jobs:
             echo "- 2022-11-01 以降の行数 $N2211"
             echo "- サイトの馬場差の行数 $(wc -l < out/site_baba.tsv)"
             echo
-            echo "## 場×年 baba_diff_d と p1_tza の非空率"
+            echo "## 場×年 baba_diff_d と prev_time_za の非空率"
             echo
-            echo "| 場 | 年 | 行数 | baba_diff_d 非空率 | p1_tza 非空率 |"
+            echo "| 場 | 年 | 行数 | baba_diff_d 非空率 | prev_time_za 非空率 |"
             echo "|---|---|---|---|---|"
             psql -X -v ON_ERROR_STOP=1 -At -F '|' -c "
               select track, extract(year from race_date)::int, count(*),
                      round(avg((baba_diff_d is not null)::int)::numeric, 3),
-                     round(avg((p1_tza is not null)::int)::numeric, 3)
+                     round(avg((prev_time_za is not null)::int)::numeric, 3)
               from public.nar_ai_feat_run group by 1, 2 order by 1, 2" | sed 's/^/| /; s/$/ |/'
           } > "$S"
           cat "$S"
