@@ -1,0 +1,27 @@
+# 研究用・1 回きり。レース画面の持ちタイム表(各馬の最速)の並びが着順にどれだけ近いかと、何を足すと近くなるか
+# (2026-11-04・cloud/research_mochi_check.py)。⛔読み取りだけ(REST の単純 select と公開バケットの json)。結果は artifact。
+name: research-mochi-check
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install numpy==1.26.4 pandas==2.2.3
+      - name: mochi check
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/research_mochi_check.py --out out/RESULT_mochi_time_check.md
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: mochi-check
+          path: out/
