@@ -344,8 +344,8 @@ begin
     (left(lpad(r.post_time, 4, '0'), 2))::real as hasso_hour,
     extract(month from u.race_date)::real   as race_month,
     extract(year  from u.race_date)::int    as yr,
-    (case when coalesce(u.finish_note, '') ~ '取消|除外' then 1 else 0 end)::real as scratched,   -- 11/3 監査 #41: 取消・除外だけ(中止・失格・降着は走った)
-    h.sire, h.broodmare_sire, null::text as owner, h.breeder,   -- 11/3 監査 #34: 今の馬主で昔の走りを束ねない(走った時点の馬主は DB に無い)= 馬主の材料は空。研究便 research-ai-featfix で差なし
+    (case when coalesce(u.finish_note, '') <> '' then 1 else 0 end)::real as scratched,
+    h.sire, h.broodmare_sire, h.owner, h.breeder,
     kb.first3f as kb_f3, kb.avg_f as kb_avgf, (kb.umaban is not null) as kb_row,
     nullif(btrim(coalesce(kb.gear, '')), '')       as kb_gear,
     nullif(btrim(coalesce(kb.start_note, '')), '') as kb_note
