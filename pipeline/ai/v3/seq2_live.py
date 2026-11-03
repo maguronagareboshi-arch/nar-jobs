@@ -23,9 +23,6 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
-import sys  # noqa: E402
-sys.path.insert(0, str(Path(__file__).resolve().parent))
-import c67_cancel  # noqa: E402  決め 67-1 取りやめのレースを落とす
 
 SEQ2 = Path(os.environ.get('V3_SEQ2', 'C:/Users/kouki/nankan_ai/v3/seq2_prod'))
 OFFICIAL = Path(os.environ.get('V3_OFFICIAL', 'C:/Users/kouki/nankan_ai/v3/official'))
@@ -55,9 +52,9 @@ def corner_pos(order, num):
 def runs_all(off=None):
     """研究 seq2_day.runs_all と同じ(公式の表の置き場だけ引数)。"""
     off = Path(off or OFFICIAL)
-    r = c67_cancel.drop(pd.read_parquet(off / 'runs.parquet'))  # 決め 67-1
+    r = pd.read_parquet(off / 'runs.parquet')
     r = r[r.track != '帯広ば'].copy()
-    ra = c67_cancel.drop(pd.read_parquet(off / 'races.parquet'))
+    ra = pd.read_parquet(off / 'races.parquet')
     ra = ra[ra.track != '帯広ば'].drop_duplicates(['track', 'race_date', 'race_no'])
     ra['prize1'] = ra.prize_yen.map(lambda a: float(a[0]) if a is not None and len(a) else np.nan)
 
