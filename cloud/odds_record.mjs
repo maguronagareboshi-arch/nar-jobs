@@ -10,6 +10,9 @@
 // 並走 2 本目(2026-10-21)= 馬単1着・3連単1着の 4 特徴も足した 28 特徴の模型(cloud/odds_combo28_model.json・公開しない)。
 //   shadow.rows の mi で分ける(models に 'combo28:<built_on>')・k は shadow.k28・人気の順ごとは shadow.pop28。⛔N24 の行・k は今まで通り。
 //   片方が失敗したら、その模型の行だけ前の shadow のまま残す(もう片方は書く)。--combo28-model で差し替え・--no-shadow28 で止める
+// 11/4 本番の模型が 28 特徴(N28)になった= 本番の判定にも組の刻み(comboDay)を渡す(lib.judgeRace の cf・k)。
+//   ⛔組の刻みが読めない日は何も書かずに 1(欠けた材料の数字で記録を上書きしない)。
+//   並走(N24・N28)は既定で止めた(--shadow で今まで通り回す・前の shadow はそのまま残る)。
 // env: SUPABASE_URL / SUPABASE_SERVICE_KEY(書く)。読むだけの試験は NAR_ANON_KEY でもよい。
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -79,7 +82,8 @@ try {
 const { judgeRace, recordRows, postMinOf, REC_COLS, modelLabel, recordPopRows, POP_COLS } = lib;
 // 並走の模型(取れなければ並走だけ止める= 既存の記録は今まで通り)
 let model24 = null;
-let shadowOn = !flag('--no-shadow');
+const prod28 = Array.isArray(model.feats) && model.feats.length === 28;
+let shadowOn = flag('--shadow') && !flag('--no-shadow');
 if (shadowOn) {
   try {
     for (const n of ['featuresAt', 'predictQ', 'obsOf', 'hobsOf', 'finOf', 'pickAt', 'checkHits', 'meanDev', 'REC_T', 'REC_MAX']) if (!(n in lib)) throw new Error('lib に ' + n + ' が無い');
@@ -89,7 +93,7 @@ if (shadowOn) {
 }
 // 並走 2 本目(28 特徴)。⛔N24 とは別に止まる
 let model28 = null;
-let on28 = !flag('--no-shadow') && !flag('--no-shadow28');
+let on28 = flag('--shadow') && !flag('--no-shadow') && !flag('--no-shadow28');
 if (on28) {
   try {
     for (const n of ['featuresAt', 'predictQ', 'obsOf', 'hobsOf', 'finOf', 'pickAt', 'checkHits', 'meanDev', 'REC_T', 'REC_MAX']) if (!(n in lib)) throw new Error('lib に ' + n + ' が無い');
@@ -150,17 +154,23 @@ for (const d of days) {
   const items = [];
   const mi = miOf(d);
   const pmBy = new Map();
-  for (const [k, ticks] of by) {
-    const [track, no] = k.split('|');
+  for (const [k] of by) {
     const pt = post.get(k);
     const hhmm = pt && /^\d{4}$/.test(String(pt)) ? String(pt).slice(0, 2) + ':' + String(pt).slice(2) : null;
-    const pm = postMinOf(hhmm);
-    pmBy.set(k, pm);
-    items.push({ d, tr: track, j: pm === null ? { st: 'no_post' } : judgeRace(model, ticks, pm, track, Number(no), d, adj), mi });
+    pmBy.set(k, postMinOf(hhmm));
+  }
+  // 11/4 本番が 28 特徴= 組の刻みを先に読む(読めなければ何も書かずに 1)
+  let cf = null;
+  if (prod28) {
+    try { cf = await comboDay(get, d, [...pmBy].map(([k, pm]) => ({ k, pm })), [lib.REC_T]); } catch (e) { die(`${d} の組の刻みが読めない: ` + e.message); }
+  }
+  for (const [k, ticks] of by) {
+    const [track, no] = k.split('|');
+    const pm = pmBy.get(k);
+    items.push({ d, tr: track, j: pm === null ? { st: 'no_post' } : judgeRace(model, ticks, pm, track, Number(no), d, adj, cf, k), mi });
   }
   // 並走(24 特徴)。⛔失敗しても既存の行には触らない(並走だけ止めて前の shadow を残す)
-  let cf = null;
-  if (shadowOn || on28) {
+  if (!cf && (shadowOn || on28)) {
     try { cf = await comboDay(get, d, [...pmBy].map(([k, pm]) => ({ k, pm })), [lib.REC_T]); } catch (e) {
       console.log(`並走なし(${d} の組の刻みで失敗)= 前の shadow を残す: ` + e.message); shadowOn = false; on28 = false;
     }

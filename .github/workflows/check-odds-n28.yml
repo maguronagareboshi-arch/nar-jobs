@@ -1,0 +1,37 @@
+# 11/4 最終予測の模型を N28(28 特徴)へ切り替える前の照合便(手動)。⛔本番 DB は読むだけ(odds_record.mjs は --dry-run)。
+# lib= 切替後の odds-final.mjs(nar-viewer の wip 枝の試しページの /viewer-data/odds-forecast/odds-final.mjs)。
+# model= cloud/odds_combo28_model.json(画面の model.json と同じ中身)。
+# 本番の行の日ごとの数が、今の nar_meta の shadow の N28 行と同じなら ok。
+name: check-odds-n28
+on:
+  workflow_dispatch:
+    inputs:
+      lib:
+        description: 'odds-final.mjs の URL(試しページ)'
+        required: true
+      from:
+        default: '2026-10-28'
+      to:
+        default: '2026-11-02'
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: odds record dry run n28
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          LIB: ${{ inputs.lib }}
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+        run: |
+          mkdir -p out
+          node cloud/odds_record.mjs --from "$FROM" --to "$TO" --lib "$LIB" --model cloud/odds_combo28_model.json --dry-run --out out/rec.json
+          node tests/odds_record_n28_match.mjs out/rec.json "$FROM" "$TO"
