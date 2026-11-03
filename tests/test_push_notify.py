@@ -68,3 +68,31 @@ class T(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Fresh(unittest.TestCase):
+    """11/3 監査 #28: updated_at は取り込みのたびに動く= 新しい組は登録時に分かっていた出走を下見(送らない)。"""
+    RUNS = [run("アイウ", "2026-09-27", 5, "2026-09-26T05:30:00+00:00"),
+            run("アイウ", "2026-09-28", 3, "2026-09-26T05:30:00+00:00")]
+
+    def test_new_pair_is_silent(self):
+        last_ok = dt.datetime(2026, 9, 26, 2, 0, tzinfo=UTC)              # 購読(03:00)より前の成功
+        got = P.pick([sub()], [{"device_id": DEV, "horse_id": "nar:アイウ"}], self.RUNS, NOW, last_ok)
+        self.assertEqual([(x["kind"], x["silent"]) for x in got], [("A", True), ("A", True)])
+
+    def test_old_pair_is_sent(self):
+        last_ok = dt.datetime(2026, 9, 26, 5, 0, tzinfo=UTC)              # 購読より後の成功= 下見は済み
+        got = P.pick([sub()], [{"device_id": DEV, "horse_id": "nar:アイウ"}], self.RUNS, NOW, last_ok)
+        self.assertEqual([(x["kind"], x["silent"]) for x in got], [("A", False), ("A", False)])
+
+    def test_horse_added_later_uses_added_at(self):
+        last_ok = dt.datetime(2026, 9, 26, 5, 0, tzinfo=UTC)
+        h = {"device_id": DEV, "horse_id": "nar:アイウ", "added_at": "2026-09-26T05:20:00+00:00"}   # 前回の成功の後に登録
+        got = P.pick([sub()], [h], self.RUNS, NOW, last_ok)
+        self.assertTrue(all(x["silent"] for x in got) and len(got) == 2)
+
+    def test_silent_not_capped(self):
+        last_ok = dt.datetime(2026, 9, 26, 2, 0, tzinfo=UTC)
+        runs = [run("アイウ", "2026-09-27", n, "2026-09-26T05:30:00+00:00") for n in range(1, 13)]
+        got = P.pick([sub()], [{"device_id": DEV, "horse_id": "nar:アイウ"}], runs, NOW, last_ok)
+        self.assertEqual(len(got), 12)

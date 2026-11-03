@@ -6,7 +6,9 @@
   python cloud/push_notify.py --fixture F.json … DB の代わりに {"subs":[],"horses":[],"runs":[]} を読む(手元の確認用)
 
 種類:
-  A= 出走が決まった(未来のレースの出走が取り込まれた)。⛔初回の洪水よけ= その出走の取り込み時刻(updated_at)が購読の作成より後
+  A= 出走が決まった(未来のレースの出走が取り込まれた)。⛔初回の洪水よけ= その出走の取り込み時刻(updated_at)が
+     購読の作成・馬の登録(added_at)の遅い方より後。updated_at は取り込みのたびに動くので、前回の成功(heartbeat)の後に
+     できた組(端末×馬)は、その時点で分かっている先の出走を送らずに nar_push_sent へ入れる(下見= silent)。11/3 監査 #28
   C= 結果が出た(その馬の着順が入った)。⛔確定(updated_at)が購読の作成より後 かつ 直近 3 時間
 突き合わせ: nar_push_subs.device_id × nar_viewer_horses(device_id, horse_id)。horse_id は nar:/name:(馬名)・
   nary:<生年>:(馬名+生年)・narb:<生年月日>:(馬名+生年月日)。kochi:/kb: は馬名が無いので送らない。
@@ -39,6 +41,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 JST = dt.timezone(dt.timedelta(hours=9))
 TITLE = "地方競馬ウォッチ"                 # 見出しは sw.js が固定で出す(ここは payload の控え)
 C_WINDOW = dt.timedelta(hours=3)
+FRESH_MARGIN = dt.timedelta(minutes=10)    # 下見の幅= 前回の成功の 10 分前から(1 回の実行より長く)
 PER_DEVICE_MAX = 10                        # 1 回の実行で 1 端末に送る上限(残りは次の回)
 FAIL_MAX = 5
 PUSH_TIMEOUT = 10   # 秒。送信先 1 件の待ち上限(pywebpush 2.x の webpush(timeout=))
@@ -120,9 +123,10 @@ def latest_per_device(subs):
     return [s for s in subs if id(s) in keep]
 
 
-def pick(subs, horses, runs, now):
+def pick(subs, horses, runs, now, last_ok=None):
     """対象を出す(DB 不要・純粋関数)。→ [{device_id, horse_id, race_id, kind, name, track, race_date, race_no, finish}]
-    1 端末に複数の購読があっても一番新しい 1 本(latest_per_device)だけで want と基準時刻を決める。"""
+    1 端末に複数の購読があっても一番新しい 1 本(latest_per_device)だけで want と基準時刻を決める。
+    last_ok(前回の成功)より後にできた組の A は silent=True(記録だけ・送らない・上限に数えない)。"""
     today = now.astimezone(JST).date().isoformat()
     by_dev = {}
     for s in latest_per_device(subs):
@@ -140,7 +144,9 @@ def pick(subs, horses, runs, now):
         key = parse_horse_id(h.get("horse_id"))
         if not key:
             continue
-        base = by_dev[dev]
+        ha = parse_ts(h.get("added_at"))
+        base = {k: (max(v, ha) if v and ha else v) for k, v in by_dev[dev].items()}
+        fresh = bool(last_ok and base["a"] and base["a"] > last_ok - FRESH_MARGIN)   # 前回の読み込み〜成功の間の登録も拾う
         for r in runs:
             if not run_matches(r, key):
                 continue
@@ -150,10 +156,13 @@ def pick(subs, horses, runs, now):
             up = parse_ts(r.get("updated_at"))
             note = str(r.get("finish_note") or "")
             rdate = str(r["race_date"])[:10]
-            kind = None
+            kind, silent = None, False
             if r.get("finish") is None:
-                if base["a"] and rdate >= today and up and up > base["a"] and not any(x in note for x in NO_RUN_NOTES):
-                    kind = "A"
+                if base["a"] and rdate >= today and not any(x in note for x in NO_RUN_NOTES):
+                    if fresh:
+                        kind, silent = "A", True          # 登録の時点で分かっていた出走= 下見
+                    elif up and up > base["a"]:
+                        kind = "A"
             elif base["c"] and up and up > base["c"] and now - up <= C_WINDOW:
                 kind = "C"
             if not kind or (dev, h["horse_id"], rid, kind) in seen:
@@ -161,10 +170,13 @@ def pick(subs, horses, runs, now):
             seen.add((dev, h["horse_id"], rid, kind))
             out.append({"device_id": dev, "horse_id": h["horse_id"], "race_id": rid, "kind": kind,
                         "name": key[0], "track": r["track"], "race_date": rdate, "race_no": int(r["race_no"]),
-                        "finish": r.get("finish")})
+                        "finish": r.get("finish"), "silent": silent})
     out.sort(key=lambda x: (x["device_id"], x["race_date"], x["track"], x["race_no"], x["kind"], x["horse_id"]))
     capped, n = [], {}
     for x in out:
+        if x["silent"]:
+            capped.append(x)
+            continue
         n[x["device_id"]] = n.get(x["device_id"], 0) + 1
         if n[x["device_id"]] <= PER_DEVICE_MAX:
             capped.append(x)
@@ -399,7 +411,7 @@ def load(rest, now):
     devs = sorted({s["device_id"] for s in subs})
     horses = []
     for i in range(0, len(devs), 50):
-        horses += rest.get_all("nar_viewer_horses", "device_id.asc,horse_id.asc", select="device_id,horse_id", device_id=pg_in(devs[i:i + 50]))
+        horses += rest.get_all("nar_viewer_horses", "device_id.asc,horse_id.asc", select="device_id,horse_id,added_at", device_id=pg_in(devs[i:i + 50]))
     names = sorted({k[0] for k in (parse_horse_id(h["horse_id"]) for h in horses) if k})
     since = (now.astimezone(JST).date() - dt.timedelta(days=1)).isoformat()   # ⛔区画を絞る(昨日以降だけ)
     runs = []
@@ -435,6 +447,8 @@ def send_all(rest, subs, targets, vapid_private, vapid_sub):
     for x in targets:
         if not claim(rest, x):
             skipped += 1
+            continue
+        if x.get("silent"):                                # 下見= 記録だけ
             continue
         payload = json.dumps(message(x), ensure_ascii=False)
         for s in by_dev.get(x["device_id"], []):
@@ -503,13 +517,23 @@ def main():
                 log("nar_push_subs が無い(migration 前)= 何もしない"); return 0
             raise
 
-    targets = [x for x in pick(subs, horses, runs, now) if x["kind"] in horse_kinds]
+    last_ok = None
+    if "A" in horse_kinds and not a.fixture:
+        import beat
+        hbrows = beat.rows()
+        if hbrows is None:                                     # 読めないまま送ると新しい組へ洪水が出る
+            log("nar_job_heartbeat が読めない= 止める"); return 1
+        last_ok = parse_ts((hbrows.get("push_notify") or {}).get("last_ok"))
+    elif a.fixture:
+        last_ok = parse_ts(fx.get("last_ok"))
+    targets = [x for x in pick(subs, horses, runs, now, last_ok) if x["kind"] in horse_kinds]
     targets += pick_people(subs, people, pruns, graded, now, extra)
-    cnt = {k: sum(1 for x in targets if x["kind"] == k) for k in "ACPRG"}
+    cnt = {k: sum(1 for x in targets if x["kind"] == k and not x.get("silent")) for k in "ACPRG"}
+    cnt["下見"] = sum(1 for x in targets if x.get("silent"))
     log("購読 %d・端末 %d・馬 %d・出走 %d・slot %s(足す %s)→ 対象 %s" % (
         len(subs), len({s["device_id"] for s in subs}), len(horses), len(runs), a.slot, "".join(sorted(extra)) or "-",
         " ".join("%s=%d" % kv for kv in cnt.items())))
-    for x in targets[:20]:
+    for x in [x for x in targets if not x.get("silent")][:20]:
         log("  %s %s" % (x["kind"], message(x)["body"]))
     if not a.apply:
         log("(dry-run: 書かない・送らない)")
