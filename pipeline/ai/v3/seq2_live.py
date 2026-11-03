@@ -23,6 +23,9 @@ from pathlib import Path
 
 import numpy as np
 import pandas as pd
+import sys  # noqa: E402
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import c67_cancel  # noqa: E402  決め 67-1 取りやめのレースを落とす
 
 SEQ2 = Path(os.environ.get('V3_SEQ2', 'C:/Users/kouki/nankan_ai/v3/seq2_prod'))
 OFFICIAL = Path(os.environ.get('V3_OFFICIAL', 'C:/Users/kouki/nankan_ai/v3/official'))
@@ -49,12 +52,15 @@ def corner_pos(order, num):
         return np.nan
 
 
-def runs_all(off=None):
-    """研究 seq2_day.runs_all と同じ(公式の表の置き場だけ引数)。"""
+def runs_all(off=None, cancel=False):
+    """研究 seq2_day.runs_all と同じ(公式の表の置き場だけ引数)。
+    cancel = 決め 67-1 の取りやめのレースを落とす(南関の並び読み = prep だけ True。他場版 k29_seq_live も呼ぶので既定は今のまま)。"""
     off = Path(off or OFFICIAL)
     r = pd.read_parquet(off / 'runs.parquet')
-    r = r[r.track != '帯広ば'].copy()
     ra = pd.read_parquet(off / 'races.parquet')
+    if cancel:
+        r, ra = c67_cancel.drop(r), c67_cancel.drop(ra)
+    r = r[r.track != '帯広ば'].copy()
     ra = ra[ra.track != '帯広ば'].drop_duplicates(['track', 'race_date', 'race_no'])
     ra['prize1'] = ra.prize_yen.map(lambda a: float(a[0]) if a is not None and len(a) else np.nan)
 
@@ -291,7 +297,7 @@ def prep(day, U, out, log=_log):
     mj = SEQ2 / 'seq2_prod.json'
     ext = mj.exists() and int(json.loads(mj.read_text(encoding='utf-8')).get('fh', 48)) == 48 + 15  # 決め 25 の版
     canc = pd.read_parquet(OFFICIAL / 'runs.parquet', columns=['track', 'race_date', 'horse_name', 'age', 'finish_note']) if ext else None
-    d = runs_all(OFFICIAL)
+    d = runs_all(OFFICIAL, cancel=True)  # 決め 67-1
     last = d[(d.jra == 0) & d.finish.notna()].race_date.max()
     log('並び読み 公式の表', len(d), '走・中央', int((d.jra == 1).sum()), '・着順のある最後の日', last)
     T, hist, ctx, bwp = build(d, U, std, [day], ext=ext, canc=canc)

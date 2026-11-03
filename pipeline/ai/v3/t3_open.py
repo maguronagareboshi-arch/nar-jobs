@@ -30,6 +30,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from day2_features import KEY, NANKAN, RACE_COLS, build  # noqa: E402
 from day5_forward_features import _align  # noqa: E402
 from load_outcomes import load_archive  # noqa: E402
+import c67_cancel  # noqa: E402  決め 67-1 取りやめのレースを落とす
 from t3_day2_features import finish_table, targets3  # noqa: E402
 from t3_eval import (OLD, V3, VERSIONS, VNAME, breakdown, check_grid, compare_old, fmt, load_old, predict,  # noqa: E402
                      race_table, summary, train)
@@ -68,7 +69,7 @@ def sources(part):
         d['race_no'] = d.race_no.astype(int)
         if d.race_date.max() >= hi:
             raise SystemExit(f'⛔ {name} に {hi} 以降の行がある')
-        out[name] = d
+        out[name] = c67_cancel.drop(d) if name in ('runs', 'races') else d  # 決め 67-1
     runs = out['runs'].rename(columns={'runner_number': 'umaban'})
     runs['umaban'] = runs.umaban.astype(int)
     runs['finish_note'] = runs.finish_note.replace(NOTE)
