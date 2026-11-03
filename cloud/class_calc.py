@@ -3291,13 +3291,20 @@ def hist_calc(kind, ctx, r, b, d, track):
     """1 頭 × 走の日 d の calc(apply の 1 頭ぶんと同じ手順・きょう → d)。出さない馬は None"""
     runs = r.get("runs") or []
     lag = ctx["lag"]
+    # 11/3 監査: 生年の無い馬は今の年齢 r["age"] しか無い= 過去の日 x の年齢は年の差だけ戻す(年齢は 1/1 に 1 つ上がる)
+    now_y = dt.date.today().year
+    try:
+        age_now = int(r.get("age")) if r.get("age") is not None else None
+    except (TypeError, ValueError):
+        age_now = None
+    age_back = (lambda x: (x.year - b.year) if b else (age_now - (now_y - x.year) if age_now is not None else None))
     if kind == "kochi":
-        c = kochi_calc(ctx["lines"], runs, d, lag, lambda x: (x.year - b.year) if b else r.get("age"))
+        c = kochi_calc(ctx["lines"], runs, d, lag, age_back)
         if last_local(runs, d) != "高知":
             c["note"] = ("転入前の場の走を高知の換算率で数えた値(要領 4.(2))" + ("・" + c["note"] if c.get("note") else ""))
         return c
     if kind == "obihiro":
-        return obi_calc(ctx["lines"], runs, d, lag, lambda x: (x.year - b.year) if b else r.get("age"), ctx["races"])
+        return obi_calc(ctx["lines"], runs, d, lag, age_back, ctx["races"])
     if not b:
         return None
     age_at = (lambda x: x.year - b.year)

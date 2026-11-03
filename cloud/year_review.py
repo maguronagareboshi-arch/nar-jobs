@@ -25,6 +25,9 @@ TRACKS = [("帯広ば", "obihiro", "帯広"), ("門別", "monbetsu", "門別"), 
           ("金沢", "kanazawa", "金沢"), ("笠松", "kasamatsu", "笠松"), ("名古屋", "nagoya", "名古屋"), ("園田", "sonoda", "園田"),
           ("姫路", "himeji", "姫路"), ("高知", "kochi", "高知"), ("佐賀", "saga", "佐賀")]
 SLUG = {t: s for t, s, _n in TRACKS}
+# 騎手の地区(略称の同名を分ける鍵)。南関・東海・兵庫・岩手は場をまたいで乗るので 1 つにまとめる
+JOCKEY_AREA = {"浦和": "南関", "船橋": "南関", "大井": "南関", "川崎": "南関", "名古屋": "東海", "笠松": "東海",
+               "園田": "兵庫", "姫路": "兵庫", "盛岡": "岩手", "水沢": "岩手"}
 KINDS = ["win", "place", "wakuren", "wakutan", "quinella", "exacta", "wide", "trio", "trifecta"]   # 重勝式は入れない
 TOPN = 5
 TIE_CAP = 30   # 同数を全部出すときの上限(超えたら打ち切って印 cut を付ける)
@@ -160,15 +163,17 @@ def build(runs, races, pays, asof, now):
     hl, hcut = top_with_ties(hw, lambda h: h[0])
     horses = [{"name": h[0], "birth": h[1] or None, "w": n, "by": dict(hv[h].most_common())} for h, n in hl]
     # 最多勝の騎手
+    # 11/3 監査: 騎手名は略称= 地区の違う同じ略称の別人を足していた→ (略称, 地区) で数える(出す形は今まで通り name だけ)
     jw, jv = Counter(), defaultdict(Counter)
     for r in wins:
         j = (r.get("jockey") or "").strip()
         if not j:
             continue
-        jw[j] += 1
-        jv[j][SLUG[r["track"]]] += 1
-    jl, jcut = top_with_ties(jw, lambda j: j)
-    jockeys = [{"name": j, "w": n, "by": dict(jv[j].most_common())} for j, n in jl]
+        k = (j, JOCKEY_AREA.get(r["track"], r["track"]))
+        jw[k] += 1
+        jv[k][SLUG[r["track"]]] += 1
+    jl, jcut = top_with_ties(jw, lambda k: k[0])
+    jockeys = [{"name": k[0], "w": n, "by": dict(jv[k].most_common())} for k, n in jl]
     # 最年長の勝ち馬
     def age_of(r):
         a = num(r.get("age"))
