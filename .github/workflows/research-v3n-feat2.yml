@@ -1,0 +1,166 @@
+# 研究用(2026-11-03)。他場版 AI(v3n)段 2 の 1・2= 新しい材料 SQL pipeline/sql/ai_feat_v3n2.sql
+#   (ai_feat_20260908.sql+①馬場差= サイトの値 ②監査 #34 馬主を空 ③監査 #41 取消・除外だけ)を
+#   本番と同じ器(nar-ai-feat.yml の build= 本番から読むだけのダンプ→地元 Postgres→SQL)で全期間流して nar_ai_feat_run を作る。
+# ⛔本番 DB へは `\copy (select …) to` だけ。書き込み・gate・base-v1・heartbeat は無し。
+# ⛔公開 repo= 材料表とサイトの馬場差は共通鍵で封をし、その鍵を公開鍵(research-v3n-baba2 と同じ RSA 4096)で包む。
+name: research-v3n-feat2
+on:
+  push:
+    branches: [research/v3n-feat2-20261103]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      PGHOST: localhost
+      PGPORT: '5432'
+      PGUSER: postgres
+      PGDATABASE: postgres
+      LOCAL_PGPASSWORD: feat        # ⛔このジョブの中だけの Postgres。鍵ではない
+      PUB_B64: LS0tLS1CRUdJTiBQVUJMSUMgS0VZLS0tLS0NCk1JSUNJakFOQmdrcWhraUc5dzBCQVFFRkFBT0NBZzhBTUlJQ0NnS0NBZ0VBbzB3VFIxK1F0TlBNaHh4RWoxNVINCk5zZ1pvQUtwdUw5bTgweVl1cFJzL0ZmRDFPRkxGTWhHNnZLWjdyQjlSUFpxYmo1bGZmajhSNEs4UmRhZVQ2b0oNCjE4Q20xZ1loTXI1N2thR0JyNzBoNVp1ZmRjbHVZZjV4SXdJeUNZamg4eGpCS3h5WGNWQ0tYdVovUDUwWitwQ1MNCklVOGlzbGhqQ1JIMEcrRm9SU1Q3ekM0UTBlM1o3ekV6NzJMa1IrRVppOTdlTGZPVW0vMzVqV3dKRmJZWGxjUzcNCnFITjFiYk9Uak50OWJ2cUFBRXk5dW10TUV2VFljUkg0NXMwamdCMHlrR0RZdm5IZXFXeUNkRHVqUThQRHR5aXQNCnRTcmlWNy81ZEpxdjRZaDZQTUNtamNtUi9hY2VlL0tzQW1BRjBMeUYxRXRSSW8vVzlSUHZRK0lib2lXQVRaQ00NCmtaUk04YkNlbk83WlgvVmtYN0liR2Z3TnhoTTdON0p6RlpETTVmSTNZc2pMaVFjK1pVaGR4aXBVMUJCdHpmdG8NCnplYTNEZHVOTmZKc1lDbkJHcjRaS3hCMHpMMVhPWEwwWFRsZ1pMTWduWXBVTjNUaTN5dk9SSE5Vems2RkllTUoNClA0eUNCYVlhaTFzbkl0d2N6cDNpcDl2RG4rYUJtVEw1dmt6ZHJSTysxbkNxcng1MXBiK2MxRm42TDNXdDN4TFcNClBsL0dselBrMXc2Q2Yyb0RGbkpUdzJSZlV5OUt5dndYZmlPdTU5ZVBUTmVWZk5pbzVqVWpMb1Izd3dmUmYyQVkNCldyN3hrNHQ1TitSUjhodm9ZaUJxVTZNekZaMVVBQzlVTHZqa1FoODQ0K1BWNGRLUFoyOUxwRDVHWFcrQkJrUmYNCjdwVnk2S0haRW5tSUZzTHpINTBpelBrQ0F3RUFBUT09DQotLS0tLUVORCBQVUJMSUMgS0VZLS0tLS0NCg==
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: install packages
+        run: pip install -q "pg8000>=1.30" "pandas>=2.2" "numpy<2"
+
+      - name: start local postgres
+        run: |
+          docker run -d --name feat -e POSTGRES_PASSWORD=feat -p 127.0.0.1:5432:5432 mirror.gcr.io/library/postgres:16             -c work_mem=256MB -c maintenance_work_mem=512MB -c shared_buffers=1GB             -c max_wal_size=4GB -c fsync=off -c synchronous_commit=off -c full_page_writes=off
+          for i in $(seq 1 60); do
+            if pg_isready -h localhost -p 5432 -U postgres -q; then echo "ready ($i)"; break; fi
+            sleep 2
+          done
+          pg_isready -h localhost -p 5432 -U postgres
+          df -h / | tail -n 1
+
+      - name: dump source tables from production (read only)
+        env:
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+          PGSSLMODE: require
+        run: |
+          mkdir -p dump
+          # ⛔列は `pipeline/sql/ai_feat_local_schema.sql` の並びをそのまま書く(select * にしない)=
+          #   本番に列が 1 つ増えた日に地元への読み込みが「extra data after last expected column」で落ちるため。
+          #   ⛔列を増やすときは schema.sql と ここ の両方を同じ並びで直す(§156 F1・2026-09-22 の監査)。
+          psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 \
+            -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X <<'SQL'
+          set statement_timeout = '10min';
+          \copy (select track, race_date, race_no, runner_number, gate, horse_name, sex, age, jockey, trainer, carried_weight, body_weight, body_weight_change, finish, finish_note, time_raw, time_sec, margin, last3f, popularity, updated_at, birth_date, trainer_area, weight_mark from public.nar_runs where (race_date >= '2022-11-01' or track = '高知')) to 'dump/nar_runs.tsv'
+          \copy (select track, race_date, race_no, post_time, race_name, surface, direction, distance_m, weather, going, field_size, condition, prize_yen, race_last4f, race_last3f, furlongs, corners, source, source_snapshot_hash, updated_at, race_kind, cancelled, cancel_note, nankan from public.nar_races where (race_date >= '2022-11-01' or track = '高知')) to 'dump/nar_races.tsv'
+          \copy (select source, item_id, horse_name, display_name, sex, age, birth_date, category, auction_date, round_no, start_price, price, bids, sold, seller, tags, other_n, jbis_id, url, fetched_at, updated_at, runs_after, first_after, sire, dam, buyer from public.auction_sales) to 'dump/auction_sales.tsv'
+          \copy (select horse_name, sex, sire, dam, broodmare_sire, owner, breeder, first_date, last_date, runs, updated_at from public.nar_horses) to 'dump/nar_horses.tsv'
+          \copy (select track, race_date, race_no, umaban, horse_name, kb_race_id, blinker, gear, first3f, avg_f, pace, kimete, start_note, updated_at from public.nar_kb_runs) to 'dump/nar_kb_runs.tsv'
+          \copy (select event_id, horse_name, birth_date, horse_code, jbis_id, track, race_date, race_no, runner_number, event_date, reported_date, stage, event_type, condition_group, race_status, detail, restriction_from, restriction_through, source_kind, source_ref, source_url, source_hash, source_line_hash, match_method, displayable, parser_version, created_at, updated_at, event_key, support_detail, support_condition_group, support_reported_date, support_restriction_from, support_restriction_through, support_source_kind, support_source_ref, support_source_url, racing_ability_lost, condition_term from public.nar_horse_health_events) to 'dump/nar_horse_health_events.tsv'
+          \copy (select penalty_id, track, race_date, race_no, person_kind, person_name, kind, detail, suspension_from, suspension_through, source_url, source_hash, parser_version, created_at, updated_at, horse_name from public.nar_penalties) to 'dump/nar_penalties.tsv'
+          \copy (select track, race_date, race_no, votes, refunds, updated_at from public.nar_sales) to 'dump/nar_sales.tsv'
+          \copy (select key, value, updated_at from public.nar_meta where key = 'noken_index') to 'dump/nar_meta.tsv'
+          \copy (select race_date, track, race_no, umaban, horse_key, horse_name, c1, n1, c2, n2, c3, n3, c4, n4, style, style_p, style_n, first3f, first3f_src, last3f, win_odds_close, src, computed_at from public.nar_run_facts where (race_date >= '2022-11-01' or track = '高知')) to 'dump/nar_run_facts.tsv'
+          SQL
+          ls -l dump | sed -n '2,20p'
+
+      - name: load into local postgres
+        run: |
+          export PGPASSWORD="$LOCAL_PGPASSWORD"
+          psql -v ON_ERROR_STOP=1 -X -f pipeline/sql/ai_feat_local_schema.sql
+          for t in nar_runs nar_races auction_sales nar_horses nar_kb_runs                    nar_horse_health_events nar_penalties nar_sales nar_meta nar_run_facts; do
+            echo "::group::load $t"
+            psql -v ON_ERROR_STOP=1 -X -c "\copy public.$t from 'dump/$t.tsv'"
+            echo "::endgroup::"
+          done
+          psql -v ON_ERROR_STOP=1 -X -c "analyze"
+          psql -X -c "select relname, n_live_tup from pg_stat_user_tables order by n_live_tup desc"
+
+      # サイトの馬場差(公開 JSON baba-hist)= research-ai-baba.yml と同じやり方。表名だけ nar_baba_site
+      - name: load site baba
+        run: |
+          set -o pipefail
+          export PGPASSWORD="$LOCAL_PGPASSWORD"
+          mkdir -p out
+          python -X utf8 cloud/research_ai_baba.py site --out out/site_baba.tsv
+          psql -v ON_ERROR_STOP=1 -X -c "create table public.nar_baba_site (track text, race_date date, d real, d1 real, primary key (track, race_date))"
+          psql -v ON_ERROR_STOP=1 -X -c "\copy public.nar_baba_site from 'out/site_baba.tsv'"
+          psql -v ON_ERROR_STOP=1 -X -c "analyze public.nar_baba_site"
+
+      - name: apply feature sql (local only)
+        run: |
+          export PGPASSWORD="$LOCAL_PGPASSWORD"
+          psql -v ON_ERROR_STOP=1 -X -f pipeline/sql/ai_feat_v3n2.sql
+
+      - name: build features (local only)
+        run: |
+          export PGPASSWORD="$LOCAL_PGPASSWORD"
+          T0=$SECONDS
+          psql -v ON_ERROR_STOP=1 -X -c "set statement_timeout = '60min'" -c "select * from public.refresh_nar_ai_feat(null, 365)"
+          echo "refresh $((SECONDS - T0)) 秒"
+          df -h / | tail -n 1
+
+      - name: check
+        continue-on-error: true
+        run: python -X utf8 tests/ai_feat_check.py --dsn "postgresql://postgres:$LOCAL_PGPASSWORD@localhost:5432/postgres"
+
+      - name: dump features
+        run: |
+          set -o pipefail
+          export PGPASSWORD="$LOCAL_PGPASSWORD"
+          psql -v ON_ERROR_STOP=1 -X -c "\copy (select * from public.nar_ai_feat_run) to 'out/nar_ai_feat_run.csv' with (format csv, header)"
+
+      # 封をしない小さな要約(数だけ)
+      - name: summary
+        run: |
+          set -o pipefail
+          export PGPASSWORD="$LOCAL_PGPASSWORD"
+          mkdir -p summary
+          S=summary/v3n_feat2_summary.md
+          {
+            echo "# research-v3n-feat2 要約(run ${{ github.run_id }}・${{ github.sha }})"
+            echo
+            echo "- 行数 $(psql -X -At -c 'select count(*) from public.nar_ai_feat_run')"
+            echo "- 列数 $(head -n 1 out/nar_ai_feat_run.csv | awk -F, '{print NF}')"
+            echo "- 2022-11-01 以降の行数 $(psql -X -At -c \"select count(*) from public.nar_ai_feat_run where race_date >= '2022-11-01'\")"
+            echo "- サイトの馬場差の行数 $(wc -l < out/site_baba.tsv)"
+            echo
+            echo "## 場×年 baba_diff_d と tza の非空率"
+            echo
+            echo "| 場 | 年 | 行数 | baba_diff_d 非空率 | tza 非空率 |"
+            echo "|---|---|---|---|---|"
+            psql -X -v ON_ERROR_STOP=1 -At -F '|' -c "
+              select track, extract(year from race_date)::int, count(*),
+                     round(avg((baba_diff_d is not null)::int)::numeric, 3),
+                     round(avg((tza is not null)::int)::numeric, 3)
+              from public.nar_ai_feat_run group by 1, 2 order by 1, 2" | sed 's/^/| /; s/$/ |/'
+          } > "$S"
+          cat "$S"
+          gzip -6 out/nar_ai_feat_run.csv
+
+      - name: seal outputs with public key
+        run: |
+          set -euo pipefail
+          mkdir -p sealed
+          printf '%s' "$PUB_B64" | base64 -d > pub.pem
+          openssl rand -hex 32 > k.txt
+          tar -czf - -C out nar_ai_feat_run.csv.gz site_baba.tsv             | openssl enc -aes-256-cbc -pbkdf2 -salt -pass file:k.txt -out sealed/v3n_feat2.tar.gz.k
+          openssl pkeyutl -encrypt -pubin -inkey pub.pem -pkeyopt rsa_padding_mode:oaep -in k.txt -out sealed/key.bin
+          rm -f k.txt
+          ls -l sealed
+      - uses: actions/upload-artifact@v7
+        with:
+          name: research-v3n-feat2-sealed
+          path: sealed/
+          retention-days: 7
+          if-no-files-found: error
+      - uses: actions/upload-artifact@v7
+        with:
+          name: research-v3n-feat2-summary
+          path: summary/
+          retention-days: 7
+          if-no-files-found: error
+
+      - name: stop local postgres
+        if: always()
+        run: docker rm -f feat || true
