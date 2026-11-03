@@ -334,6 +334,16 @@ class Rest:
         qs = "&".join("%s=%s" % (k, urllib.parse.quote(str(v), safe=".,()*:\"")) for k, v in q.items())
         return self.req("%s?%s" % (table, qs)) or []
 
+    def get_all(self, table, order, **q):
+        """1000 行の上限で黙って切れないよう、一意の order で最後まで取る。"""
+        out, off = [], 0
+        while True:
+            got = self.get(table, order=order, limit=1000, offset=off, **q)
+            out += got
+            if len(got) < 1000:
+                return out
+            off += 1000
+
 
 def pg_in(vals):
     return "in.(" + ",".join('"%s"' % str(v).replace('"', '') for v in vals) + ")"
@@ -342,13 +352,13 @@ def pg_in(vals):
 def load_subs(rest):
     """→ subs。want_p/want_g の列がまだ無い(400)ときは今までの形で読み直す(☆の人・重賞は飛ぶ)。"""
     try:
-        return rest.get("nar_push_subs", select="endpoint,device_id,p256dh,auth,want_a,want_c,want_p,want_g,created_at,fail_count",
+        return rest.get_all("nar_push_subs", "endpoint.asc", select="endpoint,device_id,p256dh,auth,want_a,want_c,want_p,want_g,created_at,fail_count",
                         **{"or": "(want_a.is.true,want_c.is.true,want_p.is.true,want_g.is.true)"})
     except urllib.error.HTTPError as e:
         if e.code != 400:
             raise
         log("nar_push_subs に want_p/want_g が無い= ☆の人・重賞は飛ばす")
-    return rest.get("nar_push_subs", select="endpoint,device_id,p256dh,auth,want_a,want_c,created_at,fail_count",
+    return rest.get_all("nar_push_subs", "endpoint.asc", select="endpoint,device_id,p256dh,auth,want_a,want_c,created_at,fail_count",
                     **{"or": "(want_a.is.true,want_c.is.true)"})
 
 
@@ -361,8 +371,8 @@ def load_people(rest, subs, now, kinds):
         try:
             people = []
             for i in range(0, len(devs), 50):
-                people += rest.get("nar_viewer_people", select="device_id,kind,name,venues,any_venue,added_at",
-                                   device_id=pg_in(devs[i:i + 50]), order="device_id,added_at,name")
+                people += rest.get_all("nar_viewer_people", "device_id,kind,name,added_at",
+                                       select="device_id,kind,name,venues,any_venue,added_at", device_id=pg_in(devs[i:i + 50]))
         except urllib.error.HTTPError as e:
             if e.code not in (400, 404):
                 raise
@@ -373,7 +383,8 @@ def load_people(rest, subs, now, kinds):
             for col in ("jockey", "trainer"):
                 names = sorted({p["name"] for p in people if p.get("kind") == col})
                 for i in range(0, len(names), 40):
-                    pruns += rest.get("nar_runs", select="track,race_date,race_no,runner_number,horse_name,jockey,trainer,finish,finish_note",
+                    pruns += rest.get_all("nar_runs", "track.asc,race_no.asc,runner_number.asc",
+                                          select="track,race_date,race_no,runner_number,horse_name,jockey,trainer,finish,finish_note",
                                       **{col: pg_in(names[i:i + 40]), "race_date": "eq." + date})
     if "G" in kinds and any(s.get("want_g") for s in subs):
         graded = rest.get("nar_races", select="track,race_date,race_no,race_name,race_kind,post_time",
@@ -388,12 +399,13 @@ def load(rest, now):
     devs = sorted({s["device_id"] for s in subs})
     horses = []
     for i in range(0, len(devs), 50):
-        horses += rest.get("nar_viewer_horses", select="device_id,horse_id", device_id=pg_in(devs[i:i + 50]))
+        horses += rest.get_all("nar_viewer_horses", "device_id.asc,horse_id.asc", select="device_id,horse_id", device_id=pg_in(devs[i:i + 50]))
     names = sorted({k[0] for k in (parse_horse_id(h["horse_id"]) for h in horses) if k})
     since = (now.astimezone(JST).date() - dt.timedelta(days=1)).isoformat()   # ⛔区画を絞る(昨日以降だけ)
     runs = []
     for i in range(0, len(names), 40):
-        runs += rest.get("nar_runs", select="track,race_date,race_no,horse_name,birth_date,finish,finish_note,updated_at",
+        runs += rest.get_all("nar_runs", "race_date.asc,track.asc,race_no.asc,runner_number.asc",
+                             select="track,race_date,race_no,horse_name,birth_date,finish,finish_note,updated_at",
                          horse_name=pg_in(names[i:i + 40]), race_date="gte." + since)
     return subs, horses, runs
 

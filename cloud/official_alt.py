@@ -243,7 +243,14 @@ def after_zip(url, key, today, zip_down, log=print):
     if not races:
         beat.beat("official_zip", True, "開催なし")
         return
-    runs = _rest(url, key, f"nar_runs?race_date=eq.{d}&select=track,race_no,runner_number,body_weight,finish,finish_note")
+    runs, off = [], 0   # ⛔1 日 1000 行を超える日がある= 一意の並びで最後まで取る(切れると「ZIP が古い」の誤った黄)
+    while True:
+        got = _rest(url, key, f"nar_runs?race_date=eq.{d}&select=track,race_no,runner_number,body_weight,finish,finish_note"
+                              f"&order=track.asc,race_no.asc,runner_number.asc&limit=1000&offset={off}") or []
+        runs += got
+        if len(got) < 1000:
+            break
+        off += 1000
     has_w = {(r["track"], int(r["race_no"])) for r in runs if r.get("body_weight") is not None}
     has_f = {(r["track"], int(r["race_no"])) for r in runs if r.get("finish") is not None}  # ⛔取消の注記は出馬表の段で入るので数えない
     has_p = {(r["track"], int(r["race_no"])) for r in _rest(url, key, f"nar_race_payouts?race_date=eq.{d}&select=track,race_no")}

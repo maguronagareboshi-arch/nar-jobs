@@ -53,7 +53,7 @@ begin
      where r.race_date = d
        and coalesce(btrim(r.cancelled::text), '') = ''
        and r.post_time ~ '^\d{4}$'
-       and r.track <> '帯広'
+       and r.track not like '帯広%'   -- DB の場名は「帯広ば」(監査 11/3)
        and (r.track in ('大井', '川崎', '船橋', '浦和')) = j.nankan
        and d + make_time(substr(r.post_time, 1, 2)::int, substr(r.post_time, 3, 2)::int, 0) > jst + interval '15 minutes';
     continue when left_n = 0;

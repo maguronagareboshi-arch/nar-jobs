@@ -138,6 +138,8 @@ def list_documents(fetch, since, until):
         url = CATEGORY + ("&paged=%d" % page if page > 1 else "")
         body = fetch(url)
         if not body:
+            if page == 1:   # ⛔1 頁目から読めない= 通信の失敗。「0 件」として緑で終えない(監査 11/3・高知を見る見張りは無い)
+                raise RuntimeError("高知の一覧の 1 頁目を読めない: " + url)
             break
         cards = _CARD.findall(body)
         if not cards:

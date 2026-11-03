@@ -451,7 +451,8 @@ jobs:
           fi
           ls -l sealed_v29
       - uses: actions/upload-artifact@v7
-        if: always() && steps.pc.outputs.run == 'yes'
+        # 監査 11/3: 直前の便(v3-gap-live)は名前で拾う= 試しの便からは上げない
+        if: always() && steps.pc.outputs.run == 'yes' && github.ref == 'refs/heads/master' && (github.event_name == 'schedule' || github.event.inputs.write == 'yes')
         with:
           name: v3-gap-base-${{ steps.d.outputs.day }}
           path: sealed_v29/

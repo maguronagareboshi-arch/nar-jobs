@@ -923,10 +923,8 @@ HEI_FROM = '2026-10-04'
 def record(days):
     """nar_v3_gap の DAY:場:R の候補 × nar_race_payouts の単勝 → 日ごとの点数・的中・払戻を nar_v3_gap 'record' に貯める。
     払戻がまだ無いレースは数えない(次の日の便で作り直す)。1 点 100 円。"""
-    try:
-        cur = (_get(f'{GAP}?key=eq.{REC_KEY}&select=value') or [{}])[0].get('value') or {}
-    except Exception:  # noqa: BLE001
-        cur = {}
+    # ⛔読めなかったときに空から始めると、直近 3 日分だけの通算で上書きしてしまう(監査 11/3)= 止める
+    cur = (_get(f'{GAP}?key=eq.{REC_KEY}&select=value') or [{}])[0].get('value') or {}
     dd = dict(cur.get('days') or {})
     # 丙の数えが無い日(足す前に作った日)も作り直す = 公開を始めた 10/4 からの通算を出す
     days = sorted(set(days) | {d for d, v in dd.items() if d >= HEI_FROM and 'hei' not in (v or {})})

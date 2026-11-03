@@ -36,6 +36,10 @@ jobs:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
           MODE: ${{ github.event.inputs.mode }}
+          IN_FROM: ${{ github.event.inputs.from }}
+          IN_TO: ${{ github.event.inputs.to }}
         run: |
+          # 監査 11/3: 入力をシェルに直に埋め込まない= 環境変数で受けて日付の形だけ通す
+          for v in "$IN_FROM" "$IN_TO"; do case "$v" in ''|[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) echo "::error::日付は YYYY-MM-DD"; exit 1;; esac; done
           if [ "$MODE" = "apply" ]; then APPLY="--apply"; else APPLY=""; fi
-          python cloud/run_facts.py $APPLY --from "${{ github.event.inputs.from }}" --to "${{ github.event.inputs.to }}"
+          python cloud/run_facts.py $APPLY --from "$IN_FROM" --to "$IN_TO"

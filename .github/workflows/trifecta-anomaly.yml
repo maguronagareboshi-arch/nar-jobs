@@ -39,11 +39,20 @@ jobs:
           else
             echo "差分なし"
           fi
+      # 監査 11/3: 公開 repo の成果物は誰でも落とせる= ほかの便と同じく暗号化してから上げる(戻し方は ops/artifact_seal.sh の頭)
+      - name: seal private race list
+        if: always()
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          [ -f trifecta_anomaly_private.csv ] || { echo "一覧なし"; exit 0; }
+          mkdir -p stage sealed && mv trifecta_anomaly_private.csv stage/
+          bash ops/artifact_seal.sh seal stage sealed/trifecta-anomaly-private.tar.gz.enc
       - name: upload private race list
         if: always()
         uses: actions/upload-artifact@v7
         with:
           name: trifecta-anomaly-private
-          path: trifecta_anomaly_private.csv
+          path: sealed/
           if-no-files-found: ignore
           retention-days: 3

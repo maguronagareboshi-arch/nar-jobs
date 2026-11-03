@@ -435,7 +435,8 @@ jobs:
       # §100 馬場傾向(時計=baba_diff・前後=1角順位×着順ρ・内外=枠×着順ρ)。朝の便は 90 日組み直し、日中の便は当日だけ
       - name: baba trend
         id: am_baba_trend
-        if: env.MODE != 'monthly'
+        # 監査 11/3: 前の段が 1 つ落ちても飛ばさない(飛ぶと朝の生存記録が ok のまま・やり直しも起きない)
+        if: "!cancelled() && env.MODE != 'monthly'"
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -555,12 +556,14 @@ jobs:
       #   明日ぶん(karte facts 段の 17:00 以降)が焼けた**後**でないと型が空になる。
       - name: tenkai (morning + 17:07)
         id: am_tenkai
+        if: "!cancelled()"
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
           PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
           PGSSLMODE: require
         run: |
+          set -o pipefail
           H=$(TZ=Asia/Tokyo date +%H%M)
           if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ] || { [ $((10#$H)) -ge 1700 ] && [ $((10#$H)) -lt 1730 ]; }; then python cloud/tenkai.py --apply; else echo "tenkai は朝と 17:07 の便だけ(JST $H)=スキップ"; fi
           if [ -n "$PACE_SINCE" ] || [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then psql -h aws-0-ap-northeast-1.pooler.supabase.com -p 5432 -U postgres.qgsnsdjvzzeazbazjlwa -d postgres -v ON_ERROR_STOP=1 -X -f pipeline/sql/nar_race_pace_20260920.sql | tail -n 2 && python cloud/tenkai.py --apply --pace-log ${PACE_SINCE:+--since "$PACE_SINCE"}; else echo "pace log は朝の便だけ(JST $H)=スキップ"; fi

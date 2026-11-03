@@ -100,6 +100,9 @@ class FakeRest:
     def err(self, code):
         return urllib.error.HTTPError("u", code, "x", {}, io.BytesIO(b"{}"))
 
+    def get_all(self, table, order, **q):   # 本物は 1000 行ずつ最後まで送る。偽物は 1 回で全部返す
+        return self.get(table, **q)
+
     def get(self, table, **q):
         self.calls.append(table)
         if table == "nar_push_subs":

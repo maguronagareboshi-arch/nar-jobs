@@ -31,7 +31,7 @@ def main():
     key = os.environ['SUPABASE_SERVICE_KEY']
     for i in range(0, len(rows), BATCH):
         st, msg = upsert(url, key, 'nar_kd_pedigree', 'ketto', rows[i:i + BATCH])
-        if st >= 300:
+        if st >= 300 or st == 0:   # st=0 = 通信が 3 回切れた(load_nar_official.upsert)
             print(f'upsert 失敗 {i:,} 行目から {st} {msg}'); return 1
         if (i // BATCH) % 50 == 0:
             print(f'  {i + len(rows[i:i + BATCH]):,} 行済み')

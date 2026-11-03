@@ -3097,7 +3097,24 @@ def fill_births(births, codes, runs, tag=""):
 
 
 # ---------------------------------------------------------------- DB
+# ⛔ページ送りは並びが一意でないと境目で行が抜け・重なる。order= の無い呼び出しには表の主キーで並べる
+UNIQUE_ORDER = {"nar_runs": "track,race_date,race_no,runner_number", "nar_races": "track,race_date,race_no",
+                T_CODES: "code", T_PRIZE: "code", "nar_jra_horses": "kb_horse_id",
+                "nar_jra_runs": "kb_horse_id,race_date,place,race_no", "nar_jra_race_prize": "kb_race_id",
+                "nar_own_runs": "track,race_date,race_no,umaban", "nar_kb_runs": "track,race_date,race_no,umaban",
+                "nar_meta": "key"}
+
+
+def with_order(path):
+    if "order=" in path:
+        return path
+    table = path.split("?", 1)[0].rsplit("/", 1)[-1]
+    o = UNIQUE_ORDER.get(table)
+    return path + ("&" if "?" in path else "?") + "order=" + o if o else path
+
+
 def sb_all(url, key, path, page=1000):
+    path = with_order(path)
     out, lo = [], 0
     while True:
         raw = http_get(f"{url}/rest/v1/{path}", {"apikey": key, "Authorization": f"Bearer {key}",

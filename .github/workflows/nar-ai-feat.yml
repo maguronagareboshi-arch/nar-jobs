@@ -19,6 +19,8 @@
 # §243 学習の範囲= 2022-11 以降+高知 2014〜(10 年分の楽天由来は表示用・学習には入れない= ユーザー決定 9/22)
 # ⛔cron はまだ付けない= 所要を実測してから Fable が決める(workflow_dispatch だけ)。
 name: nar-ai-feat
+# 監査 11/3: 下流(nar-ai-last・nar-ai-v3n)が試しの便の模型を拾わないよう、本番の便は題に「本番」を入れる
+run-name: "nar-ai-feat${{ (github.event_name == 'schedule' || github.event.inputs.write == 'yes') && github.ref == 'refs/heads/master' && ' 本番' || ' 試し' }}"
 
 on:
   schedule:

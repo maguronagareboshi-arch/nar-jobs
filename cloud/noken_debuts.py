@@ -93,15 +93,18 @@ def main():
     horses = (got[0]["value"].get("horses") if got else None) or {}
     log(f"能検索引 {len(horses):,}頭")
 
-    # 今日+明日の出馬表(⛔1日1000行上限に静かに当たらないよう日別に引く=#92。1日は最大でも約1,200行
-    #  だが、必要列だけ+レース番号順で引き、1000行ちょうどなら警告を出して落とす)
+    # 今日+明日の出馬表(⛔1日1000行上限に静かに当たらないよう日別に引く=#92。1日は最大で約1,200行
+    #  あるので、一意の並びで 1000 行ずつ最後まで取る)
     cand = []            # (date, track, race_no, horse_name)
     for d in dates:
-        rs = rows(base, key, "/rest/v1/nar_runs?select=track,race_no,horse_name"
-                             f"&race_date=eq.{d}&order=track.asc,race_no.asc,runner_number.asc&limit=1000")
-        if len(rs) >= 1000:
-            log(f"⚠ {d} の出馬表が1000行上限に当たった疑い(この日は落とす=嘘の一覧を書かない)")
-            continue
+        rs, off = [], 0
+        while True:
+            got = rows(base, key, "/rest/v1/nar_runs?select=track,race_no,horse_name"
+                                  f"&race_date=eq.{d}&order=track.asc,race_no.asc,runner_number.asc&limit=1000&offset={off}")
+            rs += got
+            if len(got) < 1000:
+                break
+            off += 1000
         for r in rs:
             nm = str(r.get("horse_name") or "")
             if nm and nm in horses:

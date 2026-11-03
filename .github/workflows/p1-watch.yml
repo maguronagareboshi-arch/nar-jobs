@@ -22,9 +22,12 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          IN_DATE: ${{ github.event.inputs.date }}
         run: |
           set +e
-          python3 cloud/p1_watch.py ${{ github.event.inputs.date }}
+          # 監査 11/3: 入力をシェルに直に埋め込まない= 環境変数で受けて日付の形だけ通す
+          case "$IN_DATE" in ''|[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]) ;; *) echo "::error::日付は YYYY-MM-DD"; exit 1;; esac
+          python3 cloud/p1_watch.py $IN_DATE
           rc=$?
           if [ "$rc" = "0" ]; then
             python3 cloud/beat.py p1_watch ok

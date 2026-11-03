@@ -184,13 +184,15 @@ jobs:
           END=$(( END_DEF < END_21 ? END_DEF : END_21 ))
           if [ -n "$UNTIL" ]; then END=$(TZ=Asia/Tokyo date -d "$TODAY $UNTIL" +%s); fi
           if [ "${{ github.event.inputs.mode }}" = "once" ]; then END=$((START + 1)); fi
-          n=0
+          n=0; nf=0
           while [ "$n" -eq 0 ] || [ "$(date +%s)" -lt "$END" ]; do
             n=$((n+1))
             echo "::group::round $n $(TZ=Asia/Tokyo date +%T)"
-            python -X utf8 -W ignore pipeline/ai/banei/banei_v3.py predict "$DAY" models $W || echo "round $n: 失敗(周は続ける)"
+            python -X utf8 -W ignore pipeline/ai/banei/banei_v3.py predict "$DAY" models $W || { rc=$?; [ "$rc" -eq 2 ] || nf=$((nf+1)); echo "round $n: 失敗 rc=$rc(周は続ける)"; }
             echo "::endgroup::"
             [ "$(date +%s)" -lt "$END" ] || break
             sleep 600
           done
-          echo "周 $n 回"
+          echo "周 $n 回・失敗 $nf 回"
+          # 監査 11/3: 全部の周が例外で落ちた日は赤(rc=2 は「入力が無いので書かない」の決めた止まり= 数えない)
+          if [ "$nf" -ge "$n" ]; then echo "::error::ばんえい直前の周が全部失敗"; exit 1; fi

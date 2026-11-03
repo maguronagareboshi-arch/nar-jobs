@@ -38,7 +38,7 @@ def left_races(races, day, now, nankan):
     for r in races or []:
         pt = str(r.get("post_time") or "")
         tr = r.get("track")
-        if str(r.get("cancelled") or "").strip() or not re.fullmatch(r"\d{4}", pt) or tr == "帯広":
+        if str(r.get("cancelled") or "").strip() or not re.fullmatch(r"\d{4}", pt) or tr.startswith("帯広"):   # DB の場名は「帯広ば」
             continue
         if (tr in NANKAN) != nankan:
             continue

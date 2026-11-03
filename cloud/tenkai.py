@@ -143,9 +143,23 @@ def req(base, key, path, method="GET", body=None):
 N_REQ = [0]
 
 
+# order= の無い呼び出しには表の主キーで並べる(監査 11/3: 並び無しのページ送りが 4 か所あった)
+UNIQUE_ORDER = {"nar_runs": "track,race_date,race_no,runner_number", "nar_races": "track,race_date,race_no",
+                "nar_own_runs": "track,race_date,race_no,umaban", "nar_kb_runs": "track,race_date,race_no,umaban",
+                "nar_meta": "key"}
+
+
+def with_order(path):
+    if "order=" in path:
+        return path
+    o = UNIQUE_ORDER.get(path.split("?", 1)[0].rsplit("/", 1)[-1])
+    return path + "&order=" + o if o else path
+
+
 def rows_all(base, key, path):
     """⛔offset で送るので `order=` は**一意**にすること(2026-09-05 実測: race_date だけで並べると
     39,475 行中 1,951 行が重複し、同じだけ抜ける。しかも引くたびに中身が変わる)。"""
+    path = with_order(path)
     out, off = [], 0
     while True:
         N_REQ[0] += 1
@@ -515,7 +529,9 @@ def day_block(base, key, date):
     # §238a2 型は派生表 nar_run_facts(その日の行・発走前 as-of)から読む。⛔ここで出し直さない
     style_of_row = fetch_style(base, key, date)
     # §99b テン。⛔前半3F のある6場の日だけ旧DBへ行く(他9場は今までどおり通信ゼロ)
-    ten = fetch_ten(base, key, {(t, d) for t, d in need if t in TEN_TRACKS} | ten_year_days(base, key, date))
+    # ⛔物差し(std・band)は前日までの走だけ= 夕方に作り直しても当日に終わったレースの前半3F を入れない(監査 11/3)
+    ten = fetch_ten(base, key, {(t, d) for t, d in need if t in TEN_TRACKS} | ten_year_days(base, key, date),
+                    std_before=date)
     out, k_ratios = build_races(races, runs, by_horse, style_of_row, ten, pmodel, dten)
     n_ten = sum(1 for r in out.values() for h in r["h"].values() if h.get("ten") is not None)
     n_pace = sum(1 for r in out.values() if r.get("pace"))

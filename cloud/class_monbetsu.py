@@ -1519,6 +1519,7 @@ def timed_main(args):
         return 0                                       # 番人が止めた= heartbeat は guard_beat が fail で書いた
     if rc == 1:
         print("::warning::門別の級別表 投入失敗(前回の表を残す)", flush=True)
+        return say(False, f"投入失敗(見込み={exp}・前回の表を残す)")   # 監査 11/3: 失敗を ok と書かない
     else:
         print(f"::warning::門別の級別表 新しい回はまだ取れていない(見込み {exp}・前回の表を残す)", flush=True)
     if state == "overdue":

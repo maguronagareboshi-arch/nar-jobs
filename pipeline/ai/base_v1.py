@@ -254,7 +254,8 @@ def fit(feat_path, model_path, variant='last', wf_out=None):
            'trained_to': str(tr['race_date'].max().date()), 'n_rows': int(len(tr)), 'cols': cols,
            'rounds': [ROUNDS_BIN, ROUNDS_RANK], 'variant': variant, 'dropped': dropped,
            'binary': bst_b.model_to_string(), 'rank': bst_r.model_to_string(),
-           'rounds_win': ROUNDS_WIN, 'win': bst_w.model_to_string(), 'cal_win': cal}
+           'rounds_win': ROUNDS_WIN, 'win': bst_w.model_to_string(), 'cal_win': cal,
+           'baba_tracks': sorted(baba_tracks(tr))}   # §143b 監査 11/3: 当日の表には着順が無い= 学習の時に数えて持たせる
     Path(model_path).write_text(json.dumps(out), encoding='utf-8')
     log('saved', model_path, round(Path(model_path).stat().st_size / 1e6, 1), 'MB')
 
@@ -323,7 +324,8 @@ def build_marks(df, day, m, bst_b, bst_r, timing, bst_w=None):
     if bst_w is not None:                                          # §224a 1 着の見込み(較正前・レース内で割る前)
         d['pw'] = bst_w.predict(d[m['cols']])
     pw_all = []
-    need = baba_tracks(df) if timing == 'last' else set()          # §143b 馬場が普段から入る場(1 回だけ数える)
+    # §143b 馬場が普段から入る場。⛔当日の表には着順が無く数えられない= 学習の時に数えた一覧を使う(古い模型は今までどおり)
+    need = set(m.get('baba_tracks') or baba_tracks(df)) if timing == 'last' else set()
     rows, skipped = [], {}
     for rid, g in d.groupby('rid', sort=False):
         if rid.split('|')[0] in NANKAN | BANEI:                  # ⛔write_marks は v3 系と共用= 絞り込みはここだけ

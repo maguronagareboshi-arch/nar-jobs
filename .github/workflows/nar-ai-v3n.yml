@@ -103,7 +103,7 @@ jobs:
           set -o pipefail
           ID="$RUN_FROM"
           if [ -z "$ID" ]; then
-            for L in $(gh run list -R "$GITHUB_REPOSITORY" -w nar-ai-feat.yml -s success -L 10 --json databaseId --jq '.[].databaseId'); do
+            for L in $(gh run list -R "$GITHUB_REPOSITORY" -w nar-ai-feat.yml -s success -L 20 --json databaseId,event,headBranch,displayTitle --jq '.[] | select((.headBranch == "master") and (.event == "schedule" or (.displayTitle | test("本番")))) | .databaseId'); do
               N=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$L/artifacts" --jq '[.artifacts[] | select(.name | startswith("nar-ai-feat-") and (endswith("dumps") | not))] | length')
               if [ "$N" -gt 0 ]; then ID=$L; break; fi
               echo "run $L は材料表の成果物 0 本= 飛ばす"

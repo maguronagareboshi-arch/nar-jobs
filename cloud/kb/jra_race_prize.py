@@ -6,7 +6,7 @@
   python cloud/kb/jra_race_prize.py --days 400 --max 60          # 既定= dry-run(取って数えるだけ)
   python cloud/kb/jra_race_prize.py --days 400 --max 60 --apply  # 表へ upsert
 """
-import argparse, datetime as dt, html as H, json, os, re, sys, time, urllib.parse, urllib.request
+import argparse, datetime as dt, html as H, json, os, re, sys, time, urllib.error, urllib.parse, urllib.request
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), ".."))
 from class_calc import sb_all, upsert, http_get  # noqa: E402
@@ -52,11 +52,18 @@ def kd_to_page(k, wait):
     m = re.fullmatch(r"kd(\d{4})(\d{2})(\d{2})(\d{2})\d{2}\d{2}(\d{2})", k)
     y, mo, d, pl, rr = m.groups()
     want = f"{int(y)}年{int(mo)}月{int(d)}日{JRA_PLACE.get(pl, '?')}{int(rr)}R"
+    bad = None
     for pid, v in kd_candidates(k):
         try:
             req = urllib.request.Request(URL + pid, headers={"User-Agent": "Mozilla/5.0"})
             h = urllib.request.urlopen(req, timeout=60).read().decode("utf-8", "ignore")
-        except Exception:
+        except urllib.error.HTTPError as e:
+            if e.code != 404:
+                bad = e
+            time.sleep(wait)
+            continue
+        except Exception as e:
+            bad = e
             time.sleep(wait)
             continue
         time.sleep(wait)
@@ -64,6 +71,8 @@ def kd_to_page(k, wait):
         if t and want in t.group(1):
             _KB_VENUE[pl] = v
             return pid, h
+    if bad is not None:   # ⛔通信の失敗を「頁なし」として保存しない(保存すると二度と取り直さない)
+        raise bad
     return None, None
 
 
