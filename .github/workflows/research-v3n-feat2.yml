@@ -117,12 +117,13 @@ jobs:
           export PGPASSWORD="$LOCAL_PGPASSWORD"
           mkdir -p summary
           S=summary/v3n_feat2_summary.md
+          N2211=$(psql -X -At -c "select count(*) from public.nar_ai_feat_run where race_date >= '2022-11-01'")
           {
             echo "# research-v3n-feat2 要約(run ${{ github.run_id }}・${{ github.sha }})"
             echo
             echo "- 行数 $(psql -X -At -c 'select count(*) from public.nar_ai_feat_run')"
             echo "- 列数 $(head -n 1 out/nar_ai_feat_run.csv | awk -F, '{print NF}')"
-            echo "- 2022-11-01 以降の行数 $(psql -X -At -c \"select count(*) from public.nar_ai_feat_run where race_date >= '2022-11-01'\")"
+            echo "- 2022-11-01 以降の行数 $N2211"
             echo "- サイトの馬場差の行数 $(wc -l < out/site_baba.tsv)"
             echo
             echo "## 場×年 baba_diff_d と tza の非空率"
