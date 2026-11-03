@@ -90,7 +90,7 @@ jobs:
         run: |
           # 9/25 実例: 遅れた予備 schedule は build を飛ばした success(成果物 0)になる= 成果物のある最新の便まで戻る
           R=""
-          for L in $(gh run list -R "$GITHUB_REPOSITORY" -w nar-ai-feat.yml -s success -L 20 --json databaseId,createdAt,event,headBranch,displayTitle --jq '.[] | select((.headBranch == "master") and (.event == "schedule" or (.displayTitle | test("本番")))) | "\(.databaseId)|\(.createdAt)|\(.event)"'); do
+          for L in $(gh run list -R "$GITHUB_REPOSITORY" -w nar-ai-feat.yml -s success -L 20 --json databaseId,createdAt,event,headBranch,displayTitle --jq '.[] | select((.headBranch == "master") and (.event == "schedule" or (.displayTitle | test("本番")) or .displayTitle == "nar-ai-feat")) | "\(.databaseId)|\(.createdAt)|\(.event)"'); do
             N=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/${L%%|*}/artifacts" --jq .total_count)
             if [ "$N" -gt 0 ]; then R=$(echo "$L" | tr '|' ' '); break; fi
             echo "run ${L%%|*} は成果物 0 本= 飛ばす"
