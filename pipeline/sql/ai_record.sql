@@ -140,7 +140,7 @@ select od.model, od.track, od.race_date, od.race_no, od.timing, od.num, od.pr,
 from od
 join public.nar_runs u on (u.track, u.race_date, u.race_no, u.runner_number) = (od.track, od.race_date, od.race_no, od.num)
 left join public.nar_race_payouts rp on (rp.track, rp.race_date, rp.race_no) = (od.track, od.race_date, od.race_no)
-where coalesce(u.finish_note, '') !~ '取消|除外' and u.finish is not null
+where coalesce(u.finish_note, '') !~ '取消|除外'   -- 11/3 監査 #41: 中止・失格は印の成績と同じく「買って外れた」(finish is not null で落とさない)
   and exists (select 1 from public.nar_runs w
               where w.track = od.track and w.race_date = od.race_date and w.race_no = od.race_no and w.finish = 1)
   and (od.race_date < (now() at time zone 'Asia/Tokyo')::date or rp.payouts is not null);
