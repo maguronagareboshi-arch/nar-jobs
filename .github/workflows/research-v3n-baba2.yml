@@ -1,0 +1,50 @@
+# 研究用・1 回きり(2026-11-03)。run 41559705370 の材料表 A・B(SUPABASE_SERVICE_KEY で封)を、便の中で開いて
+# ランダムな共通鍵で封し直し、その共通鍵を入力の公開鍵(RSA)で包んで出す。手元の秘密鍵でだけ開ける。
+# ⛔本番の秘密はログにも artifact にも出さない。本番 DB には触らない。
+name: research-v3n-baba2
+on:
+  workflow_dispatch:
+    inputs:
+      pubkey_b64:
+        description: RSA public key PEM (base64)
+        required: true
+permissions:
+  contents: read
+  actions: read
+jobs:
+  rewrap:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        v: [A, B]
+    steps:
+      - uses: actions/download-artifact@v7
+        with:
+          name: research-ai-baba-feat-${{ matrix.v }}
+          path: in/
+          run-id: 41559705370
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+      - name: rewrap with random key
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          PUB_B64: ${{ inputs.pubkey_b64 }}
+        run: |
+          set -euo pipefail
+          mkdir -p out
+          printf '%s' "$PUB_B64" | base64 -d > pub.pem
+          ARTIFACT_KEY=$(printf '%s' "$SUPABASE_SERVICE_KEY" | sha256sum | cut -c1-64)
+          export ARTIFACT_KEY
+          openssl rand -hex 32 > k.txt
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:ARTIFACT_KEY -in in/feat_${{ matrix.v }}.tar.gz.enc \
+            | openssl enc -aes-256-cbc -pbkdf2 -salt -pass file:k.txt -out out/feat_${{ matrix.v }}.tar.gz.k
+          openssl pkeyutl -encrypt -pubin -inkey pub.pem -pkeyopt rsa_padding_mode:oaep -in k.txt -out out/key_${{ matrix.v }}.bin
+          rm -f k.txt
+          ls -l out
+      - uses: actions/upload-artifact@v7
+        with:
+          name: research-v3n-baba2-${{ matrix.v }}
+          path: out/
+          retention-days: 2
+          if-no-files-found: error
