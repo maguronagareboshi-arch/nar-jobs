@@ -51,7 +51,7 @@ P0 = TQ0 - dtm.timedelta(days=365)                # (c) のふだんに要る (b
 H_START = P0 - dtm.timedelta(days=1095 + 30)      # その日の 3 年の段の窓
 TRACKS = list(baba.TRACK2PREFIX)                  # ばんえいは入っていない
 NANKAN = ("浦和", "船橋", "大井", "川崎")
-BASE, NONE_BAND = baba.DEFAULT_BASELINE, "drop"
+BASE, NONE_BAND = "classfirst", "drop"  # 10/26 の研究は classfirst で測った(既定が変わっても結果を変えない)
 SHRINK = 5
 MIN_PRIOR = 5
 DBANDS = (("〜1200m", 0, 1250), ("1300〜1600m", 1251, 1650), ("1700m〜", 1651, 99999))

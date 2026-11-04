@@ -35,7 +35,7 @@
   ⛔当日の値は「その日の**終わったレース**(時計のある走)だけ」から出した暫定値。
     "p":true が付き、画面は「途中まで」と断って出す(js/ui.js babaWord/babaLabel)。
 
-  標準の窓は --baseline で切替。**既定は going(2026-09-28 ユーザー決定= 物差し 2 本)**。
+  標準の窓は --baseline で切替。**既定は projhalf(2026-11-04)**。going(9/28)→classfirst(10/25)→projhalf(11/2 本番・11/4 既定)。
     going  : 2 本の物差しを1セルに入れる。窓は [d-365, d)(前日までの直近1年・d 未満。2026-09-28 ユーザー決定で 1095→365)
              d = 良馬場比: 同じ場×距離×クラス帯×着順の going=良 の時計(1〜5着)の中央値との差
              g = 同じ馬場状態比: 同じ場×距離×クラス帯×着順×その走の going の中央値との差
@@ -114,7 +114,8 @@ GOING_LIKE = ("going", "classfirst")
 NONE_BAND_DEFAULT = {"going": "dist", "classfirst": "drop"}
 # ⛔2026-10-25 ユーザー決定で既定を classfirst へ(本番データの研究便 docs/research-baba-classfirst: クラスの片寄り 0.93→0.39 秒・
 #   オープン −2.17→−0.85・次走の当たり d 同等/g +0.20 点)。baba_hist.py もこれを使う
-DEFAULT_BASELINE = "classfirst"
+# ⛔2026-11-02 本番を projhalf(classfirst の d1 と出走馬の力の見積もりの半々)へ・11/4 既定もそろえた(引数を書き忘れても古い値を出さない)
+DEFAULT_BASELINE = "projhalf"
 GOING_BASE = "良"          # going 版の d の物差し
 TOP_N = 5                # going 版(T5)で使う着順の上限(1〜5着)
 MIN_HORSES = 3           # going 版(T5): レース差を出す最少頭数
