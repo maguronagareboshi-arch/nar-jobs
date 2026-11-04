@@ -1,0 +1,26 @@
+# 研究用・1 回きり。/ai のレース札に「1強・2強・混戦」を出してよいかの裏付け
+# (2026-11-04・cloud/research_kyou_fuda.py)。⛔読み取りだけ(REST の単純 select)。結果は artifact。
+name: research-kyou-fuda
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: kyou fuda
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/research_kyou_fuda.py --out out/RESULT_kyou_fuda.md
+      - uses: actions/upload-artifact@v7
+        if: always()
+        with:
+          name: kyou-fuda
+          path: out/
