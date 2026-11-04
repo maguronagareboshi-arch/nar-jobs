@@ -430,7 +430,7 @@ def day_cell_going(day_rows, by_band_g, by_dist_g, d, stages=None, none_band="di
 FRONT_KEY = "pc"
 GRP_KEYS = ("rg", FRONT_KEY)
 GRP_YEARS_DAYS = 1095        # 組の表= その月の 1 日より前 3 年
-GRP_ITERS = 4                # 「日の速さ」と「箱の差」を交互に求める回数
+GRP_ITERS = 20               # 「日の速さ」と「箱の差」を交互に求める回数(⛔4 回は未収束= 高知 C3 20+ が 0.57→0.67・10 回で収束・11/4 研究便)
 GRP_MIN = 15                 # 箱のレース数がこれ未満は出さない
 KISHA_SEPARATE = False       # 「記者選抜」を選抜と別の箱にするか(⛔高知の本物で差 0.2 秒以上なら True= 未測定)
 FRONT_DAYS = 365             # 前半の基準= 同じ場×距離の その日より前 1 年の中央値
