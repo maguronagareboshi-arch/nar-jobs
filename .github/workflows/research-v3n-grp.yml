@@ -1,0 +1,39 @@
+# 研究(2026-11-04): 他場版 v3n の時計の物差しのクラスに「組」を足すと D_T・SI・予想がどう変わるか(手動だけ)。
+# ⛔本番の DB・便は変えない = 公開 REST とサイトの公開 JSON を読むだけ。結果は成果物 research-v3n-grp。
+name: research-v3n-grp
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  run:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install python packages
+        run: pip install -q "pandas==2.2.3" "numpy==1.26.4" "pyarrow==25.0.1" "lightgbm==4.7.0" requests
+      - name: compare A and B grp
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          NAR_JOBS_AI: pipeline/ai
+        run: |
+          set -o pipefail
+          python -X utf8 -W ignore pipeline/ai/kochi/research_v3n_grp.py work research_out 2>&1 | tee research_out_log.txt
+      - name: upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: research-v3n-grp
+          path: |
+            research_out
+            research_out_log.txt
+          if-no-files-found: warn
+          retention-days: 7
