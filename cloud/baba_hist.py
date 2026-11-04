@@ -42,8 +42,9 @@ import cond_stats  # noqa: E402
 DIR = "baba-hist/"
 FIRST_DATE = dt.date(2014, 1, 1)     # nar_races の最古(2026-10-17 実測)
 DAILY_DAYS = 14                      # 毎朝 組み直す候補の日数(確定済みは据え置くので実際は p と新しい日だけ)
-KEEP = ("d", "g", "d1", "g1", "k", "p", "s", "r")   # d1/g1= 補正タイム用の 1000m あたり・s="ai"= 南関は予想 AI の値(2026-10-26)
+KEEP = ("d", "g", "d1", "g1", "k", "p", "s", "r", "rg", baba.FRONT_KEY)   # d1/g1= 補正タイム用の 1000m あたり・s="ai"= 南関は予想 AI の値(2026-10-26)
 #   r= {R番号: 1 着の基準の秒}(2026-11-04 開催日ページ「この日の時計」・baba.py の day_cell_going)
+#   rg= {R番号: 組の差の秒}・pc= {R番号: 前半の秒}(2026-11-04・baba.py の add_grp_front)
 
 
 def log(msg):
@@ -51,21 +52,37 @@ def log(msg):
 
 
 def fetch_track(rest, track, since, until):
-    """[since, until] の 1〜5着の時計と、レースの距離・名前・馬場。年ごとに区切って読む(offset を浅く)"""
-    wins, races = [], []
+    """[since, until] の 1〜5着の時計と、レースの距離・名前・馬場・通過順。年ごとに区切って読む(offset を浅く)。
+    戻り= (1〜5着, レース, 6 着以下の last3f つき= 前半の先頭の馬を探すだけ)"""
+    wins, races, rest6 = [], [], []
     tq = cond_stats.enc(track)
     y = since.year
     while y <= until.year:
         lo = max(since, dt.date(y, 1, 1)).isoformat()
         hi = min(until, dt.date(y, 12, 31)).isoformat()
         rng = f"&track=eq.{tq}&race_date=gte.{lo}&race_date=lte.{hi}"
-        wins += rest.paged("nar_runs?select=track,race_date,race_no,finish,runner_number,time_sec"
+        wins += rest.paged("nar_runs?select=track,race_date,race_no,finish,runner_number,time_sec,last3f"
                            f"&finish=gte.1&finish=lte.{baba.TOP_N}&time_sec=not.is.null&finish_note=is.null" + rng,
                            "race_date.asc,race_no.asc,finish.asc,runner_number.asc")
-        races += rest.paged("nar_races?select=track,race_date,race_no,distance_m,race_name,going,race_kind" + rng,
+        rest6 += rest.paged("nar_runs?select=track,race_date,race_no,finish,runner_number,time_sec,last3f"
+                            f"&finish=gte.{baba.TOP_N + 1}&time_sec=not.is.null&last3f=not.is.null&finish_note=is.null" + rng,
+                            "race_date.asc,race_no.asc,finish.asc,runner_number.asc")
+        races += rest.paged("nar_races?select=track,race_date,race_no,distance_m,race_name,going,race_kind,corners" + rng,
                             "race_date.asc,race_no.asc")
         y += 1
-    return wins, races
+    return wins, races, rest6
+
+
+def to_race_rows(track, wins, races, rest6):
+    """baba.race_rows_of へ渡す形(同着は速い方 1 本)= 組の差 rg・前半 pc の材料"""
+    meta = {(track, r["race_date"], r["race_no"]): r for r in races}
+    best = {}
+    for w in wins:
+        kk = (track, w["race_date"], w["race_no"], int(w["finish"]))
+        if kk not in best or float(w["time_sec"]) < float(best[kk]["time_sec"]):
+            best[kk] = w
+    runs = [dict(w, track=track) for w in list(wins) + list(rest6)]
+    return baba.race_rows_of(best, meta, runs)
 
 
 def to_samples(track, wins, races):
@@ -125,7 +142,7 @@ class ProjCache:
         return self.pv
 
 
-def merge_days(prefix, samples, targets, old_days, today, rebuild_all, baseline=None, pv=None):
+def merge_days(prefix, samples, targets, old_days, today, rebuild_all, baseline=None, pv=None, rrows=None):
     """baba.build_days を 1 場ぶんで呼び、前回のファイルの確定済みの日と合わせる。戻り= (days, 組み直した日数)
     baseline= projhalf のときは classfirst で組んでから pv(②の日の値)と半々にする(baba.blend_proj)"""
     baseline = baseline or baba.DEFAULT_BASELINE
@@ -135,6 +152,8 @@ def merge_days(prefix, samples, targets, old_days, today, rebuild_all, baseline=
                                         rebuild_all=rebuild_all)
     if baseline == baba.PROJ_BASE and pv is not None:
         baba.blend_proj(built, frozen, pv, rebuild_all, samples)
+    if bl in baba.GOING_LIKE and rrows:
+        baba.add_grp_front(built, frozen, rrows, rebuild_all)       # 組の差 rg・前半 pc(11/4)
     days = {} if rebuild_all else {d: dict(c) for d, c in (old_days or {}).items()}
     for d, cells in built.items():
         c = cells.get(prefix)
@@ -202,8 +221,9 @@ def main(argv=None):
             else:
                 lo = (today - dt.timedelta(days=DAILY_DAYS)).isoformat()
                 since = today - dt.timedelta(days=DAILY_DAYS + baba.fetch_days(a.baseline))
-            wins, races = fetch_track(rest, track, since, today)
+            wins, races, rest6 = fetch_track(rest, track, since, today)
             samples = to_samples(track, wins, races)
+            rrows = to_race_rows(track, wins, races, rest6)
             targets = {s[1] for s in samples if lo <= s[1] <= today.isoformat()}
             targets |= {d for d in (old or {}) if lo <= d <= today.isoformat()}
             # ⛔標準は前日までの1年= その場の最初のレースから 1 年たつ前の日は標準が欠ける(2014 年・姫路の再開直後)→ 出さない
@@ -211,7 +231,7 @@ def main(argv=None):
             ok_from = (dt.date.fromisoformat(fr[0]["race_date"]) + dt.timedelta(days=365)).isoformat() if fr else lo
             targets = {d for d in targets if d >= ok_from}
             pv = pc.get(lo) if pc is not None and track not in baba.AI_TRACKS else None
-            days, rebuilt = merge_days(prefix, samples, targets, old, today, a.rebuild_all, a.baseline, pv)
+            days, rebuilt = merge_days(prefix, samples, targets, old, today, a.rebuild_all, a.baseline, pv, rrows)
             days = {d: v for d, v in days.items() if d >= ok_from}
             if track in baba.AI_TRACKS:                  # 南関は予想 AI の日の値にそろえる(確定済みの日も毎回)
                 ai = read_ai(rest) if ai is None else ai
