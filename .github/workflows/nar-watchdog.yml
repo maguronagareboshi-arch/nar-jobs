@@ -535,12 +535,50 @@ jobs:
           raise SystemExit(1 if bad else 0)
           PY
 
+  # 2026-11-05 送信量の目安(Supabase の送信量が 10 月に枠超え)。pg_stat_statements の累計の差で
+  #   閲覧者の取得回数・便の取得回数・便の直結の行数を 1 日ごとに残し、ふだん(前の日々の中央値)の 1.5 倍を超えたら赤。
+  #   GB は数えられない(管理 API が要る)= 目安。中身は cloud/egress_watch.py・記録は nar_meta 'egress_watch'。
+  egress:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      red: ${{ steps.c.outcome == 'failure' }}
+      reasons: ${{ steps.c.outputs.reasons }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            cloud/beat.py
+            cloud/egress_watch.py
+          sparse-checkout-cone-mode: false
+      - name: count requests and direct rows per day and check jumps
+        id: c
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
+        run: |
+          set -o pipefail
+          RC=0
+          python3 cloud/egress_watch.py 2>&1 | tee out.txt || RC=$?
+          RC=$RC python3 - <<'PY'
+          import json, os
+          lines = open('out.txt', encoding='utf-8').read().splitlines()
+          bad = ['送信量の目安: ' + l.split('::warning::', 1)[1] for l in lines if '::warning::' in l]
+          if not bad and os.environ.get('RC', '0') not in ('0', '1'):
+              bad = ['送信量の目安が数えられない']
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              f.write('reasons=' + json.dumps(bad, ensure_ascii=False) + chr(10))
+          PY
+          exit $RC
+
   # 2026-10-03 同じ赤のメールは 1 日 1 通(監査 B-1: 同じ警告で毎時メールが来た)。
   #   上の点検は continue-on-error= job は緑のまま outputs red/reasons を出す。ここでまとめて
   #   nar_meta 'watchdog_last_red'({date(JST), reasons[]})と比べ、同じ JST 日付で理由が全部既出なら警告だけで緑。
   #   新しい理由が 1 つでもあれば赤(= 所有者へ失敗メール)。赤が無い run は保存を消す。中身は cloud/watchdog_dedupe.py。
   notify:
-    needs: [freshness, v3-forecast, odds-live, boards-yesterday, kochi-results, ooi-official, heartbeat, db-size]
+    needs: [freshness, v3-forecast, odds-live, boards-yesterday, kochi-results, ooi-official, heartbeat, db-size, egress]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
