@@ -3,6 +3,8 @@
 name: research-kyou-fuda
 on:
   workflow_dispatch:
+  push:
+    branches: [wip/kyou-fuda-20261104]
 permissions:
   contents: read
 jobs:
