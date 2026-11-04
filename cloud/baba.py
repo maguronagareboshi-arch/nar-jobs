@@ -85,10 +85,12 @@
 import argparse
 import bisect
 import datetime as dt
+import gzip
 from zoneinfo import ZoneInfo
 import io
 import json
 import os
+from pathlib import Path
 import re
 import statistics
 import sys
@@ -208,6 +210,44 @@ def rows_all(base, key, path, tries=3, wait=5):
         if len(c) < 1000:
             return out
         off += 1000
+
+
+# 2026-11-05 通信量: 日中の便(20 分おき)が projhalf で毎回 全着順 約 50 万行を読み直していた(1 日 約 1,700 万行= REST の最大口)。
+# BABA_CACHE(便のキャッシュの置き場)があれば、その日(JST)に最初に読んだ行を控えにし、以後の便は直近 FRESH_DAYS 日だけ読み直す。
+# ⛔控えは日付・取り方・始めの日が全部同じときだけ使う(= 1 日 1 回は丸ごと読む・古い日の後からの直しは翌日に入る)。BABA_CACHE が無ければ今まで通り。
+BABA_CACHE = os.environ.get("BABA_CACHE", "")
+FRESH_DAYS = 14
+
+
+def rows_cached(base, key, name, path, since, order, today):
+    """path= select と race_date 以外の条件。race_date >= since の行を order の順で返す(order は race_date.asc から始めること)"""
+    def read(lo):
+        return rows_all(base, key, f"{path}&race_date=gte.{lo}&order={order}")
+    if not BABA_CACHE:
+        return read(since)
+    d = Path(BABA_CACHE)
+    f, mf = d / f"{name}.json.gz", d / f"{name}.meta.json"
+    sig = {"day": today.isoformat(), "path": path, "order": order, "since": since}
+    fresh_from = (today - dt.timedelta(days=FRESH_DAYS)).isoformat()
+    if fresh_from > since and mf.exists():
+        try:
+            if json.loads(mf.read_text(encoding="utf-8")) == sig:
+                with gzip.open(f, "rt", encoding="utf-8") as fh:
+                    old = json.load(fh)
+                new = read(fresh_from)
+                keep = [r for r in old if r["race_date"] < fresh_from]
+                log(f"  控え {name}: {len(keep)} 行({fresh_from} より前)+ 読み直し {len(new)} 行")
+                return keep + new
+            log(f"  控え {name}: 日付か取り方が違う → 丸ごと")
+        except Exception as e:  # noqa: BLE001  壊れた控えは丸ごとに戻るだけ
+            log(f"  控え {name}: 読めない({e})→ 丸ごと")
+    rows = read(since)
+    d.mkdir(parents=True, exist_ok=True)
+    with gzip.open(f, "wt", encoding="utf-8") as fh:
+        json.dump(rows, fh, ensure_ascii=False)
+    mf.write_text(json.dumps(sig), encoding="utf-8")
+    log(f"  控え {name}: 丸ごと {len(rows)} 行を読んで控えた")
+    return rows
 
 
 # §104 2026-09-05(Fable・要判断①=a): 名古屋・笠松の公式クラスは Ａ級/Ｂ級/Ｃ級の3つだけで、レース名の数字は
@@ -954,10 +994,10 @@ def main():
     bl = "classfirst" if proj else a.baseline     # projhalf は classfirst を組んでから d1 を半々にする
     if proj:
         # ⛔projhalf だけ全着順を読む(馬の見分け= 馬名+生年月日)。1〜5着は同じ行から取る
-        allruns = rows_all(base, key, "/rest/v1/nar_runs?select=track,race_date,race_no,finish,runner_number,time_sec,"
-                                      "horse_name,birth_date,last3f"
-                                      f"&finish=gte.1&time_sec=not.is.null&finish_note=is.null&race_date=gte.{since}"
-                                      "&order=race_date.asc,track.asc,race_no.asc,finish.asc,runner_number.asc")
+        allruns = rows_cached(base, key, "proj_runs",
+                              "/rest/v1/nar_runs?select=track,race_date,race_no,finish,runner_number,time_sec,"
+                              "horse_name,birth_date,last3f&finish=gte.1&time_sec=not.is.null&finish_note=is.null",
+                              since, "race_date.asc,track.asc,race_no.asc,finish.asc,runner_number.asc", today)
         wins = [w for w in allruns if int(w["finish"]) <= TOP_N]
         lead_runs = allruns
     else:
@@ -970,9 +1010,10 @@ def main():
                                     f"&finish=gte.{TOP_N + 1}&time_sec=not.is.null&last3f=not.is.null&finish_note=is.null"
                                     f"&race_date=gte.{since_f}"
                                     "&order=race_date.asc,track.asc,race_no.asc,finish.asc,runner_number.asc")
-    races = rows_all(base, key, "/rest/v1/nar_races?select=track,race_date,race_no,distance_m,race_name,going,race_kind,corners"
-                                + (",surface" if proj else "") +
-                                f"&race_date=gte.{since}&order=race_date.asc,track.asc,race_no.asc")
+    rsel = ("/rest/v1/nar_races?select=track,race_date,race_no,distance_m,race_name,going,race_kind,corners"
+            + (",surface" if proj else ""))
+    races = (rows_cached(base, key, "proj_races", rsel, since, "race_date.asc,track.asc,race_no.asc", today) if proj
+             else rows_all(base, key, f"{rsel}&race_date=gte.{since}&order=race_date.asc,track.asc,race_no.asc"))
     meta = {(r["track"], r["race_date"], r["race_no"]): r for r in races}
     log(f"1〜{TOP_N}着の時計 {len(wins)}行 / レース {len(races)}行({since}〜・標準={a.baseline})")
 

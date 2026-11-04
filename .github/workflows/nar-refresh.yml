@@ -423,14 +423,56 @@ jobs:
       # §48 K-1b 馬場差の全15場一括計算(日×場の中央値・帯広ば除外)
       # 2026-09-28 標準の窓は going 版(良馬場比 d+同じ馬場状態比 g・前日までの1年間)が既定= 引数は要らない(--baseline で切替。旧既定は season)
       # 2026-09-05 ユーザーFB「最近の馬場の時計が出ていない日がある」= monthly だけだったのを 朝の便(JST 09:30 前)でも回す(手元 24 秒)
+      # 2026-11-05 通信量: projhalf の全着順(約 50 万行)を便ごとに読み直さない= その日(JST)最初の便が読んだ行を便のキャッシュで持ち越し、
+      #   以後の便は直近 14 日だけ読み直す(cloud/baba.py の rows_cached)。キャッシュの鍵は JST の日付= 1 日 1 回は丸ごと読む。
+      #   公開の repo の cache は他人の PR の便からも読める= 中身はサービスキーの sha256 で暗号化して置く(開けなければ丸ごと読むだけ)。
+      - name: baba cache key
+        id: bbk
+        if: '!cancelled()'
+        run: echo "k=baba-proj-$(TZ=Asia/Tokyo date +%F)" >> "$GITHUB_OUTPUT"
+      - name: restore baba cache
+        id: bbr
+        if: '!cancelled()'
+        uses: actions/cache/restore@v6
+        with:
+          path: babaenc
+          key: ${{ steps.bbk.outputs.k }}
+      - name: open baba cache
+        if: ${{ !cancelled() && steps.bbr.outputs.cache-hit == 'true' }}
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          BABA_KEY=$(printf '%s' "$SUPABASE_SERVICE_KEY" | sha256sum | cut -c1-64); export BABA_KEY
+          mkdir -p babacache
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BABA_KEY -in babaenc/baba.tar.gz.enc | tar -C babacache -xzf - || { echo "baba cache: 開けない → 丸ごと読む"; rm -rf babacache; }
       - name: baba diff (monthly + morning)
         id: am_baba_diff
         if: '!cancelled()'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          BABA_CACHE: ${{ github.workspace }}/babacache
         # 2026-10-22 「今日ここまで」の時計の速さ= 当日の暫定値(p)が要る→ 日中の便でも毎回回す(過去の確定日は据え置き)
         run: python cloud/baba.py --apply --baseline projhalf
+      - name: seal baba cache
+        id: bbs
+        if: ${{ !cancelled() && steps.bbr.outputs.cache-hit != 'true' && steps.am_baba_diff.outcome == 'success' }}
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          [ -d babacache ] || { echo "控えが無い= 置かない"; exit 0; }
+          BABA_KEY=$(printf '%s' "$SUPABASE_SERVICE_KEY" | sha256sum | cut -c1-64); export BABA_KEY
+          mkdir -p babaenc
+          tar -C babacache -czf - . | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:BABA_KEY -out babaenc/baba.tar.gz.enc
+          ls -l babaenc
+          echo "ok=1" >> "$GITHUB_OUTPUT"
+      - name: save baba cache
+        if: ${{ !cancelled() && steps.bbs.outputs.ok == '1' }}
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: babaenc
+          key: ${{ steps.bbk.outputs.k }}
 
       # §100 馬場傾向(時計=baba_diff・前後=1角順位×着順ρ・内外=枠×着順ρ)。朝の便は 90 日組み直し、日中の便は当日だけ
       - name: baba trend
