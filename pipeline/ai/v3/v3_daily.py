@@ -322,6 +322,12 @@ def main():
         notes = v3_notes.make(day, cap['h'], cap['T'], log=log)
     except Exception as e:  # noqa: BLE001
         log('ひとこと 失敗', type(e).__name__, str(e)[:200])
+    cyb = {}
+    try:  # 調教の札(表示だけ・cy_day_pct の 4 段・cy_band.py・ユーザー承認 2026-11-04)
+        import cy_band
+        cyb = cy_band.make(cap.get('F'))
+    except Exception as e:  # noqa: BLE001
+        log('調教の札 失敗', type(e).__name__, str(e)[:200])
     del cap
     ver = '南関 第21版 前日版' if b12 and nt and nsq and ncap is not None else '南関 第20版 前日版' if b12 and nt and nsq else '南関 第19版 前日版' if b12 and nt and naw else '南関 第15版 前日版' if b12 and nt else '南関 第12版 前日版' if b12 else '南関 第11版 前日版' if bundle else '南関 第10版 前日版'  # 版の名前(研究 nankan-ai-v3 VERSIONS.md)
     import c67_cancel
@@ -333,6 +339,8 @@ def main():
         r['meta']['c67'] = c67
     if notes:
         log('ひとこと 付けた', v3_notes.attach(rows, notes), '頭')
+    if cyb:
+        log('調教の札 付けた', cy_band.attach(rows, cyb), '頭')
     log('races', len(rows), '◎', ' '.join(f"{r['track']}{r['race_no']}R:{r['marks'][0]['num']}" for r in rows[:12] if r['marks']))
     hon, h = table_digest(csv_path)
     log('digest ◎', hon, 'sha256', h)
