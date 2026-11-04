@@ -4,7 +4,7 @@
   py -3 -m unittest discover -s tests -p "test_baba_grp_front.py"
 
 確かめるのは=
-  ①group_box の級と箱(C3 の 6 箱・ほかは組番号 7 以上を 7・選抜/選定・重賞は外す・全角は NFKC)
+  ①group_box の級と箱(組 1〜7 はそのまま・8 以上は 4 つずつ・選抜/選定・重賞と混ざった級は外す・全場の書き方)
   ②group_table が作り物の「箱の差+日の速さ」を取り戻し、級の中で重み付き平均 0 になる
   ③front_value の式・≤800m/欠けは None・race_rows_of が最初のコーナーの 1 番手(6 着以下も)を使う
   ④add_grp_front= 15 R 未満の箱・0.0 は入れない・据え置きのセルは触らない・d/r は変えない・前半は 1 年の中央値との差
@@ -27,14 +27,13 @@ FK = baba.FRONT_KEY
 class GroupBox(unittest.TestCase):
     def test_boxes(self):
         g = baba.group_box
-        self.assertEqual(g("C3-1"), ("C3", "1-3"))
-        self.assertEqual(g("Ｃ３－５"), ("C3", "4-7"))      # 全角マイナスも NFKC で "-"
-        self.assertEqual(g("Ｃ３-５"), ("C3", "4-7"))
+        self.assertEqual(g("C3-1"), ("C3", "1"))
+        self.assertEqual(g("Ｃ３－５"), ("C3", "5"))       # 全角も読む(サイトの raceClassParts と同じ)
         self.assertEqual(g("C3-11"), ("C3", "8-11"))
         self.assertEqual(g("C3-19"), ("C3", "16-19"))
         self.assertEqual(g("C3-24"), ("C3", "20+"))
         self.assertEqual(g("C2-3"), ("C2", "3"))
-        self.assertEqual(g("C2-9"), ("C2", "7"))
+        self.assertEqual(g("C2-9"), ("C2", "8-11"))
         self.assertEqual(g("3歳-2"), ("3歳", "2"))
         self.assertEqual(g("C2選抜馬"), ("C2", "選抜"))
         self.assertEqual(g("C1記者選抜"), ("C1", "記者選抜" if baba.KISHA_SEPARATE else "選抜"))
@@ -42,9 +41,25 @@ class GroupBox(unittest.TestCase):
         self.assertIsNone(g("C3-1", "重賞"))
         self.assertIsNone(g("一般"))
 
+    def test_all_tracks(self):
+        g = baba.group_box
+        self.assertEqual(g("C2八 九", None, "大井"), ("C2", "8-11"))           # 南関= 漢数字・並びは先頭
+        self.assertEqual(g("日刊スポーツ賞B3四選抜特別", None, "大井"), ("B3", "選抜"))
+        self.assertEqual(g("C1四組", None, "盛岡"), ("C1", "4"))               # 岩手
+        self.assertEqual(g("3歳C2五組", None, "水沢"), ("3歳C2", "5"))         # 3歳限定は分ける
+        self.assertEqual(g("C1十二", None, "金沢"), ("C1", "12-15"))
+        self.assertEqual(g("ベガ賞C2一3歳以上", None, "園田"), ("C2", "1"))
+        self.assertEqual(g("乳岩疾風戦C14", None, "名古屋"), ("C", "12-15"))   # 名古屋・笠松= 字の後ろの数字が組
+        self.assertEqual(g("C11組", None, "笠松"), ("C", "8-11"))
+        self.assertEqual(g("グランシャリオドリーム79C4-2", None, "門別"), ("C4", "2"))
+        self.assertEqual(g("C2-25組", None, "佐賀"), ("C2", "20+"))
+        for n, t in (("特別C1七C2一", "浦和"), ("賞A2B1選定馬", "川崎"), ("特別C3-2C4-1", "門別"),
+                     ("C1 3歳以上", "園田"), ("2歳新馬", "佐賀")):
+            self.assertIsNone(g(n, None, t), n)                                 # 混ざった級・組なし・新馬
+
 
 def synth(track="高知", seed=3, n_days=400, start=dt.date(2023, 10, 1)):
-    """作り物: 1 日 8R・C3 の箱(1-3: −0.5・20+: +0.6・8-11: 0)と C2 の箱(2: −0.3・6: +0.3)・日の速さ ±1"""
+    """作り物: 1 日 8R・C3 の箱(2: −0.5・20+: +0.6・8-11: 0)と C2 の箱(2: −0.3・6: +0.3)・日の速さ ±1"""
     rnd = random.Random(seed)
     eff = {("C3", 2): -0.5, ("C3", 22): 0.6, ("C3", 9): 0.0, ("C2", 2): -0.3, ("C2", 6): 0.3}
     best, meta = {}, {}
@@ -66,10 +81,10 @@ class GroupTable(unittest.TestCase):
         rows = baba.race_rows_of(best, meta, [])
         gr = [(d, dist, c, b, t) for _tr, d, _r, dist, c, b, t, _f in rows if b]
         tb = baba.group_table(gr, "2023-01-01", "2026-01-01")
-        # C3: 箱の数= 1-3 は 2 本/日・4..: 作り物の差 −0.5/+0.6/0 を級の重み付き平均で中心化したもの
+        # C3: 箱の数= 2 は 2 本/日・4..: 作り物の差 −0.5/+0.6/0 を級の重み付き平均で中心化したもの
         c3 = {k: v for k, v in tb.items() if k[0] == "C3"}
-        w = {("C3", "1-3"): 2, ("C3", "20+"): 1, ("C3", "8-11"): 2}
-        raw = {("C3", "1-3"): -0.5, ("C3", "20+"): 0.6, ("C3", "8-11"): 0.0}
+        w = {("C3", "2"): 2, ("C3", "20+"): 1, ("C3", "8-11"): 2}
+        raw = {("C3", "2"): -0.5, ("C3", "20+"): 0.6, ("C3", "8-11"): 0.0}
         mean = sum(raw[k] * w[k] for k in w) / sum(w.values())
         for k in w:
             self.assertAlmostEqual(c3[k][0], raw[k] - mean, delta=0.05, msg=k)
@@ -123,11 +138,11 @@ class AddCells(unittest.TestCase):
         self.assertEqual(c["r"], {"1": 82.5})
         self.assertEqual(c[FK], {"1": 0.5})
         self.assertNotIn("rg", frozen_cell)
-        # 1R= C3-2(1-3 箱)・その月の 1 日より前 3 年の表と一致
+        # 1R= C3-2(2 の箱)・その月の 1 日より前 3 年の表と一致
         ms = d0.replace(day=1)
         gr = [(d, dist, cl, b, t) for _tr, d, _r, dist, cl, b, t, _f in rows if b and t is not None]
         tb = baba.group_table(gr, (ms - dt.timedelta(days=1095)).isoformat(), ms.isoformat())
-        self.assertEqual(c["rg"]["1"], round(tb[("C3", "1-3")][0], 1))
+        self.assertEqual(c["rg"]["1"], round(tb[("C3", "2")][0], 1))
         self.assertTrue(all(v != 0 for v in c["rg"].values()))
         self.assertIsNotNone(nxt)
 

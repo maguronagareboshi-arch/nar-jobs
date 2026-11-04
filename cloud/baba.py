@@ -31,11 +31,11 @@
     blend_proj/overlay_ai は d/d1 だけを書き換える= "r" は動かない(画面の「ふだん」は南関も同じ基準)。
     ⛔確定済みの日に "r" を付けるには baba-rebuild 便(--rebuild-all)が要る。
   ⛔2026-11-04 同じセルへ "rg"(組の差)と "pc"(前半)を足す(add_grp_front・d/g/d1/g1/r は変えない)。
-    "rg" = {"R番号": 秒(小数 1 桁)}= 組の箱の差。級と組= レース名(NFKC)の (C1|C2|C3|A|B|[23]歳)-(数字)・
-      名に「選抜」「選定」= 級ごとに「選抜」の箱(KISHA_SEPARATE で記者選抜を分ける)。重賞・準重賞は外す。
-      箱= C3 は 1-3・4-7・8-11・12-15・16-19・20+/ほかの級は組番号(7 以上は 7)。
+    "rg" = {"R番号": 秒(小数 1 桁)}= 組の箱の差。級と組= cloud/class_parts.py(サイトの raceClassParts の写し・全場)・
+      付帯に「選抜」「選定」= 級ごとに「選抜」の箱(KISHA_SEPARATE で記者選抜を分ける)。重賞・準重賞・級の混ざったレースは外す。
+      箱= 組番号 1〜7 はそのまま・8-11・12-15・16-19・20+(11/4 全場へ広げたとき C3 の 1-3・4-7 の束ねをやめた)。
       表= その場の、その月の 1 日より前 3 年の 1 着の時計 t。res = t − 同じ級×距離の中央値。
-      日の速さ(res − 箱の差 の日の平均)と箱の差(res − 日の速さ の平均)を 4 回交互に求め、
+      日の速さ(res − 箱の差 の日の平均)と箱の差(res − 日の速さ の平均)を 20 回交互に求め、
       級の全レース(選抜も含む)の重み付き平均を引く= "r"(級の帯の中央値)からのずれ。15 R 未満の箱・0.0 は入れない。
       表は場×月ごとに 1 回だけ組む(group_table)。
     "pc" = {"R番号": 秒(小数 2 桁)}= 前半。最初のコーナーで 1 番手(1 頭だけ)の馬の (走破 − 上がり3F) ÷ (距離 − 600) × 200
@@ -95,6 +95,9 @@ import sys
 import time
 import unicodedata
 import urllib.request
+
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from class_parts import race_class_parts  # noqa: E402  ⛔サイトの js/class-parts.js と同じ読み方
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -435,33 +438,39 @@ GRP_MIN = 15                 # 箱のレース数がこれ未満は出さない
 KISHA_SEPARATE = False       # 「記者選抜」を選抜と別の箱にするか(⛔高知の本物で差 0.2 秒以上なら True= 未測定)
 FRONT_DAYS = 365             # 前半の基準= 同じ場×距離の その日より前 1 年の中央値
 FRONT_MIN = MIN_BAND
-_GRP_RE = re.compile(r"(C1|C2|C3|A|B|[23]歳)-([0-9]+)")
-_CLS_RE = re.compile(r"(?<![A-Za-z])(C1|C2|C3|A|B|[23]歳)(?![A-Za-z])")
+_CLS_OK = re.compile(r"^([A-D][0-9]?|[2-4]歳)$")            # 字 1 つ(+1 桁)か 馬齢= 級の箱を作るもの
+_MIX_RE = re.compile(r"[A-DＡ-Ｄ][0-9０-９]")                # 付帯に別の級(C3-2C4-1・A2B1 選定馬)= 混ざったレース
 
 
-def group_box(race_name, race_kind=None):
-    """レース名 → (級, 箱) / None。箱= C3 は 1-3・4-7・8-11・12-15・16-19・20+、ほかの級は組番号(7 以上は "7")・
-    名に「選抜」「選定」= 級ごとに "選抜"(KISHA_SEPARATE なら「記者選抜」は "記者選抜")。重賞・準重賞は None"""
+def group_box(race_name, race_kind=None, track=None):
+    """レース名 → (級, 箱) / None。級と組の読み方= cloud/class_parts.py(サイトの js/class-parts.js と同じ・全場)。
+    箱= 組番号 1〜7 はそのまま・8-11・12-15・16-19・20+(組がいくつ並ぶ「八 九」は先頭)。
+    2歳・3歳限定は級の前に付ける(3歳C2)。付帯に「選抜」「選定」= 級ごとに "選抜"(KISHA_SEPARATE なら「記者選抜」は "記者選抜")。
+    ⛔外す= 重賞・準重賞・級の混ざったレース(付帯に別の級 C4-1・B1 など/級字 2 つ AB)・級が語(新馬・未勝利)・組の無いレース"""
     if str(race_kind or "") in OP_KINDS:
         return None
-    t = unicodedata.normalize("NFKC", str(race_name or ""))
-    if "選抜" in t or "選定" in t:
-        m = _CLS_RE.search(t)
-        if not m:
-            return None
-        return m.group(1), ("記者選抜" if KISHA_SEPARATE and "記者選抜" in t else "選抜")
-    m = _GRP_RE.search(t)
-    if not m:
+    pt = race_class_parts(race_name, race_kind, track)
+    if not pt or not pt["cls"] or not _CLS_OK.match(pt["cls"]):
         return None
-    cls, n = m.group(1), int(m.group(2))
+    cls, ex = pt["cls"], pt["extra"] or ""
+    if pt["age"] in ("2歳", "3歳") and not cls.endswith("歳"):
+        cls = pt["age"] + cls                                  # 3歳C2五組(岩手)= 古馬の C2 と分ける
+    if _MIX_RE.search(ex):
+        return None
+    if "選抜" in ex or "選定" in ex:
+        return cls, ("記者選抜" if KISHA_SEPARATE and "記者選抜" in ex else "選抜")
+    if not pt["grp"]:
+        return None
+    m = re.match(r"([0-9]+)", pt["grp"])
+    n = int(m.group(1)) if m else 0
     if n <= 0:
         return None
-    if cls == "C3":
-        for hi, lab in ((3, "1-3"), (7, "4-7"), (11, "8-11"), (15, "12-15"), (19, "16-19")):
-            if n <= hi:
-                return cls, lab
-        return cls, "20+"
-    return cls, str(min(n, 7))
+    if n <= 7:
+        return cls, str(n)
+    for hi, lab in ((11, "8-11"), (15, "12-15"), (19, "16-19")):
+        if n <= hi:
+            return cls, lab
+    return cls, "20+"
 
 
 def group_table(rows, lo, hi):
@@ -531,7 +540,7 @@ def race_rows_of(best, meta, runs):
         if track == BANEI or track not in TRACK2PREFIX or not m.get("distance_m"):
             continue
         dist = int(m["distance_m"])
-        gb = group_box(m.get("race_name"), m.get("race_kind"))
+        gb = group_box(m.get("race_name"), m.get("race_kind"), track)
         w1 = best.get((track, date, rno, 1))
         t1 = float(w1["time_sec"]) if w1 and w1.get("time_sec") is not None else None
         fv = None
