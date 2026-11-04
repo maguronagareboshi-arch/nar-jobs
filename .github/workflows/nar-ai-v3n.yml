@@ -190,10 +190,12 @@ jobs:
 
       # 2026-10-31 通信量: 公式の表(k0_dl)の前回分を便のキャッシュで持ち越し、直近の月だけ読み直す(7 日に 1 回は丸ごと)。
       # 1 日 1 つ(k0-UTC の日付)だけ残す。無ければ k0_dl は今まで通り丸ごと読む(安全側)。
+      # 11/5: 鍵は便ごと(k0-日付-run)・読むのは一番新しい k0-*。保存は k0_dl がどれかの表を丸ごと読んだ(dirty.flag)ときだけ
+      #   (前は 1 日 1 鍵= その日最初の nar-ai-last が facts 抜きで保存し、v3n の facts 丸ごとが保存されず毎回丸ごとだった)。
       # 公開の repo の cache は他人の PR の便からも読める = 中身は V3_ASSET_KEY で暗号化して置く(鍵が違えば丸ごとに戻るだけ)。
       - name: k0 cache key
         id: k0k
-        run: echo "k=k0-$(date -u +%F)" >> "$GITHUB_OUTPUT"
+        run: echo "k=k0-$(date -u +%F)-${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
       - name: restore k0 cache
         id: k0r
         uses: actions/cache/restore@v6
@@ -209,6 +211,7 @@ jobs:
           V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
           mkdir -p k0cache
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in k0enc/k0.tar.gz.enc | tar -C k0cache -xzf - || { echo "k0 cache: 開けない → 丸ごと読む"; rm -rf k0cache; }
+          rm -f k0cache/dirty.flag
       - name: v3n 10 tracks (fetch → features → one model → write)
         env:
           K0_CACHE: ${{ github.workspace }}/k0cache
@@ -227,15 +230,17 @@ jobs:
           python -X utf8 -W ignore pipeline/ai/kochi/v3n_daily.py "${{ steps.d.outputs.day }}" work $W 2>&1 | tee out_log.txt
           df -h / | tail -n 1
       - name: seal k0 cache
-        if: "!cancelled() && steps.k0r.outputs.cache-hit != 'true' && hashFiles('k0cache/meta.json') != ''"
+        id: k0s
+        if: "!cancelled() && hashFiles('k0cache/dirty.flag') != '' && hashFiles('k0cache/meta.json') != ''"
         env:
           V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
         run: |
           V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          cat k0cache/dirty.flag; rm -f k0cache/dirty.flag
           mkdir -p k0enc
           tar -C k0cache -czf - . | openssl enc -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -out k0enc/k0.tar.gz.enc
       - name: save k0 cache
-        if: "!cancelled() && steps.k0r.outputs.cache-hit != 'true' && hashFiles('k0enc/k0.tar.gz.enc') != ''"
+        if: "!cancelled() && steps.k0s.outcome == 'success'"
         uses: actions/cache/save@v6
         with:
           path: k0enc

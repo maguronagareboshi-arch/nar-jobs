@@ -49,6 +49,7 @@ CACHE = os.environ.get('K0_CACHE', '')
 DIFF_DAYS, FULL_DAYS = 92, 7
 # 控えの版: 2 = 月の取り方に日付の並びを入れた(11/3)。前の版の控えはページの切れ目で行が抜けている恐れ= 丸ごと読み直す
 CACHE_VER = 2
+DIRTY = 'dirty.flag'   # 控えの封の前に便が消す(控えの中には入れない)
 
 
 def _meta():
@@ -86,6 +87,10 @@ def _keep(table, sel, df, full):
         m = _meta()
         m[table] = {'sel': sel, 'ver': CACHE_VER, 'full': dt.date.today().isoformat() if full else m.get(table, {}).get('full')}
         (Path(CACHE) / 'meta.json').write_text(json.dumps(m, ensure_ascii=False), encoding='utf-8')
+        # 11/5: 丸ごと読んだ回は印を置く= 便はこの印があるときだけ控えを新しい鍵で保存する。
+        # (前は 1 日 1 鍵で、その日最初の便= nar-ai-last が facts を読まないまま保存し、後の v3n の facts 丸ごとは鍵が既にあって保存されず毎回丸ごとだった)
+        if full:
+            (Path(CACHE) / DIRTY).write_text(table + '\n', encoding='utf-8')
     return df
 
 
