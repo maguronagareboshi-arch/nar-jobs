@@ -1,0 +1,389 @@
+# 南関 第 23 版の前日の便を、過去の日について「書かずに」回し直す研究の便(2026-11-05・枝 wip/v3-pre-replay-1105 だけ)。
+# 中身は master 68b27d2 の nar-ai-v3.yml と同じ段で、次だけ違う:
+#   ・起動 = この枝への push(日付は ops/replay_days.txt・1 行 1 日)・同時に 2 日まで。
+#   ・本番に書かない: v3_daily.py に --write を付けない・生存の記録(beat)・キャッシュの保存・v29 の土台・A3 の封は外した。
+#   ・出力 = out の表 csv・印の json・記録を V3_ASSET_KEY で暗号化した成果物 v3-pre-replay-<日付>(14 日)。
+# 注意: 過去の日を今 DB にある元で回すので、前の日の 14:30 以降に分かった情報(その日の朝の取消など)が少し入る。
+name: v3-pre-replay
+
+on:
+  push:
+    branches: ['wip/v3-pre-replay-1105']
+    paths: ['ops/replay_days.txt', '.github/workflows/v3-pre-replay.yml']
+
+concurrency:
+  group: v3-pre-replay
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      days: ${{ steps.p.outputs.days }}
+    steps:
+      - uses: actions/checkout@v7
+      - id: p
+        run: echo "days=$(grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' ops/replay_days.txt | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+  predict:
+    needs: plan
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 2
+      matrix:
+        day: ${{ fromJSON(needs.plan.outputs.days) }}
+    timeout-minutes: 60
+    env:
+      GH_TOKEN: ${{ github.token }}
+      V3_DATA: ${{ github.workspace }}/v3/v3_data
+      V3_RAW: ${{ github.workspace }}/v3/raw
+      V3_MODELS: ${{ github.workspace }}/v3/models
+      V3_CYOKYO_CSV: ${{ github.workspace }}/v3/cyokyo_csv
+      V3_KD: ${{ github.workspace }}/v3/kd
+      V3_T14: ${{ github.workspace }}/v3/t14
+      V3_F10K: ${{ github.workspace }}/v3/f10k
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: install python packages (手元と同じ版)
+        run: pip install -q "pandas==2.2.3" "numpy==1.26.4" "pyarrow==25.0.1" "lightgbm==4.7.0" "scipy==1.14.1" "scikit-learn==1.9.0" requests beautifulsoup4 lxml
+
+      - name: day
+        id: d
+        env:
+          IN_DATE: ${{ matrix.day }}
+        run: |
+          if [ -n "$IN_DATE" ]; then
+            echo "$IN_DATE" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || { echo "date は YYYY-MM-DD で"; exit 1; }
+            DAY="$IN_DATE"
+          elif [ "$(TZ=Asia/Tokyo date +%H)" -lt 12 ]; then
+            DAY=$(TZ=Asia/Tokyo date +%F)            # 当日 09:35 の取り直し(前夜に作れなかった日だけ動く)
+          else
+            DAY=$(TZ=Asia/Tokyo date -d tomorrow +%F)
+          fi
+          echo "day=$DAY" >> "$GITHUB_OUTPUT"; echo "day=$DAY"
+
+      # ---------------------------------------------------------------- 起動前の確かめ(2026-10-01・9/30 の事故の再発防止)
+      # 開催なし・全レースの印が済み(DB の時計からの起動のとき)= 以降を飛ばして緑。出馬表が DB に足りなければ
+      # 取り込み(nar-refresh・20 分おき)を最大 40 分待つ。1 R も来なければ赤(= 持ち主へ失敗のメール)。
+      - name: precheck (racing day / already done / race card in DB)
+        id: pc
+        env:
+          AUTO: 'no'
+        run: |
+          if [ "$AUTO" = "yes" ]; then A=--auto; else A=; fi
+          python -X utf8 pipeline/ai/v3/v3_precheck.py "${{ steps.d.outputs.day }}" $A --wait-min 40
+
+      # ---------------------------------------------------------------- 固定ファイル(暗号化したリリース資産)
+      - name: download and decrypt fixed files
+        if: steps.pc.outputs.run == 'yes'
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+          TAG: 'v3-assets-20260929'
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY  # Get-Content 経由の末尾改行を除く
+          : "${V3_ASSET_KEY:?secrets.V3_ASSET_KEY が無い}"
+          mkdir -p in v3
+          gh release download "${TAG:-v3-assets-20260929}" -p 'v3_fixed.tar.gz.enc' -D in
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_fixed.tar.gz.enc | tar -C v3 -xzf -
+          rm -f in/v3_fixed.tar.gz.enc
+          du -sh v3/*; df -h / | tail -n 1
+
+      # 2026-10-15 予想の学んだ定数・表(勝つ率の直し・談話の印・他場の曲線など)= 暗号化したリリース v3-consts-20261104(公開のコードに置かない)。
+      #   取れない・開けない・中身が欠けている時は止める(黙って別の値で予想を出さない)。中身の確かめ = pipeline/ai/sealed.py check
+      - name: download sealed constants
+        id: sc
+        if: steps.pc.outputs.run == 'yes'
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          : "${V3_ASSET_KEY:?secrets.V3_ASSET_KEY が無い}"
+          mkdir -p in sealed_consts
+          for i in 1 2 3; do
+            gh release download v3-consts-20261104 -p 'v3_consts.tar.gz.enc' -D in --clobber && break
+            [ "$i" = 3 ] && { echo "::error::⛔ 予想の定数(v3-consts-20261104)を 3 回取れなかった"; exit 1; }
+            sleep 20
+          done
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_consts.tar.gz.enc | tar -C sealed_consts -xzf -
+          rm -f in/v3_consts.tar.gz.enc
+          V3_CONSTS="$PWD/sealed_consts" python -X utf8 pipeline/ai/sealed.py check
+          echo "V3_CONSTS=$PWD/sealed_consts" >> "$GITHUB_ENV"
+
+      # 第 10 版の上乗せの模型(t10_up.json・t10_up_{p3,p1}_s{0,1,2}.txt)。無ければ第 9 版のまま印を出す
+      - name: download t10 uplift models
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-t10-up-20261001 -p 'v3_t10_up.tar.gz.enc' -D in
+          mkdir -p v3/models
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_t10_up.tar.gz.enc | tar -C v3/models -xzf -
+          rm -f in/v3_t10_up.tar.gz.enc
+          ls -l v3/models | grep t10_up
+
+      # 第11版 = 束 t14(37 列の木・談話の 7 項目の係数・談話の集計 8/31 締め・調教欄 2018〜20)。無ければ第10版 + 談話の印のまま
+      - name: download t14 bundle files
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-t14-20261103 -p 'v3_t14.tar.gz.enc' -D in
+          mkdir -p v3/t14
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_t14.tar.gz.enc | tar -C v3/t14 -xzf -
+          rm -f in/v3_t14.tar.gz.enc
+          ls -l v3/t14 v3/t14/cyokyo_old | head -30
+
+      # 第12版 = 束 f10k(材料 1 万個のふるいの 60 列の木 3 本)。無ければ第11版のまま
+      - name: download f10k bundle files
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-f10k-20261103 -p 'v3_f10k.tar.gz.enc' -D in
+          mkdir -p v3/f10k
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_f10k.tar.gz.enc | tar -C v3/f10k -xzf -
+          rm -f in/v3_f10k.tar.gz.enc
+          ls -l v3/f10k
+
+      # 決め 23 = 馬主 5 列を走った時の馬主で作り直して全段を学び直した模型一式 + 南関の走りごとの馬主の写し(v3/kd)。
+      # 展開が全部済んでから一度に上書きする。無ければ今の模型 + 台帳の馬主のまま(v7c_owner は写しが無いと使わない)
+      - name: download owner-rt model set
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-own-20261103 -p 'v3_own.tar.gz.enc' -D in
+          mkdir -p in/own
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_own.tar.gz.enc | tar -C in/own -xzf -
+          test -f in/own/kd/kd_se_owner_nankan.parquet && test -f in/own/models/t9_Y3.txt && test -f in/own/f10k/f10k_bundle.json
+          cp -r in/own/. v3/
+          rm -rf in/own in/v3_own.tar.gz.enc
+          ls -l v3/kd v3/models/t9_* v3/models/t10_up* v3/t14/t14_bundle* v3/f10k
+
+      # 決め 24 = 並び読み(全場の過去 10 走を読む小さな模型・2026-10-12)の固定ファイル(時計のならし・重み)。
+      # 決め 25(2026-10-13)= 次の版(DEFG + 着差の補助)。同じ名前の包み・seq2_live.prep が seq2_prod.json の形で材料の作りを選ぶ。
+      # 公式の表は表の手順の中で落とす(v3_daily → k0_dl・約 3 分)。無ければ材料を作らない = 当日版は第12版のまま
+      - name: download seq2 files
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-seq67-20261103 -p 'v3_seq2.tar.gz.enc' -D in
+          mkdir -p v3/seq2
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_seq2.tar.gz.enc | tar -C v3/seq2 -xzf -
+          rm -f in/v3_seq2.tar.gz.enc
+          ls -l v3/seq2
+
+      # 決め 63(2026-10-30)= 前日版の並び読みの重み(seqpre_model.npz・seqpre_prod.json)を同じ置き場 v3/seq2 へ。
+      # 別の包み・別の手順 = 取れなくても当日版の並び読みの材料(上)は変わらない(前日版は第19版のまま)
+      - name: download seqpre files
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-seqpre-20261103 -p 'v3_seqpre.tar.gz.enc' -D in
+          mkdir -p v3/seq2
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_seqpre.tar.gz.enc | tar -C v3/seq2 -xzf -
+          rm -f in/v3_seqpre.tar.gz.enc
+          ls -l v3/seq2
+
+      # 初出走の層(決め 28・2026-10-14)= 寸評・時計 35 列の木 種 3 本 × 前日版用・直前版用 + debut_tp.json。無ければ第12版のまま(debut_live が落ちて log に出る)
+      - name: download debut files
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-debut-20261103 -p 'v3_debut.tar.gz.enc' -D in
+          mkdir -p v3/debut
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_debut.tar.gz.enc | tar -C v3/debut -xzf -
+          rm -f in/v3_debut.tar.gz.enc
+          ls -l v3/debut
+
+      - name: download tanpyo files
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-tanpyo-20261103 -p 'v3_tanpyo.tar.gz.enc' -D in
+          mkdir -p v3/tanpyo
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_tanpyo.tar.gz.enc | tar -C v3/tanpyo -xzf -
+          rm -f in/v3_tanpyo.tar.gz.enc
+          ls -l v3/tanpyo
+
+      # 2026-10-22 決め 49: 平らな模型 F3 の列の一覧と短評の意味の札の表(直前版の材料を v29 の土台へ書くのに使う)。無ければ書かない
+      - name: download f3 files
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-f3-20261103 -p 'v3_f3.tar.gz.enc' -D in
+          mkdir -p v3/f3
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_f3.tar.gz.enc | tar -C v3/f3 -xzf -
+          rm -f in/v3_f3.tar.gz.enc
+          ls -l v3/f3
+
+      # 談話の札を BERT で読む(2026-10-14)= tohoku-nlp/bert-base-japanese-v3 を談話の札で仕込んだ模型(16 ビット・約 220 MB)。
+      # 無い・読めない便は規則の版(dw_pat)で要約を出す(予想の表と書き込みは止めない)
+      - name: download dwbert files
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-dwbert-20261014 -p 'v3_dwbert.tar.gz.enc' -D in
+          mkdir -p v3/dwbert
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_dwbert.tar.gz.enc | tar -C v3/dwbert -xzf -
+          rm -f in/v3_dwbert.tar.gz.enc
+          ls -l v3/dwbert
+
+      # 束 t14 の談話 14 列: 本文 → intfloat/multilingual-e5-small(手元と同じ版・CPU)。失敗しても第10版 + 談話の印のまま進む
+      - name: install text model (t14 danwa)
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        run: |
+          set -o pipefail
+          pip install -q "torch==2.14.1" --index-url https://download.pytorch.org/whl/cpu
+          pip install -q "sentence-transformers==6.1.0" "transformers==5.18.0"
+          pip install -q "fugashi==1.5.2" "unidic-lite==1.0.8"  # 談話の札の BERT の分かち書き
+          python -c "from sentence_transformers import SentenceTransformer as S; m = S('intfloat/multilingual-e5-small', device='cpu', revision='614241f622f53c4eeff9890bdc4f31cfecc418b3'); print('e5-small', m.encode(['query: 調子は良い'], normalize_embeddings=True).shape)"
+
+      # ---------------------------------------------------------------- 毎日変わる材料(読むだけ)
+      - name: fetch forward copy (db_*_forward_t3)
+        if: steps.pc.outputs.run == 'yes'
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          set -o pipefail  # 11/3 監査: tee が取得の失敗を隠し、予想の段へ進んでいた
+          python -X utf8 pipeline/ai/v3/t7e_forecast.py fetch "${{ steps.d.outputs.day }}" 2>&1 | tee -a out_log.txt
+
+      - name: ability trial pages read on the PC (v3-nk-html)
+        if: steps.pc.outputs.run == 'yes'
+        # 公式サイトは GitHub の機械に 403(2026-11-01〜)。PC が読んで置いた頁を先に入れ、便は足りない日だけ取りに行く。無ければ続行
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          mkdir -p in/nk "$V3_DATA/nk_html"
+          gh release download v3-nk-html -p 'v3_nk_html.tar.gz.enc' -D in/nk --clobber
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/nk/v3_nk_html.tar.gz.enc | tar -C "$V3_DATA/nk_html" -xzf -
+          echo "PC の能力試験の頁: $(ls "$V3_DATA/nk_html" | grep -c '\.html$') 頁・最後 $(ls "$V3_DATA/nk_html" | grep '\.html$' | sort | tail -n 1)"
+
+      - name: fetch ability trials (nk_shiken)
+        if: steps.pc.outputs.run == 'yes'
+        # 失敗しても次に進む(2026-11-01 公式サイトが GitHub の機械に 403 → 60 分の時間切れで印が出なかった。手持ちの表で予想する)
+        continue-on-error: true
+        timeout-minutes: 15
+        run: python -X utf8 pipeline/ai/v3/t7e_forecast.py nk "${{ steps.d.outputs.day }}" 2>&1 | tee -a out_log.txt
+
+      - name: fetch pedigree and JRA runs of the day's runners (nk_pedjra)
+        if: steps.pc.outputs.run == 'yes'
+        # 失敗しても次に進む(live が無い・壊れていれば v7d_run は固定ファイルのまま動く)
+        continue-on-error: true
+        timeout-minutes: 15
+        run: python -X utf8 pipeline/ai/v3/nk_pedjra.py "${{ steps.d.outputs.day }}" "$V3_KD" 2>&1 | tee -a out_log.txt
+
+      # ---------------------------------------------------------------- 前日版の表と書き込み(ここだけ本番の鍵を渡す)
+      # 2026-10-31 通信量: 公式の表(k0_dl)の前回分を便のキャッシュで持ち越し、直近の月だけ読み直す(7 日に 1 回は丸ごと)。
+      # 1 日 1 つ(k0-UTC の日付)だけ残す。無ければ k0_dl は今まで通り丸ごと読む(安全側)。
+      # 公開の repo の cache は他人の PR の便からも読める = 中身は V3_ASSET_KEY で暗号化して置く(鍵が違えば丸ごとに戻るだけ)。
+      - name: k0 cache key
+        id: k0k
+        run: echo "k=k0-$(date -u +%F)" >> "$GITHUB_OUTPUT"
+      - name: restore k0 cache
+        id: k0r
+        uses: actions/cache/restore@v6
+        with:
+          path: k0enc
+          key: ${{ steps.k0k.outputs.k }}
+          restore-keys: k0-
+      - name: open k0 cache
+        if: steps.k0r.outputs.cache-matched-key != ''
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          mkdir -p k0cache
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in k0enc/k0.tar.gz.enc | tar -C k0cache -xzf - || { echo "k0 cache: 開けない → 丸ごと読む"; rm -rf k0cache; }
+      - name: table (pre) and write marks (REST upsert only)
+        if: steps.pc.outputs.run == 'yes'
+        env:
+          K0_CACHE: ${{ github.workspace }}/k0cache
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          WRITE: 'no'  # 回し直しは書かない(固定)
+          V3_DUMP_FEATS: '1'  # 照合用の材料 csv(暗号化した成果物にだけ入る)
+          KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}  # 談話の印: nar_kb_danwa に無いレースを競馬ブックの頁から読む(danwa_marks.py)
+          KEIBABOOK_PASSWORD: ${{ secrets.KEIBABOOK_PASSWORD }}
+          KB_DATA_DIR: /tmp/kbdata_v3
+          V3_SEQ2: v3/seq2  # 並び読みの時計のならし(上の download seq2 files)
+          V3_OFFICIAL: v3/official  # 並び読みの公式の表(v3_daily が落とす)
+          V3_DEBUT: v3/debut  # 初出走の層の模型(上の download debut files)
+          V3_TANPYO: v3/tanpyo  # 全馬の短評の層の模型・前走の元(上の download tanpyo files)
+          V3_DWBERT: v3/dwbert  # 談話の札の BERT(上の download dwbert files)
+          V3_F3: v3/f3  # 決め 49 F3 の列の一覧・意味の札の表(上の download f3 files)
+        run: |
+          set -o pipefail
+          mkdir -p out
+          W=  # --write は付けない
+          echo "day=${{ steps.d.outputs.day }} write=$WRITE"
+          python -X utf8 pipeline/ai/v3/v3_daily.py "${{ steps.d.outputs.day }}" out $W 2>&1 | tee -a out_log.txt
+
+      - name: seal table csv with V3_ASSET_KEY
+        if: always() && steps.pc.outputs.run == 'yes'
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          mkdir -p sealed_csv
+          ls out/*.csv >/dev/null 2>&1 || { echo "out/*.csv が無い"; exit 0; }
+          cp out_log.txt out/ 2>/dev/null || true; tar -C out -czf - $(cd out && ls *.csv *.json *.txt 2>/dev/null) | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:V3_ASSET_KEY -out sealed_csv/nar-ai-v3-csv.tar.gz.enc
+          ls -l sealed_csv
+      - uses: actions/upload-artifact@v7
+        if: always() && steps.pc.outputs.run == 'yes'
+        with:
+          name: v3-pre-replay-${{ matrix.day }}
+          path: sealed_csv/
+          retention-days: 14
+          if-no-files-found: warn
+          
+      # ---------------------------------------------------------------- v29(市場のずれ模型)の前日の土台 → 当日の便 v3-gap-live が読む
