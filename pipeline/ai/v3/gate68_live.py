@@ -9,7 +9,8 @@
 窓の終わり(含まない): 直前版 = その日・前日版 = 前の日(前日 14:30 に前の日の結果は無い)。直前版の便の時に前の日の結果が DB に
 そろっていない場は、その場だけ前日版と同じ窓に落とす(決め書 §9)。
 窓の率 = その日に出した行の直しの前の p3(meta.g68.p0・無い行 = 第 22 版までの行は meta.runners の p3)。直前版の窓は直前の行
-(直前の行が無い R は朝の行)・前日版の窓は朝の行。答え = 本番 DB の nar_runs(取消・除外を除く・競走中止は着外として残す)。
+(直前の行が無い R は朝の行)・前日版の窓は朝の行。DB に行の無い R(2026-09 = 南関の v3-9 の行が 9/30 より前に無い)は、
+第22版の前日の便を手元で回し直した前日版の率(暗号化の定数の g68_sept.csv)で埋める(直前版の窓も同じ前日版の率)。答え = 本番 DB の nar_runs(取消・除外を除く・競走中止は着外として残す)。
 開催日 = nar_races の取りやめでないレースのある日 + 答えのある日。重み・学びは無い。
 定数(WIN・LAM56・LAMM・GAP・TAG)は暗号化したリリース v3-consts の consts.json の g68(公開のコードに数を置かない)。
 """
@@ -32,6 +33,7 @@ KEEP = ('中止', '失格')   # 着順の無い馬のうち着外で残す馬(�
 KEY = ['track', 'race_date', 'race_no']
 MIN_N = 5                # 窓に入れる R・直しを足す R の頭数の下限(研究の数える表 = 5 頭以上の R だけ)
 MK = {1: '◎', 2: '○', 3: '▲', 4: '△', 5: '△'}  # seqpre_live.MK と同じ
+SEPT = 'g68_sept.csv'    # 窓の元の補い(DB に南関の印の行が無い 2026-09 の第22版の前日版の率・研究 src/f5_scripts/gate68_sept_run.py)
 _C = None
 
 
@@ -147,8 +149,16 @@ def fetch(d0, day, timing):
     return marks, runs, races
 
 
-def window_rows(marks, timing):
-    """印の行 → 馬ごとの直しの前の p3(track・race_date・race_no・umaban・p3・src)。直前版は直前の行(無い R は朝の行)"""
+def sept_rows():
+    """DB に南関の印の行が無い頃(2026-09)の第22版の前日版の率(手元で作り直した表・暗号化の定数の g68_sept.csv)"""
+    import sealed
+    x = pd.read_csv(sealed.path(SEPT), dtype={'track': str, 'race_date': str})
+    return x.assign(race_no=x.race_no.astype(int), umaban=x.umaban.astype(int), p3=x.p3.astype(float))
+
+
+def window_rows(marks, timing, sept=None):
+    """印の行 → 馬ごとの直しの前の p3(track・race_date・race_no・umaban・p3・src)。直前版は直前の行(無い R は朝の行)。
+    DB に行が無い R は 9 月の表(sept = sept_rows())から読む(src = sp・直前版の窓も前日版の率で代わり = sp_mo)"""
     best = {}
     for r in marks:
         if timing == 'morning' and r['timing'] != 'morning':
@@ -164,7 +174,12 @@ def window_rows(marks, timing):
             g = p0.get(str(n), x.get('p3'))
             if g is not None:
                 rows.append((t, d, rn, n, float(g), ('g0' if str(n) in p0 else 'p3') + ('' if r['timing'] == timing else '_mo')))
-    return pd.DataFrame(rows, columns=['track', 'race_date', 'race_no', 'umaban', 'p3', 'src'])
+    W = pd.DataFrame(rows, columns=['track', 'race_date', 'race_no', 'umaban', 'p3', 'src'])
+    if sept is not None and len(sept):
+        s = sept.merge(W[KEY].drop_duplicates().assign(_db=1), on=KEY, how='left')
+        s = s[s._db.isna()][KEY + ['umaban', 'p3']].assign(src='sp' + ('' if timing == 'morning' else '_mo'))
+        W = pd.concat([W, s], ignore_index=True)
+    return W
 
 
 def answers(runs, min_n=MIN_N):
@@ -204,7 +219,7 @@ def build(marks, runs, races, day, timing):
     ans = answers(runs)
     done = answers([r for r in runs if str(r['race_date'])[:10] == (pd.Timestamp(day) - pd.Timedelta(days=1)).strftime('%Y-%m-%d')], 1)  # 前の日の結果の入った R
     days = race_days(races, ans, day)
-    W = window_rows(marks, timing)
+    W = window_rows(marks, timing, sept_rows())
     D = W.merge(ans, on=KEY + ['umaban'], how='inner')
     lag = {}
     prev = (pd.Timestamp(day) - pd.Timedelta(days=1)).strftime('%Y-%m-%d')
@@ -221,6 +236,7 @@ def build(marks, runs, races, day, timing):
     nR = W[KEY].drop_duplicates()
     no_ans = int(len(nR.merge(ans[KEY].drop_duplicates(), how='left', indicator=True).query('_merge == "left_only"')))
     st = {'rows': int(len(D)), 'R': int(D[KEY].drop_duplicates().shape[0]), 'g0': int((D.src.str.startswith('g0')).sum()),
+          'sp': int(D.src.str.startswith('sp').sum()), 'd0': (str(D.race_date.min()) if len(D) else None),
           'mo': int(D.src.str.endswith('_mo').sum()), 'no_ans_R': no_ans,
           'lag1': sorted(t for t, v in lag.items() if v and t in {k[0] for k in T})}
     return {'T': T, 'lag': lag, 'st': st, 'timing': timing, 'day': day}
