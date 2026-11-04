@@ -188,9 +188,9 @@ class ClassFirstTest(unittest.TestCase):
             old = _old_day_cell_going(rows, bb, bd, dd)
             new = baba.day_cell_going(rows, bb, bd, dd)
             new2 = baba.day_cell_going(rows, bb, bd, dd, stages=baba.GOING_STAGES, none_band="dist", info={})
-            # d1/g1(10/26 距離の直し)は足しただけ= それ以外は書き換え前と同じ
-            new = {k: v for k, v in new.items() if k not in ("d1", "g1")}
-            new2 = {k: v for k, v in new2.items() if k not in ("d1", "g1")}
+            # d1/g1(10/26 距離の直し)・r(11/4 1 着の基準)は足しただけ= それ以外は書き換え前と同じ
+            new = {k: v for k, v in new.items() if k not in ("d1", "g1", "r")}
+            new2 = {k: v for k, v in new2.items() if k not in ("d1", "g1", "r")}
             self.assertEqual(old, new, d)
             self.assertEqual(old, new2, d)
             n_cmp += 1 if old else 0

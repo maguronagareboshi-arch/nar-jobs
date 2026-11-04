@@ -25,6 +25,12 @@
     ⛔南関 4 場は予想 AI の日の値(nar_meta nankan_d5= SI5 と同じ D5)にそろえる(overlay_ai・"s":"ai")。
     ⛔切替の初回だけ baba-rebuild 便(--rebuild-all)で確定済みの日にも d1/g1 を付ける。
 
+  ⛔2026-11-04 開催日ページ「この日の時計」用に going/classfirst のセルへ "r" を足す= {"R番号": 1 着の基準の秒(小数 1 桁)}。
+    基準= d(良馬場比)の計算が使う、同じ場×距離×クラス帯(→退避の段)×going=良×着順=1 の中央値そのもの(day_cell_going の med_of)。
+    基準が無いレース(帯なし= classfirst では外す・標本不足)は入れない。セルの d が出たときだけ付ける。
+    blend_proj/overlay_ai は d/d1 だけを書き換える= "r" は動かない(画面の「ふだん」は南関も同じ基準)。
+    ⛔確定済みの日に "r" を付けるには baba-rebuild 便(--rebuild-all)が要る。
+
   ⛔as-of(§17 監査 2026-09-22 で「as-of でない」と判定された点の直し)
     日 d の標準は **race_date < d**= その日も、その日より後も標準に入れない。
     さらに **一度確定した日の値は二度と上書きしない**。組み直すのは
@@ -359,7 +365,7 @@ def day_cell_going(day_rows, by_band_g, by_dist_g, d, stages=None, none_band="di
             info["reach_" + nm] = [0] * (len(stages) + 1)
             info["race_" + nm], info["stage_" + nm] = {}, {}
         info["drop"] = 0
-    per_d, per_g, st_d, st_g, dist_r = {}, {}, {}, {}, {}
+    per_d, per_g, st_d, st_g, dist_r, par1 = {}, {}, {}, {}, {}, {}
     for dist, band, t, going, rno, fin in day_rows:
         if not fin or fin > TOP_N:
             continue
@@ -371,6 +377,8 @@ def day_cell_going(day_rows, by_band_g, by_dist_g, d, stages=None, none_band="di
         m, i = med_of(dist, band, GOING_BASE, fin)
         if info is not None:
             info["reach_d"][i] += 1
+        if m is not None and fin == 1 and rno is not None:
+            par1[str(rno)] = round(m, 1)       # 11/4 開催日ページ「この日の時計」のふだん= d に使った 1 着の基準そのもの
         if m is not None:
             per_d.setdefault(rno, []).append(t - m)
             st_d.setdefault(rno, []).append(i)
@@ -397,6 +405,8 @@ def day_cell_going(day_rows, by_band_g, by_dist_g, d, stages=None, none_band="di
     if len(dv) >= MIN_RACES:
         out["d"], out["n"], out["devs"] = round(statistics.median(dv), 1), len(dv), dv
         out["d1"] = round(statistics.median([v * 1000.0 / dist_r[r_] for r_, v in dr]), 2)
+        if par1:
+            out["r"] = dict(sorted(par1.items(), key=lambda kv: int(kv[0]) if kv[0].isdigit() else 999))
     if len(gv) >= MIN_RACES:
         out["g"], out["ng"] = round(statistics.median(gv), 1), len(gv)
         out["g1"] = round(statistics.median([v * 1000.0 / dist_r[r_] for r_, v in gr]), 2)
@@ -483,7 +493,7 @@ def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=
                     info_of[(date, track)] = inf
                 if "d" not in c and "g" not in c:
                     continue
-                cell = {k: c[k] for k in ("d", "g", "n", "ng", "d1", "g1") if k in c}
+                cell = {k: c[k] for k in ("d", "g", "n", "ng", "d1", "g1", "r") if k in c}
                 k = _main_going(rows)
                 if k:
                     cell["k"] = k

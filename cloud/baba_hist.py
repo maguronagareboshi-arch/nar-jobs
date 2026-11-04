@@ -42,7 +42,8 @@ import cond_stats  # noqa: E402
 DIR = "baba-hist/"
 FIRST_DATE = dt.date(2014, 1, 1)     # nar_races の最古(2026-10-17 実測)
 DAILY_DAYS = 14                      # 毎朝 組み直す候補の日数(確定済みは据え置くので実際は p と新しい日だけ)
-KEEP = ("d", "g", "d1", "g1", "k", "p", "s")   # d1/g1= 補正タイム用の 1000m あたり・s="ai"= 南関は予想 AI の値(2026-10-26)
+KEEP = ("d", "g", "d1", "g1", "k", "p", "s", "r")   # d1/g1= 補正タイム用の 1000m あたり・s="ai"= 南関は予想 AI の値(2026-10-26)
+#   r= {R番号: 1 着の基準の秒}(2026-11-04 開催日ページ「この日の時計」・baba.py の day_cell_going)
 
 
 def log(msg):
