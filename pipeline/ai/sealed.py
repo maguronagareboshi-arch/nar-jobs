@@ -22,6 +22,7 @@ NEED = {'p1_follow': ['FORM', 'TAG'], 'danwa_marks': ['CONST'], 't14_bundle': ['
         'awase60': ['W1', 'W3', 'W1_PRE', 'W3_PRE', 'SD', 'TAG'],
         'c67_sand': ['SPANS', 'Q', 'TAG'],   # 2026-11-03 決め 67-1 大井の砂替えの馬場差を寄せない場・期間(t4_base._sand)
         'g68': ['WIN', 'LAM56', 'LAMM', 'GAP', 'TAG'],   # 2026-11-04 決め 68 南関 枠の内外の有利の直し(v3/gate68_live)
+        'pt69': ['A', 'K', 'TAG'],   # 2026-11-04 決め 69 南関 前日版の 3 着内の率の温度(v3/pre69_live)
         'v3n_rb61': ['W', 'WIN', 'LAM', 'gamma', 'nb', 'curve', 'TAG']}   # 2026-10-31 決め 61 他場の 2 本目の木の混ぜ・内外の有利(v3n_rb61)   # 2026-10-28 決め 60 併せ馬の相手の層(awase_live)   # 2026-10-27 サイトの指数の表示の直し(si5_store.disp)   # 2026-10-22 決め 49 F3 の混ぜの重み
 _C = None
 
