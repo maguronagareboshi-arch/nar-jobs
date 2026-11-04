@@ -30,6 +30,17 @@
     基準が無いレース(帯なし= classfirst では外す・標本不足)は入れない。セルの d が出たときだけ付ける。
     blend_proj/overlay_ai は d/d1 だけを書き換える= "r" は動かない(画面の「ふだん」は南関も同じ基準)。
     ⛔確定済みの日に "r" を付けるには baba-rebuild 便(--rebuild-all)が要る。
+  ⛔2026-11-04 同じセルへ "rg"(組の差)と "pc"(前半)を足す(add_grp_front・d/g/d1/g1/r は変えない)。
+    "rg" = {"R番号": 秒(小数 1 桁)}= 組の箱の差。級と組= レース名(NFKC)の (C1|C2|C3|A|B|[23]歳)-(数字)・
+      名に「選抜」「選定」= 級ごとに「選抜」の箱(KISHA_SEPARATE で記者選抜を分ける)。重賞・準重賞は外す。
+      箱= C3 は 1-3・4-7・8-11・12-15・16-19・20+/ほかの級は組番号(7 以上は 7)。
+      表= その場の、その月の 1 日より前 3 年の 1 着の時計 t。res = t − 同じ級×距離の中央値。
+      日の速さ(res − 箱の差 の日の平均)と箱の差(res − 日の速さ の平均)を 4 回交互に求め、
+      級の全レース(選抜も含む)の重み付き平均を引く= "r"(級の帯の中央値)からのずれ。15 R 未満の箱・0.0 は入れない。
+      表は場×月ごとに 1 回だけ組む(group_table)。
+    "pc" = {"R番号": 秒(小数 2 桁)}= 前半。最初のコーナーで 1 番手(1 頭だけ)の馬の (走破 − 上がり3F) ÷ (距離 − 600) × 200
+      − 上がり3F/3 から、同じ場×距離の その日より前 1 年の中央値(8 本以上)を引く。先頭が分からない・上がりなし・≤800m は入れない。
+      ⛔鍵を "p" にしないのは "p":true(暫定)と重なるため(FRONT_KEY)。
 
   ⛔as-of(§17 監査 2026-09-22 で「as-of でない」と判定された点の直し)
     日 d の標準は **race_date < d**= その日も、その日より後も標準に入れない。
@@ -82,6 +93,7 @@ import re
 import statistics
 import sys
 import time
+import unicodedata
 import urllib.request
 
 try:
@@ -412,6 +424,186 @@ def day_cell_going(day_rows, by_band_g, by_dist_g, d, stages=None, none_band="di
         out["g1"] = round(statistics.median([v * 1000.0 / dist_r[r_] for r_, v in gr]), 2)
     return out
 
+
+# ─── 11/4 開催日ページ「この日の時計」の rg(組の差)と前半(FRONT_KEY)────────────────────
+# ⛔前半の鍵は "p" にしない= "p":true は既に「暫定(当日)」の印。FRONT_KEY を変えれば鍵名だけ変わる
+FRONT_KEY = "pc"
+GRP_KEYS = ("rg", FRONT_KEY)
+GRP_YEARS_DAYS = 1095        # 組の表= その月の 1 日より前 3 年
+GRP_ITERS = 4                # 「日の速さ」と「箱の差」を交互に求める回数
+GRP_MIN = 15                 # 箱のレース数がこれ未満は出さない
+KISHA_SEPARATE = False       # 「記者選抜」を選抜と別の箱にするか(⛔高知の本物で差 0.2 秒以上なら True= 未測定)
+FRONT_DAYS = 365             # 前半の基準= 同じ場×距離の その日より前 1 年の中央値
+FRONT_MIN = MIN_BAND
+_GRP_RE = re.compile(r"(C1|C2|C3|A|B|[23]歳)-([0-9]+)")
+_CLS_RE = re.compile(r"(?<![A-Za-z])(C1|C2|C3|A|B|[23]歳)(?![A-Za-z])")
+
+
+def group_box(race_name, race_kind=None):
+    """レース名 → (級, 箱) / None。箱= C3 は 1-3・4-7・8-11・12-15・16-19・20+、ほかの級は組番号(7 以上は "7")・
+    名に「選抜」「選定」= 級ごとに "選抜"(KISHA_SEPARATE なら「記者選抜」は "記者選抜")。重賞・準重賞は None"""
+    if str(race_kind or "") in OP_KINDS:
+        return None
+    t = unicodedata.normalize("NFKC", str(race_name or ""))
+    if "選抜" in t or "選定" in t:
+        m = _CLS_RE.search(t)
+        if not m:
+            return None
+        return m.group(1), ("記者選抜" if KISHA_SEPARATE and "記者選抜" in t else "選抜")
+    m = _GRP_RE.search(t)
+    if not m:
+        return None
+    cls, n = m.group(1), int(m.group(2))
+    if n <= 0:
+        return None
+    if cls == "C3":
+        for hi, lab in ((3, "1-3"), (7, "4-7"), (11, "8-11"), (15, "12-15"), (19, "16-19")):
+            if n <= hi:
+                return cls, lab
+        return cls, "20+"
+    return cls, str(min(n, 7))
+
+
+def group_table(rows, lo, hi):
+    """1 場ぶんの組の差の表。rows= [(date, dist, 級, 箱, 1 着の時計)]・期間 [lo, hi)。
+    res = 時計 − 同じ級×距離の中央値 → 日の速さ(res − 箱の差 の日ごとの平均)と箱の差(res − 日の速さ の平均)を
+    GRP_ITERS 回交互に → 級ごとに「その級の全レースの重み付き平均」を引く。戻り= {(級, 箱): (差, レース数)}"""
+    xs = [r for r in rows if lo <= r[0] < hi]
+    if not xs:
+        return {}
+    by_cd = {}
+    for date, dist, cls, box, t in xs:
+        by_cd.setdefault((cls, dist), []).append(t)
+    med = {k: statistics.median(v) for k, v in by_cd.items()}
+    res = [(date, (cls, box), t - med[(cls, dist)]) for date, dist, cls, box, t in xs]
+    box_d = {b: 0.0 for _, b, _ in res}
+    for _ in range(GRP_ITERS):
+        acc = {}
+        for date, b, v in res:
+            acc.setdefault(date, []).append(v - box_d[b])
+        day_d = {k: sum(v) / len(v) for k, v in acc.items()}
+        acc = {}
+        for date, b, v in res:
+            acc.setdefault(b, []).append(v - day_d[date])
+        box_d = {k: sum(v) / len(v) for k, v in acc.items()}
+    cnt = {}
+    for _, b, _ in res:
+        cnt[b] = cnt.get(b, 0) + 1
+    ctr = {}
+    for b, v in box_d.items():
+        s_ = ctr.setdefault(b[0], [0.0, 0])
+        s_[0] += v * cnt[b]
+        s_[1] += cnt[b]
+    return {b: (v - ctr[b[0]][0] / ctr[b[0]][1], cnt[b]) for b, v in box_d.items()}
+
+
+def front_value(dist, t, l3f):
+    """前半= (走破 − 上がり3F) を (距離 − 600) で割って 200m あたり − 上がり3F/3。距離 ≤ 800m・欠けは None"""
+    try:
+        dist, t, l3f = int(dist), float(t), float(l3f)
+    except (TypeError, ValueError):
+        return None
+    if dist <= 800 or t <= 0 or l3f <= 0 or t <= l3f:
+        return None
+    return (t - l3f) / (dist - 600) * 200.0 - l3f / 3.0
+
+
+def _first_corner(corners):
+    root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    if root not in sys.path:
+        sys.path.insert(0, root)
+    from pipeline.facts import first_corner      # ⛔通過順の読み方は pipeline/facts.py の 1 か所だけ
+    return first_corner(corners)
+
+
+def race_rows_of(best, meta, runs):
+    """組の差・前半に使うレースごとの行。best= {(場, 日, R, 着順): REST の行}(同着は速い方)・
+    meta= {(場, 日, R): nar_races の行(race_name・race_kind・distance_m・corners)}・
+    runs= last3f 付きの nar_runs の行(全着順。先頭の馬を探すだけ)。
+    戻り= [(場, 日, R, 距離, 級, 箱 or None, 1 着の時計 or None, 前半 or None)]"""
+    by_no = {}
+    for w in runs or []:
+        if w.get("runner_number") is not None:
+            by_no[(w["track"], w["race_date"], w["race_no"], int(w["runner_number"]))] = w
+    out = []
+    for kk, m in meta.items():
+        track, date, rno = kk
+        if track == BANEI or track not in TRACK2PREFIX or not m.get("distance_m"):
+            continue
+        dist = int(m["distance_m"])
+        gb = group_box(m.get("race_name"), m.get("race_kind"))
+        w1 = best.get((track, date, rno, 1))
+        t1 = float(w1["time_sec"]) if w1 and w1.get("time_sec") is not None else None
+        fv = None
+        fc = _first_corner(m.get("corners")) if m.get("corners") else None
+        lead = [n for n, r in (fc or {}).items() if r == 1]
+        if len(lead) == 1:
+            w = by_no.get((track, date, rno, int(lead[0])))
+            if w and w.get("time_sec") is not None and w.get("last3f") is not None:
+                fv = front_value(dist, w["time_sec"], w["last3f"])
+        if gb is None and fv is None:
+            continue
+        out.append((track, date, rno, dist, gb[0] if gb else None, gb[1] if gb else None, t1, fv))
+    return out
+
+
+def add_grp_front(days, frozen, rrows, rebuild_all=False):
+    """組み直したセル(d のあるもの)に "rg"={R: 秒(小数 1 桁)}・FRONT_KEY={R: 秒(小数 2 桁)}を足す。
+    据え置きのセル(frozen と同じ物)は触らない。d・g・d1・g1・r は変えない。戻り= 足した場日の数"""
+    frozen = frozen or {}
+    by_tr = {}
+    for row in rrows or []:
+        by_tr.setdefault(row[0], []).append(row)
+    grp_rows, fr_rows, day_rows = {}, {}, {}
+    for track, xs in by_tr.items():
+        grp_rows[track] = [(d, dist, c, b, t) for _tr, d, _r, dist, c, b, t, _f in xs if b and t is not None]
+        fr = {}
+        for _tr, d, _r, dist, _c, _b, _t, f in sorted(xs, key=lambda r: r[1]):
+            if f is not None:
+                fr.setdefault(dist, []).append((d, f))
+        fr_rows[track] = fr
+        for row in xs:
+            day_rows.setdefault((track, row[1]), []).append(row)
+    tables, n = {}, 0
+    for date, cells in days.items():
+        for track, pf in TRACK2PREFIX.items():
+            c = cells.get(pf)
+            if not c or "d" not in c:
+                continue
+            if not rebuild_all and c is (frozen.get(date) or {}).get(pf):
+                continue
+            rows = day_rows.get((track, date))
+            if not rows:
+                continue
+            d0 = dt.date.fromisoformat(date)
+            ms = d0.replace(day=1)
+            tk = (track, ms)
+            if tk not in tables:
+                tables[tk] = group_table(grp_rows.get(track, []),
+                                         (ms - dt.timedelta(days=GRP_YEARS_DAYS)).isoformat(), ms.isoformat())
+            tb = tables[tk]
+            rg, fv = {}, {}
+            lo1 = (d0 - dt.timedelta(days=FRONT_DAYS)).isoformat()
+            for _tr, _d, rno, dist, cls, box, _t, f in rows:
+                if rno is None:
+                    continue
+                if box:
+                    v = tb.get((cls, box))
+                    if v and v[1] >= GRP_MIN and round(v[0], 1) != 0:
+                        rg[str(rno)] = round(v[0], 1)
+                if f is not None:
+                    seq = fr_rows.get(track, {}).get(dist, [])
+                    vals = _vals_in(seq, [(lo1, date)])
+                    if len(vals) >= FRONT_MIN:
+                        fv[str(rno)] = round(f - statistics.median(vals), 2)
+            srt = lambda dd: dict(sorted(dd.items(), key=lambda kv: int(kv[0]) if kv[0].isdigit() else 999))  # noqa: E731
+            if rg:
+                c["rg"] = srt(rg)
+            if fv:
+                c[FRONT_KEY] = srt(fv)
+            if rg or fv:
+                n += 1
+    return n
 
 
 def _main_going(rows):
@@ -754,15 +946,22 @@ def main():
     if proj:
         # ⛔projhalf だけ全着順を読む(馬の見分け= 馬名+生年月日)。1〜5着は同じ行から取る
         allruns = rows_all(base, key, "/rest/v1/nar_runs?select=track,race_date,race_no,finish,runner_number,time_sec,"
-                                      "horse_name,birth_date"
+                                      "horse_name,birth_date,last3f"
                                       f"&finish=gte.1&time_sec=not.is.null&finish_note=is.null&race_date=gte.{since}"
                                       "&order=race_date.asc,track.asc,race_no.asc,finish.asc,runner_number.asc")
         wins = [w for w in allruns if int(w["finish"]) <= TOP_N]
+        lead_runs = allruns
     else:
-        wins = rows_all(base, key, "/rest/v1/nar_runs?select=track,race_date,race_no,finish,runner_number,time_sec"
+        wins = rows_all(base, key, "/rest/v1/nar_runs?select=track,race_date,race_no,finish,runner_number,time_sec,last3f"
                                    f"&finish=gte.1&finish=lte.{TOP_N}&time_sec=not.is.null&finish_note=is.null&race_date=gte.{since}"
                                    "&order=race_date.asc,track.asc,race_no.asc,finish.asc,runner_number.asc")
-    races = rows_all(base, key, "/rest/v1/nar_races?select=track,race_date,race_no,distance_m,race_name,going,race_kind"
+        # 前半(FRONT_KEY)の先頭の馬は 6 着以下もある= 前半の窓(表示 90 日+基準 1 年)ぶんだけ 6 着以下も読む
+        since_f = max(since, (today - dt.timedelta(days=WINDOW_DAYS + FRONT_DAYS + 1)).isoformat())
+        lead_runs = wins + rows_all(base, key, "/rest/v1/nar_runs?select=track,race_date,race_no,finish,runner_number,time_sec,last3f"
+                                    f"&finish=gte.{TOP_N + 1}&time_sec=not.is.null&last3f=not.is.null&finish_note=is.null"
+                                    f"&race_date=gte.{since_f}"
+                                    "&order=race_date.asc,track.asc,race_no.asc,finish.asc,runner_number.asc")
+    races = rows_all(base, key, "/rest/v1/nar_races?select=track,race_date,race_no,distance_m,race_name,going,race_kind,corners"
                                 + (",surface" if proj else "") +
                                 f"&race_date=gte.{since}&order=race_date.asc,track.asc,race_no.asc")
     meta = {(r["track"], r["race_date"], r["race_no"]): r for r in races}
@@ -807,6 +1006,9 @@ def main():
     days, rebuilt, devs = build_days(samples, targets, bl, today=today,
                                      frozen=frozen, rebuild_all=a.rebuild_all)
     days = {d: v for d, v in days.items() if d >= lo}      # 90日の窓から出た日は落とす
+    if bl in GOING_LIKE:
+        n_gf = add_grp_front(days, frozen, race_rows_of(best, meta, lead_runs), a.rebuild_all)
+        log(f"組の差 rg・前半 {FRONT_KEY} を足した: {n_gf} 場日")
     if proj:
         todo = {d for d, cells in days.items()
                 for pf, c in cells.items() if a.rebuild_all or c is not (frozen.get(d) or {}).get(pf)}
