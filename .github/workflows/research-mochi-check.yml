@@ -1,12 +1,33 @@
 # 研究用・1 回きり。レース画面の持ちタイム表(各馬の最速)の並びが着順にどれだけ近いかと、何を足すと近くなるか
-# (2026-11-04・cloud/research_mochi_check.py)。⛔読み取りだけ(REST の単純 select と公開バケットの json)。結果は artifact。
+# (2026-11-04・cloud/research_mochi_check.py)。その 1 は済み(fe7ccd1)。今は その 2(--part 2)=
+# 園田で補正が効かない原因(前の出し方 classfirst の d1 を園田・姫路で組む)と古さの効き目の分解。
+# ⛔読み取りだけ(baba_hist.py --dry-run・REST の単純 select と公開バケットの json)。公開バケットにも DB にも書かない。結果は artifact。
 name: research-mochi-check
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
+  classfirst:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install numpy==1.26.4 pandas==2.2.3
+      - name: baba classfirst sonoda himeji
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python cloud/baba_hist.py --dry-run --full --rebuild-all --venue sonoda,himeji --baseline classfirst --out out/classfirst
+      - uses: actions/upload-artifact@v7
+        with:
+          name: baba-classfirst
+          path: out/
   check:
+    needs: classfirst
     runs-on: ubuntu-latest
     timeout-minutes: 240
     steps:
@@ -15,13 +36,17 @@ jobs:
         with:
           python-version: '3.12'
       - run: pip install numpy==1.26.4 pandas==2.2.3
-      - name: mochi check
+      - uses: actions/download-artifact@v7
+        with:
+          name: baba-classfirst
+          path: out/
+      - name: mochi check part 2
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: python cloud/research_mochi_check.py --out out/RESULT_mochi_time_check.md
+        run: python cloud/research_mochi_check.py --part 2 --cf out/classfirst --out out/RESULT_mochi_time_check2.md
       - uses: actions/upload-artifact@v7
         if: always()
         with:
-          name: mochi-check
+          name: mochi-check2
           path: out/
