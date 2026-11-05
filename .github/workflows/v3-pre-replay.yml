@@ -1,6 +1,6 @@
 # 南関 第 23 版の前日の便を、過去の日について「書かずに」回し直す研究の便(2026-11-05・枝 wip/v3-pre-replay-1105 だけ)。
 # 中身は master 68b27d2 の nar-ai-v3.yml と同じ段で、次だけ違う:
-#   ・起動 = この枝への push(日付は ops/replay_days.txt・1 行 1 日)・同時に 2 日まで。
+#   ・起動 = この枝への push(日付は ops/replay_days.txt・1 行 1 日)・同時に 8 日まで。
 #   ・本番に書かない: v3_daily.py に --write を付けない・生存の記録(beat)・キャッシュの保存・v29 の土台・A3 の封は外した。
 #   ・出力 = out の表 csv・印の json・記録を V3_ASSET_KEY で暗号化した成果物 v3-pre-replay-<日付>(14 日)。
 # 注意: 過去の日を今 DB にある元で回すので、前の日の 14:30 以降に分かった情報(その日の朝の取消など)が少し入る。
@@ -31,7 +31,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
-      max-parallel: 2
+      max-parallel: 8
       matrix:
         day: ${{ fromJSON(needs.plan.outputs.days) }}
     timeout-minutes: 60
