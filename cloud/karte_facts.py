@@ -20,6 +20,8 @@
 """
 import argparse
 import datetime as dt
+import gzip
+import hashlib
 import json
 import os
 import sys
@@ -45,6 +47,11 @@ PAUSE = 0.0               # 1 本ごとの間(秒)。手元の読むだけの模
 TABLE = "nar_karte_facts"
 PK = "race_date,track,race_no,umaban"
 HIST_FROM = "2014-01-01"  # 通算の始め(楽天 2014〜)
+# 2026-11-05 通信量: KARTE_CACHE(便のキャッシュの置き場)があれば、その日(JST)に読んだ行を控えにし、以後の便は直近 FRESH_DAYS 日だけ
+#   読み直す(cloud/baba.py の rows_cached と同じ考え)。⛔控えは日付と取り方(path)が同じときだけ使う= 1 日 1 回は丸ごと読む・
+#   古い日の後からの直しは翌日に入る。KARTE_CACHE が無ければ今まで通り(手動便 karte-facts.yml は置かない)。
+KARTE_CACHE = os.environ.get("KARTE_CACHE", "")
+FRESH_DAYS = 14
 
 
 def log(msg):
@@ -86,6 +93,75 @@ def rows_all(base, key, path):
         if len(rows) < PAGE:
             return out
         off += PAGE
+
+
+def _cache_today():
+    return dt.datetime.now(JST).date()
+
+
+def _cache_paths(path):
+    h = hashlib.sha1(path.encode("utf-8")).hexdigest()[:24]
+    d = os.path.join(KARTE_CACHE, "k")
+    return d, os.path.join(d, h + ".json.gz"), os.path.join(d, h + ".meta.json")
+
+
+def _cache_load(path, sig):
+    _, f, mf = _cache_paths(path)
+    if not os.path.exists(mf):
+        return None
+    try:
+        with open(mf, encoding="utf-8") as fh:
+            if json.load(fh) != sig:
+                return None
+        with gzip.open(f, "rt", encoding="utf-8") as fh:
+            return json.load(fh)
+    except Exception:  # noqa: BLE001  壊れた控えは丸ごとに戻るだけ
+        return None
+
+
+def _cache_store(path, sig, rows):
+    d, f, mf = _cache_paths(path)
+    os.makedirs(d, exist_ok=True)
+    with gzip.open(f, "wt", encoding="utf-8") as fh:
+        json.dump(rows, fh, ensure_ascii=False)
+    with open(mf, "w", encoding="utf-8") as fh:
+        json.dump(sig, fh)
+    with open(os.path.join(KARTE_CACHE, ".dirty"), "w", encoding="utf-8") as fh:   # 便が控えを置き直す印
+        fh.write("1")
+
+
+def rows_since_cached(base, key, path, today=None):
+    """rows_all(path) と同じ行・同じ順。⛔path の order は race_date.asc から始めること(race_date は主キーの一部= null なし)。
+    控えがあれば FRESH_DAYS 日より前は控えから・それ以後だけ race_date=gte を足して読み直す。"""
+    if not KARTE_CACHE:
+        return rows_all(base, key, path)
+    today = today or _cache_today()
+    sig = {"day": today.isoformat(), "path": path}
+    fresh_from = (today - dt.timedelta(days=FRESH_DAYS)).isoformat()
+    old = _cache_load(path, sig)
+    if old is not None:
+        keep = [r for r in old if str(r["race_date"])[:10] < fresh_from]
+        return keep + rows_all(base, key, "%s&race_date=gte.%s" % (path, fresh_from))
+    rows = rows_all(base, key, path)
+    _cache_store(path, sig, rows)
+    return rows
+
+
+def rows_days_cached(base, key, path, days, today=None):
+    """rows_all(path) と同じ行。path の日付(days)が全部 FRESH_DAYS 日より前なら、その日(JST)の控えをそのまま使う。"""
+    if not KARTE_CACHE:
+        return rows_all(base, key, path)
+    today = today or _cache_today()
+    fresh_from = (today - dt.timedelta(days=FRESH_DAYS)).isoformat()
+    if not days or max(str(x)[:10] for x in days) >= fresh_from:
+        return rows_all(base, key, path)
+    sig = {"day": today.isoformat(), "path": path}
+    old = _cache_load(path, sig)
+    if old is not None:
+        return old
+    rows = rows_all(base, key, path)
+    _cache_store(path, sig, rows)
+    return rows
 
 
 def q_in(values):
@@ -148,7 +224,7 @@ def fetch_history(base, key, names, hi):
     """馬名の束 → その馬名の全走(2014〜hi)。⛔同名の別馬は呼ぶ側が (名前, 生年) で分ける。"""
     out = []
     for part in chunks(sorted(set(names))):
-        out.extend(rows_all(
+        out.extend(rows_since_cached(
             base, key,
             "/rest/v1/nar_runs?select=%s,finish,finish_note,popularity,time_sec"
             "&horse_name=in.(%s)&race_date=gte.%s&race_date=lte.%s"
@@ -160,10 +236,10 @@ def fetch_kb(base, key, names, hi):
     """{(場, 日, R, 馬名): start_note('' は記録あり・出遅れ等の字なし)}。⛔行が無い走= 記録なし。"""
     out = {}
     for part in chunks(sorted(set(names))):
-        for r in rows_all(base, key,
-                          "/rest/v1/nar_kb_runs?select=track,race_date,race_no,umaban,horse_name,start_note"
-                          "&horse_name=in.(%s)&race_date=lte.%s"
-                          "&order=race_date.asc,track.asc,race_no.asc,umaban.asc" % (q_in(part), hi)):
+        for r in rows_since_cached(base, key,
+                                   "/rest/v1/nar_kb_runs?select=track,race_date,race_no,umaban,horse_name,start_note"
+                                   "&horse_name=in.(%s)&race_date=lte.%s"
+                                   "&order=race_date.asc,track.asc,race_no.asc,umaban.asc" % (q_in(part), hi)):
             out[(r["track"], str(r["race_date"])[:10], int(r["race_no"]), r["horse_name"])] = r.get("start_note") or ""
     return out
 
@@ -187,10 +263,10 @@ def fetch_races(base, key, need):
     out = {}
     for t, days in sorted(by_track.items()):
         for part in chunks(sorted(days)):
-            for r in rows_all(base, key,
-                              "/rest/v1/nar_races?select=track,race_date,race_no,post_time,race_name,distance_m"
-                              "&track=eq.%s&race_date=in.(%s)&order=race_date.asc,race_no.asc"
-                              % (urllib.parse.quote(t), q_in(part))):
+            for r in rows_days_cached(base, key,
+                                      "/rest/v1/nar_races?select=track,race_date,race_no,post_time,race_name,distance_m"
+                                      "&track=eq.%s&race_date=in.(%s)&order=race_date.asc,race_no.asc"
+                                      % (urllib.parse.quote(t), q_in(part)), part):
                 out[(r["track"], str(r["race_date"])[:10], int(r["race_no"]))] = r
     return out
 
@@ -203,10 +279,11 @@ def fetch_win_times(base, key, need):
     out = {}
     for t, days in sorted(by_track.items()):
         for part in chunks(sorted(days)):
-            for r in rows_all(base, key,
-                              "/rest/v1/nar_runs?select=track,race_date,race_no,runner_number,time_sec"
-                              "&track=eq.%s&race_date=in.(%s)&finish=eq.1"
-                              "&order=race_date.asc,race_no.asc,runner_number.asc" % (urllib.parse.quote(t), q_in(part))):
+            for r in rows_days_cached(base, key,
+                                      "/rest/v1/nar_runs?select=track,race_date,race_no,runner_number,time_sec"
+                                      "&track=eq.%s&race_date=in.(%s)&finish=eq.1"
+                                      "&order=race_date.asc,race_no.asc,runner_number.asc"
+                                      % (urllib.parse.quote(t), q_in(part)), part):
                 v = karte.num_or_none(r.get("time_sec"))
                 if v is None:
                     continue

@@ -578,6 +578,31 @@ jobs:
       # 夕方(17:00 以降)は先に**明日**の nar_run_facts を焼く(run facts 段は今日と前日だけ= 明日の脚質が空になるため)。
       #   脚質は過去走だけで決まる= 発走前の値として正しい。着順・通過の入った行は当日と翌日の run facts 段が上書きする。
       # §302 karte_facts の失敗は握りつぶさない(段は failure・continue-on-error で後ろは続く)→ 朝なら refresh_morning= fail でやり直し
+      # 2026-11-05 通信量: karte facts の過去走(約 8 万行/便・夕方は 20 便)を便ごとに読み直さない= その日(JST)に読んだ行を
+      #   便のキャッシュで持ち越し、以後の便は直近 14 日だけ読み直す(cloud/karte_facts.py の rows_since_cached)。
+      #   鍵は JST の日付+run_id(前の便の控えを restore-keys で受け取り、新しい控えを足した便だけ置き直す)= 日が変われば丸ごと読む。
+      #   公開の repo の cache は他人の PR の便からも読める= baba と同じくサービスキーの sha256 で暗号化(開けなければ丸ごと読むだけ)。
+      - name: karte cache key
+        id: kck
+        if: '!cancelled()'
+        run: echo "p=karte-v1-$(TZ=Asia/Tokyo date +%F)-" >> "$GITHUB_OUTPUT"
+      - name: restore karte cache
+        id: kcr
+        if: '!cancelled()'
+        uses: actions/cache/restore@v6
+        with:
+          path: karteenc
+          key: ${{ steps.kck.outputs.p }}${{ github.run_id }}
+          restore-keys: ${{ steps.kck.outputs.p }}
+      - name: open karte cache
+        if: ${{ !cancelled() && steps.kcr.outputs.cache-matched-key != '' }}
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          BABA_KEY=$(printf '%s' "$SUPABASE_SERVICE_KEY" | sha256sum | cut -c1-64); export BABA_KEY
+          mkdir -p kartecache
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:BABA_KEY -in karteenc/karte.tar.gz.enc | tar -C kartecache -xzf - || { echo "karte cache: 開けない → 丸ごと読む"; rm -rf kartecache; }
+          rm -f kartecache/.dirty
       - name: karte facts (morning + evening)
         id: am_karte_facts
         if: '!cancelled()'
@@ -585,12 +610,33 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          KARTE_CACHE: ${{ github.workspace }}/kartecache
         run: |
           H=$(TZ=Asia/Tokyo date +%H%M)
           if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ] || [ $((10#$H)) -ge 1700 ]; then
             if [ $((10#$H)) -ge 1700 ]; then T=$(TZ=Asia/Tokyo date -d tomorrow +%F); python cloud/run_facts.py --apply --from "$T" --to "$T" || echo "⚠ 明日($T)の nar_run_facts が焼けない(続行)"; fi
             python cloud/karte_facts.py --apply || { echo "⚠ 分析タブの事実 nar_karte_facts が焼けない(段は失敗・後ろは続行)"; exit 1; }
           else echo "karte facts は朝と 17:00 以降の便だけ(JST $H)=スキップ"; fi
+      - name: seal karte cache
+        id: kcs
+        if: ${{ !cancelled() && steps.am_karte_facts.outcome == 'success' }}
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          [ -f kartecache/.dirty ] || { echo "新しい控えが無い= 置き直さない"; exit 0; }
+          rm -f kartecache/.dirty
+          BABA_KEY=$(printf '%s' "$SUPABASE_SERVICE_KEY" | sha256sum | cut -c1-64); export BABA_KEY
+          rm -rf karteenc; mkdir -p karteenc
+          tar -C kartecache -czf - . | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:BABA_KEY -out karteenc/karte.tar.gz.enc
+          ls -l karteenc
+          echo "ok=1" >> "$GITHUB_OUTPUT"
+      - name: save karte cache
+        if: ${{ !cancelled() && steps.kcs.outputs.ok == '1' }}
+        continue-on-error: true
+        uses: actions/cache/save@v6
+        with:
+          path: karteenc
+          key: ${{ steps.kck.outputs.p }}${{ github.run_id }}
 
       # §99 展開の見立て(今日+明日の出馬表)。朝の便(09:30 前)と 17:07 の便(明日の出馬表が前日夕に出る)だけ
       # ⛔§238a2(2026-09-22)でこの段は **run facts / karte facts の後ろへ移した**。tenkai は
