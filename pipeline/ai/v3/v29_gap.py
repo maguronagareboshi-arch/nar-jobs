@@ -794,12 +794,12 @@ def live(day, base_csv, mdir, write, until):
     done = done_keys(day) if write else set()
     day_done = set()
     # 2026-11-05 組の確率(全 9 券種・AI だけ): 直前の行が固まった後(発走 14.5 分前)に作り、公開バケット cond-stats に置く。
-    #   ⛔失敗しても印・買いの記録は止めない。書く便だけ(dry は作らない)。回し直しの便は置き場の一覧で作り直さない
+    #   ⛔失敗しても印・買いの記録は止めない。書かない便(試し)は上げずに手元の tp_dry/ に書くだけ。回し直しの便は置き場の一覧で作り直さない
     tp_done, tp_try = set(), {}
     try:
         import ticket_prob_live as TP
         tp_done = TP.done_set(day) if write else set()
-        log('組の確率:', '置く' if write else '置かない(dry)', 'もう置いた', len(tp_done), 'R')
+        log('組の確率:', '置く' if write else '置かない(試し = tp_dry/ に書くだけ)', 'もう置いた', len(tp_done), 'R')
     except Exception as e:  # noqa: BLE001
         TP = None
         log('組の確率 読めない(置かない)', type(e).__name__, str(e)[:200])
@@ -819,7 +819,7 @@ def live(day, base_csv, mdir, write, until):
             log('nar_races: 読めない', type(e).__name__)
             time.sleep(20)
             continue
-        if TP is not None and write:
+        if TP is not None:
             for r in races:
                 at = post_at(day, r.get('post_time'))
                 k = f"{day}:{r['track']}:{int(r['race_no'])}"
@@ -827,7 +827,7 @@ def live(day, base_csv, mdir, write, until):
                     continue
                 tp_try[k] = tp_try.get(k, 0) + 1
                 try:
-                    st = TP.publish(day, r['track'], int(r['race_no']))
+                    st = TP.publish(day, r['track'], int(r['race_no']), out_dir=None if write else 'tp_dry')
                     tp_done.add(k)
                     log(f"{r['track']}{int(r['race_no'])}R: 組の確率 {st}")
                 except Exception as e:  # noqa: BLE001  次の回でもう一度(3 回まで)
