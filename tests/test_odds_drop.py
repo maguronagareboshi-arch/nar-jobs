@@ -120,5 +120,63 @@ class TestTrack(unittest.TestCase):
         self.assertIsNone(od.track_prefix("東京"))
 
 
+def crow(kind, c, o0, r0, o1, r1, t0, t1, of=None, fin="2026-11-04T05:25:00+00:00", hf=True, track="盛岡", r=6):
+    """public.combo_drops の 1 行(PostgREST の返り値の形)。時刻は UTC。"""
+    return {"track": track, "race_no": r, "kind": kind, "t0": t0, "t1": t1, "fin": fin, "has_final": hf,
+            "c": c, "o0": o0, "r0": r0, "o1": o1, "r1": r1, "ofin": of}
+
+
+A0, A1 = "2026-11-04T05:22:00+00:00", "2026-11-04T05:23:00+00:00"   # JST 14:22→14:23
+B0, B1 = "2026-11-04T05:20:00+00:00", "2026-11-04T05:21:00+00:00"   # JST 14:20→14:21
+
+
+class TestCombo(unittest.TestCase):
+    def setUp(self):
+        self.rows = [
+            crow("sanrentan", [5, 3, 4], 118.1, 32, 29.8, 4, A0, A1, 30.1),
+            crow("sanrentan", [5, 3, 4], 100.0, 30, 60.0, 9, B0, B1, 30.1),   # 同じ組の別の刻み(下がり小)
+            crow("umaren", [3, 5], 20.0, 6, 9.0, 2, A0, A1, 8.5),
+            crow("wide", [3, 7], 10.0, 8, 4.0, 3, B0, B1, None),
+            crow("umatan", [5, 3], 30.0, 9, 14.0, 4, A0, A1, "13.9"),
+        ]
+        self.wt = [{"id": 1, "track": "盛岡", "race_no": 6, "t": "14:22", "f": False, "w": {"3": "8.2", "5": "2.5"}},
+                   {"id": 2, "track": "盛岡", "race_no": 6, "t": "14:23", "f": False, "w": {"3": "4.6", "5": "3.3"}},
+                   {"id": 3, "track": "盛岡", "race_no": 6, "t": "14:25", "f": True, "w": {"3": "1.0", "5": "9.9"}}]
+        self.runs = [{"track": "盛岡", "race_no": 6, "runner_number": 5, "finish": 1},
+                     {"track": "盛岡", "race_no": 6, "runner_number": 3, "finish": 2},
+                     {"track": "盛岡", "race_no": 6, "runner_number": 4, "finish": 3}]
+
+    def test_race_card(self):
+        x = od.combo_race("2026-11-04", self.rows, self.wt, self.runs)
+        self.assertEqual((x["d"], x["track"], x["r"], x["t0"], x["t1"], x["left"], x["fin"]),
+                         ("2026-11-04", "盛岡", 6, "14:22", "14:23", 2, "B"))
+        self.assertEqual([(i["k"], i["c"]) for i in x["items"]],
+                         [("sanrentan", [5, 3, 4]), ("wide", [3, 7]), ("umaren", [3, 5]), ("umatan", [5, 3])])
+        self.assertEqual(x["items"][0], {"k": "sanrentan", "c": [5, 3, 4], "o0": 118.1, "r0": 32, "o1": 29.8,
+                                         "r1": 4, "of": 30.1})
+        self.assertIsNone(x["items"][1]["of"])
+        self.assertEqual(x["items"][3]["of"], 13.9)
+        self.assertEqual(x["focus"], [3, 5])            # 3 は 4 回・5 は 3 回(4 組の半分以上)・4・7 は 1 回
+        self.assertEqual(x["tan"], [[3, 8.2, 4.6], [5, 2.5, 3.3]])
+        self.assertEqual(x["res"], [5, 3, 4])
+
+    def test_no_final_no_result(self):
+        rows = [crow("umaren", [1, 2], 10.0, 5, 5.0, 1, A0, A1, None, fin="2026-11-04T05:30:00+00:00", hf=False)]
+        x = od.combo_race("2026-11-04", rows, [], self.runs[:2])
+        self.assertEqual((x["fin"], x["left"], x["res"], x["tan"], x["focus"]), (None, 7, None, [], [1, 2]))
+
+    def test_obihiro_and_day_week(self):
+        rows = self.rows + [crow("umaren", [1, 2], 10.0, 5, 4.0, 1, A0, A1, track="帯広ば", r=3)]
+        day = od.combo_day("2026-11-04", rows, self.wt, self.runs, races_all=59)
+        self.assertEqual([(r["track"], r["r"]) for r in day["races"]], [("帯広", 3), ("盛岡", 6)])
+        self.assertEqual(day["races"][0]["tan"], [])     # 帯広の単勝 tick は渡していない= 省く
+        w = od.combo_week("this", "2026-11-01", "2026-11-05", [day, {"d": "2026-11-05", "races_all": 0, "races": []}])
+        self.assertEqual((w["key"], w["races_all"], w["n_races"], w["n_combos"]), ("this", 59, 2, 5))
+
+    def test_empty_day(self):
+        day = od.combo_day("2026-11-03", [], [], [], races_all=0)
+        self.assertEqual(day, {"d": "2026-11-03", "races_all": 0, "races": []})
+
+
 if __name__ == "__main__":
     unittest.main()

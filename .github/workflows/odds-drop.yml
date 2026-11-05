@@ -42,6 +42,21 @@ jobs:
             python3 cloud/beat.py odds_drop ok
           fi
 
+      # 組の急落(combo-latest.json・日ごとの combo-days)。⛔落ちても単勝の分と心拍は止めない
+      - name: odds drop combo
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          DRY: ${{ github.event.inputs.dry_run }}
+        run: |
+          if [ "$DRY" = "true" ]; then
+            python3 cloud/odds_drop.py --combo --out "$RUNNER_TEMP/odds-drop-combo.json"
+            ls -l "$RUNNER_TEMP/odds-drop-combo.json"
+          else
+            python3 cloud/odds_drop.py --combo --apply
+          fi
+
       # 失敗の印(表 nar_job_heartbeat)。⛔表が無くても落ちない
       - name: heartbeat fail
         if: failure()
