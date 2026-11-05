@@ -9,6 +9,7 @@
 2026-10-31 決め 61(第 12 版・meta.rb61 のある朝の行): 取消の後の馬で 2 本目の木の割合 meta.rb61.pm も割り直して混ぜ、勝つ率の直しの k は mo4/di4。
 最後に朝の便が数えた有利 a(直前版 = meta.rb61.a_di・直前版でない行 = meta.rb61.a)を印の率と勝つ率に足す(v3n_rb61.shift)。
 直す前の率は meta.rb61.fin0・q0・g0 に書き直す(次の日からの直前の窓の元)。DB はここでは読まない。
+2026-11-06 決め 70(第 13 版・meta.mx70 のある朝の行): CatBoost・ニューラルネット 6 本の割合 meta.mx70.sh も取消の後で割り直して混ぜ、k は mo5/di5。
 
 確かめ(v3 の out/v3n_last3.md): 本番 base-v1 朝 9/8〜10/10・他場 763 R で取消・除外のあるレース 8.7%・
 取消の馬に 11.5% が割り振られていた・◎ が取消 12 R → 割り直しで ◎ 71.95 → 73.39%。直前の材料(体重・当日の偏り)は
@@ -83,7 +84,19 @@ def relabel(meta, gone, ud=None, sf=None, rk=None):
         pm = {int(k): float(v) for k, v in (rb.get('pm') or {}).items()}
         assert all(n in pm for n in keep), ('meta.rb61.pm に無い馬', rk)
         sm = sum(pm[n] for n in keep) or 1.0
-        q3 = dict(zip(keep, v3n_rb61.lmix([q3[n] for n in keep], v3n_rb61.p3([pm[n] / sm for n in keep], len(keep)))))
+        mx = meta.get('mx70') or None   # 第 13 版(決め 70)の朝の行 = 6 本の割合も取消の後で割り直して混ぜる
+        if mx is not None:
+            import v3n_mx70
+            sh = {int(k): v for k, v in (mx.get('sh') or {}).items()}
+            assert all(n in sh for n in keep), ('meta.mx70.sh に無い馬', rk)
+            shx = {}
+            for i, x in enumerate(v3n_mx70.MODELS):
+                v = np.array([float(sh[n][i]) for n in keep])
+                shx[x] = v / (v.sum() or 1.0)
+            q3 = dict(zip(keep, v3n_mx70.mix_p3([q3[n] for n in keep], v3n_rb61.p3([pm[n] / sm for n in keep], len(keep)),
+                                                 v3n_mx70.p5_extra(shx, len(keep)))))
+        else:
+            q3 = dict(zip(keep, v3n_rb61.lmix([q3[n] for n in keep], v3n_rb61.p3([pm[n] / sm for n in keep], len(keep)))))
     u = {int(k): float(v) for k, v in (ud if ud is not None else (meta.get('u') or {})).items()}
     if u and all(n in u for n in keep):  # 第 6 版: 朝の並び読みの外した分を足す(朝と同じ式・取消の後の頭数で計算し直すのは未対応)
         q3 = {n: min(max(1 / (1 + np.exp(-(np.log(q3[n] / (1 - q3[n])) + u[n]))), 0.001), 0.999) for n in keep}
@@ -118,7 +131,7 @@ def relabel(meta, gone, ud=None, sf=None, rk=None):
     if pc and all(n in pc for n in keep):
         import v3n_p1
         xs = np.array([(u[n] if (u and all(m in u for m in keep)) else 0.0) + (v3n_e1.BETA_NOKEN * nz.get(n, 0.0) if e1on else 0.0) + (fs[n] if fs is not None else 0.0) for n in keep])
-        ver = ('di' if ud is not None else 'mo') + ('4' if rb is not None else '3' if meta.get('trees54') else '2' if meta.get('one15') else '1' if one else '')  # 第 10 版(決め 32)の朝の行 = k mo2・di2・第 11 版(決め 54)= mo3・di3・第 12 版(決め 61)= mo4・di4
+        ver = ('di' if ud is not None else 'mo') + ('5' if meta.get('mx70') else '4' if rb is not None else '3' if meta.get('trees54') else '2' if meta.get('one15') else '1' if one else '')  # 第 10 版(決め 32)の朝の行 = k mo2・di2・第 11 版(決め 54)= mo3・di3・第 12 版(決め 61)= mo4・di4・第 13 版(決め 70)= mo5・di5
         p1n = dict(zip(keep, v3n_p1.follow([pc[n] for n in keep], xs, ver)))
         import v3n_p1mix
         if meta.get('one15') and len(keep) >= v3n_p1mix.MIN_N:  # 決め 40: 画面の勝つ率を 3 着内率(E1・能検の後・max の前)と混ぜる。第 10 版の行だけ・印は key の順のまま
@@ -161,6 +174,8 @@ def relabel(meta, gone, ud=None, sf=None, rk=None):
         **({'seq_day': SEQ_FORM} if ud is not None and SEQ_FORM else {}),
         **({'f41': F41_TAG, 'f41_s': {str(n): round(fs[n], 4) for n in keep}} if fs is not None else {}),
         **({'rb61': rb_new} if rb_new is not None else {}),
+        **({'mx70': {**meta['mx70'], 'tag': v3n_mx70.TAG['di' if ud is not None else 'mo'],
+                     'sh': {k: v for k, v in (meta['mx70'].get('sh') or {}).items() if int(k) not in gone}}} if meta.get('mx70') else {}),
     })
     return marks, new
 
