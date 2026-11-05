@@ -92,14 +92,18 @@ fx as (
     cross join lateral jsonb_array_elements(ft.combos) x(v)
    where x.v->>0 ~ '^[0-9]+$' and x.v->>1 ~ '^[0-9]+$' and (z.oi = 2 or x.v->>2 ~ '^[0-9]+$')
 ),
+lg as (
+  -- 2026-11-05 自己結合は 2 分で時間切れ→窓関数で 1 つ前の刻みを見る(11/4 で 28R・58 組を確認)
+  select ex.*, lag(i) over w as pi, lag(o) over w as po, lag(r) over w as pr, lag(observed_at) over w as pt
+    from ex
+  window w as (partition by track, race_no, kind, c order by i)
+),
 pairs as (
-  select a.track, a.race_no, a.kind, a.observed_at as t0, b.observed_at as t1, a.fin, a.has_final,
-         a.c, a.o as o0, a.r as r0, b.o as o1, b.r as r1
-    from ex a
-    join (select * from ex where r <= 5 and o > 0) b
-      on b.track = a.track and b.race_no = a.race_no and b.kind = a.kind and b.i = a.i + 1 and b.c = a.c
-   where a.o > 0
-     and b.o <= a.o * 0.5 + 1e-9
+  select track, race_no, kind, pt as t0, observed_at as t1, fin, has_final,
+         c, po as o0, pr as r0, o as o1, r as r1
+    from lg
+   where pi = i - 1 and po > 0 and o > 0 and r <= 5
+     and o <= po * 0.5 + 1e-9
 )
 select p.track::text, p.race_no::int, p.kind::text, p.t0, p.t1, p.fin, p.has_final,
        p.c, p.o0, p.r0, p.o1, p.r1, f.o as ofin
@@ -110,6 +114,6 @@ select p.track::text, p.race_no::int, p.kind::text, p.t0, p.t1, p.fin, p.has_fin
 $$;
 
 revoke all on function public.combo_drops(date, text[]) from public;
-grant execute on function public.combo_drops(date, text[]) to anon, service_role;
+grant execute on function public.combo_drops(date, text[]) to service_role;
 
 -- 戻し方: drop function if exists public.combo_drops(date, text[]);
