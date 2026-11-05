@@ -48,6 +48,7 @@ STAMP_CAP = '+勝つ率の守り(勝つ率 ≦ 3 着内の率)'  # 決め 67-2(�
 CAP_TAG = '決め67-2 勝つ率の守り'  # p1cap.TAG と同じ字
 STAMP_G68 = '+枠の内外の有利の直し(場 × 枠の前 56 日 + 同じ開催の前の日まで・前の日を含まない)'  # 決め 68(前日版の並び読みの後・勝つ率の守りの前)
 STAMP_PT = '+3 着内の率の温度(なだらかに・勝つ率は動かさない)'  # 決め 69(枠の内外の有利の直しの後・勝つ率の守りの前)
+STAMP_PM = '+勝つ率に 3 着内の率を混ぜる(3 着内の率・印は動かさない)'  # 決め 71(3 着内の率の温度の後・勝つ率の守りの前)
 
 
 def log(*a):
@@ -84,6 +85,9 @@ def build_rows(csv_path, day, src, stamp=STAMP):
         if 'p3p_pt0' in g.columns:  # 3 着内の率の温度(決め 69)を掛けたレース = 直しの前の 3 着内の率(次の日からの枠の直しの窓の元は p0 のまま)
             import pre69_live  # 記録の字 = pre69_live.tag()(暗号化した定数)
             meta['pt69'] = {'tag': pre69_live.tag(), 'p3_before': {str(int(r.umaban)): round(float(r.p3p_pt0), 6) for r in g.itertuples()}}
+        if 'pm71' in g.columns and (g.pm71 == 1).all():  # 勝つ率に 3 着内の率を混ぜたレース(決め 71)= 混ぜる前の勝つ率(= 第24版の勝つ率・下流で混ぜる前の率で学んだ物はこちらを読む)
+            import p1mix71_live  # 記録の字 = p1mix71_live.tag()(暗号化した定数)
+            meta['pm71'] = {'tag': p1mix71_live.tag(), 'p1_before': {str(int(r.umaban)): round(float(r.p1_pm0), 6) for r in g.itertuples()}}
         if 'p1_cap0' in g.columns:  # 勝つ率の守り(決め 67-2)を通したレース = 元の勝つ率は p1_cap0・動かした頭数
             meta['p1cap'] = CAP_TAG
             meta['p1cap_n'] = int((g.p1 != g.p1_cap0).sum())
@@ -322,6 +326,14 @@ def main():
             npt = pre69_live.apply_csv_pre(csv_path, log=log)
         except Exception as e:  # noqa: BLE001
             log('3 着内の率の温度 失敗(前の段のまま)', type(e).__name__, str(e)[:200])
+    npm = 0
+    if ng and npt:  # 勝つ率に 3 着内の率を混ぜる(決め 71・研究 nankan-ai-v3 p1mix71_judge.py・判定 2026-11-05 合格・ユーザー承認 11/5): 温度の後・勝つ率の守りの前。
+        #   土台が第24版の時だけ(研究の土台 = 決め 69 の後)。p1 ∝ exp(B·ln p1 + BETA·logit p3)・3 着内の率は動かさない。失敗しても前の段のまま
+        try:
+            import p1mix71_live
+            npm = p1mix71_live.apply_csv_pre(csv_path, log=log)
+        except Exception as e:  # noqa: BLE001
+            log('勝つ率の混ぜ 失敗(前の段のまま)', type(e).__name__, str(e)[:200])
     ncap = None
     try:  # 勝つ率 ≦ 3 着内の率 の守り(決め 67-2・研究 nankan-ai-v3 correct67_2_guard.py・ユーザー承認 2026-11-01): 全部の段の後
         import p1cap
@@ -345,8 +357,8 @@ def main():
     import c67_cancel
     c67 = c67_cancel.c67_tag() if ver == '南関 第21版 前日版' else None  # 決め 67-1(砂替えと取りやめの直し・直した重み)
     if c67:
-        ver = '南関 第24版 前日版' if ng and npt else '南関 第23版 前日版' if ng else '南関 第22版 前日版'  # 第23版 = 第22版 + 枠の内外の有利の直し(決め 68)・第24版 = 第23版 + 3 着内の率の温度(決め 69)
-    rows = build_rows(csv_path, day, src, ver + ' = ' + ((STAMP12 + (STAMP_DEB if nd else '') + (STAMP_TPL if nt else '') + (STAMP_AW if naw else '') + (STAMP_SQ if nsq else '') + (STAMP_G68 if ng else '') + (STAMP_PT if npt else '') + (STAMP_CAP if ncap is not None else '')) if b12 else (STAMP11 if bundle else STAMP)))
+        ver = '南関 第25版 前日版' if ng and npt and npm else '南関 第24版 前日版' if ng and npt else '南関 第23版 前日版' if ng else '南関 第22版 前日版'  # 第23版 = 第22版 + 枠の内外の有利の直し(決め 68)・第24版 = 第23版 + 3 着内の率の温度(決め 69)・第25版 = 第24版 + 勝つ率の混ぜ(決め 71)
+    rows = build_rows(csv_path, day, src, ver + ' = ' + ((STAMP12 + (STAMP_DEB if nd else '') + (STAMP_TPL if nt else '') + (STAMP_AW if naw else '') + (STAMP_SQ if nsq else '') + (STAMP_G68 if ng else '') + (STAMP_PT if npt else '') + (STAMP_PM if npm else '') + (STAMP_CAP if ncap is not None else '')) if b12 else (STAMP11 if bundle else STAMP)))
     for r in rows if c67 else ():
         r['meta']['c67'] = c67
     if notes:
