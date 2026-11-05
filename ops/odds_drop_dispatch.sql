@@ -18,21 +18,21 @@
 
 \set ON_ERROR_STOP on
 
--- ひな形の確認(PAT は出さない= URL と本文だけ抜く)
+-- ひな形の確認(PAT は出さない)。2026-11-05 nar-dispatch は本文に inputs mode=daily があり 422 になるので、本文が {"ref":"master"} だけの nar-watchdog-dispatch をひな形にする
 select jobid, jobname, schedule, active,
        substring(command from 'https://api\.github\.com/repos/[^'']+') as target_url,
        substring(command from '\{[^{}]*"ref"[^{}]*\}') as body
   from cron.job
- where jobname = 'nar-dispatch';
+ where jobname = 'nar-watchdog-dispatch';
 
 do $$
 declare
   tpl text;
   wf  text := '/actions/workflows/[^/'']+/dispatches';
 begin
-  select command into tpl from cron.job where jobname = 'nar-dispatch';
+  select command into tpl from cron.job where jobname = 'nar-watchdog-dispatch';
   if tpl is null then
-    raise exception 'ひな形 nar-dispatch が無い';
+    raise exception 'ひな形 nar-watchdog-dispatch が無い';
   end if;
   if tpl !~ '/nar-jobs/' or tpl !~ wf then
     raise exception 'ひな形の宛先が nar-jobs の workflow_dispatch でない';
@@ -49,7 +49,7 @@ end $$;
 select jobid, jobname, schedule, active,
        substring(command from 'https://api\.github\.com/repos/[^'']+') as target_url
   from cron.job
- where jobname in ('nar-dispatch', 'nar-odds-drop-today-dispatch', 'nar-odds-drop-dispatch')
+ where jobname in ('nar-watchdog-dispatch', 'nar-odds-drop-today-dispatch', 'nar-odds-drop-dispatch')
  order by jobname;
 
 -- 戻し方: select cron.unschedule('nar-odds-drop-today-dispatch'); select cron.unschedule('nar-odds-drop-dispatch');
