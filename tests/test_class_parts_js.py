@@ -1,5 +1,6 @@
 """cloud/class_parts.py がサイトの js/class-parts.js raceClassParts と同じ読みをするか(本物のレース名 350 件・2026-11-04 の JS の出力)。
 ⛔JS を直したら fixtures/class_parts_js.json を作り直す(全件 24,494 名で違い 0 を確かめた・11/4)。
+  11/6 金沢・南関の 2022 年までの詰めた書き方(Ａ２１= A2 1組)を 26 件足した(公式の全レース名 70,777 で JS と違い 0)。
   py -3 -m unittest discover -s tests -p "test_class_parts_js.py"
 """
 import json

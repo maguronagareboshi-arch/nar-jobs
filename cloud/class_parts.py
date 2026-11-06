@@ -13,7 +13,29 @@ ORD = re.compile(r"[0-9](st|nd|rd|th)$", re.I)
 STRICT = re.compile(r"^[0-9]+([一二三四五六七八九十\-―‐−組]|$)")
 WORDS = (("新馬", "新馬"), ("初出走", "新馬"), ("未勝利", "未勝利"), ("未受賞", "未受賞"), ("オープン", "オープン"))
 NK = ("名古屋", "笠松")
+# 金沢・南関の 2022 年までの詰めた書き方= 級は字+1 桁・後ろの数字は組(Ａ２１= A2 の 1組・Ｃ２１２１３= C2 の 12・13組)。JS の PACKED と同じ
+PACKED = ("金沢", "大井", "浦和", "川崎", "船橋")
 AGE_RE = re.compile(r"([2-4])歳(以上|上)?")
+
+
+def _packed_group(d):
+    """詰めた組の数字 → '12・13組'。1 通りにしか読めないときだけ(「12」は 12組 とも 1・2組 とも読める= None)。JS の packedGroup と同じ"""
+    reads = []
+    if 0 < len(d) <= 2 and d[0] != "0":
+        reads.append([int(d)])
+    for first in (1, 2):
+        ns, i, ok = [], 0, True
+        while i < len(d):
+            ln = len(str(ns[-1] + 1)) if ns else first
+            piece = d[i:i + ln]
+            if len(piece) < ln or piece[0] == "0" or (ns and int(piece) != ns[-1] + 1):
+                ok = False
+                break
+            ns.append(int(piece))
+            i += ln
+        if ok and len(ns) >= 2:
+            reads.append(ns)
+    return "・".join(str(n) for n in reads[0]) + "組" if len(reads) == 1 else None
 
 
 def half(s):
@@ -158,17 +180,28 @@ def race_class_parts(name, kind=None, track=None):
             cls_label = cls if re.search(r"[0-9]", cls) else cls + "級"
         else:
             dd = re.match(r"[0-9]{2,}(組)?", t[p:])
-            if len(blk) == 1 and dd:
-                cls += dd.group(0).replace("組", "")
-                p += len(dd.group(0))
-                return {"cls": cls, "grp": None, "age": None, "extra": _tidy(t[p:]), "label": t[:p], "src": src}
-            if len(blk) == 1 and re.match(r"[0-9]", t[p:p + 1]):
-                cls += t[p]
-                p += 1
-            if t[p:p + 1] == "級":
-                p += 1
-            grp, rest = _take_group(t[p:])
-            cls_label = cls
+            # 前に「3歳」がある名前(金沢の ３歳Ｂ１０= 3 歳戦の番号は 14 まで)は割らない
+            if len(blk) == 1 and dd and str(track or "") in PACKED and not re.search(r"[2-4]歳", h[:hit[0]]):
+                ds = dd.group(0)
+                if not dd.group(1) and t[p + len(ds):p + len(ds) + 1] == "歳":
+                    ds = ds[:-1]   # Ｃ１３歳= C1 と 3歳(最後の数字は馬齢)
+                cls += ds[0]   # 字+1 桁が級・残りの数字が組(馬齢・付帯は下の共通の読み)
+                p += len(ds)
+                grp = _packed_group(ds[1:].replace("組", "")) if len(ds) > 1 else None
+                rest = t[p:]
+                cls_label = cls
+            else:
+                if len(blk) == 1 and dd:
+                    cls += dd.group(0).replace("組", "")
+                    p += len(dd.group(0))
+                    return {"cls": cls, "grp": None, "age": None, "extra": _tidy(t[p:]), "label": t[:p], "src": src}
+                if len(blk) == 1 and re.match(r"[0-9]", t[p:p + 1]):
+                    cls += t[p]
+                    p += 1
+                if t[p:p + 1] == "級":
+                    p += 1
+                grp, rest = _take_group(t[p:])
+                cls_label = cls
     elif knd == "word":
         cls = word[1]
         wp = t.find(word[0])
