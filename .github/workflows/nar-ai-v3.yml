@@ -277,8 +277,7 @@ jobs:
           V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
         run: |
           set -o pipefail
-          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '
-'); export V3_ASSET_KEY
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
           gh release download v3-pt74-20261110 -p 'v3_pt74.tar.gz.enc' -D in
           mkdir -p v3/pt74
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_pt74.tar.gz.enc | tar -C v3/pt74 -xzf -
