@@ -6,7 +6,7 @@ import unicodedata
 
 _TOK = re.compile(r'(?<![A-Za-z0-9])([ABC])(\d{0,2})(?![A-Za-z0-9])')
 _TOK_DASH = re.compile(r'(?<![A-Za-z0-9])([ABC])(\d{1,2})(?=-)')
-_MIX = re.compile(r'[ABC]\d{0,2}(-\d+)?[~〜・]?[ABC]\d')
+_MIX = re.compile(r'(?<![A-Za-z])[ABC]\d{0,2}(-\d+)?[~〜・]?[ABC]\d')   # 11/6 夜 「JBC2023」の BC2 を混ぜたクラスと読まない
 
 
 def cls2(name):
