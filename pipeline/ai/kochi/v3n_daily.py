@@ -245,6 +245,12 @@ def main():
                     'own': {str(int(n)): [round(float(a), 4), round(float(b_), 4)] for n, a, b_ in zip(nums, c1t, g3)}}
             rows.append({'track': trk, 'race_date': day, 'race_no': int(rno), 'marks': marks, 'meta': meta})
             show.append(f"{trk}{int(rno)}R " + ' '.join(f"{x['mark']}{x['num']}({x['score']})" for x in marks))
+    # 2026-11-06 移籍の目安(表示だけ・予想の計算には使わない・v3n_xfer.py): 移籍 1〜5 戦目の馬に meta.xfer = {馬番: 1 行}。⛔失敗しても付けずに書く
+    try:
+        import v3n_xfer
+        v3n_xfer.attach(rows, off, day, log=lambda *a: print(*a, flush=True))
+    except Exception as e:  # noqa: BLE001
+        print('移籍の目安 失敗 = 付けずに書く', type(e).__name__, str(e)[:200], flush=True)
     (work / f'v3n_{day}.json').write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding='utf-8')
     print('\n'.join(show))
     print('書く行', len(rows))
