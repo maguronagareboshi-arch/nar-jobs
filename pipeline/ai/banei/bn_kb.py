@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """ばんえい 第 3 版の競馬ブック(帯広・場 58)の成績の段(2026-10-28)。
 
-  python -X utf8 pipeline/ai/banei/bn_kb.py fetch 2026-10-31 [--push]   # その日より前の開催日で、DB に無い日の成績を取る
+  python -X utf8 pipeline/ai/banei/bn_kb.py fetch 2026-10-31 [--push]   # その日より前の開催日で、DB に無い日と区間が埋まっていない日(21 日まで)の成績を取る
   python -X utf8 pipeline/ai/banei/bn_kb.py table <置き場>              # 固めた表 + DB の nar_kb_banei → <置き場>/banei_kb/kb_runs.parquet
 
 取るのは成績の頁だけ(区間 3 つ = 前半・障害・後半タイム・通過順 3 つ・発走時刻)。読み方は v3 の src/banei/kb_banei_parse.py と同じ。
@@ -29,7 +29,9 @@ COLS = ['race_date', 'race_no', 'umaban', 'horse_name', 'finish', 'finish_note',
         'pass1', 'pass2', 'pass3', 'hasso_time', 'kb_race_id']
 NEED = ['race_date', 'race_no', 'umaban', 'finish', 'seg_front', 'seg_obst', 'seg_back', 'pass1', 'pass2', 'pass3', 'hasso_time']
 SEG = {'前半ﾀｲﾑ': 'seg_front', '障害ﾀｲﾑ': 'seg_obst', '後半ﾀｲﾑ': 'seg_back'}
-FROZEN_TO = os.environ.get('BANEI_KB_FROZEN_TO', '2026-10-26')   # 固めた表(リリース)の最後の日
+FROZEN_TO = os.environ.get('BANEI_KB_FROZEN_TO', '2026-10-25')   # 固めた表(リリース)から使う最後の日
+# 2026-11-06: リリースの 10/26 は 7R〜12R が頁の埋まる前の値(前半 0・障害 空)。10/26 は固めた表から使わず DB に取り直す。
+REDO_DAYS = 21   # 区間が埋まっていない日を取り直すのはこの日数まで(頁がずっと空のレースで取り続けない)
 
 
 def log(*a):
@@ -106,7 +108,25 @@ def parse_one(html, rid):
             'pass1': pp[0] if len(pp) > 0 else None, 'pass2': pp[1] if len(pp) > 1 else None, 'pass3': pp[2] if len(pp) > 2 else None,
             **(sg[i] if ok else {}),
         })
+    for r in rows:
+        if not seg_ok(r):   # 2026-11-06: 頁が埋まる前(前半 0・障害 空・後半 = 全体の時計)の値は捨てて空にする(後の便が取り直す)
+            r['seg_front'] = r['seg_obst'] = r['seg_back'] = None
     return rows, ok
+
+
+def seg_ok(r):
+    """走り切った馬の区間 3 つが本物か。頁が埋まる前は 前半 0・障害 空・後半 = 全体の時計 になる(2026-10-26 7R〜・10/31・11/1 の 3R〜)。"""
+    t = _num(r.get('time_sec'))
+    if t is None:
+        return True
+    f, o, b = _num(r.get('seg_front')), _num(r.get('seg_obst')), _num(r.get('seg_back'))
+    return f is not None and f > 0 and o is not None and b is not None and b < t - 0.5
+
+
+def race_complete(rows):
+    """そのレースの走り切った馬の半分以上で障害の時計がある = 頁が埋まった後に取れている。"""
+    fin = [r for r in rows if _num(r.get('time_sec')) is not None]
+    return not fin or sum(_num(r.get('seg_obst')) is not None for r in fin) * 2 >= len(fin)
 
 
 # ---------------------------------------------------------------- 取る
@@ -122,11 +142,17 @@ def official_days(before, since):
 
 
 def db_days(since):
-    rs = rest(f'/rest/v1/{TABLE}?select=race_date,race_no&race_date=gte.{since}&limit=20000')
-    d = {}
+    """DB にある日と R → (行のある R, 区間が埋まった R)。埋まっていない R は取り直しの対象(2026-11-06)。"""
+    rs = rest(f'/rest/v1/{TABLE}?select=race_date,race_no,time_sec,seg_obst&race_date=gte.{since}&limit=20000')
+    by = {}
     for r in rs:
-        d.setdefault(str(r['race_date'])[:10], set()).add(int(r['race_no']))
-    return d
+        by.setdefault((str(r['race_date'])[:10], int(r['race_no'])), []).append(r)
+    have, done = {}, {}
+    for (d, n), g in by.items():
+        have.setdefault(d, set()).add(n)
+        if race_complete(g):
+            done.setdefault(d, set()).add(n)
+    return have, done
 
 
 def fetch_day(client, day):
@@ -157,9 +183,11 @@ def fetch_day(client, day):
 def fetch(day, push):
     since = (dt.date.fromisoformat(FROZEN_TO) + dt.timedelta(days=1)).isoformat()
     want = official_days(day, since)
-    have = db_days(since)
-    todo = sorted(d for d, rs in want.items() if not rs <= have.get(d, set()))
-    log('公式の開催日', len(want), '日・DB に無い日', todo)
+    have, done = db_days(since)
+    redo_from = (dt.date.fromisoformat(day) - dt.timedelta(days=REDO_DAYS)).isoformat()
+    todo = sorted(d for d, rs in want.items()
+                  if not rs <= have.get(d, set()) or (d >= redo_from and not rs <= done.get(d, set())))
+    log('公式の開催日', len(want), '日・DB に無い日か区間が埋まっていない日', todo)
     if not todo:
         return 0
     sys.path.insert(0, str(KB_DIR))
@@ -193,6 +221,7 @@ def table(root):
     """固めた表(リリースの kb_runs_frozen.parquet)+ DB の nar_kb_banei(固めた日より後)→ <root>/banei_kb/kb_runs.parquet。"""
     root = Path(root)
     k = pd.read_parquet(root / 'banei_kb' / 'kb_runs_frozen.parquet')
+    k = k[k.race_date.astype(str).str[:10] <= FROZEN_TO]
     since = (dt.date.fromisoformat(FROZEN_TO) + dt.timedelta(days=1)).isoformat()
     try:
         rs, off = [], 0
