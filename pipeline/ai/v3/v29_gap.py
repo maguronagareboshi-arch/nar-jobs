@@ -52,6 +52,7 @@ TPLM = None  # 全馬の短評の層(決め 30・tanpyo_live.load の戻り)。l
 F3M, F3W = None, None  # 平らな模型 F3 の混ぜ(決め 49・f3_live.load の戻りと混ぜの重み)。live() が mdir/f3 から読む。無ければ足さない
 AW = None  # 併せ馬の相手(決め 60・awase_live.load の戻り = (track, race_no, 馬番) → (res, mar))。live() がその日の nar_kb_works から読む。無ければ足さない
 G68 = None  # 枠の内外の有利の直し(決め 68・gate68_live.load の戻り = 場 × 枠の a)。live() が便の始めに DB の前 56 日の直前の行と結果から作る。無ければ足さない
+OT72, OT72G = None, None  # 一本の木(決め 72・onetree72_live.load の戻り)と一本の木の側の枠の表(onetree72_live.load_gate)。live() が読む。無ければ混ぜない
 PREB = {}  # (場, R) → {馬番: (p1, p3′)} = F3 の混ぜの前の直前版(買いの模型 決め38-1 はこの率で学んだので、買いにはこれを渡す)
 DAY_MIN = 30      # 当日版の印は発走 30 分前から出す(体重はもう出ている・ユーザー 2026-10-01)
 DAY_LAST_MIN = 16  # 発走 15 分前を過ぎた印は DB のトリガーが捨てるので、その手前まで
@@ -335,6 +336,21 @@ def day_marks(Bk, odds, w, going, dm, day):
         stamp += ' + 砂替えと取りやめの直し'
     if ver == '南関 第22版' and 'g68' in used:  # 第23版 = 第22版 + 枠の内外の有利の直し(決め 68)
         ver = '南関 第23版'
+    ot72m = None
+    if ver == '南関 第23版' and OT72 is not None:
+        try:  # 一本の木を 5 割混ぜる(決め 72・研究 nankan-ai-v3 onetree72_judge.py・判定 2026-11-06 合格): 第23版の全部の段(勝つ率の守り)の後。
+            #   定数の ON の日の前・一本の木の側の枠の窓の埋まりが足りない場は混ぜずに meta.ot72.p0(一本の木の側の枠の直しの前の p3 = 次の日からの窓の元)だけ残す
+            import onetree72_live
+            r_ = onetree72_live.apply_day(OT72, OT72G, AW, b, Bk.track.iloc[0], int(Bk.race_no.iloc[0]), u, np.asarray(p1, float), np.asarray(p3p, float), day)
+            if r_ is not None:
+                ot72m = r_['meta']
+                if r_['on']:
+                    p1, p3, p3p = r_['p1'], r_['p3raw'], r_['p3']
+                    used.append('ot72')
+                    ver = '南関 第26版'  # 第26版 = 第23版 + 一本の木 5 割(決め 72)
+                    stamp += ' + 一本の木 5 割'
+        except Exception as e:  # noqa: BLE001  一本の木が落ちても第23版の印は出す
+            log('一本の木 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
     stamp = f'{ver} 直前版 = {stamp}'
     d = pd.DataFrame({'num': b.umaban.astype(int).to_numpy(), 'p1': p1, 'p3': p3p, 'p3_raw': p3})
     d = d.sort_values(['p3', 'p1', 'num'], ascending=[False, False, True], kind='mergesort').reset_index(drop=True)
@@ -360,8 +376,10 @@ def day_marks(Bk, odds, w, going, dm, day):
     if 'p1cap' in used:
         meta['p1cap'] = sys.modules['p1cap'].TAG
         meta['p1cap_n'] = ncap  # 勝つ率を動かした頭数
-    if c67 and ver in ('南関 第22版', '南関 第23版'):
+    if c67 and ver in ('南関 第22版', '南関 第23版', '南関 第26版'):
         meta['c67'] = c67
+    if ot72m is not None:
+        meta['ot72'] = ot72m
     if g68m is not None:
         meta['g68'] = g68m
     return {'track': tr, 'race_date': day, 'race_no': rno, 'marks': marks, 'meta': meta}
@@ -774,6 +792,20 @@ def live(day, base_csv, mdir, write, until):
     except Exception as e:  # noqa: BLE001
         G68 = None
         log('枠の内外の有利の直し 読めない(足さない)', type(e).__name__, str(e)[:200])
+    global OT72, OT72G
+    try:  # 一本の木(決め 72): 模型 = mdir/ot72(便がリリース v3-ot72-20261109 を開ける)・定数 = 暗号化の定数 ot72。
+        #   一本の木の側の枠の窓 = 前 56 日の直前の行の meta.ot72.p0 + 補いの表(定数の ot72_win.csv)・答えと開催日は第23版の窓と同じ。無ければ混ぜない
+        import onetree72_live
+        OT72, OT72G = onetree72_live.load(Path(mdir) / 'ot72'), None
+        try:  # 窓が読めない日は混ぜない(行の meta.ot72.p0 = 次の日からの窓の元は残す)
+            OT72G = onetree72_live.load_gate(day, G68, log=log) if OT72 is not None and G68 is not None else None
+        except Exception as e:  # noqa: BLE001
+            log('一本の木の側の枠の窓 読めない(混ぜない・p0 は残す)', type(e).__name__, str(e)[:200])
+        log('一本の木', '読めた' if OT72 else '無し(混ぜない)', 'OT: 材料', 'あり' if OT72 and onetree72_live.has_cols(OT72, B) else 'なし',
+            '・混ぜる日', onetree72_live.consts().get('ON') if OT72 else '', '・窓の埋まり', OT72G['cover'] if OT72G else None)
+    except Exception as e:  # noqa: BLE001
+        OT72, OT72G = None, None
+        log('一本の木 読めない(混ぜない)', type(e).__name__, str(e)[:200])
     global NEW
     try:  # 決め 38-1: 直前版の勝つ率で学んだ買いの模型(mdir/buy38_new.json・種 3 本)。無ければ全部 v31
         NEW = load_new(mdir)
