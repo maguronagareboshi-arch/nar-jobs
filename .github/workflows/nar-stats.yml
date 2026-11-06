@@ -76,11 +76,36 @@ jobs:
           psql -X -At -c "select 'ロケール ' || datlocprovider::text || ' ' || coalesce(datlocale, '') || ' ' || datcollate from pg_database where datname = 'postgres'"
           df -h / | tail -n 1
 
+      # ---------------------------------------------------------------- 11/6 送信量: 出力の照合元のキャッシュ(apply の便だけ・asof なし)
+      #   前回成功した apply の後の手元の出力 16 表(=本番と同じ)を暗号化して置いておき、本番の出力を丸ごと読む(約 245MB/回)代わりに使う。
+      #   ⛔公開 repo= 平文で置かない(暗号の鍵は secrets・fork の PR からは開けない)。前提= 16 表を書くのはこの便だけ。
+      #   使えない(無い・印が dirty・本番の行数や最新の updated_at が合わない・7 日を超えた)ときは今までどおり丸ごと読む。
+      - name: restore output cache
+        if: env.MODE == 'apply' && env.ASOF == ''
+        uses: actions/cache/restore@v6
+        with:
+          path: stats-out-cache.enc
+          key: nar-stats-out-v1-none
+          restore-keys: nar-stats-out-v1-
+
       # ---------------------------------------------------------------- ①④ 本番から写す(⛔読むだけ・1 表ずつ・statement_timeout 10min)
       - name: dump from production (read only)
         env:
           PROD_PGPASSWORD: ${{ secrets.NAR_DB_PASSWORD }}
-        run: python3 pipeline/stats_local/stats_local.py dump --asof "$ASOF"
+          OUT_CACHE_PASS: ${{ secrets.NAR_DB_PASSWORD }}
+        run: |
+          set -u
+          OC=""
+          if [ "$MODE" = "apply" ] && [ -z "$ASOF" ] && [ -f stats-out-cache.enc ]; then
+            mkdir -p out_cache
+            if openssl enc -d -aes-256-cbc -pbkdf2 -iter 200000 -pass env:OUT_CACHE_PASS -in stats-out-cache.enc | tar -xzf - -C out_cache; then
+              OC=out_cache
+            else
+              echo "キャッシュが開けない= 本番を丸ごと読む"; rm -rf out_cache
+            fi
+            rm -f stats-out-cache.enc
+          fi
+          python3 pipeline/stats_local/stats_local.py dump --asof "$ASOF" ${OC:+--out-cache "$OC"}
 
       # ---------------------------------------------------------------- ② 手元に入れる
       - name: load into local postgres
@@ -148,3 +173,31 @@ jobs:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: python3 cloud/beat.py owner_breeder fail 失敗
+
+      # ---------------------------------------------------------------- 11/6 出力の照合元のキャッシュを置く(apply の便だけ・asof なし)
+      #   成功= 手元の出力を写す / 失敗・取消(書きかけかもしれない)= 「使えない」印だけ置く= 次の便は本番を丸ごと読む
+      - name: build output cache ok
+        id: cache_ok
+        if: success() && env.MODE == 'apply' && env.ASOF == ''
+        continue-on-error: true
+        env:
+          OUT_CACHE_PASS: ${{ secrets.NAR_DB_PASSWORD }}
+        run: |
+          rm -f stats-out-cache.enc
+          python3 pipeline/stats_local/stats_local.py save-cache out_cache
+          tar -czf - -C out_cache . | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:OUT_CACHE_PASS -out stats-out-cache.enc
+          ls -l stats-out-cache.enc
+      - name: build output cache dirty
+        if: always() && env.MODE == 'apply' && env.ASOF == '' && steps.cache_ok.outcome != 'success'
+        env:
+          OUT_CACHE_PASS: ${{ secrets.NAR_DB_PASSWORD }}
+        run: |
+          rm -f stats-out-cache.enc
+          python3 pipeline/stats_local/stats_local.py dirty-cache out_cache
+          tar -czf - -C out_cache . | openssl enc -aes-256-cbc -pbkdf2 -iter 200000 -salt -pass env:OUT_CACHE_PASS -out stats-out-cache.enc
+      - name: save output cache
+        if: always() && env.MODE == 'apply' && env.ASOF == '' && hashFiles('stats-out-cache.enc') != ''
+        uses: actions/cache/save@v6
+        with:
+          path: stats-out-cache.enc
+          key: nar-stats-out-v1-${{ github.run_id }}-${{ github.run_attempt }}

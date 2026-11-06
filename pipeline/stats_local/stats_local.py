@@ -9,6 +9,10 @@ Actions 内の Postgres で計算し、本番との差分だけを戻す台本�
   python3 pipeline/stats_local/stats_local.py ob                  ③'' 10/2 名寄せ(ob_alias.py)と owner_breeder.sql(馬主・生産者・調教師の年)
   python3 pipeline/stats_local/stats_local.py diff                ⑤ 表ごとに 同じ/変わった/手元だけ/本番だけ をログへ
   python3 pipeline/stats_local/stats_local.py apply [--allow-large]  差分を REST で本番へ(安全柵に掛かれば何も書かない)
+  python3 pipeline/stats_local/stats_local.py save-cache DIR      apply 成功の後= 手元の出力 16 表(=本番と同じ)を DIR に置く(便が暗号化して Actions キャッシュへ)
+  python3 pipeline/stats_local/stats_local.py dirty-cache DIR     apply 失敗・取消の後= DIR を「使えない」印だけにする(次の便は本番を丸ごと読む)
+  dump に --out-cache DIR を付けると(apply の便だけ・asof なし)、本番の出力 16 表を丸ごと読む代わりに
+  DIR(前回成功した便の後の手元の出力)を照合の「本番」として使う。本番で数えた行数が合わない・印が無い・7 日を超えた等は丸ごと読む。
 
 ⛔標準ライブラリだけ・psql を子プロセスで呼ぶ。
 ⛔本番への接続は dump(読むだけ・default_transaction_read_only)と apply(REST の upsert/delete)だけ。
@@ -21,6 +25,7 @@ import csv
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -133,6 +138,11 @@ CHANGE_MAX_RATIO = 0.30  # 1 表で(変わった+消す)が本番行数のこれ
 CHANGE_MIN_ROWS = 1000   # ↑の柵は本番が この行数以上の表だけ(venue・ai_record・big_payouts は毎日ほぼ全行変わる)。
                          #   それ未満の表は「手元の行数が本番の 99% 以上」だけを見る
 BATCH = 500
+# 11/6 送信量: 本番の出力 16 表の丸ごと読み(約 245MB/回)を、前回成功した apply の後の手元の出力(暗号化した Actions キャッシュ)で代える。
+#   前提= この 16 表を書くのはこの便だけ(11/6 に origin/master の yml・cloud・pipeline と本番の関数・cron・trigger で確かめた)。
+#   ⛔別の書き手を足したら OUT_CACHE_VER を上げるか、この仕組みを外す。
+OUT_CACHE_VER = 1
+OUT_CACHE_MAX_DAYS = 7   # 最後に本番を丸ごと読んでからこれを超えたら丸ごと読む(手で直された行などを拾い直す)
 
 
 def log(*a):
@@ -159,7 +169,7 @@ def rows(sql):
 
 
 # ------------------------------------------------------------------ ①④ 本番から写す(⛔読むだけ)
-def cmd_dump(asof):
+def cmd_dump(asof, out_cache=""):
     if asof and not re.fullmatch(r"[0-9T:.+\- Z]{10,40}", asof):
         raise SystemExit("asof の形がおかしい: ISO 時刻だけ")
     os.makedirs(DUMP, exist_ok=True)
@@ -185,13 +195,14 @@ def cmd_dump(asof):
     missing = _prod_missing_outputs(env)
     with open(os.path.join(DUMP, "missing_out.txt"), "w", encoding="utf-8") as f:
         f.write("\n".join(missing))
-    for t, cols in OUT_COLS.items():
-        if t in missing:
-            # 10/10 §18 新しい出力表を本番に作る前の check= 本番 0 行として照合する(apply は cmd_apply が止める)
-            open(os.path.join(DUMP, f"out_{t}.tsv"), "w").close()
-            log(f"  ⚠本番に {t} が無い= 0 行として照合する(apply はしない)")
-            continue
-        lines.append(f"\\copy (select {cols} from public.{t} {OUT_WHERE.get(t, '')}) to '{DUMP}/out_{t}.tsv'")
+    meta, why = (None, "")
+    if out_cache:
+        meta, why = _out_cache_usable(out_cache, asof, missing, time.time())
+        log("出力の照合元= " + ("キャッシュ(本番は行数だけ数える)" if meta else f"本番を丸ごと読む({why})"))
+    if meta:
+        lines.append(f"\\copy ({_out_count_sql()}) to '{DUMP}/out_counts.tsv'")
+    else:
+        lines += _out_copy_lines(missing)
     names = ",".join(f"'{t}'" for t in list(INPUTS) + list(OUTPUTS))
     lines.append(
         "\\copy (select c.relname, (case when c.relkind = 'p' then (select coalesce(sum(greatest(ch.reltuples, 0)), 0) "
@@ -205,8 +216,134 @@ def cmd_dump(asof):
                     "-v", "ON_ERROR_STOP=1", "-X", "-q"], input=script, text=True, encoding="utf-8",
                    env=env, check=True)
     log(f"dump 済み {time.time() - t0:.0f} 秒 asof={asof or '(なし)'}")
+    src = {"source": "prod", "full_read_at": t0}
+    if meta:
+        bad = _out_cache_mismatch(meta, _read_counts(os.path.join(DUMP, "out_counts.tsv")))
+        if bad:
+            log(f"  ⚠キャッシュの後に本番が変わった {bad[:5]}= 本番を丸ごと読む")
+            t1 = time.time()
+            script2 = "\n".join(["set default_transaction_read_only = on;", "set statement_timeout = '10min';",
+                                 "begin read only;"] + _out_copy_lines(missing) + ["commit;"]) + "\n"
+            subprocess.run(["psql", "-h", PROD["host"], "-p", PROD["port"], "-U", PROD["user"], "-d", PROD["db"],
+                            "-v", "ON_ERROR_STOP=1", "-X", "-q"], input=script2, text=True, encoding="utf-8",
+                           env=env, check=True)
+            src = {"source": "prod", "full_read_at": t1}
+        else:
+            for t in OUT_COLS:
+                shutil.copyfile(os.path.join(out_cache, f"out_{t}.tsv"), os.path.join(DUMP, f"out_{t}.tsv"))
+            src = {"source": "cache", "full_read_at": meta["full_read_at"]}
+            log(f"  キャッシュを使う({len(OUT_COLS)} 表とも行数一致・後から書かれた行なし・最後に丸ごと読んだのは "
+                f"{(time.time() - meta['full_read_at']) / 86400:.1f} 日前)")
+    with open(os.path.join(DUMP, "out_source.json"), "w", encoding="utf-8") as f:
+        json.dump(src, f)
     for f in sorted(os.listdir(DUMP)):
         log(f"  {f}  {os.path.getsize(os.path.join(DUMP, f)) / 1e6:.1f} MB")
+
+
+def _out_copy_lines(missing):
+    lines = []
+    for t, cols in OUT_COLS.items():
+        if t in missing:
+            # 10/10 §18 新しい出力表を本番に作る前の check= 本番 0 行として照合する(apply は cmd_apply が止める)
+            open(os.path.join(DUMP, f"out_{t}.tsv"), "w").close()
+            log(f"  ⚠本番に {t} が無い= 0 行として照合する(apply はしない)")
+            continue
+        lines.append(f"\\copy (select {cols} from public.{t} {OUT_WHERE.get(t, '')}) to '{DUMP}/out_{t}.tsv'")
+    return lines
+
+
+def _out_count_sql():
+    """表ごとの 行数 と 最新の updated_at(秒)。apply は手元の updated_at(その便の now())ごと書くので、
+    キャッシュの後に別の便が 1 行でも書けば本番の最新が キャッシュの最新 を超える(途中で落ちた便も拾う)"""
+    return " union all ".join(
+        f"select '{t}', count(*), coalesce(extract(epoch from max(updated_at)), 0)::float8 "
+        f"from public.{t} {OUT_WHERE.get(t, '')}" for t in OUT_COLS)
+
+
+def _parse_counts(lines):
+    out = {}
+    for ln in lines:
+        if ln.strip():
+            a, b, c = ln.rstrip("\n").split("\t")
+            out[a] = [int(b), float(c)]
+    return out
+
+
+def _read_counts(path):
+    with open(path, encoding="utf-8") as f:
+        return _parse_counts(f)
+
+
+def _out_cache_mismatch(meta, prod):
+    """キャッシュと本番が食い違う表の名前(行数が違う・キャッシュの後に書かれた行がある)"""
+    bad = []
+    for t in OUT_COLS:
+        c, p = meta["counts"].get(t), prod.get(t)
+        if not c or not p or c[0] != p[0] or p[1] > c[1] + 0.001:
+            bad.append(t)
+    return bad
+
+
+def _out_cache_meta_expect():
+    return {"ver": OUT_CACHE_VER, "cols": OUT_COLS, "where": OUT_WHERE}
+
+
+def _out_cache_usable(out_cache, asof, missing, now):
+    """(meta, 理由)。meta が None なら本番を丸ごと読む"""
+    if asof:
+        return None, "asof あり"
+    if missing:
+        return None, "本番に無い出力表がある"
+    mp = os.path.join(out_cache, "meta.json")
+    if not os.path.exists(mp):
+        return None, "キャッシュ無し"
+    try:
+        with open(mp, encoding="utf-8") as f:
+            meta = json.load(f)
+    except (OSError, ValueError):
+        return None, "印が読めない"
+    if not isinstance(meta, dict) or meta.get("dirty") or meta.get("clean") is not True:
+        return None, "前の便が書き込みの途中で落ちた・取り消された"
+    if any(meta.get(k) != v for k, v in _out_cache_meta_expect().items()):
+        return None, "出力表の列・版が変わった"
+    fr = meta.get("full_read_at")
+    if not isinstance(fr, (int, float)) or now - fr > OUT_CACHE_MAX_DAYS * 86400 or fr > now + 3600:
+        return None, f"最後に丸ごと読んでから {OUT_CACHE_MAX_DAYS} 日を超えた"
+    cs = meta.get("counts")
+    if not isinstance(cs, dict) or set(cs) != set(OUT_COLS) or any(
+            not (isinstance(v, list) and len(v) == 2) for v in cs.values()):
+        return None, "行数の記録が無い"
+    for t in OUT_COLS:
+        if not os.path.exists(os.path.join(out_cache, f"out_{t}.tsv")):
+            return None, f"{t} の写しが無い"
+    return meta, ""
+
+
+def cmd_save_cache(out_cache):
+    """apply 成功の後だけ= 手元の出力(apply で本番と同じになった)を写し、印を付ける"""
+    with open(os.path.join(DUMP, "out_source.json"), encoding="utf-8") as f:
+        src = json.load(f)
+    if os.path.isdir(out_cache):
+        shutil.rmtree(out_cache)
+    os.makedirs(out_cache)
+    oc = os.path.abspath(out_cache)
+    for t, cols in OUT_COLS.items():
+        psql_local(f"\\copy (select {cols} from public.{t} {OUT_WHERE.get(t, '')}) to '{oc}/out_{t}.tsv'")
+    counts = _parse_counts(psql_local(_out_count_sql().replace("\n", " "), fetch=True).replace("|", "\t").splitlines())
+    meta = dict(_out_cache_meta_expect(), clean=True, counts=counts, saved_at=time.time(),
+                full_read_at=src["full_read_at"])
+    with open(os.path.join(out_cache, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump(meta, f, ensure_ascii=False)
+    log(f"出力のキャッシュを置いた {sum(c[0] for c in counts.values())} 行(照合元= {src['source']})")
+
+
+def cmd_dirty_cache(out_cache):
+    if os.path.isdir(out_cache):
+        shutil.rmtree(out_cache)
+    os.makedirs(out_cache)
+    with open(os.path.join(out_cache, "meta.json"), "w", encoding="utf-8") as f:
+        json.dump({"ver": OUT_CACHE_VER, "dirty": True, "saved_at": time.time()}, f)
+    log("出力のキャッシュに「使えない」印を置いた= 次の便は本番を丸ごと読む")
 
 
 def _prod_missing_outputs(env):
@@ -560,7 +697,8 @@ def main(argv):
     c = argv[0]
     if c == "dump":
         asof = argv[argv.index("--asof") + 1] if "--asof" in argv else ""
-        cmd_dump(asof.strip())
+        oc = argv[argv.index("--out-cache") + 1] if "--out-cache" in argv else ""
+        cmd_dump(asof.strip(), oc.strip())
     elif c == "load":
         cmd_load()
     elif c == "run":
@@ -573,6 +711,10 @@ def main(argv):
         cmd_diff()
     elif c == "apply":
         cmd_apply("--allow-large" in argv)
+    elif c == "save-cache" and len(argv) == 2:
+        cmd_save_cache(argv[1])
+    elif c == "dirty-cache" and len(argv) == 2:
+        cmd_dirty_cache(argv[1])
     else:
         raise SystemExit(__doc__)
 
