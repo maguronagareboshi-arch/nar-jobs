@@ -49,7 +49,7 @@ def history(off):
     ra = pd.read_parquet(off / 'races.parquet', columns=['track', 'race_date', 'race_no', 'race_name'])
     ra['race_date'] = ra.race_date.astype(str).str[:10]
     ra = ra.drop_duplicates(['track', 'race_date', 'race_no'])
-    ra['cls'] = ra.race_name.map(cls2)
+    ra['cls'] = [cls2(n, t) for n, t in zip(ra.race_name, ra.track)]   # 2 桁の番号は名古屋・笠松だけ
     ru = ru.merge(ra[['track', 'race_date', 'race_no', 'cls']], on=['track', 'race_date', 'race_no'], how='left')
     L = ru[['hid', 'race_date', 'race_no', 'track', 'cls', 'runner_number']].copy()
     L['area'] = L.track.map(AREA).fillna(L.track)
@@ -109,7 +109,7 @@ def attach(rows, off, day, log=print):
     g = {h: s for h, s in past.groupby('hid', sort=False)}
     ra = pd.read_parquet(Path(off) / 'races.parquet', columns=['track', 'race_date', 'race_no', 'race_name'])
     ra['race_date'] = ra.race_date.astype(str).str[:10]
-    tcls = {(t, int(r)): cls2(nm) for t, r, nm in ra.loc[ra.race_date == day, ['track', 'race_no', 'race_name']].itertuples(index=False)}
+    tcls = {(t, int(r)): cls2(nm, t) for t, r, nm in ra.loc[ra.race_date == day, ['track', 'race_no', 'race_name']].itertuples(index=False)}
     hid_of = {(t, int(r), int(u)): h for t, r, u, h in tod.dropna(subset=['runner_number'])[['track', 'race_no', 'runner_number', 'hid']].itertuples(index=False)}
     took = 0
     for row in rows:

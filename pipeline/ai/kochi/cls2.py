@@ -39,7 +39,18 @@ if __name__ == '__main__':
 _ALL = re.compile(r'([ABC])(\d{0,2})')
 
 
-def cls3(name):
+# 2 桁の番号が本当にクラスの場(名古屋 C1〜C30・笠松 C1〜C19 など)。他の場の「A12」「B21」は 1 桁目だけがクラス(金沢「Ａ１２」= A1 の 2 組など)
+TWO_DIGIT = ('名古屋', '笠松')
+
+
+def cls3(name, track=None):
+    c = _cls3(name)
+    if c and track is not None and track not in TWO_DIGIT and len(c) > 2 and c[1:].isdigit():
+        return c[:2]
+    return c
+
+
+def _cls3(name):
     if name is None:
         return None
     n = unicodedata.normalize('NFKC', str(name))
