@@ -14,7 +14,8 @@ from pathlib import Path
 DIR = Path(os.environ.get('V3_CONSTS', 'C:/Users/kouki/nankan_ai/v3/consts_prod'))
 FILES = ['consts.json', 'v3n_one_p5.json', 'k26_cal_table.json', 'dw_pat_dict.json.gz', 'dw_pat_fallback.json.gz',
          'v3n_f41_grp.parquet', 'v3n_f41_horse.parquet',
-         'g68_sept.csv']   # 2026-11-04 決め 68 の窓の補い(9 月の第22版の前日版の率)・2026-10-17 決め 41 の固めた表(KDS から・父・生産者の群の合計と馬の台帳)
+         'g68_sept.csv',
+         'ot72_win.csv']   # 2026-11-06 決め 72 一本の木の側の枠の窓の補い(DB に meta.ot72.p0 の無い R)・2026-11-04 決め 68 の窓の補い(9 月の第22版の前日版の率)・2026-10-17 決め 41 の固めた表(KDS から・父・生産者の群の合計と馬の台帳)
 NEED = {'p1_follow': ['FORM', 'TAG'], 'danwa_marks': ['CONST'], 't14_bundle': ['M_GLOB', 'V0'],
         'v3n_p1': ['K', 'TAG'], 'v3n_e1': ['B_E1', 'S_NOKEN', 'BETA_NOKEN'], 'v3n_p1mix': ['AB', 'TAG'],
         'v3n_f41': ['NAMES', 'BETA', 'B', 'TAG', 'CUT'], 'f3_blend': ['W'],
@@ -25,6 +26,7 @@ NEED = {'p1_follow': ['FORM', 'TAG'], 'danwa_marks': ['CONST'], 't14_bundle': ['
         'pt69': ['A', 'K', 'TAG'],   # 2026-11-04 決め 69 南関 前日版の 3 着内の率の温度(v3/pre69_live)
         'v3n_mx70': ['W', 'models', 'seed_of', 'nb', 'gamma', 'curve', 'TAG'],   # 2026-11-06 決め 70 他場の CatBoost・ニューラルネットの混ぜ(v3n_mx70)
         'pm71': ['B', 'BETA', 'TAG'],   # 2026-11-05 決め 71 南関 前日版の勝つ率に 3 着内の率を混ぜる(v3/p1mix71_live)
+        'ot72': ['MIX', 'CU', 'WU1', 'W1', 'W3', 'ON', 'COVER', 'C182', 'TAG'],   # 2026-11-06 決め 72 南関 直前版に一本の木を混ぜる(v3/onetree72_live)
         'v3n_rb61': ['W', 'WIN', 'LAM', 'gamma', 'nb', 'curve', 'TAG']}   # 2026-10-31 決め 61 他場の 2 本目の木の混ぜ・内外の有利(v3n_rb61)   # 2026-10-28 決め 60 併せ馬の相手の層(awase_live)   # 2026-10-27 サイトの指数の表示の直し(si5_store.disp)   # 2026-10-22 決め 49 F3 の混ぜの重み
 _C = None
 

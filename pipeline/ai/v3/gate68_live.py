@@ -239,7 +239,8 @@ def build(marks, runs, races, day, timing):
           'sp': int(D.src.str.startswith('sp').sum()), 'd0': (str(D.race_date.min()) if len(D) else None),
           'mo': int(D.src.str.endswith('_mo').sum()), 'no_ans_R': no_ans,
           'lag1': sorted(t for t, v in lag.items() if v and t in {k[0] for k in T})}
-    return {'T': T, 'lag': lag, 'st': st, 'timing': timing, 'day': day}
+    return {'T': T, 'lag': lag, 'st': st, 'timing': timing, 'day': day,
+            'ans': ans, 'days': days, 'W': D[KEY + ['umaban']]}   # 2026-11-06 決め 72: 一本の木の側の窓(onetree72_live.load_gate)が答え・開催日・窓の埋まりに借りる
 
 
 def load(day, timing, log=print):

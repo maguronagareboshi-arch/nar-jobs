@@ -287,6 +287,12 @@ def main():
             f3_live.run(day, cap['h'], out / f'{day}_v29_base.csv', log=log)
         except Exception as e:  # noqa: BLE001
             log('F3 の材料 失敗(当日は前の段のまま)', type(e).__name__, str(e)[:200])
+        try:  # 一本の木の段 1 の材料(決め 72・研究 nankan-ai-v3 onetree72_prod.py・判定 2026-11-06 合格): 直前版だけ。t9.table の材料 T のその日の
+            #   182 列を v29 の土台へ 'OT:'(F3 の列は上の 'F3:' をそのまま使う)。当日の便が第23版の後に混ぜる。前日版は変えない。失敗しても当日は第23版のまま
+            import onetree72_live
+            onetree72_live.run_pre(day, cap['T'], out / f'{day}_v29_base.csv', log=log)
+        except Exception as e:  # noqa: BLE001
+            log('一本の木の材料 失敗(当日は第23版のまま)', type(e).__name__, str(e)[:200])
     naw = 0
     if nt:  # 併せ馬の相手の層(決め 60・研究 nankan-ai-v3 awase60_pre.py・ユーザー承認 2026-10-28 = 前日版は例外で採る): 短評の層の後の最後の段。
         #   その日の nar_kb_works の相手の行(partners)・前日版の上で学んだ重み(暗号化の定数)。失敗しても前の段のまま
