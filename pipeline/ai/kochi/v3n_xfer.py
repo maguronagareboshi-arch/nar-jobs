@@ -16,7 +16,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from cls2 import cls2
+from cls2 import cls3 as cls2  # 11/6 夜 広い読み(交流・混ぜたクラス・2・3 歳)= 表と同じ読み
 
 HERE = Path(__file__).resolve().parent
 AREA = {'園田': '兵庫', '姫路': '兵庫', '名古屋': '東海', '笠松': '東海', '水沢': '岩手', '盛岡': '岩手',
@@ -96,7 +96,8 @@ def note_for(seq, track, today_cls, day, T):
     if not c:
         return None
     n, r = c
-    return f'移籍{k + 1}戦目: {s_trk}{s_cls}から{track}{e_cls}に入った馬は{int(round(r * 100))}%が通用({n}頭)'
+    src = f'{s_trk}の{s_cls}戦' if s_cls.endswith('歳') else f'{s_trk}{s_cls}'   # 2・3 歳限定は「船橋の3歳戦」
+    return f'移籍{k + 1}戦目: {src}から{track}{e_cls}に入った馬は{int(round(r * 100))}%が通用({n}頭)'
 
 
 def attach(rows, off, day, log=print):
