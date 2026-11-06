@@ -48,6 +48,8 @@ import sys
 import urllib.error
 import urllib.parse
 import urllib.request
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))  # 2026-11-06 送信量: 受け取りを gzip で
+import sb_gzip  # noqa: E402
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -136,8 +138,8 @@ def req(base, key, path, method="GET", body=None):
         "apikey": key, "Authorization": "Bearer " + key, "User-Agent": UA,
         "Content-Type": "application/json",
         "Prefer": "resolution=merge-duplicates,return=minimal"})
-    with urllib.request.urlopen(r, timeout=120) as x:
-        return x.status, x.read().decode("utf-8")
+    st, _h, body = sb_gzip.open_read(r, 120)
+    return st, body.decode("utf-8")
 
 
 N_REQ = [0]

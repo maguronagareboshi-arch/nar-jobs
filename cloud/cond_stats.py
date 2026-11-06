@@ -24,6 +24,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))  # 2026-11-06 送信量: 受け取りを gzip で
+import sb_gzip  # noqa: E402
 
 BUCKET = "cond-stats"
 ROOT = "v1/"
@@ -181,8 +183,7 @@ class Rest:
             self.nreq += 1
             try:
                 r = urllib.request.Request(self.base + path, method=method, data=body, headers=h)
-                with urllib.request.urlopen(r, timeout=timeout) as x:
-                    return x.read()
+                return sb_gzip.read(r, timeout)
             except urllib.error.HTTPError as e:
                 if e.code < 500 or i == 2:
                     raise

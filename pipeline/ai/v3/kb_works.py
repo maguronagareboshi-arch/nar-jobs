@@ -20,6 +20,8 @@ import sys
 import urllib.parse
 import urllib.request
 from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parents[3] / 'cloud'))  # 2026-11-06 送信量: 受け取りを gzip で
+import sb_gzip  # noqa: E402
 
 import pandas as pd
 
@@ -50,8 +52,7 @@ def fetch_rows(lo=FROM, hi=None):
     while True:
         url = f'{base}/rest/v1/{TABLE}?' + urllib.parse.urlencode(q + [('limit', str(PAGE)), ('offset', str(off))])
         req = urllib.request.Request(url, headers={'apikey': key, 'Authorization': f'Bearer {key}', 'User-Agent': 'nar-ai-v3'})
-        with urllib.request.urlopen(req, timeout=60) as r:
-            got = json.loads(r.read().decode('utf-8'))
+        got = json.loads(sb_gzip.read(req, 60).decode('utf-8'))
         rows += got
         if len(got) < PAGE:
             break

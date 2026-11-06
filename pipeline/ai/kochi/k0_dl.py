@@ -12,6 +12,8 @@ import urllib.parse
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parents[3] / 'cloud'))  # 2026-11-06 送信量: 受け取りを gzip で
+import sb_gzip  # noqa: E402
 import pandas as pd
 D = 'C:/Users/kouki/nankan_ai/v3/official/'
 URL = os.environ.get('SUPABASE_URL', 'https://qgsnsdjvzzeazbazjlwa.supabase.co').rstrip('/')
@@ -27,8 +29,7 @@ class sb:
         for i in range(tries):
             try:
                 req = urllib.request.Request(URL + path, headers={'apikey': KEY, 'Authorization': 'Bearer ' + KEY})
-                with urllib.request.urlopen(req, timeout=120) as r:
-                    return json.loads(r.read().decode('utf-8'))
+                return json.loads(sb_gzip.read(req, 120).decode('utf-8'))
             except Exception:
                 if i == tries - 1:
                     raise

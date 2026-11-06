@@ -17,6 +17,8 @@ import types
 import urllib.parse
 import urllib.request
 from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parents[3] / 'cloud'))  # 2026-11-06 送信量: 受け取りを gzip で
+import sb_gzip  # noqa: E402
 
 import pandas as pd
 
@@ -52,9 +54,8 @@ def rest(path, body=None, prefer=None):
     if prefer:
         h['Prefer'] = prefer
     req = urllib.request.Request(url + path, data=data, headers=h, method='POST' if body is not None else 'GET')
-    with urllib.request.urlopen(req, timeout=120) as r:
-        t = r.read().decode('utf-8')
-        return json.loads(t) if t else None
+    t = sb_gzip.read(req, 120).decode('utf-8')
+    return json.loads(t) if t else None
 
 
 # ---------------------------------------------------------------- 読み(kb_banei_parse.py と同じ)

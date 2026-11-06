@@ -29,6 +29,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))  # 2026-11-06 送信量: 受け取りを gzip で
+import sb_gzip  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from pipeline import facts, karte                                   # noqa: E402
@@ -73,8 +75,7 @@ def get(base, key, path):
         try:
             if PAUSE:
                 time.sleep(PAUSE)
-            with urllib.request.urlopen(req, timeout=60) as r:
-                return json.loads(r.read())
+            return json.loads(sb_gzip.read(req, 60))
         except Exception as e:                                       # noqa: BLE001
             if n == 2:
                 log("  ⛔読み取り失敗 %s: %s" % (path.split("?")[0], str(e)[:120]))

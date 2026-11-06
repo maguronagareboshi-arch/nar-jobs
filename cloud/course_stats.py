@@ -35,6 +35,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))  # 2026-11-06 送信量: 受け取りを gzip で
+import sb_gzip  # noqa: E402
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -117,8 +119,8 @@ def req(base, key, path, method="GET", body=None, prefer=None, tries=2):
             "Content-Type": "application/json",
             "Prefer": prefer or "resolution=merge-duplicates,return=minimal"})
         try:
-            with urllib.request.urlopen(r, timeout=180) as x:
-                return x.status, x.headers.get("Content-Range"), x.read().decode("utf-8")
+            st, hd, body = sb_gzip.open_read(r, 180)
+            return st, hd.get("Content-Range"), body.decode("utf-8")
         except urllib.error.HTTPError as e:
             last = e
             if method != "GET" or e.code < 500 or i == tries - 1:

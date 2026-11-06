@@ -19,6 +19,8 @@ import time
 import urllib.parse
 import urllib.request
 from pathlib import Path
+sys.path.append(str(Path(__file__).resolve().parents[3] / 'cloud'))  # 2026-11-06 送信量: 受け取りを gzip で
+import sb_gzip  # noqa: E402
 
 import pandas as pd
 
@@ -41,11 +43,11 @@ def req(table, q, count=False):
     h = {'apikey': KEY, **({} if KEY.startswith('sb_') else {'Authorization': f'Bearer {KEY}'}), **({'Prefer': 'count=exact'} if count else {})}
     for k in range(6):
         try:
-            with urllib.request.urlopen(urllib.request.Request(url, headers=h), timeout=90) as r:
-                time.sleep(0.3)
-                if count:
-                    return int(r.headers['Content-Range'].split('/')[-1])
-                return json.loads(r.read())
+            _st, _hd, _body = sb_gzip.open_read(urllib.request.Request(url, headers=h), 90)
+            time.sleep(0.3)
+            if count:
+                return int(_hd['Content-Range'].split('/')[-1])
+            return json.loads(_body)
         except Exception as e:  # noqa: BLE001
             print('retry', table, type(e).__name__, flush=True)
             time.sleep(5 * (k + 1))

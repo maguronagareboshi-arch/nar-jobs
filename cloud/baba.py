@@ -97,6 +97,8 @@ import sys
 import time
 import unicodedata
 import urllib.request
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))  # 2026-11-06 送信量: 受け取りを gzip で
+import sb_gzip  # noqa: E402
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 from class_parts import race_class_parts  # noqa: E402  ⛔サイトの js/class-parts.js と同じ読み方
@@ -188,8 +190,8 @@ def req(base, key, path, method="GET", body=None):
         "apikey": key, "Authorization": "Bearer " + key, "User-Agent": UA,
         "Content-Type": "application/json",
         "Prefer": "resolution=merge-duplicates,return=minimal"})
-    with urllib.request.urlopen(r, timeout=90) as x:
-        return x.status, x.read().decode("utf-8")
+    st, _h, body = sb_gzip.open_read(r, 90)
+    return st, body.decode("utf-8")
 
 
 def rows_all(base, key, path, tries=3, wait=5):
