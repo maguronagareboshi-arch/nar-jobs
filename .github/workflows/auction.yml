@@ -46,7 +46,9 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
-          sparse-checkout: cloud/beat.py
+          sparse-checkout: |
+            cloud/beat.py
+            cloud/sb_gzip.py
           sparse-checkout-cone-mode: false
       - name: skip when today's run is already done
         id: g

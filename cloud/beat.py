@@ -17,7 +17,10 @@ import sys
 import urllib.parse
 import urllib.request
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))  # 2026-11-06 送信量: 受け取りを gzip で
-import sb_gzip  # noqa: E402
+try:
+    import sb_gzip  # noqa: E402
+except ImportError:          # 部品を取り出さない便(sparse-checkout)でも今どおり動く
+    sb_gzip = None
 
 JST = dt.timezone(dt.timedelta(hours=9))
 TABLE = "nar_job_heartbeat"
@@ -37,7 +40,11 @@ def _req(path, body=None, timeout=20):
     req = urllib.request.Request(f"{url}/rest/v1/{path}", data=data, method="GET" if body is None else "POST",
                                  headers={"apikey": key, "Authorization": "Bearer " + key,
                                           "Content-Type": "application/json"})
-    raw = sb_gzip.read(req, timeout)
+    if sb_gzip is not None:
+        raw = sb_gzip.read(req, timeout)
+    else:
+        with urllib.request.urlopen(req, timeout=timeout) as r:
+            raw = r.read()
     return json.loads(raw) if raw else None
 
 

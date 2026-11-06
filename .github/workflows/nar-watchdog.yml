@@ -328,6 +328,7 @@ jobs:
         with:
           sparse-checkout: |
             cloud/beat.py
+            cloud/sb_gzip.py
             cloud/live_watch.py
           sparse-checkout-cone-mode: false
       - name: check job heartbeats
@@ -486,6 +487,7 @@ jobs:
         with:
           sparse-checkout: |
             cloud/beat.py
+            cloud/sb_gzip.py
             cloud/db_sizes.py
           sparse-checkout-cone-mode: false
       - name: record db sizes once a day and check thresholds
@@ -549,6 +551,7 @@ jobs:
         with:
           sparse-checkout: |
             cloud/beat.py
+            cloud/sb_gzip.py
             cloud/watchdog_dedupe.py
           sparse-checkout-cone-mode: false
       - name: mail once a day for the same red
