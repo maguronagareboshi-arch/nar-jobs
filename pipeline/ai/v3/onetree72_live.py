@@ -14,9 +14,11 @@
   4. 枠の内外の有利(gate68_live の式): 窓 = 一本の木の側の直しの前の p3(直前の行の meta.ot72.p0・DB に無い R は暗号化の定数の ot72_win.csv)。
      答え・開催日・前の日の結果のそろい(lag)は第 23 版の窓と同じ物を使う。
   5. 勝つ率の守り(p1cap.cap)。
-  6. 第 23 版(全部の段の後)と MIX : 1 − MIX(勝つ率は対数・3 着内は logit)→ 勝つ率は合計 1・3 着内は max(·, min(p1, 0.999)) で合計 3 → 勝つ率の守り。
+  6. 3 着内率 = 第 23 版(全部の段の後)と MIX : 1 − MIX(logit)→ max(·, min(混ぜた勝つ率, 0.999)) で合計 3(決め 72 のまま)。
+  7. 勝つ率(決め 73・2026-11-06 ユーザー採用・研究 onetree73_follow.py の fol)= 第 23 版の最後の勝つ率 × (6 の 3 着内率 ÷ 第 23 版の最後の 3 着内率)^FOL
+     → 合計 1 → 勝つ率の守り。72 の混ぜた勝つ率は 6 の下限にだけ使う(出す率には使わない)。6・7 のどこかで落ちたら勝つ率も 3 着内率も第 23 版のまま。
 混ぜるのは ON の日から(それより前は一本の木の側を作って meta.ot72.p0 に残すだけ = 窓をためる)、かつ窓の行が第 23 版の窓の COVER 以上ある場だけ。
-定数(MIX・CU・WU1・W1・W3・ON・COVER・TAG)は暗号化したリリース v3-consts の consts.json の ot72(公開のコードに数を置かない)。
+定数(MIX・CU・WU1・W1・W3・FOL・ON・COVER・TAG)は暗号化したリリース v3-consts の consts.json の ot72(公開のコードに数を置かない)。
 模型は暗号化したリリース v3-ot72-*(V3_OT72 = 開けた置き場: ot72.json・ot72_y3.txt・ot72_y1.txt)。
 """
 import datetime as dt
@@ -213,6 +215,17 @@ def mix(t1, t3, s1, s3):
     return p1cap.cap(p1, p3), raw, p3
 
 
+def follow(s1, s3, p3):
+    """決め 73: 勝つ率を 3 着内率の動きに付いていかせる(研究 onetree73_follow.fol と同じ)。s1・s3 = 第 23 版の最後の率・p3 = mix の合計 3 の後の 3 着内率。
+    → 勝つ率(合計 1・勝つ率の守りの後)"""
+    import p1cap
+    k = float(consts()['FOL'])
+    p3 = np.asarray(p3, float)
+    q = np.asarray(s1, float) * np.exp(k * np.log(np.clip(p3, 1e-9, 1) / np.clip(np.asarray(s3, float), 1e-9, 1)))
+    q = q / q.sum()
+    return p1cap.cap(q, p3)
+
+
 def aw_d(AW, track, rno, nums):
     """併せ馬の相手の材料 D(awase_live.apply と同じ: (res, mar) ÷ SD・相手の行の無い馬は 0)。"""
     import awase_live
@@ -309,7 +322,16 @@ def apply_day(M, GT, AW, b, track, rno, u, s1, s3, day):
          'p0': {str(int(n)): round(float(x), 6) for n, x in zip(nums, p3n)}}
     if not on:
         return {'on': False, 'meta': m}
-    p1, raw, p3 = mix(t1, t3, s1, s3)
-    m['s1'] = {str(int(n)): round(float(x), 4) for n, x in zip(nums, s1)}
+    try:  # 3 着内率の混ぜ(決め 72)と勝つ率の付いていき(決め 73)は 1 つの段: どちらかが落ちたら両方とも第 23 版のまま(p0 は残す)
+        _, raw, p3 = mix(t1, t3, s1, s3)
+        p1 = follow(s1, s3, p3)
+        if not (np.isfinite(p1).all() and np.isfinite(p3).all() and abs(float(p1.sum()) - 1) < 1e-6):
+            raise ValueError('率が数でないか勝つ率の合計が 1 でない')
+    except Exception as e:  # noqa: BLE001
+        m['on'] = False
+        m['err'] = f'{type(e).__name__} {str(e)[:80]}'
+        return {'on': False, 'meta': m}
+    m['k'] = float(consts()['FOL'])
+    m['s1'] = {str(int(n)): round(float(x), 4) for n, x in zip(nums, s1)}   # 付いていく前の勝つ率(第 23 版)
     m['s3'] = {str(int(n)): round(float(x), 4) for n, x in zip(nums, s3)}
     return {'on': True, 'p1': p1, 'p3raw': raw, 'p3': p3, 'meta': m}

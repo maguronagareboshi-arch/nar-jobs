@@ -344,11 +344,13 @@ def day_marks(Bk, odds, w, going, dm, day):
             r_ = onetree72_live.apply_day(OT72, OT72G, AW, b, Bk.track.iloc[0], int(Bk.race_no.iloc[0]), u, np.asarray(p1, float), np.asarray(p3p, float), day)
             if r_ is not None:
                 ot72m = r_['meta']
-                if r_['on']:
+                if r_['on']:  # 3 着内率と勝つ率は必ず一緒に替える(片方だけ替えない)
                     p1, p3, p3p = r_['p1'], r_['p3raw'], r_['p3']
                     used.append('ot72')
-                    ver = '南関 第26版'  # 第26版 = 第23版 + 一本の木 5 割(決め 72)
-                    stamp += ' + 一本の木 5 割'
+                    ver = '南関 第26版'  # 第26版 = 第23版 + 一本の木 5 割(3 着内率・決め 72)+ 勝つ率は付いていく(決め 73)
+                    stamp += ' + 一本の木 5 割(勝つ率は付いていく)'
+                elif ot72m.get('err'):
+                    log('一本の木の混ぜ 失敗(第23版のまま)', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), ot72m['err'])
         except Exception as e:  # noqa: BLE001  一本の木が落ちても第23版の印は出す
             log('一本の木 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
     stamp = f'{ver} 直前版 = {stamp}'
