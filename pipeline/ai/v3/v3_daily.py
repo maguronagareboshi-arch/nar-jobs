@@ -49,6 +49,7 @@ CAP_TAG = '決め67-2 勝つ率の守り'  # p1cap.TAG と同じ字
 STAMP_G68 = '+枠の内外の有利の直し(場 × 枠の前 56 日 + 同じ開催の前の日まで・前の日を含まない)'  # 決め 68(前日版の並び読みの後・勝つ率の守りの前)
 STAMP_PT = '+3 着内の率の温度(なだらかに・勝つ率は動かさない)'  # 決め 69(枠の内外の有利の直しの後・勝つ率の守りの前)
 STAMP_PM = '+勝つ率に 3 着内の率を混ぜる(3 着内の率・印は動かさない)'  # 決め 71(3 着内の率の温度の後・勝つ率の守りの前)
+STAMP_PT74 = '+前日の一本の木 5 割(当日の 8 列なし・勝つ率は付いていく)+前日の F3 2 割'  # 決め 74(勝つ率の守りの後・混ぜたレースだけ = 南関 第27版 前日版)
 
 
 def log(*a):
@@ -90,7 +91,7 @@ def build_rows(csv_path, day, src, stamp=STAMP):
             meta['pm71'] = {'tag': p1mix71_live.tag(), 'p1_before': {str(int(r.umaban)): round(float(r.p1_pm0), 6) for r in g.itertuples()}}
         if 'p1_cap0' in g.columns:  # 勝つ率の守り(決め 67-2)を通したレース = 元の勝つ率は p1_cap0・動かした頭数
             meta['p1cap'] = CAP_TAG
-            meta['p1cap_n'] = int((g.p1 != g.p1_cap0).sum())
+            meta['p1cap_n'] = int(((g.p1_t74 if 'p1_t74' in g.columns else g.p1) != g.p1_cap0).sum())   # 決め 74 の段の前の勝つ率で数える
         rows.append({'track': tr, 'race_date': str(day), 'race_no': int(rno), 'marks': marks, 'meta': meta})
     return rows
 
@@ -294,6 +295,7 @@ def main():
         except Exception as e:  # noqa: BLE001
             log('一本の木の材料 失敗(当日は第23版のまま)', type(e).__name__, str(e)[:200])
     naw = 0
+    A_aw = None
     if nt:  # 併せ馬の相手の層(決め 60・研究 nankan-ai-v3 awase60_pre.py・ユーザー承認 2026-10-28 = 前日版は例外で採る): 短評の層の後の最後の段。
         #   その日の nar_kb_works の相手の行(partners)・前日版の上で学んだ重み(暗号化の定数)。失敗しても前の段のまま
         try:
@@ -301,6 +303,7 @@ def main():
             A, n_aw = awase_live.load(day)
             log('併せの相手', f'相手の行のある馬 {len(A)} / 調教の行 {n_aw}')
             naw = awase_live.apply_csv_pre(A, csv_path, log=log)
+            A_aw = A   # 決め 74 の一本の木の側の併せ馬が同じ相手の行を使う
         except Exception as e:  # noqa: BLE001
             log('併せの相手 失敗(前の段のまま)', type(e).__name__, str(e)[:200])
     nsq = 0
@@ -317,11 +320,13 @@ def main():
         except Exception as e:  # noqa: BLE001
             log('前日版の並び読み 失敗(前の段のまま)', type(e).__name__, str(e)[:200])
     ng = 0
+    G68m = None
     if b12 and nt and nsq:  # 枠の内外の有利の直し(決め 68・研究 nankan-ai-v3 gate68_judge.py・ユーザー採用 2026-11-03 = 前日版にも §8 の条件で入れる): 前日版の並び読みの後・
         #   勝つ率の守りの前。前 56 日の朝の行(meta.g68.p0 か runners の p3)と nar_runs の結果から場 × 枠の a(前の日を含まない)。失敗しても前の段のまま
         try:
             import gate68_live
-            ng = gate68_live.apply_csv_pre(gate68_live.load(day, 'morning', log=log), csv_path, log=log)
+            G68m = gate68_live.load(day, 'morning', log=log)
+            ng = gate68_live.apply_csv_pre(G68m, csv_path, log=log)
         except Exception as e:  # noqa: BLE001
             log('枠の内外の有利の直し 失敗(前の段のまま)', type(e).__name__, str(e)[:200])
     npt = 0
@@ -364,9 +369,36 @@ def main():
     c67 = c67_cancel.c67_tag() if ver == '南関 第21版 前日版' else None  # 決め 67-1(砂替えと取りやめの直し・直した重み)
     if c67:
         ver = '南関 第25版 前日版' if ng and npt and npm else '南関 第24版 前日版' if ng and npt else '南関 第23版 前日版' if ng else '南関 第22版 前日版'  # 第23版 = 第22版 + 枠の内外の有利の直し(決め 68)・第24版 = 第23版 + 3 着内の率の温度(決め 69)・第25版 = 第24版 + 勝つ率の混ぜ(決め 71)
+    PT74 = {}
+    if ver == '南関 第25版 前日版' and G68m is not None:  # 前日版の作り直し(決め 74・研究 nankan-ai-v3 preday74_judge.py・preday74_prod.py・判定 2026-11-06 合格):
+        #   第25版の最後(勝つ率の守りの後)に前日の一本の木 5 割 + 前日の F3 2 割(1 つの段)。混ぜたレースだけ「南関 第27版 前日版」。
+        #   混ぜる日(定数 pt74.ON)の前は率を変えず meta.pt74.p0 だけ残す(一本の木の側の枠の窓をためる)。失敗しても第25版のまま
+        try:
+            import preday74_live
+            M74 = preday74_live.load()
+            if M74 is None:
+                log('前日の一本の木 模型なし(第25版のまま)')
+            else:
+                log('前日の一本の木 読めた', M74.get('cut'), len(M74['cols']), '列・F3', len(M74['F3']['cols']), '列・混ぜる日', preday74_live.consts()['ON'])
+                GT74 = preday74_live.load_gate(day, G68m, log=log)
+                PT74 = preday74_live.apply_csv_pre(M74, GT74, A_aw, day, csv_path, out / f'{day}_v29_base.csv', log=log)
+        except Exception as e:  # noqa: BLE001
+            log('前日の一本の木 失敗(第25版のまま)', type(e).__name__, str(e)[:200])
+            PT74 = {}
     rows = build_rows(csv_path, day, src, ver + ' = ' + ((STAMP12 + (STAMP_DEB if nd else '') + (STAMP_TPL if nt else '') + (STAMP_AW if naw else '') + (STAMP_SQ if nsq else '') + (STAMP_G68 if ng else '') + (STAMP_PT if npt else '') + (STAMP_PM if npm else '') + (STAMP_CAP if ncap is not None else '')) if b12 else (STAMP11 if bundle else STAMP)))
     for r in rows if c67 else ():
         r['meta']['c67'] = c67
+    n74 = 0
+    for r in rows:  # 決め 74: 混ぜたレースは版の字を第27版に(混ぜないレース・影の日は第25版のまま + meta.pt74.p0)
+        m74 = PT74.get((r['track'], int(r['race_no'])))
+        if m74 is None:
+            continue
+        r['meta']['pt74'] = m74
+        if m74.get('on'):
+            r['meta']['stamp'] = r['meta']['stamp'].replace('南関 第25版 前日版', '南関 第27版 前日版', 1) + STAMP_PT74
+            n74 += 1
+    if PT74:
+        log('版', '南関 第27版 前日版', n74, 'R ・第25版のまま', len(rows) - n74, 'R')
     if notes:
         log('ひとこと 付けた', v3_notes.attach(rows, notes), '頭')
     if cyb:

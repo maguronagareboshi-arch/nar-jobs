@@ -26,7 +26,8 @@ NEED = {'p1_follow': ['FORM', 'TAG'], 'danwa_marks': ['CONST'], 't14_bundle': ['
         'pt69': ['A', 'K', 'TAG'],   # 2026-11-04 決め 69 南関 前日版の 3 着内の率の温度(v3/pre69_live)
         'v3n_mx70': ['W', 'models', 'seed_of', 'nb', 'gamma', 'curve', 'TAG'],   # 2026-11-06 決め 70 他場の CatBoost・ニューラルネットの混ぜ(v3n_mx70)
         'pm71': ['B', 'BETA', 'TAG'],   # 2026-11-05 決め 71 南関 前日版の勝つ率に 3 着内の率を混ぜる(v3/p1mix71_live)
-        'ot72': ['MIX', 'CU', 'WU1', 'W1', 'W3', 'FOL', 'ON', 'COVER', 'C182', 'TAG'],   # 2026-11-06 決め 72 南関 直前版に一本の木を混ぜる・決め 73 勝つ率は付いていく(v3/onetree72_live)
+        'ot72': ['MIX', 'CU', 'WU1', 'W1', 'W3', 'FOL', 'ON', 'COVER', 'C182', 'TAG'],
+        'pt74': ['MIX', 'CU', 'WU1', 'W1', 'W3', 'FOL', 'WF3', 'ON', 'COVER', 'C182', 'TAG'],   # 2026-11-06 決め 74 南関 前日版の作り直し(v3/preday74_live)   # 2026-11-06 決め 72 南関 直前版に一本の木を混ぜる・決め 73 勝つ率は付いていく(v3/onetree72_live)
         'v3n_rb61': ['W', 'WIN', 'LAM', 'gamma', 'nb', 'curve', 'TAG']}   # 2026-10-31 決め 61 他場の 2 本目の木の混ぜ・内外の有利(v3n_rb61)   # 2026-10-28 決め 60 併せ馬の相手の層(awase_live)   # 2026-10-27 サイトの指数の表示の直し(si5_store.disp)   # 2026-10-22 決め 49 F3 の混ぜの重み
 _C = None
 
