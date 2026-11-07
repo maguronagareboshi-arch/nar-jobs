@@ -1,0 +1,56 @@
+# 2026-11-07 走破指数を他 10 場へ(cloud/si_all.py)の埋め直し便。1 場ずつ・月ごとに順に nar_si5 へ upsert(トリガーで nar_runs.si5 へ写る)。
+# ⛔南関 4 場(si5_store が書く)と帯広ばは台本が弾く。apply=no は計算と行数だけ(書かない)。同時に走るのは 1 本。
+# 読む量= その場の対象の月と前の 3 年ぶん(場×月・要る列だけ)。送信量が枠超えの月なので 1 場ずつ流す。
+name: si-all-backfill
+on:
+  workflow_dispatch:
+    inputs:
+      track:
+        description: '場(1 つ)'
+        required: true
+        type: choice
+        options: [門別, 盛岡, 水沢, 金沢, 笠松, 名古屋, 園田, 姫路, 高知, 佐賀]
+      from:
+        description: '始めの月 YYYY-MM'
+        required: true
+      to:
+        description: '終わりの月 YYYY-MM'
+        required: true
+      apply:
+        description: 'nar_si5 へ書く(yes/no)'
+        required: true
+        default: 'no'
+        type: choice
+        options: ['no', 'yes']
+concurrency:
+  group: si-all-backfill
+  cancel-in-progress: false
+jobs:
+  backfill:
+    runs-on: ubuntu-latest
+    timeout-minutes: 300
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install pandas==2.2.3 numpy==1.26.4
+      - name: check inputs
+        env:
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+        run: |
+          echo "$FROM" | grep -Eq '^20[0-9]{2}-(0[1-9]|1[0-2])$' || { echo "from は YYYY-MM"; exit 1; }
+          echo "$TO" | grep -Eq '^20[0-9]{2}-(0[1-9]|1[0-2])$' || { echo "to は YYYY-MM"; exit 1; }
+          [ "$FROM" \< "$TO" ] || [ "$FROM" = "$TO" ] || { echo "from が to より後"; exit 1; }
+      - name: si all backfill
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          TRACK: ${{ inputs.track }}
+          FROM: ${{ inputs.from }}
+          TO: ${{ inputs.to }}
+          APPLY: ${{ inputs.apply }}
+        run: |
+          if [ "$APPLY" = "yes" ]; then A=--apply; else A=; fi
+          python -X utf8 cloud/si_all.py run --track "$TRACK" --from "$FROM" --to "$TO" $A

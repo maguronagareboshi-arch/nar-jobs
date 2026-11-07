@@ -476,6 +476,18 @@ jobs:
           path: babaenc
           key: ${{ steps.bbk.outputs.k }}
 
+      # 2026-11-07 走破指数を他 10 場へ(cloud/si_all.py・場ごとの物差し o_s=0)。baba の日の値の後で、前日までの直近 21 日を
+      #   nar_si5 へ書き直す(トリガーで nar_runs.si5 へ写る)。南関 4 場は nar-ai-v3 の si5_store のまま。朝の便だけ(読む量= 10 場×約 3 年)。
+      #   heartbeat 'si_all'(台本の中で書く)。⛔落ちても続行(|| echo)= 便を止めない
+      - name: si all (morning only)
+        if: '!cancelled()'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          H=$(TZ=Asia/Tokyo date +%H%M)
+          if [ "$MODE" != "daily" ] || [ "$MORNING" = 1 ]; then { pip install -q pandas==2.2.3 numpy==1.26.4 && python -X utf8 cloud/si_all.py run --days 21 --apply --beat; } || echo "::warning::他場の走破指数が書けない(続行)"; else echo "si all は朝の便だけ(JST $H)=スキップ"; fi
+
       # §100 馬場傾向(時計=baba_diff・前後=1角順位×着順ρ・内外=枠×着順ρ)。朝の便は 90 日組み直し、日中の便は当日だけ
       - name: baba trend
         id: am_baba_trend

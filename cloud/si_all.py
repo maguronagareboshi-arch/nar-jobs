@@ -1,7 +1,8 @@
 # -*- coding: utf-8 -*-
 """走破指数(SI)を南関以外の 10 場へ広げる台本(2026-11-07・枝 si5-all・⛔まだ本番の便には入れない)。
 
-  python -X utf8 cloud/si_all.py run   [--track 高知,佐賀] [--from 2024-01-01] [--to 2024-12-31] [--out x.csv.gz] [--apply]
+  python -X utf8 cloud/si_all.py run --track 高知 --from 2024-01 --to 2024-12 [--apply]   # 埋め直し(月ごとに順に書く)
+  python -X utf8 cloud/si_all.py run --days 21 --apply --beat                            # 毎日の便(他 10 場の直近 21 日)
   python -X utf8 cloud/si_all.py check --out DIR        # 照合の数表(DB に書かない)→ DIR/check.json・check.md
   python -X utf8 cloud/si_all.py check3 --out DIR       # o_s の残りのずれ・2〜3 歳を外した版・級ごとの表(DB に書かない)
   python -X utf8 cloud/si_all.py check2 --out DIR       # o_s+2014〜前日の全期間(DB に書かない)→ DIR/check2.json・check2.md
@@ -17,6 +18,7 @@
   出走馬の力の見積もり proj_days の半々(力の見積もりが無い日は classfirst のまま= baba.blend_proj と同じ)。
   nar_meta baba_diff は直近 90 日しか無いので、baba の関数で全日を as-of(その日より前の走だけ)で組み直す。
   照合用に t4_base と同じ作りの D(その日のレース残差の中央値を n/(n+5) で場×馬場のふだんへ寄せる)も出す(D_t4)。
+- ⛔書く値(run)は o_s=0(2026-11-07 決定= 他 10 場は場ごとの物差し)。o_s のつなぎは照合(check2/check3)の口だけ。
 - 式= 80 + (1000/B)·(B − T' + D·d/1000) + 2·(斤量 − 55) + o_s。B= bc·d/1000・T'= min(走破, 勝ち時計 + 2·d/1000)。
   流れの直し(disp)・D5 は入れない。
 - o_s(2026-11-07 ア)= 場の間の物差し。t5_base.o_table と同じ作り(同じ馬が 90 日以内に別の場で走った組・両向き 100 組以上の線)で
@@ -313,17 +315,38 @@ def out_frame(X, col='SI'):
     return x.reset_index(drop=True)
 
 
-def push(x):
-    assert not x.track.isin(NANKAN).any(), '南関は si5_store が書く'
-    sys.path.insert(0, str(HERE.parent / 'pipeline/ai'))
-    import ai_common as B1
-    base, key = B1.creds()
-    recs = x.to_dict('records')
-    for i in range(0, len(recs), 2000):
-        st, err = B1.upsert(base, key, TABLE, 'track,race_date,race_no,runner_number', recs[i:i + 2000])
-        if st not in (200, 201, 204):
-            raise SystemExit(f'nar_si5 upsert failed: {st} {err}')
-    log(f'nar_si5 へ {len(recs):,} 行')
+PUSH_CHUNK = 1000
+PUSH_TRIES = 3
+NO_WRITE = set(NANKAN) | {baba.BANEI}
+
+
+def push(x, base=None, key=None, wait=5.0):
+    """nar_si5 へ upsert(1,000 行ずつ・1 回の POST が落ちたら 3 回まで引き直し・それでも駄目なら止める)。戻り= 書いた行数"""
+    bad = sorted(set(x.track) & NO_WRITE)
+    assert not bad, f'南関・帯広ばは書かない: {bad}'
+    base = base or os.environ.get('SUPABASE_URL', '').rstrip('/')
+    key = key or os.environ.get('SUPABASE_SERVICE_KEY', '')
+    recs = [{'track': r['track'], 'race_date': r['race_date'], 'race_no': int(r['race_no']),
+             'runner_number': int(r['runner_number']), 'horse_key': r['horse_key'], 'si5': float(r['si5'])}
+            for r in x.to_dict('records')]
+    n = 0
+    for i in range(0, len(recs), PUSH_CHUNK):
+        body = json.dumps(recs[i:i + PUSH_CHUNK], ensure_ascii=False).encode('utf-8')
+        for k in range(PUSH_TRIES + 1):
+            try:
+                st, txt = baba.req(base, key, f'/rest/v1/{TABLE}?on_conflict=track,race_date,race_no,runner_number',
+                                   'POST', body)
+                if st in (200, 201, 204):
+                    break
+                err = f'{st} {txt[:200]}'
+            except Exception as e:  # noqa: BLE001  5xx・時間切れ・接続切れ
+                err = f'{type(e).__name__}: {str(e)[:200]}'
+            if k == PUSH_TRIES:
+                raise SystemExit(f'nar_si5 upsert failed({i} 行目から・{PUSH_TRIES} 回引き直し): {err}')
+            log(f'  書き直し {k + 1}/{PUSH_TRIES}({i} 行目から): {err}')
+            time.sleep(wait * (2 ** k))
+        n += len(recs[i:i + PUSH_CHUNK])
+    return n
 
 
 def compute(runs, races, lo, hi, nankan_joint=True):
@@ -487,7 +510,7 @@ KEEP = ['track', 'race_date', 'race_no', 'runner_number', 'horse_name', 'hk', 'y
         'time_sec', 'carried_weight', 'si5', 'age', 'SI', 'SI_t4', 'D', 'why']
 
 
-def load_frames(base, key, tracks, lo, hi, workers=6):
+def load_frames(base, key, tracks, lo, hi, workers=6, cols=None):
     """load と同じ読み方(場×月・要る列だけ)で、行は場月ごとに DataFrame にしてためる(全期間で辞書を持たない)。
     戻り= (走, レース, 場×年の {行数, 読んだ秒})"""
     jobs = [(t, m1, m2) for t in tracks for m1, m2 in months(lo, hi)]
@@ -495,22 +518,25 @@ def load_frames(base, key, tracks, lo, hi, workers=6):
 
     def one(j):
         t0 = time.time()
-        a = pd.DataFrame(_fetch(base, key, 'nar_runs', RUN_COLS, 'race_date.asc,race_no.asc,runner_number.asc', *j),
-                         columns=RUN_COLS)
-        b = pd.DataFrame(_fetch(base, key, 'nar_races', RACE_COLS, 'race_date.asc,race_no.asc', *j), columns=RACE_COLS)
-        return j, a, b, time.time() - t0
+        ra = _fetch(base, key, 'nar_runs', cols or RUN_COLS, 'race_date.asc,race_no.asc,runner_number.asc', *j)
+        rb = _fetch(base, key, 'nar_races', RACE_COLS, 'race_date.asc,race_no.asc', *j)
+        mb = (len(json.dumps(ra, ensure_ascii=False).encode()) + len(json.dumps(rb, ensure_ascii=False).encode())) / 1e6
+        return j, pd.DataFrame(ra, columns=RUN_COLS), pd.DataFrame(rb, columns=RACE_COLS), time.time() - t0, mb
     runs, races = [], []
     t0 = time.time()
     with ThreadPoolExecutor(workers) as ex:
-        for (t, m1, _), a, b, sec in ex.map(one, jobs):
+        for (t, m1, _), a, b, sec, mb in ex.map(one, jobs):
             runs.append(a)
             races.append(b)
             s = stat.setdefault(f'{t}_{m1[:4]}', {'runs': 0, 'races': 0, 'fetch_sec': 0.0})
             s['runs'] += len(a)
             s['races'] += len(b)
             s['fetch_sec'] = round(s['fetch_sec'] + sec, 1)
+            s['mb'] = round(s.get('mb', 0.0) + mb, 2)
     U, R = pd.concat(runs, ignore_index=True), pd.concat(races, ignore_index=True)
-    log(f'読んだ: 走 {len(U):,} 行・レース {len(R):,} 行({len(jobs)} 場月・{time.time() - t0:.0f} 秒)')
+    mb = sum(v['mb'] for v in stat.values())
+    log(f'読んだ: 走 {len(U):,} 行・レース {len(R):,} 行・約 {mb:.1f} MB(JSON の大きさ・送りは gzip で数分の 1)'
+        f'({len(jobs)} 場月・{time.time() - t0:.0f} 秒)')
     return U, R, stat
 
 
@@ -864,6 +890,8 @@ def main():
     ap.add_argument('--to', dest='hi', default=None)
     ap.add_argument('--out', default=None)
     ap.add_argument('--apply', action='store_true', help='nar_si5 へ upsert(既定は書かない)')
+    ap.add_argument('--days', type=int, default=None, help='毎日の便= 前日までの直近 N 日(--from/--to の代わり)')
+    ap.add_argument('--beat', action='store_true', help="nar_job_heartbeat 'si_all' を書く")
     a = ap.parse_args()
     if a.cmd == 'check':
         check(a.out or 'si_all_check')
@@ -874,29 +902,74 @@ def main():
     if a.cmd == 'check2':
         check2(a.out or 'si_all_check2')
         return 0
+    return run(a)
+
+
+RUN_COLS_W = [c for c in RUN_COLS if c not in ('si5', 'age')]     # 書く便は照合の列を読まない
+
+
+def month_range(lo, hi):
+    """--from/--to = YYYY-MM(月単位)か YYYY-MM-DD → (始めの日, 終わりの日)"""
+    a = lo + '-01' if len(lo) == 7 else lo
+    if len(hi) == 7:
+        y, m = map(int, hi.split('-'))
+        b = (dt.date(y + (m == 12), m % 12 + 1, 1) - dt.timedelta(days=1)).isoformat()
+    else:
+        b = hi
+    return a, b
+
+
+def run(a):
+    """他 10 場の指数(o_s=0= 場ごとの物差し・2026-11-07 決定)。場ごとに、対象の月と前の 3 年(基準・馬場差・ふだんの力)だけ読む。
+    --apply で月ごとに順に nar_si5 へ upsert。--beat で nar_job_heartbeat 'si_all' を書く(毎日の便)"""
     tracks = [t for t in a.track.split(',') if t]
     bad = [t for t in tracks if t not in TARGETS]
     if bad:
-        raise SystemExit(f'対象外の場: {bad}(南関は si5_store・帯広ばは外す)')
-    hi = a.hi or (dt.date.today() - dt.timedelta(days=1)).isoformat()
-    lo = a.lo or (dt.date.fromisoformat(hi) - dt.timedelta(days=21)).isoformat()
+        raise SystemExit(f'対象外の場: {bad}(南関は si5_store・帯広ばは書かない)')
+    if a.days:
+        hi = (baba._today_jst() - dt.timedelta(days=1)).isoformat()
+        lo = (dt.date.fromisoformat(hi) - dt.timedelta(days=a.days - 1)).isoformat()
+    else:
+        if not a.lo or not a.hi:
+            raise SystemExit('--from と --to(YYYY-MM)か --days が要る')
+        lo, hi = month_range(a.lo, a.hi)
     base = os.environ.get('SUPABASE_URL', '').rstrip('/')
     key = os.environ.get('SUPABASE_SERVICE_KEY', '')
-    # o_s(前の 3 年の組)のため、lo の 3 年前の 1 月から指数を作る(その基準にさらに 3 年= 6 年前の 1 月から読む)
-    w0 = max(2014, int(lo[:4]) - 3)
-    U, R, _ = load_frames(base, key, ALL, f'{max(2014, w0 - 3)}-01-01', hi)
-    X, _ = compute_years(U, R, f'{w0}-01-01', hi)
-    O, _ = o_table(X, sorted(int(y) for y in X.year.unique()))
-    X = apply_o(X, O)
-    X = X[(X.race_date >= lo) & (X.race_date <= hi)]
-    x = out_frame(X[X.track.isin(tracks)], 'SI_o')
-    log(f'指数 {len(x):,} 行({lo}〜{hi}・{",".join(tracks)})')
-    if a.out:
-        x.to_csv(a.out, index=False)
-    if a.apply:
-        push(x)
+    if not base or not key:
+        raise SystemExit('SUPABASE_URL / SUPABASE_SERVICE_KEY が無い')
+    tot_w, tot_r = 0, 0
+    try:
+        for t in tracks:
+            t0 = time.time()
+            U, R, stat = load_frames(base, key, [t], f'{max(2014, int(lo[:4]) - 3)}-01-01', hi, cols=RUN_COLS_W)
+            mb = sum(v['mb'] for v in stat.values())
+            X, _ = compute_years(U, R, lo, hi)
+            x = out_frame(X[X.track == t], 'SI')
+            nw = 0
+            for m1, m2 in months(lo, hi):
+                xm = x[(x.race_date >= m1) & (x.race_date < m2)]
+                w = push(xm, base, key) if a.apply and len(xm) else 0
+                nw += w
+                log(f'  {t} {m1[:7]}: 指数 {len(xm):,} 行・書いた {w:,} 行')
+            log(f'{t}: 読んだ 走 {len(U):,}・レース {len(R):,} 行・約 {mb:.1f} MB / 指数 {len(x):,} 行・書いた {nw:,} 行'
+                f'({lo}〜{hi}・{time.time() - t0:.0f} 秒)')
+            tot_w += nw
+            tot_r += len(U)
+            if a.out:
+                x.to_csv(a.out, index=False, mode='a', header=not os.path.exists(a.out))
+    except BaseException as e:
+        if a.beat:
+            _beat(False, f'{type(e).__name__} {str(e)[:80]}')
+        raise
+    log(f'合計: 読んだ走 {tot_r:,} 行・書いた {tot_w:,} 行')
+    if a.beat:
+        _beat(True, f'{lo}〜{hi} 書いた {tot_w}')
     return 0
 
+
+def _beat(ok, note):
+    import beat
+    beat.beat('si_all', ok, note)
 
 if __name__ == '__main__':
     sys.exit(main())

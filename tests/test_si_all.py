@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
 """2026-11-07 走破指数を全場へ(cloud/si_all.py)。行は REST の nar_runs / nar_races の列名・型そのまま。"""
+import os
 import sys
 import unittest
 from pathlib import Path
@@ -210,6 +211,92 @@ class Check3Test(unittest.TestCase):
         self.assertIn("級ごとの指数", md)
         self.assertIn("C1", res["class"]["高知"])
         __import__("json").dumps(res, ensure_ascii=False)
+
+
+class WriteTest(unittest.TestCase):
+    """2026-11-07 書く口: 1,000 行ずつ・3 回まで引き直して止まる・南関と帯広ばは弾く・o_s=0・月ごとに順に"""
+    def setUp(self):
+        self.saved = S.baba.req, S.load_frames, S.time.sleep
+        S.time.sleep = lambda *_: None
+
+    def tearDown(self):
+        S.baba.req, S.load_frames, S.time.sleep = self.saved
+
+    def frame(self, n, track="高知"):
+        return pd.DataFrame({"track": [track] * n, "race_date": ["2024-05-01"] * n, "race_no": [1] * n,
+                             "runner_number": list(range(1, n + 1)), "horse_key": ["ア|2020-04-01"] * n,
+                             "si5": [61.2] * n})
+
+    def test_push_chunks_and_retry(self):
+        calls = []
+
+        def req(base, key, path, method="GET", body=None):
+            calls.append((path, len(__import__("json").loads(body))))
+            if len(calls) == 2:
+                raise OSError("接続切れ")                                    # 2 回目の POST だけ落ちる→ 引き直す
+            return 201, ""
+        S.baba.req = req
+        n = S.push(self.frame(2500), "u", "k")
+        self.assertEqual(n, 2500)
+        self.assertEqual([c[1] for c in calls], [1000, 1000, 1000, 500])
+        self.assertTrue(calls[0][0].startswith("/rest/v1/nar_si5?on_conflict=track,race_date,race_no,runner_number"))
+
+    def test_push_stops_after_3_retries(self):
+        calls = []
+
+        def req(base, key, path, method="GET", body=None):
+            calls.append(1)
+            return 500, "err"
+        S.baba.req = req
+        with self.assertRaises(SystemExit):
+            S.push(self.frame(10), "u", "k")
+        self.assertEqual(len(calls), 4)                                       # 最初の 1 回 + 引き直し 3 回
+
+    def test_push_rejects_nankan_banei(self):
+        for t in ["大井", "帯広ば"]:
+            with self.assertRaises(AssertionError):
+                S.push(self.frame(1, t), "u", "k")
+
+    def test_month_range(self):
+        self.assertEqual(S.month_range("2024-01", "2024-12"), ("2024-01-01", "2024-12-31"))
+        self.assertEqual(S.month_range("2024-02", "2024-02"), ("2024-02-01", "2024-02-29"))
+
+    def args(self, **kw):
+        d = dict(track="高知", lo="2024-01", hi="2024-02", days=None, apply=True, beat=False, out=None)
+        d.update(kw)
+        return __import__("argparse").Namespace(**d)
+
+    def test_run_rejects_nankan_and_banei(self):
+        for t in ["大井", "帯広ば", "高知,川崎"]:
+            with self.assertRaises(SystemExit):
+                S.run(self.args(track=t))
+
+    def test_run_reads_only_track_and_window_and_writes_by_month(self):
+        S.MIN_R = 30
+        runs, races = synth(years=(2021, 2022, 2023, 2024))
+        got, posts = {}, []
+
+        def lf(base, key, tracks, lo, hi, workers=6, cols=None):
+            got.update(tracks=tracks, lo=lo, hi=hi, cols=cols)
+            U, R = pd.DataFrame(runs), pd.DataFrame(races)
+            return U[(U.race_date >= lo) & (U.race_date <= hi)], R[(R.race_date >= lo) & (R.race_date <= hi)], {"x": {"mb": 1.0}}
+        S.load_frames = lf
+
+        def req(base, key, path, method="GET", body=None):
+            posts.append(__import__("json").loads(body))
+            return 201, ""
+        S.baba.req = req
+        os.environ.setdefault("SUPABASE_URL", "http://x")
+        os.environ.setdefault("SUPABASE_SERVICE_KEY", "k")
+        self.assertEqual(S.run(self.args()), 0)
+        self.assertEqual(got["tracks"], ["高知"])
+        self.assertEqual((got["lo"], got["hi"]), ("2021-01-01", "2024-02-29"))    # 前の 3 年の 1 月から対象の月まで
+        self.assertNotIn("si5", got["cols"])
+        self.assertEqual([p[0]["race_date"][:7] for p in posts], ["2024-01", "2024-02"])   # 月ごとに順に
+        self.assertTrue(all(r["track"] == "高知" for p in posts for r in p))
+        X, _ = S.compute_years(pd.DataFrame(runs), pd.DataFrame(races), "2024-01-01", "2024-02-29")
+        x = S.out_frame(X, "SI")                                               # 書く値= o_s を足さない SI
+        self.assertEqual(sorted(r["si5"] for p in posts for r in p), sorted(x.si5.tolist()))
 
 
 if __name__ == "__main__":
