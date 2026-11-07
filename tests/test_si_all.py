@@ -125,5 +125,56 @@ class BaseTest(unittest.TestCase):
         self.assertEqual(set(x.track), {"高知"})
 
 
+class OsTest(unittest.TestCase):
+    """o_s(場の間の物差し)= 南関は本番の si5 で 0 に固定・100 組未満の線は使わない・前の年の組だけ"""
+    def frame(self):
+        rows = []
+        def add(h, d, t, v):
+            rows.append({"hk": h, "race_date": d, "race_no": 1, "track": t, "year": int(d[:4]),
+                         "si5": v if t in S.NANKAN else np.nan, "SI": np.nan if t in S.NANKAN else v})
+        for i in range(300):                               # 大井→高知→大井(高知の値は 5 高い= 物差しが甘い)
+            v = 50 + i % 30
+            add(f"a{i}|", "2023-03-01", "大井", v); add(f"a{i}|", "2023-04-01", "高知", v + 5)
+            add(f"a{i}|", "2023-05-01", "大井", v)
+        for i in range(400):                               # 同じ場の組(当てはめの a・b 用)
+            v = 45 + i % 40
+            add(f"s{i}|", "2023-06-01", "大井", v); add(f"s{i}|", "2023-07-01", "大井", v)
+        for i in range(50):                                # 佐賀とは 50 組だけ= 使わない
+            v = 60 + i % 10
+            add(f"g{i}|", "2023-03-01", "大井", v); add(f"g{i}|", "2023-04-01", "佐賀", v - 8)
+            add(f"g{i}|", "2023-05-01", "大井", v)
+        return pd.DataFrame(rows)
+
+    def test_o_table(self):
+        X = self.frame()
+        X["hk"] = X.hk.str.replace("|", "|x", regex=False)
+        O, info = S.o_table(X, [2023, 2024])
+        self.assertTrue(all(v == 0.0 for v in O[2023].values()))          # 2023 の組は 2023 に使わない(未来を入れない)
+        self.assertAlmostEqual(O[2024]["高知"], -5.0, 6)
+        self.assertEqual(O[2024]["大井"], 0.0)                               # 南関は動かさない
+        self.assertEqual(O[2024]["佐賀"], 0.0)
+        self.assertIn("佐賀", info[2024]["alone"])
+        self.assertNotIn("高知", info[2024]["alone"])
+        Y = S.apply_o(X.assign(year=2024), O)
+        k = Y[Y.track == "高知"]
+        self.assertTrue(np.allclose(k.F, k.SI - 5))
+        n = Y[Y.track == "大井"]
+        self.assertTrue(np.allclose(n.F, n.si5))
+
+
+    def test_years_summary_md(self):
+        S.MIN_R = 30
+        runs, races = synth(years=(2021, 2022, 2023, 2024, 2025))
+        X, sec = S.compute_years(pd.DataFrame(runs), pd.DataFrame(races), "2024-01-01", "2025-12-31")
+        self.assertEqual(sorted(sec), [2024, 2025])
+        O, info = S.o_table(X, [2024, 2025])
+        self.assertEqual(info[2025]["alone"], S.TARGETS)                    # 南関とつながらない= 0 のまま
+        X = S.apply_o(X, O)
+        res = S.summarize(X, O, info, {}, sec, "2024-01-01", "2025-12-31", 1)
+        md = S.to_md2(res)
+        self.assertIn("| 高知 |", md)
+        __import__("json").dumps(res, ensure_ascii=False)
+
+
 if __name__ == "__main__":
     unittest.main()

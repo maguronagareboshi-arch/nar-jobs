@@ -3,6 +3,7 @@
 
   python -X utf8 cloud/si_all.py run   [--track 高知,佐賀] [--from 2024-01-01] [--to 2024-12-31] [--out x.csv.gz] [--apply]
   python -X utf8 cloud/si_all.py check --out DIR        # 照合の数表(DB に書かない)→ DIR/check.json・check.md
+  python -X utf8 cloud/si_all.py check2 --out DIR       # o_s+2014〜前日の全期間(DB に書かない)→ DIR/check2.json・check2.md
 
 - 対象= 門別・盛岡・水沢・金沢・笠松・名古屋・園田・姫路・高知・佐賀。南関 4 場は pipeline/ai/v3/si5_store.py のまま
   (この台本は南関を書かない= --apply は南関を拒む)。帯広ばは外す。予想 AI の便(nar-ai-v3)には入れない。
@@ -15,14 +16,18 @@
   出走馬の力の見積もり proj_days の半々(力の見積もりが無い日は classfirst のまま= baba.blend_proj と同じ)。
   nar_meta baba_diff は直近 90 日しか無いので、baba の関数で全日を as-of(その日より前の走だけ)で組み直す。
   照合用に t4_base と同じ作りの D(その日のレース残差の中央値を n/(n+5) で場×馬場のふだんへ寄せる)も出す(D_t4)。
-- 式= 80 + (1000/B)·(B − T' + D·d/1000) + 2·(斤量 − 55)。B= bc·d/1000・T'= min(走破, 勝ち時計 + 2·d/1000)。
-  流れの直し(disp)・D5・o_s は入れない。
+- 式= 80 + (1000/B)·(B − T' + D·d/1000) + 2·(斤量 − 55) + o_s。B= bc·d/1000・T'= min(走破, 勝ち時計 + 2·d/1000)。
+  流れの直し(disp)・D5 は入れない。
+- o_s(2026-11-07 ア)= 場の間の物差し。t5_base.o_table と同じ作り(同じ馬が 90 日以内に別の場で走った組・両向き 100 組以上の線)で
+  14 場をつなぐ。南関 4 場は本番の si5 を組の値に使い o_s=0 に固定(南関の値は動かさない)。年 y は y−3〜y−1 の組だけ。
+  南関とつながらない場は 0(C1 基準のまま)。check2 で数表。
 - 読み方= nar_runs・nar_races を場×月で、要る列だけ(送信量が枠超えの月= 丸ごと読まない)。
   基準と baba の窓のぶん、--from の 3 年前の 1 月から読む。proj の馬の走歴のため 14 場を読む(書くのは対象の場だけ)。
 - 出力の形= nar_si5 と同じ(track, race_date, race_no, runner_number, horse_key= 馬名|生年月日, si5 小数 1 桁)。
 """
 import argparse
 import datetime as dt
+import itertools
 import json
 import os
 import re
@@ -474,9 +479,237 @@ def check(out):
     return res
 
 
+# ---------------------------------------------------------------- 場の間の物差し o_s(2026-11-07 ア・t5_base.o_table の作り)
+O_GAP = 90
+O_MIN_PAIR = 100
+KEEP = ['track', 'race_date', 'race_no', 'runner_number', 'horse_name', 'hk', 'year', 'finish', 'k0', 'distance_m',
+        'time_sec', 'carried_weight', 'si5', 'SI', 'SI_t4', 'D', 'why']
+
+
+def load_frames(base, key, tracks, lo, hi, workers=6):
+    """load と同じ読み方(場×月・要る列だけ)で、行は場月ごとに DataFrame にしてためる(全期間で辞書を持たない)。
+    戻り= (走, レース, 場×年の {行数, 読んだ秒})"""
+    jobs = [(t, m1, m2) for t in tracks for m1, m2 in months(lo, hi)]
+    stat = {}
+
+    def one(j):
+        t0 = time.time()
+        a = pd.DataFrame(_fetch(base, key, 'nar_runs', RUN_COLS, 'race_date.asc,race_no.asc,runner_number.asc', *j),
+                         columns=RUN_COLS)
+        b = pd.DataFrame(_fetch(base, key, 'nar_races', RACE_COLS, 'race_date.asc,race_no.asc', *j), columns=RACE_COLS)
+        return j, a, b, time.time() - t0
+    runs, races = [], []
+    t0 = time.time()
+    with ThreadPoolExecutor(workers) as ex:
+        for (t, m1, _), a, b, sec in ex.map(one, jobs):
+            runs.append(a)
+            races.append(b)
+            s = stat.setdefault(f'{t}_{m1[:4]}', {'runs': 0, 'races': 0, 'fetch_sec': 0.0})
+            s['runs'] += len(a)
+            s['races'] += len(b)
+            s['fetch_sec'] = round(s['fetch_sec'] + sec, 1)
+    U, R = pd.concat(runs, ignore_index=True), pd.concat(races, ignore_index=True)
+    log(f'読んだ: 走 {len(U):,} 行・レース {len(R):,} 行({len(jobs)} 場月・{time.time() - t0:.0f} 秒)')
+    return U, R, stat
+
+
+def compute_years(U, R, lo, hi):
+    """lo〜hi を年ごとに compute(各年はその 3 年前の 1 月からの行だけ渡す)。戻り= (X, {年: 秒})"""
+    U = U.assign(_d=U.race_date.astype(str).str[:10])
+    R = R.assign(_d=R.race_date.astype(str).str[:10])
+    out, sec = [], {}
+    for y in range(int(lo[:4]), int(hi[:4]) + 1):
+        a, b = max(lo, f'{y}-01-01'), min(hi, f'{y}-12-31')
+        w = f'{y - 3}-01-01'
+        t0 = time.time()
+        X, _, _ = compute(U[(U._d >= w) & (U._d <= b)].drop(columns='_d'),
+                          R[(R._d >= w) & (R._d <= b)].drop(columns='_d'), a, b)
+        out.append(X[[c for c in KEEP if c in X.columns]])
+        sec[y] = round(time.time() - t0, 1)
+        log(f'  {y}: {len(X):,} 走・{sec[y]} 秒')
+    return pd.concat(out, ignore_index=True), sec
+
+
+def pair_val(X):
+    """物差しの組に使う値= 南関は本番の si5(動かさない)・他場は新台本の SI(o_s を足す前)"""
+    return np.where(X.track.isin(NANKAN), X.si5.to_numpy(float), X.SI.to_numpy(float))
+
+
+def o_table(X, years, min_pair=O_MIN_PAIR):
+    """年 y の o_s= y−3〜y−1 の組(同じ馬が 90 日以内に続けて走った 2 走・後の走がその窓)だけから作る(未来を入れない)。
+    同じ場の組で s1 = a + b·s0 を当て、別の場の組の残差の中央値 m(A→B)・m(B→A) から θ = (m_BA − m_AB)/2 = o_B − o_A。
+    min(n_AB, n_BA) ≥ min_pair の線だけ使い、南関 4 場= 0 に固定(本番の値のまま)して、南関とつながる場を重み付き最小二乗で解く。
+    南関とつながらない場は 0(C1 基準のまま)。戻り= ({年: {場: o}}, {年: 記録})"""
+    V = pd.DataFrame({'hk': X.hk.to_numpy(), 'race_date': X.race_date.to_numpy(), 'race_no': X.race_no.to_numpy(),
+                      'track': X.track.to_numpy(), 'year': X.year.to_numpy(), 'v': pair_val(X)})
+    V = V[~V.hk.str.startswith('|')].sort_values(['hk', 'race_date', 'race_no'], kind='mergesort')
+    dn = (pd.to_datetime(V.race_date) - pd.Timestamp('2000-01-01')).dt.days.to_numpy()
+    hk, s, tr, yr = V.hk.to_numpy(), V.v.to_numpy(float), V.track.to_numpy(), V.year.to_numpy()
+    ok = (hk[1:] == hk[:-1]) & (dn[1:] - dn[:-1] <= O_GAP) & np.isfinite(s[1:]) & np.isfinite(s[:-1])
+    P = pd.DataFrame({'s0': s[:-1], 's1': s[1:], 't0': tr[:-1], 't1': tr[1:], 'yl': yr[1:]})[ok]
+    O, info = {}, {}
+    for y in years:
+        o = {t: 0.0 for t in ALL}
+        W = P[P.yl.isin(list(range(y - 3, y)))]
+        Sm = W[W.t0 == W.t1]
+        if len(Sm) < 2:
+            O[y], info[y] = o, {'n_same': int(len(Sm)), 'pairs': [], 'linked': [], 'alone': list(TARGETS)}
+            continue
+        b, a = np.polyfit(Sm.s0.to_numpy(), Sm.s1.to_numpy(), 1)
+        C = W[W.t0 != W.t1]
+        e = C.s1 - (a + b * C.s0)
+        m = e.groupby([C.t0, C.t1]).median().to_dict()
+        n = e.groupby([C.t0, C.t1]).size().to_dict()
+        edges, pr = [], []
+        for A, Bt in itertools.combinations(ALL, 2):
+            nab, nba = int(n.get((A, Bt), 0)), int(n.get((Bt, A), 0))
+            if not nab and not nba:
+                continue
+            use = min(nab, nba) >= min_pair
+            th = (m.get((Bt, A), np.nan) - m.get((A, Bt), np.nan)) / 2
+            pr.append({'pair': f'{A}-{Bt}', 'n_ab': nab, 'n_ba': nba, 'theta': r2(th, 3), 'use': bool(use)})
+            if use:
+                edges.append((A, Bt, th, min(nab, nba)))
+        linked, todo = set(NANKAN), list(NANKAN)
+        while todo:
+            t = todo.pop()
+            for A, Bt, _, _ in edges:
+                for p, q in ((A, Bt), (Bt, A)):
+                    if p == t and q not in linked:
+                        linked.add(q)
+                        todo.append(q)
+        free = [t for t in ALL if t in linked and t not in NANKAN]
+        if free:
+            rows, rhs, wts = [], [], []
+            for A, Bt, th, w in edges:
+                if A not in linked or Bt not in linked or (A in NANKAN and Bt in NANKAN):
+                    continue
+                r = np.zeros(len(free))
+                if Bt in free:
+                    r[free.index(Bt)] += 1
+                if A in free:
+                    r[free.index(A)] -= 1
+                rows.append(r)
+                rhs.append(th)
+                wts.append(w)
+            M = np.array(rows) * np.sqrt(wts)[:, None]
+            assert np.linalg.matrix_rank(M) == len(free), f'{y}: つながった場が解けない'
+            sol = np.linalg.lstsq(M, np.array(rhs) * np.sqrt(wts), rcond=None)[0]
+            o.update({t: float(v) for t, v in zip(free, sol)})
+        O[y] = o
+        info[y] = {'a': r2(a, 3), 'b': r2(b, 3), 'n_same': int(len(Sm)), 'pairs': pr, 'linked': sorted(free),
+                   'alone': [t for t in TARGETS if t not in linked]}
+    return O, info
+
+
+def apply_o(X, O):
+    o = np.array([O.get(y, {}).get(t, 0.0) for y, t in zip(X.year, X.track)])
+    X = X.assign(o_s=o)
+    X['SI_o'] = X.SI + o
+    X['F0'] = np.where(X.track.isin(NANKAN), X.si5, X.SI)          # つなぐ前(南関は本番の値)
+    X['F'] = np.where(X.track.isin(NANKAN), X.si5, X.SI_o)         # つないだ後
+    return X
+
+
+def pair_split(X, col):
+    """続く 2 走(間隔は問わない)の相関を 同じ場どうし / 場をまたぐ に分けて"""
+    Y = X[np.isfinite(X[col]) & ~X.hk.str.startswith('|')].sort_values(['hk', 'race_date', 'race_no'])
+    h, v, t = Y.hk.to_numpy(), Y[col].to_numpy(float), Y.track.to_numpy()
+    same = h[1:] == h[:-1]
+    st = same & (t[1:] == t[:-1])
+    xt = same & (t[1:] != t[:-1])
+    return {'same': [r2(_corr(v[:-1][st], v[1:][st]), 3), int(st.sum())],
+            'cross': [r2(_corr(v[:-1][xt], v[1:][xt]), 3), int(xt.sum())]}
+
+
+def check2(out):
+    base = os.environ.get('SUPABASE_URL', '').rstrip('/')
+    key = os.environ.get('SUPABASE_SERVICE_KEY', '')
+    if not base or not key:
+        raise SystemExit('SUPABASE_URL / SUPABASE_SERVICE_KEY が無い')
+    hi = (baba._today_jst() - dt.timedelta(days=1)).isoformat()
+    t_all = time.time()
+    U, R, stat = load_frames(base, key, ALL, '2014-01-01', hi)
+    X, ysec = compute_years(U, R, '2014-01-01', hi)
+    del U, R
+    years = sorted(int(y) for y in X.year.unique())
+    O, info = o_table(X, years)
+    X = apply_o(X, O)
+    res = summarize(X, O, info, stat, ysec, '2014-01-01', hi, round(time.time() - t_all))
+    os.makedirs(out, exist_ok=True)
+    Path(out, 'check2.json').write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding='utf-8')
+    md = to_md2(res)
+    Path(out, 'check2.md').write_text(md, encoding='utf-8')
+    log(md)
+    return res
+
+
+def summarize(X, O, info, stat, ysec, lo, hi, total):
+    years = sorted(O)
+    res = {'range': [lo, hi], 'total_sec': total, 'year_sec': {str(k): v for k, v in ysec.items()},
+           'fetch': stat, 'o': {str(y): {t: r2(v, 2) for t, v in O[y].items()} for y in years},
+           'o_info': {str(y): info[y] for y in years}}
+    rows = {}
+    for (t, y), g in X.groupby(['track', 'year']):
+        rows.setdefault(t, {})[str(y)] = {'runs': int(len(g)), 'si': int(np.isfinite(g.F).sum())}
+    res['rows'] = rows
+    Z = X[X.race_date >= '2024-01-01']
+    lv = {}
+    for t in ALL:
+        g = Z[Z.track == t]
+        if not len(g):
+            continue
+        e = {}
+        for col in ['F0', 'F']:
+            ok = np.isfinite(g[col])
+            e[col] = {'mean': r2(g[col][ok].mean(), 1), 'C3': r2(g[col][ok & (g.k0 == 'C3')].mean(), 1),
+                      'OP': r2(g[col][ok & (g.k0 == 'OP')].mean(), 1),
+                      'n_C3': int((ok & (g.k0 == 'C3')).sum()), 'n_OP': int((ok & (g.k0 == 'OP')).sum())}
+        e['rank_corr'] = r2(rank_corr(g, 'F')[0], 3)
+        e['pair_same'] = pair_split(g, 'F')['same']
+        lv[t] = e
+    res['level_2024_'] = lv
+    res['pairs_all'] = {'F0': pair_split(Z, 'F0'), 'F': pair_split(Z, 'F')}
+    return res
+
+
+def to_md2(res):
+    ys = sorted(res['o'])
+    last = ys[-1]
+    L = [f"# 走破指数を全場へ 照合 2(場の間の物差し o_s・{res['range'][0]}〜{res['range'][1]})", '',
+         f"全期間の所要 {res['total_sec']} 秒(読み込み+計算)。南関は本番の si5 のまま(o_s=0 に固定)。", '',
+         '## o_s(年ごと・前の 3 年の組だけ)', '', '| 場 | ' + ' | '.join(ys) + ' |', '|---|' + '---|' * len(ys)]
+    for t in ALL:
+        L.append(f'| {t} | ' + ' | '.join(str(res['o'][y][t]) for y in ys) + ' |')
+    L += ['', '南関とつながらず 0 のままの場: ' + '・'.join(
+        f"{y} {'/'.join(res['o_info'][y]['alone']) or 'なし'}" for y in ys), '',
+        f'### {last} の組(使う線 = 両向き 100 組以上)', '', '| 組 | A→B | B→A | θ | 使う |', '|---|---|---|---|---|']
+    for p in sorted(res['o_info'][last]['pairs'], key=lambda p: -min(p['n_ab'], p['n_ba'])):
+        if p['n_ab'] + p['n_ba'] >= 20:
+            L.append(f"| {p['pair']} | {p['n_ab']} | {p['n_ba']} | {p['theta']} | {'○' if p['use'] else ''} |")
+    L += ['', '## 2024〜 の水準(つなぐ前 → 後)', '',
+          '| 場 | 平均 | C3 | 重賞 OP | 着順との順位相関 | 続く2走(同じ場) |', '|---|---|---|---|---|---|']
+    for t, e in res['level_2024_'].items():
+        a, b = e['F0'], e['F']
+        L.append(f"| {t} | {a['mean']} → {b['mean']} | {a['C3']} → {b['C3']}({b['n_C3']}) | "
+                 f"{a['OP']} → {b['OP']}({b['n_OP']}) | {e['rank_corr']} | {e['pair_same'][0]}({e['pair_same'][1]:,}) |")
+    pa = res['pairs_all']
+    L += ['', f"続く 2 走の相関(2024〜・全場): 同じ場 {pa['F0']['same'][0]} → {pa['F']['same'][0]}({pa['F']['same'][1]:,} 組)・"
+              f"場をまたぐ {pa['F0']['cross'][0]} → {pa['F']['cross'][0]}({pa['F']['cross'][1]:,} 組)", '',
+          '## 全期間の行数と所要', '', '| 年 | 計算の秒 | ' + ' | '.join(ALL) + ' |', '|---|---|' + '---|' * len(ALL)]
+    for y in ys:
+        cells = []
+        for t in ALL:
+            r = res['rows'].get(t, {}).get(y)
+            cells.append(f"{r['si']:,}/{r['runs']:,}" if r else '')
+        L.append(f"| {y} | {res['year_sec'].get(y)} | " + ' | '.join(cells) + ' |')
+    L += ['', 'マス= 指数の出た走/走(取消・除外を除く)。読み込みの秒は check2.json の fetch(場×年)。']
+    return '\n'.join(L) + '\n'
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('cmd', choices=['run', 'check'])
+    ap.add_argument('cmd', choices=['run', 'check', 'check2'])
     ap.add_argument('--track', default=','.join(TARGETS))
     ap.add_argument('--from', dest='lo', default=None)
     ap.add_argument('--to', dest='hi', default=None)
@@ -486,6 +719,9 @@ def main():
     if a.cmd == 'check':
         check(a.out or 'si_all_check')
         return 0
+    if a.cmd == 'check2':
+        check2(a.out or 'si_all_check2')
+        return 0
     tracks = [t for t in a.track.split(',') if t]
     bad = [t for t in tracks if t not in TARGETS]
     if bad:
@@ -494,9 +730,14 @@ def main():
     lo = a.lo or (dt.date.fromisoformat(hi) - dt.timedelta(days=21)).isoformat()
     base = os.environ.get('SUPABASE_URL', '').rstrip('/')
     key = os.environ.get('SUPABASE_SERVICE_KEY', '')
-    runs, races = load(base, key, ALL, f'{int(lo[:4]) - 3}-01-01', hi)
-    X, _, _ = compute(runs, races, lo, hi)
-    x = out_frame(X[X.track.isin(tracks)])
+    # o_s(前の 3 年の組)のため、lo の 3 年前の 1 月から指数を作る(その基準にさらに 3 年= 6 年前の 1 月から読む)
+    w0 = max(2014, int(lo[:4]) - 3)
+    U, R, _ = load_frames(base, key, ALL, f'{max(2014, w0 - 3)}-01-01', hi)
+    X, _ = compute_years(U, R, f'{w0}-01-01', hi)
+    O, _ = o_table(X, sorted(int(y) for y in X.year.unique()))
+    X = apply_o(X, O)
+    X = X[(X.race_date >= lo) & (X.race_date <= hi)]
+    x = out_frame(X[X.track.isin(tracks)], 'SI_o')
     log(f'指数 {len(x):,} 行({lo}〜{hi}・{",".join(tracks)})')
     if a.out:
         x.to_csv(a.out, index=False)

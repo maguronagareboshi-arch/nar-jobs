@@ -1,4 +1,4 @@
-# 2026-11-07 走破指数を全場へ(cloud/si_all.py)の照合便。⛔DB に書かない(check は読むだけ)。
+# 2026-11-07 走破指数を全場へ(cloud/si_all.py)の照合便(check1 は run 42348450194 で済み・今は check2= o_s と全期間)。⛔DB に書かない(check は読むだけ)。
 # 枝 si5-all に push したときと手動で起こす(master に置かずに回すため)。
 name: si-all-check
 on:
@@ -20,11 +20,11 @@ jobs:
       - run: pip install pandas==2.2.3 numpy==1.26.4 pytest
       - name: unit tests
         run: python -m pytest -q tests/test_si_all.py
-      - name: si all check (read only)
+      - name: si all check2 full period (read only)
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        run: python -X utf8 cloud/si_all.py check --out si_all_check
+        run: python -X utf8 cloud/si_all.py check2 --out si_all_check
       - uses: actions/upload-artifact@v4
         if: always()
         with:
