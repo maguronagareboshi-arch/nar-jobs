@@ -1,0 +1,32 @@
+# 2026-11-07 走破指数を全場へ(cloud/si_all.py)の照合便。⛔DB に書かない(check は読むだけ)。
+# 枝 si5-all に push したときと手動で起こす(master に置かずに回すため)。
+name: si-all-check
+on:
+  push:
+    branches: [si5-all]
+  workflow_dispatch:
+concurrency:
+  group: si-all-check
+  cancel-in-progress: true
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - run: pip install pandas==2.2.3 numpy==1.26.4 pytest
+      - name: unit tests
+        run: python -m pytest -q tests/test_si_all.py
+      - name: si all check (read only)
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python -X utf8 cloud/si_all.py check --out si_all_check
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: si-all-check
+          path: si_all_check/
