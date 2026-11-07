@@ -49,6 +49,14 @@ jobs:
             # 最終成功時刻(表 nar_job_heartbeat)。⛔表が無くても落ちない
             python3 cloud/beat.py cond_stats ok
           fi
+      # dry run で作ったファイルを手元の確かめ用に持ち帰る(上げない・7 日で消える)
+      - name: keep dry run files
+        if: github.event.inputs.dry_run == 'true' && github.event.inputs.baba_full != 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: cond-dry
+          path: ${{ runner.temp }}/cond
+          retention-days: 7
 
       # 馬場差の全期間ファイル(持ちタイム表の馬場差・補正タイム)。cond-stats/v1/baba-hist/<prefix>.json
       # 毎朝は直近 14 日だけ組む(確定済みは据え置き)。手動便の baba_full で全期間(2014〜)を組む
