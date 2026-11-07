@@ -7,8 +7,7 @@
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
 name: leading-race
 on:
-  schedule:
-    - cron: '50 20 * * *'
+  # 2026-11-07 起動は本番 DB の pg_cron(nar-leading-race-dispatch・50 20 * * * UTC)だけ。GitHub の schedule は毎日 3〜5 時間遅れていた(画面が昼まで前日のまま)
   workflow_dispatch:
     inputs:
       dry_run:

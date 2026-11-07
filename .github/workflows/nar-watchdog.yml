@@ -445,10 +445,15 @@ jobs:
                   bad.append(f"top_band_next(前の晩の翌日分)が昨夜成功していない(最終 {t})")
           if hm >= 800:
               # cond_stats= 条件で集計 /stats の毎朝便(JST 05:40・2026-10-15)・milestones= 区切りの勝利(JST 06:20・2026-10-17)・leading_race= リーディング争い(JST 05:50・2026-10-26)・year_review= 年まとめ(JST 06:10・2026-10-27)
-              for job in ('k43_daily', 'cond_stats', 'milestones', 'leading_race', 'year_review'):
+              # 2026-11-07 k43_daily(別の repo の GitHub schedule・毎日 3〜5 時間遅れて 10〜12 時に動く)は下の 12:00 で見る
+              for job in ('cond_stats', 'milestones', 'leading_race', 'year_review'):
                   t = last_ok(job)
                   if t is None or t.date() != today:
                       bad.append(f"{job} が今日まだ成功していない(最終 {t})")
+          if hm >= 1200:
+              t = last_ok('k43_daily')
+              if t is None or t.date() != today:
+                  bad.append(f"k43_daily が今日まだ成功していない(最終 {t})")
           # 2026-10-30 ⑦⑧ 直前の便の生存(10/29 12:29 に便が GitHub 側で消え、fail も書けずに 2.5 時間抜けた)
           import live_watch
           try:

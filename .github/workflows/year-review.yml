@@ -4,8 +4,7 @@
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
 name: year-review
 on:
-  schedule:
-    - cron: '10 21 * * *'
+  # 2026-11-07 起動は本番 DB の pg_cron(nar-year-review-dispatch・10 21 * * * UTC)だけ。GitHub の schedule は毎日 3〜5 時間遅れていた(画面が昼まで前日のまま)
   workflow_dispatch:
 permissions:
   contents: read
