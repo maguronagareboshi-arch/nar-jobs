@@ -176,5 +176,41 @@ class OsTest(unittest.TestCase):
         __import__("json").dumps(res, ensure_ascii=False)
 
 
+class Check3Test(unittest.TestCase):
+    def test_young_pairs_and_resid(self):
+        X = OsTest.frame(None)
+        X["hk"] = X.hk.str.replace("|", "|x", regex=False)
+        X["age"] = [2 if h.startswith("a") and int(h[1:].split("|")[0]) < 150 else 5 for h in X.hk]
+        X["k0"] = "C1"
+        O1, _ = S.o_table(X, [2024])
+        O2, i2 = S.o_table(X, [2024], young=False)                          # 若馬の組を外すと高知は 150 頭= 100 組以上のまま
+        self.assertAlmostEqual(O1[2024]["高知"], -5.0, 6)
+        self.assertAlmostEqual(O2[2024]["高知"], -5.0, 6)
+        O3, i3 = S.o_table(X.assign(age=2), [2024], young=False)            # 全部若馬= 組が無い→ 0
+        self.assertEqual(O3[2024]["高知"], 0.0)
+        Y = S.apply_o(X.assign(year=2024, race_date=X.race_date.str.replace("2023", "2024")), O1)
+        r = S.resid_check(Y, "F")
+        self.assertAlmostEqual(r["高知"]["all"]["in"][0], 0.0, 6)          # 足した後は残りのずれ 0
+        self.assertEqual(r["高知"]["all"]["in"][1], 300)
+        self.assertEqual(r["高知"]["young"]["in"][1], 150)
+        r0 = S.resid_check(Y, "F0")
+        self.assertAlmostEqual(r0["高知"]["all"]["in"][0], 5.0, 6)          # 足す前は高知に入ると +5
+        self.assertAlmostEqual(r0["高知"]["all"]["out"][0], -5.0, 6)
+        ct = S.class_table(Y, "F", min_n=1)
+        self.assertIn("C1", ct["高知"])
+        S.to_md3  # noqa: B018
+
+
+    def test_summarize3_md(self):
+        S.MIN_R = 30
+        runs, races = synth(years=(2021, 2022, 2023, 2024, 2025))
+        X, sec = S.compute_years(pd.DataFrame(runs), pd.DataFrame(races), "2024-01-01", "2025-12-31")
+        res = S.summarize3(X, sec, "2025-12-31", 0)
+        md = S.to_md3(res)
+        self.assertIn("級ごとの指数", md)
+        self.assertIn("C1", res["class"]["高知"])
+        __import__("json").dumps(res, ensure_ascii=False)
+
+
 if __name__ == "__main__":
     unittest.main()

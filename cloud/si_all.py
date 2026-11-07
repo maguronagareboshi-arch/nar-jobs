@@ -3,6 +3,7 @@
 
   python -X utf8 cloud/si_all.py run   [--track 高知,佐賀] [--from 2024-01-01] [--to 2024-12-31] [--out x.csv.gz] [--apply]
   python -X utf8 cloud/si_all.py check --out DIR        # 照合の数表(DB に書かない)→ DIR/check.json・check.md
+  python -X utf8 cloud/si_all.py check3 --out DIR       # o_s の残りのずれ・2〜3 歳を外した版・級ごとの表(DB に書かない)
   python -X utf8 cloud/si_all.py check2 --out DIR       # o_s+2014〜前日の全期間(DB に書かない)→ DIR/check2.json・check2.md
 
 - 対象= 門別・盛岡・水沢・金沢・笠松・名古屋・園田・姫路・高知・佐賀。南関 4 場は pipeline/ai/v3/si5_store.py のまま
@@ -50,7 +51,7 @@ ALL = TARGETS + NANKAN
 RK = ['track', 'race_date', 'race_no']
 MIN_R = 30
 RUN_COLS = ['track', 'race_date', 'race_no', 'runner_number', 'horse_name', 'birth_date', 'finish', 'finish_note',
-            'time_sec', 'carried_weight', 'si5']
+            'time_sec', 'carried_weight', 'si5', 'age']
 RACE_COLS = ['track', 'race_date', 'race_no', 'distance_m', 'race_name', 'going', 'race_kind', 'surface']
 RE_LV = re.compile(r'[ABC][0-9]?')
 TABLE = 'nar_si5'
@@ -116,7 +117,7 @@ def runs_frame(runs):
     U['race_date'] = U.race_date.astype(str).str[:10]
     for c in ['race_no', 'runner_number']:
         U[c] = pd.to_numeric(U[c]).astype(int)
-    for c in ['finish', 'time_sec', 'carried_weight', 'si5']:
+    for c in ['finish', 'time_sec', 'carried_weight', 'si5', 'age']:
         U[c] = pd.to_numeric(U[c], errors='coerce')
     U['finish_note'] = U.finish_note.fillna('').astype(str)
     U = U[~U.finish_note.str.contains('取消|除外')]          # t4_base と同じ= 取消・除外は走りに数えない
@@ -483,7 +484,7 @@ def check(out):
 O_GAP = 90
 O_MIN_PAIR = 100
 KEEP = ['track', 'race_date', 'race_no', 'runner_number', 'horse_name', 'hk', 'year', 'finish', 'k0', 'distance_m',
-        'time_sec', 'carried_weight', 'si5', 'SI', 'SI_t4', 'D', 'why']
+        'time_sec', 'carried_weight', 'si5', 'age', 'SI', 'SI_t4', 'D', 'why']
 
 
 def load_frames(base, key, tracks, lo, hi, workers=6):
@@ -535,18 +536,14 @@ def pair_val(X):
     return np.where(X.track.isin(NANKAN), X.si5.to_numpy(float), X.SI.to_numpy(float))
 
 
-def o_table(X, years, min_pair=O_MIN_PAIR):
+def o_table(X, years, min_pair=O_MIN_PAIR, young=True):
     """年 y の o_s= y−3〜y−1 の組(同じ馬が 90 日以内に続けて走った 2 走・後の走がその窓)だけから作る(未来を入れない)。
     同じ場の組で s1 = a + b·s0 を当て、別の場の組の残差の中央値 m(A→B)・m(B→A) から θ = (m_BA − m_AB)/2 = o_B − o_A。
     min(n_AB, n_BA) ≥ min_pair の線だけ使い、南関 4 場= 0 に固定(本番の値のまま)して、南関とつながる場を重み付き最小二乗で解く。
-    南関とつながらない場は 0(C1 基準のまま)。戻り= ({年: {場: o}}, {年: 記録})"""
-    V = pd.DataFrame({'hk': X.hk.to_numpy(), 'race_date': X.race_date.to_numpy(), 'race_no': X.race_no.to_numpy(),
-                      'track': X.track.to_numpy(), 'year': X.year.to_numpy(), 'v': pair_val(X)})
-    V = V[~V.hk.str.startswith('|')].sort_values(['hk', 'race_date', 'race_no'], kind='mergesort')
-    dn = (pd.to_datetime(V.race_date) - pd.Timestamp('2000-01-01')).dt.days.to_numpy()
-    hk, s, tr, yr = V.hk.to_numpy(), V.v.to_numpy(float), V.track.to_numpy(), V.year.to_numpy()
-    ok = (hk[1:] == hk[:-1]) & (dn[1:] - dn[:-1] <= O_GAP) & np.isfinite(s[1:]) & np.isfinite(s[:-1])
-    P = pd.DataFrame({'s0': s[:-1], 's1': s[1:], 't0': tr[:-1], 't1': tr[1:], 'yl': yr[1:]})[ok]
+    南関とつながらない場は 0(C1 基準のまま)。young=False= どちらかの走が 3 歳以下の組を使わない。戻り= ({年: {場: o}}, {年: 記録})"""
+    P = pairs_frame(X, pair_val(X))
+    if not young:                                           # 2026-11-07 A= 2〜3 歳の組を外した版
+        P = P[~P.young]
     O, info = {}, {}
     for y in years:
         o = {t: 0.0 for t in ALL}
@@ -707,9 +704,161 @@ def to_md2(res):
     return '\n'.join(L) + '\n'
 
 
+# ---------------------------------------------------------------- 照合 3(2026-11-07 A〜C: 残りのずれの点検・若馬を外した版・級ごとの表)
+def pairs_frame(X, vals):
+    """同じ馬の続く 2 走(90 日以内・両方に値)。young= どちらかの走で 3 歳以下(nar_runs.age)。yl= 後の走の年"""
+    age = pd.to_numeric(X['age'], errors='coerce').to_numpy(float) if 'age' in X.columns else np.full(len(X), np.nan)
+    V = pd.DataFrame({'hk': X.hk.to_numpy(), 'race_date': X.race_date.to_numpy(), 'race_no': X.race_no.to_numpy(),
+                      'track': X.track.to_numpy(), 'year': X.year.to_numpy(), 'v': np.asarray(vals, float), 'age': age})
+    V = V[~V.hk.str.startswith('|')].sort_values(['hk', 'race_date', 'race_no'], kind='mergesort')
+    dn = (pd.to_datetime(V.race_date) - pd.Timestamp('2000-01-01')).dt.days.to_numpy()
+    hk, s, tr, yr, ag = V.hk.to_numpy(), V.v.to_numpy(float), V.track.to_numpy(), V.year.to_numpy(), V.age.to_numpy()
+    ok = (hk[1:] == hk[:-1]) & (dn[1:] - dn[:-1] <= O_GAP) & np.isfinite(s[1:]) & np.isfinite(s[:-1])
+    young = (ag[1:] <= 3) | (ag[:-1] <= 3)
+    return pd.DataFrame({'s0': s[:-1], 's1': s[1:], 't0': tr[:-1], 't1': tr[1:], 'yl': yr[1:], 'young': young})[ok]
+
+
+def resid_check(X, col, lo_year=2024):
+    """o_s を足した値 col で、後の走が lo_year〜 の組の残りのずれ。年ごとに同じ場の組で s1 = a + b·s0 を当て、
+    別の場の組の残差 e = s1 − (a + b·s0)。場ごとに 入る向き(他→場)・出る向き(場→他)の平均と組の数を、
+    全部・2〜3 歳・4 歳以上に分けて。入る向きが正= その場の値が高すぎる"""
+    P = pairs_frame(X, X[col])
+    P = P[P.yl >= lo_year]
+    E = []
+    for y, W in P.groupby('yl'):
+        Sm = W[W.t0 == W.t1]
+        if len(Sm) < 2:
+            continue
+        b, a = np.polyfit(Sm.s0.to_numpy(), Sm.s1.to_numpy(), 1)
+        C = W[W.t0 != W.t1]
+        E.append(C.assign(e=C.s1 - (a + b * C.s0)))
+    E = pd.concat(E) if E else pd.DataFrame(columns=['t0', 't1', 'e', 'young'])
+    out = {}
+    for t in ALL:
+        r = {}
+        for nm, m in [('all', np.ones(len(E), bool)), ('young', E.young.to_numpy(bool)), ('old', ~E.young.to_numpy(bool))]:
+            i = E[m & (E.t1 == t).to_numpy()].e
+            o = E[m & (E.t0 == t).to_numpy()].e
+            r[nm] = {'in': [r2(i.mean(), 2), int(len(i))], 'out': [r2(o.mean(), 2), int(len(o))]}
+        out[t] = r
+    ally = E.young.to_numpy(bool)
+    out['_share_young'] = r2(float(ally.mean()) if len(E) else None, 3)
+    return out
+
+
+def class_table(X, col, lo='2024-01-01', min_n=30):
+    Z = X[(X.race_date >= lo) & np.isfinite(X[col])]
+    out = {}
+    for (t, k), g in Z.groupby([Z.track, Z.k0.fillna('(なし)')]):
+        if len(g) >= min_n:
+            out.setdefault(t, {})[k] = [r2(g[col].mean(), 1), r2(g[col].median(), 1), int(len(g))]
+    return out
+
+
+def level(X, col, lo='2024-01-01'):
+    Z = X[X.race_date >= lo]
+    out = {}
+    for t in ALL:
+        g = Z[Z.track == t]
+        ok = np.isfinite(g[col])
+        out[t] = {'mean': r2(g[col][ok].mean(), 1), 'OP': r2(g[col][ok & (g.k0 == 'OP')].mean(), 1),
+                  'rank_corr': r2(rank_corr(g, col)[0], 3), 'pair_same': pair_split(g, col)['same']}
+    return out
+
+
+def check3(out):
+    base = os.environ.get('SUPABASE_URL', '').rstrip('/')
+    key = os.environ.get('SUPABASE_SERVICE_KEY', '')
+    if not base or not key:
+        raise SystemExit('SUPABASE_URL / SUPABASE_SERVICE_KEY が無い')
+    hi = (baba._today_jst() - dt.timedelta(days=1)).isoformat()
+    t_all = time.time()
+    U, R, _ = load_frames(base, key, ALL, '2014-01-01', hi)
+    X, ysec = compute_years(U, R, '2014-01-01', hi)
+    del U, R
+    res = summarize3(X, ysec, hi, t_all)
+    os.makedirs(out, exist_ok=True)
+    Path(out, 'check3.json').write_text(json.dumps(res, ensure_ascii=False, indent=1), encoding='utf-8')
+    md = to_md3(res)
+    Path(out, 'check3.md').write_text(md, encoding='utf-8')
+    log(md)
+    return res
+
+
+def summarize3(X, ysec, hi, t_all):
+    years = sorted(int(y) for y in X.year.unique())
+    O1, info1 = o_table(X, years)
+    O2, info2 = o_table(X, years, young=False)
+    X = apply_o(X, O1)
+    X['F_old'] = np.where(X.track.isin(NANKAN), X.si5,
+                          X.SI + np.array([O2.get(y, {}).get(t, 0.0) for y, t in zip(X.year, X.track)]))
+    Z = X[X.race_date >= '2024-01-01']
+    res = {'range': ['2014-01-01', hi], 'total_sec': round(time.time() - t_all), 'year_sec': {str(k): v for k, v in ysec.items()}}
+    for nm, O, info in [('o_all', O1, info1), ('o_old', O2, info2)]:
+        res[nm] = {str(y): {t: r2(v, 2) for t, v in O[y].items()} for y in years}
+        res[nm + '_link'] = {str(y): {'linked': info[y]['linked'], 'alone': info[y]['alone'],
+                                      'edges': [p['pair'] for p in info[y]['pairs'] if p['use']]} for y in years}
+    res['o_all_pairs_last'] = info1[years[-1]]['pairs']
+    res['resid'] = {'F0': resid_check(X, 'F0'), 'F': resid_check(X, 'F'), 'F_old': resid_check(X, 'F_old')}
+    res['level'] = {c: level(X, c) for c in ['F0', 'F', 'F_old']}
+    res['pairs_all'] = {c: pair_split(Z, c) for c in ['F0', 'F', 'F_old']}
+    res['class'] = class_table(X, 'F')
+    nul = X[~np.isfinite(X.F)]
+    res['null'] = {t: {str(y): {w or 'other': int(n) for w, n in g.why.value_counts().items()}
+                       for y, g in gt.groupby('year')} for t, gt in nul.groupby('track')}
+    res['null_first_year'] = {t: int(((nul.track == t) & (nul.year == int(X[X.track == t].year.min()))).sum())
+                              for t in ALL if (X.track == t).any()}
+    return res
+
+
+def to_md3(res):
+    ys = sorted(res['o_all'])
+    L = [f"# 走破指数を全場へ 照合 3({res['range'][0]}〜{res['range'][1]}・所要 {res['total_sec']} 秒)", '',
+         '南関は本番の si5 のまま(o_s=0)。o_s= 前の 3 年の組・両向き 100 組以上の線・14 場をまとめて最小二乗(中継あり)。', '']
+    for nm, title in [('o_all', '全部の組'), ('o_old', '2〜3 歳の組を外した版')]:
+        L += [f'## o_s({title})', '', '| 場 | ' + ' | '.join(ys) + ' |', '|---|' + '---|' * len(ys)]
+        for t in ALL:
+            L.append(f'| {t} | ' + ' | '.join(str(res[nm][y][t]) for y in ys) + ' |')
+        L += ['', 'つながらず 0: ' + '・'.join(f"{y} {'/'.join(res[nm + '_link'][y]['alone']) or 'なし'}" for y in ys),
+              f"使った線({ys[-1]}): " + '・'.join(res[nm + '_link'][ys[-1]]['edges']), '']
+    L += ['## 残りのずれ(2024〜・別の場の組・e = 後の値 − 同じ場の組の当てはめ)', '',
+          f"2〜3 歳の組の割合 {res['resid']['F']['_share_young']}。入る= 他→その場(正= その場が高すぎ)・出る= その場→他。", '',
+          '| 場 | つなぐ前 入る/出る | 後(全部) 入る/出る | 後 2〜3歳 入る/出る | 後 4歳以上 入る/出る | 外した版 入る/出る |',
+          '|---|---|---|---|---|---|']
+
+    def io(d):
+        return f"{d['in'][0]}({d['in'][1]}) / {d['out'][0]}({d['out'][1]})"
+    for t in ALL:
+        R0, R1, R2 = res['resid']['F0'][t], res['resid']['F'][t], res['resid']['F_old'][t]
+        L.append(f"| {t} | {io(R0['all'])} | {io(R1['all'])} | {io(R1['young'])} | {io(R1['old'])} | {io(R2['all'])} |")
+    L += ['', '## 水準(2024〜)', '', '| 場 | 平均 前→後(外した版) | 重賞 OP 前→後(外した版) | 着順との順位相関 | 続く2走(同じ場) |',
+          '|---|---|---|---|---|']
+    lv = res['level']
+    for t in ALL:
+        a, b, c = lv['F0'][t], lv['F'][t], lv['F_old'][t]
+        L.append(f"| {t} | {a['mean']} → {b['mean']}({c['mean']}) | {a['OP']} → {b['OP']}({c['OP']}) | {b['rank_corr']} | "
+                 f"{b['pair_same'][0]}({b['pair_same'][1]:,}) |")
+    pa = res['pairs_all']
+    L += ['', '続く 2 走の相関(2024〜・全場・間隔は問わない): ' + '・'.join(
+        f"{c} 同じ場 {pa[c]['same'][0]}({pa[c]['same'][1]:,})・場をまたぐ {pa[c]['cross'][0]}({pa[c]['cross'][1]:,})"
+        for c in ['F0', 'F', 'F_old']), '', '## 級ごとの指数(2024〜・o_s 全部の版・30 走以上)', '',
+        '| 場 | 級: 平均 / 中央値(走) |', '|---|---|']
+    for t in ALL:
+        cl = res['class'].get(t, {})
+        L.append(f'| {t} | ' + '・'.join(f'{k} {v[0]}/{v[1]}({v[2]})' for k, v in sorted(cl.items(), key=lambda kv: kv[1][1])) + ' |')
+    L += ['', '## 出せない走(空欄のまま)', '', '最初の年の空欄: ' + '・'.join(f'{t} {n:,}' for t, n in res['null_first_year'].items()), '']
+    for t, by in res['null'].items():
+        tot = {}
+        for d in by.values():
+            for w, n in d.items():
+                tot[w] = tot.get(w, 0) + n
+        L.append(f'- {t}: ' + '・'.join(f'{w} {n:,}' for w, n in sorted(tot.items(), key=lambda kv: -kv[1])))
+    return '\n'.join(L) + '\n'
+
+
 def main():
     ap = argparse.ArgumentParser()
-    ap.add_argument('cmd', choices=['run', 'check', 'check2'])
+    ap.add_argument('cmd', choices=['run', 'check', 'check2', 'check3'])
     ap.add_argument('--track', default=','.join(TARGETS))
     ap.add_argument('--from', dest='lo', default=None)
     ap.add_argument('--to', dest='hi', default=None)
@@ -718,6 +867,9 @@ def main():
     a = ap.parse_args()
     if a.cmd == 'check':
         check(a.out or 'si_all_check')
+        return 0
+    if a.cmd == 'check3':
+        check3(a.out or 'si_all_check3')
         return 0
     if a.cmd == 'check2':
         check2(a.out or 'si_all_check2')
