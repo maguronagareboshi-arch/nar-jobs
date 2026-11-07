@@ -30,6 +30,12 @@
     基準が無いレース(帯なし= classfirst では外す・標本不足)は入れない。セルの d が出たときだけ付ける。
     blend_proj/overlay_ai は d/d1 だけを書き換える= "r" は動かない(画面の「ふだん」は南関も同じ基準)。
     ⛔確定済みの日に "r" を付けるには baba-rebuild 便(--rebuild-all)が要る。
+  ⛔2026-11-08 AB・BC 帯(coarse_key が None)の基準に「両側の級の平均」段を足す(med_of)。
+    b の段が全部だめなら d(場×距離の全クラス)の前に、粗い帯 "*A" と "*B"(BC は "*B" と "*C")の中央値を
+    c の段と同じ窓の順(365→1095)で引き、両方 MIN_BAND 以上取れた窓で (m1+m2)/2。取れなければ今までどおり d へ。
+    この値は d/g(1 着以外の着順も)にもそのまま使う(例: 高知 1600 良の AB が 3 年で 5 回→全クラスの 1:47.8 で B-1 組より遅く見えた)。
+    "r" は 1 着の基準が c の段か両側平均の段で出たら今どおり入れ、同じセルに "rq" = {"R番号": 1}(参考の印)を足す。
+    d の段で出たら "r" に入れない(画面は「—」)。b の段は印なし。
   ⛔2026-11-04 同じセルへ "rg"(組の差)と "pc"(前半)を足す(add_grp_front・d/g/d1/g1/r は変えない)。
     "rg" = {"R番号": 秒(小数 1 桁)}= 組の箱の差。級と組= cloud/class_parts.py(サイトの raceClassParts の写し・全場)・
       付帯に「選抜」「選定」= 級ごとに「選抜」の箱(KISHA_SEPARATE で記者選抜を分ける)。重賞・準重賞・級の混ざったレースは外す。
@@ -135,6 +141,8 @@ GOING_STAGES = (("b", STD_DAYS), ("c", STD_DAYS), ("d", STD_DAYS))
 CLASSFIRST_STAGES = (("b", STD_DAYS), ("b", STD_DAYS_LEGACY), ("c", STD_DAYS), ("c", STD_DAYS_LEGACY),
                      ("d", STD_DAYS))
 GOING_LIKE = ("going", "classfirst")
+# 11/8 粗い段の無い 2 級またぎの帯= d の前に両側の級の粗い帯の平均を引く
+PAIR_BANDS = {"AB": ("*A", "*B"), "BC": ("*B", "*C")}
 # 帯が読めない走(band_of が None)の扱い: "dist"= 場×距離の基準へ落とす(going の今まで)/"drop"= その日の値から外す
 NONE_BAND_DEFAULT = {"going": "dist", "classfirst": "drop"}
 # ⛔2026-10-25 ユーザー決定で既定を classfirst へ(本番データの研究便 docs/research-baba-classfirst: クラスの片寄り 0.93→0.39 秒・
@@ -396,10 +404,28 @@ def day_cell_going(day_rows, by_band_g, by_dist_g, d, stages=None, none_band="di
     stages = stages or GOING_STAGES
     rng_of = {sp: [((d - dt.timedelta(days=sp)).isoformat(), d.isoformat())] for _, sp in stages}
     cache = {}
+    c_spans = [(i, sp) for i, (lv, sp) in enumerate(stages) if lv == "c"]
+
+    def med_at(src, kk, sp, k):
+        m = cache.get(k, "?")
+        if m == "?":
+            v = _vals_in(src.get(kk, []), rng_of[sp])
+            m = statistics.median(v) if len(v) >= MIN_BAND else None
+            cache[k] = m
+        return m
 
     def med_of(dist, band, going, fin):
+        """戻り= (基準, 段の番号, 種類 "b"/"c"/"p"(両側平均)/"d")。無ければ (None, -1, None)"""
         cb = coarse_key(band)
+        pair = PAIR_BANDS.get(band)
         for i, (lv, sp) in enumerate(stages):
+            if lv == "d" and pair:
+                # 11/8 AB・BC= d の前に両側の級の粗い帯の平均(c の窓の順)。段の番号は使った c の段
+                for ci, csp in c_spans:
+                    ms = [med_at(by_band_g, (dist, pb, going, fin), csp, ("c", dist, pb, going, fin, csp))
+                          for pb in pair]
+                    if all(m is not None for m in ms):
+                        return (ms[0] + ms[1]) / 2.0, ci, "p"
             if lv == "b":
                 k, src, kk = ("b", dist, band, going, fin, sp), by_band_g, (dist, band, going, fin)
             elif lv == "c":
@@ -408,21 +434,17 @@ def day_cell_going(day_rows, by_band_g, by_dist_g, d, stages=None, none_band="di
                 k, src, kk = ("d", dist, going, fin, sp), by_dist_g, (dist, going, fin)
             if lv != "d" and not k[2]:
                 continue
-            m = cache.get(k, "?")
-            if m == "?":
-                v = _vals_in(src.get(kk, []), rng_of[sp])
-                m = statistics.median(v) if len(v) >= MIN_BAND else None
-                cache[k] = m
+            m = med_at(src, kk, sp, k)
             if m is not None:
-                return m, i
-        return None, -1
+                return m, i, lv
+        return None, -1, None
 
     if info is not None:
         for nm in ("d", "g"):
             info["reach_" + nm] = [0] * (len(stages) + 1)
             info["race_" + nm], info["stage_" + nm] = {}, {}
         info["drop"] = 0
-    per_d, per_g, st_d, st_g, dist_r, par1 = {}, {}, {}, {}, {}, {}
+    per_d, per_g, st_d, st_g, dist_r, par1, parq = {}, {}, {}, {}, {}, {}, {}
     for dist, band, t, going, rno, fin in day_rows:
         if not fin or fin > TOP_N:
             continue
@@ -431,16 +453,18 @@ def day_cell_going(day_rows, by_band_g, by_dist_g, d, stages=None, none_band="di
             if info is not None:
                 info["drop"] += 1
             continue
-        m, i = med_of(dist, band, GOING_BASE, fin)
+        m, i, kind = med_of(dist, band, GOING_BASE, fin)
         if info is not None:
             info["reach_d"][i] += 1
-        if m is not None and fin == 1 and rno is not None:
+        if m is not None and fin == 1 and rno is not None and kind != "d":
             par1[str(rno)] = round(m, 1)       # 11/4 開催日ページ「この日の時計」のふだん= d に使った 1 着の基準そのもの
+            if kind in ("c", "p"):
+                parq[str(rno)] = 1             # 11/8 字だけの帯・両側平均= 参考の印(d の段は r に入れない)
         if m is not None:
             per_d.setdefault(rno, []).append(t - m)
             st_d.setdefault(rno, []).append(i)
         if going:
-            m, i = med_of(dist, band, going, fin)
+            m, i, _kind = med_of(dist, band, going, fin)
             if info is not None:
                 info["reach_g"][i] += 1
             if m is not None:
@@ -464,6 +488,8 @@ def day_cell_going(day_rows, by_band_g, by_dist_g, d, stages=None, none_band="di
         out["d1"] = round(statistics.median([v * 1000.0 / dist_r[r_] for r_, v in dr]), 2)
         if par1:
             out["r"] = dict(sorted(par1.items(), key=lambda kv: int(kv[0]) if kv[0].isdigit() else 999))
+            if parq:
+                out["rq"] = dict(sorted(parq.items(), key=lambda kv: int(kv[0]) if kv[0].isdigit() else 999))
     if len(gv) >= MIN_RACES:
         out["g"], out["ng"] = round(statistics.median(gv), 1), len(gv)
         out["g1"] = round(statistics.median([v * 1000.0 / dist_r[r_] for r_, v in gr]), 2)
@@ -736,7 +762,7 @@ def build_days(samples, targets, baseline, today=None, frozen=None, rebuild_all=
                     info_of[(date, track)] = inf
                 if "d" not in c and "g" not in c:
                     continue
-                cell = {k: c[k] for k in ("d", "g", "n", "ng", "d1", "g1", "r") if k in c}
+                cell = {k: c[k] for k in ("d", "g", "n", "ng", "d1", "g1", "r", "rq") if k in c}
                 k = _main_going(rows)
                 if k:
                     cell["k"] = k

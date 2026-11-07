@@ -165,7 +165,7 @@ class ClassFirstTest(unittest.TestCase):
 
     def test_going_unchanged_random(self):
         rnd = random.Random(20261025)
-        bands = ["C1", "C2", "C3", "B1", "B2", "A1", "C", "AB", "OP", "OPy", "2y", "3y", None]
+        bands = ["C1", "C2", "C3", "B1", "B2", "A1", "C", "OP", "OPy", "2y", "3y", None]   # 11/8 AB は両側平均の段で d が変わる(わざと)= tests/test_baba_pair_band.py
         goings = ["良", "稍重", "重", "不良", ""]
         dists = [1200, 1400, 1600]
         smp = []
@@ -188,9 +188,9 @@ class ClassFirstTest(unittest.TestCase):
             old = _old_day_cell_going(rows, bb, bd, dd)
             new = baba.day_cell_going(rows, bb, bd, dd)
             new2 = baba.day_cell_going(rows, bb, bd, dd, stages=baba.GOING_STAGES, none_band="dist", info={})
-            # d1/g1(10/26 距離の直し)・r(11/4 1 着の基準)は足しただけ= それ以外は書き換え前と同じ
-            new = {k: v for k, v in new.items() if k not in ("d1", "g1", "r")}
-            new2 = {k: v for k, v in new2.items() if k not in ("d1", "g1", "r")}
+            # d1/g1(10/26 距離の直し)・r(11/4 1 着の基準)・rq(11/8 参考の印)は足しただけ= それ以外は書き換え前と同じ
+            new = {k: v for k, v in new.items() if k not in ("d1", "g1", "r", "rq")}
+            new2 = {k: v for k, v in new2.items() if k not in ("d1", "g1", "r", "rq")}
             self.assertEqual(old, new, d)
             self.assertEqual(old, new2, d)
             n_cmp += 1 if old else 0
