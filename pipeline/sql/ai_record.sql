@@ -11,12 +11,17 @@ set statement_timeout = '10min';
 --   (nar-viewer js/data.js の AI_TAJO_*・10 場 = 盛岡・姫路を足した)。画面の成績(model='base-v1' の欄)も画面に出した印で数える =
 --   その 10 場で v3n-1 の朝の行があるレースは、base-v1 の行の代わりに v3n-1 の印を base-v1 の朝・直前の両方として数える。
 --   v3n-1 そのものの成績(model='v3n-1')も別に残る。⛔サイトの AI_TAJO_PUBLIC を false に戻すときは、ここも一緒に戻す
+-- 2026-11-07 帯広ば も同じ: サイトは帯広の印を banei-3 で出す(nar-viewer js/data.js の AI_BANEI_*・banei-3 の行は 10/31〜)。
+--   ここに入れ忘れていたため、帯広の画面の成績は旧 base-v1(帯広の行は 10/31 で止まった)を数え、10/31 で止まっていた。
+--   banei-3 の朝(前日版)の行があるレースは base-v1 の代わりに数える。直前の欄は banei-3 の直前の行をいつも使い、無ければ朝の写し
+--   (サイトの tajoLastUsed = ばんえい第 3 版の直前の行はいつも返す)。⛔サイトの AI_BANEI_PUBLIC を false に戻すときは、ここも一緒に戻す
 drop table if exists tmp_ai_src;
 create temp table tmp_ai_src as
 with tj as (
   select t.* from public.nar_ai_marks t
-  where t.model = 'v3n-1' and t.timing = 'morning'
-    and t.track in ('門別', '盛岡', '水沢', '金沢', '笠松', '名古屋', '園田', '姫路', '高知', '佐賀')
+  where t.timing = 'morning'
+    and ((t.model = 'v3n-1' and t.track in ('門別', '盛岡', '水沢', '金沢', '笠松', '名古屋', '園田', '姫路', '高知', '佐賀'))
+         or (t.model = 'banei-3' and t.track = '帯広ば'))
 )
 select m.model, m.track, m.race_date, m.race_no, m.timing, m.marks, m.meta, m.computed_at
 from public.nar_ai_marks m
@@ -35,8 +40,9 @@ select 'base-v1', tj.track, tj.race_date, tj.race_no, 'last',
        coalesce(tl.marks, tj.marks), coalesce(tl.meta, tj.meta), coalesce(tl.computed_at, tj.computed_at)
 from tj
 left join public.nar_ai_marks tl
-  on tl.model = 'v3n-1' and tl.timing = 'last' and (tl.track, tl.race_date, tl.race_no) = (tj.track, tj.race_date, tj.race_no)
- and (jsonb_array_length(coalesce(tl.meta->'scratched', '[]'::jsonb)) > 0 or coalesce(tl.meta->>'direct', '') = 'true');
+  on tl.model = tj.model and tl.timing = 'last' and (tl.track, tl.race_date, tl.race_no) = (tj.track, tj.race_date, tj.race_no)
+ and (tj.model = 'banei-3'
+      or jsonb_array_length(coalesce(tl.meta->'scratched', '[]'::jsonb)) > 0 or coalesce(tl.meta->>'direct', '') = 'true');
 
 -- 印は ◎○▲△△ の 5 頭(2026-10-10 ユーザー決定 B)。pos = 印の順(1〜5)= 配列の並び(書き手は常に ◎○▲△△ の順で保存)。
 -- 4 頭のまま保存された過去の試験運用(base-v1・v3n-1)の行は、2026-09-14 以降に限り、発走前に同じ行へ保存した meta.p から
