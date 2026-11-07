@@ -260,9 +260,10 @@ class WriteTest(unittest.TestCase):
     def test_month_range(self):
         self.assertEqual(S.month_range("2024-01", "2024-12"), ("2024-01-01", "2024-12-31"))
         self.assertEqual(S.month_range("2024-02", "2024-02"), ("2024-02-01", "2024-02-29"))
+        self.assertEqual(S.month_range("2024", "2025"), ("2024-01-01", "2025-12-31"))
 
     def args(self, **kw):
-        d = dict(track="高知", lo="2024-01", hi="2024-02", days=None, apply=True, beat=False, out=None)
+        d = dict(track="高知", lo="2024-01", hi="2024-02", days=None, apply=True, beat=False, out=None, compare=None)
         d.update(kw)
         return __import__("argparse").Namespace(**d)
 
@@ -271,7 +272,7 @@ class WriteTest(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 S.run(self.args(track=t))
 
-    def test_run_reads_only_track_and_window_and_writes_by_month(self):
+    def test_run_reads_all_tracks_and_window_writes_target_by_month(self):
         S.MIN_R = 30
         runs, races = synth(years=(2021, 2022, 2023, 2024))
         got, posts = {}, []
@@ -289,7 +290,7 @@ class WriteTest(unittest.TestCase):
         os.environ.setdefault("SUPABASE_URL", "http://x")
         os.environ.setdefault("SUPABASE_SERVICE_KEY", "k")
         self.assertEqual(S.run(self.args()), 0)
-        self.assertEqual(got["tracks"], ["高知"])
+        self.assertEqual(got["tracks"], S.ALL)                              # ふだんの力の走歴は全場(照合と同じ)
         self.assertEqual((got["lo"], got["hi"]), ("2021-01-01", "2024-02-29"))    # 前の 3 年の 1 月から対象の月まで
         self.assertNotIn("si5", got["cols"])
         self.assertEqual([p[0]["race_date"][:7] for p in posts], ["2024-01", "2024-02"])   # 月ごとに順に
@@ -297,6 +298,59 @@ class WriteTest(unittest.TestCase):
         X, _ = S.compute_years(pd.DataFrame(runs), pd.DataFrame(races), "2024-01-01", "2024-02-29")
         x = S.out_frame(X, "SI")                                               # 書く値= o_s を足さない SI
         self.assertEqual(sorted(r["si5"] for p in posts for r in p), sorted(x.si5.tolist()))
+
+
+class DailyTest(unittest.TestCase):
+    """毎日の口(②)= 1〜3 着だけの基準+baba_diff の d1 が、埋め直し(①)と同じ値になる"""
+    def test_daily_equals_backfill(self):
+        S.MIN_R = 30
+        runs, races = synth(years=(2021, 2022, 2023, 2024))
+        lo, hi = "2024-06-01", "2024-06-21"
+        X1, cf, pv = S.compute(runs, races, lo, hi)                          # ①(全部の走を読む・baba の関数で日の値)
+        # baba_diff の blob の形(cloud/baba.py build_days+blend_proj の出力= {日: {prefix: {d, d1, n, ...}}})
+        blob = {}
+        for (d, t), v in cf.items():
+            d1 = round(0.5 * v + 0.5 * pv[(d, t)], 2) if (d, t) in pv else v
+            blob.setdefault(d, {})[S.baba.TRACK2PREFIX[t]] = {"d": round(d1 * 1.35, 1), "d1": d1, "n": 4, "k": "良"}
+        blob.setdefault("2024-06-21", {})["kochi"] = {"d": 0.1, "d1": 0.1, "n": 4, "p": True}   # 暫定は使わない
+        w0, top_hi = S.daily_ranges(lo, hi)
+        self.assertEqual((w0, top_hi), ("2021-01-01", "2024-01-01"))
+        top = [r for r in runs if w0 <= r["race_date"] < top_hi and r["finish"] <= 3 and r["time_sec"] is not None]
+        tgt = [r for r in runs if lo <= r["race_date"] <= hi]
+        rr = [r for r in races if (w0 <= r["race_date"] < top_hi) or (lo <= r["race_date"] <= hi)]
+        U = pd.DataFrame([{k: r[k] for k in S.TOP_COLS} for r in top] + tgt)
+        X2 = S.compute_daily(U, pd.DataFrame(rr), blob, lo, hi)
+        a, b = S.out_frame(X1, "SI"), S.out_frame(X2, "SI")
+        self.assertGreater(len(a), 0)
+        pd.testing.assert_frame_equal(a, b)
+        X3 = S.compute_daily(U, pd.DataFrame(rr), {}, lo, hi)                  # その日のセルが無ければ書かない
+        self.assertEqual(len(S.out_frame(X3, "SI")), 0)
+        self.assertTrue((X3.why[X3.time_sec.notna()] == "no_day").all())
+
+    def test_daily_ranges_year_edge(self):
+        self.assertEqual(S.daily_ranges("2026-12-20", "2027-01-09"), ("2023-01-01", "2026-12-20"))
+
+    def test_compare_ref(self):
+        S.MIN_R = 30
+        runs, races = synth(years=(2021, 2022, 2023, 2024))
+        X, _, _ = S.compute(runs, races, "2024-01-01", "2024-12-31")
+        g = X[np.isfinite(X.SI)]
+        ref = {"lo": "2024-01-01", "hi": "2024-12-31", "o_all": {"2024": {"高知": 0.0}},
+               "mean": {"高知": round(float(g.SI.mean()), 1)}, "OP": {"高知": None},
+               "class": {"高知": S.class_table(g, "SI")["高知"]}}
+        f = Path(__import__("tempfile").mkdtemp()) / "ref.json"
+        f.write_text(__import__("json").dumps(ref, ensure_ascii=False), encoding="utf-8")
+        d = S.compare_ref(X, str(f))
+        self.assertTrue(d and max(x[0] for x in d) == 0)
+        ref["mean"]["高知"] += 1
+        f.write_text(__import__("json").dumps(ref, ensure_ascii=False), encoding="utf-8")
+        with self.assertRaises(SystemExit):
+            S.compare_ref(X, str(f))
+
+    def test_ref_fixture_shape(self):
+        ref = __import__("json").loads((ROOT / "tests/fixtures/si_all_check3_ref.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(ref["mean"]), set(S.TARGETS))
+        self.assertEqual(ref["hi"], "2026-11-06")
 
 
 if __name__ == "__main__":

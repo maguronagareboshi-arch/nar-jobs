@@ -1,5 +1,5 @@
 # 2026-11-07 走破指数を全場へ(cloud/si_all.py)の照合便(check1 は run 42348450194 で済み・check2 は 42350092671 で済み・今は check3= 残りのずれ・若馬を外した版・級ごとの表)。⛔DB に書かない(check は読むだけ)。
-# 2026-11-07 push で起きたときは試験だけ(DB を読まない)。照合は手で起こしたときだけ。
+# 2026-11-07 push で起きたときは試験+埋め直しの口を DB に書かずに 2024-01〜2026-11-06 で回し、check3 の数と照らす(差 0 を見る)。
 # 枝 si5-all に push したときと手動で起こす(master に置かずに回すため)。
 name: si-all-check
 on:
@@ -21,6 +21,12 @@ jobs:
       - run: pip install pandas==2.2.3 numpy==1.26.4 pytest
       - name: unit tests
         run: python -m pytest -q tests/test_si_all.py
+      - name: backfill dry run vs check3 (read only)
+        if: github.event_name == 'push'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python -X utf8 cloud/si_all.py run --from 2024-01-01 --to 2026-11-06 --compare tests/fixtures/si_all_check3_ref.json
       - name: si all check3 full period (read only)
         if: github.event_name == 'workflow_dispatch'
         env:

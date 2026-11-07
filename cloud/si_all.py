@@ -73,9 +73,9 @@ def months(lo, hi):
         a = b
 
 
-def _fetch(base, key, table, cols, order, track, m1, m2):
+def _fetch(base, key, table, cols, order, track, m1, m2, extra=''):
     path = (f"/rest/v1/{table}?select={','.join(cols)}&track=eq.{urllib.parse.quote(track)}"
-            f"&race_date=gte.{m1}&race_date=lt.{m2}&order={order}")
+            f"&race_date=gte.{m1}&race_date=lt.{m2}{extra}&order={order}")
     return baba.rows_all(base, key, path)
 
 
@@ -885,13 +885,14 @@ def to_md3(res):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument('cmd', choices=['run', 'check', 'check2', 'check3'])
-    ap.add_argument('--track', default=','.join(TARGETS))
+    ap.add_argument('--track', default=None, help='省略= 10 場ぜんぶ')
     ap.add_argument('--from', dest='lo', default=None)
     ap.add_argument('--to', dest='hi', default=None)
     ap.add_argument('--out', default=None)
     ap.add_argument('--apply', action='store_true', help='nar_si5 へ upsert(既定は書かない)')
     ap.add_argument('--days', type=int, default=None, help='毎日の便= 前日までの直近 N 日(--from/--to の代わり)')
     ap.add_argument('--beat', action='store_true', help="nar_job_heartbeat 'si_all' を書く")
+    ap.add_argument('--compare', default=None, help='check3 の数(tests/fixtures/si_all_check3_ref.json)と照らす')
     a = ap.parse_args()
     if a.cmd == 'check':
         check(a.out or 'si_all_check')
@@ -909,9 +910,11 @@ RUN_COLS_W = [c for c in RUN_COLS if c not in ('si5', 'age')]     # 書く便は
 
 
 def month_range(lo, hi):
-    """--from/--to = YYYY-MM(月単位)か YYYY-MM-DD → (始めの日, 終わりの日)"""
-    a = lo + '-01' if len(lo) == 7 else lo
-    if len(hi) == 7:
+    """--from/--to = YYYY(年単位)・YYYY-MM(月単位)・YYYY-MM-DD → (始めの日, 終わりの日)"""
+    a = lo + '-01-01' if len(lo) == 4 else lo + '-01' if len(lo) == 7 else lo
+    if len(hi) == 4:
+        b = hi + '-12-31'
+    elif len(hi) == 7:
         y, m = map(int, hi.split('-'))
         b = (dt.date(y + (m == 12), m % 12 + 1, 1) - dt.timedelta(days=1)).isoformat()
     else:
@@ -919,10 +922,25 @@ def month_range(lo, hi):
     return a, b
 
 
+ROWS_PER_TRACK_MONTH = 820      # check2 の実測(2014〜2026・14 場で 1,719,561 走)
+MB_PER_ROW = 0.00021             # JSON の 1 行あたり(走とレース込みのおよそ)
+SEC_PER_JOB = 0.45               # 場×月 1 つの読み込み(check2 の実測・6 本並列で割る)
+SEC_PER_YEAR = 20                # 1 年の計算(check2/check3 の実測 4〜20 秒)
+
+
+def estimate(n_tracks, lo, hi, last):
+    nm = len(list(months(lo, hi)))
+    rows = n_tracks * nm * ROWS_PER_TRACK_MONTH
+    yrs = int(last[:4]) - int(lo[:4]) + 1
+    return rows, rows * MB_PER_ROW * 1.1, n_tracks * nm * SEC_PER_JOB / 6 + yrs * SEC_PER_YEAR
+
+
 def run(a):
-    """他 10 場の指数(o_s=0= 場ごとの物差し・2026-11-07 決定)。場ごとに、対象の月と前の 3 年(基準・馬場差・ふだんの力)だけ読む。
-    --apply で月ごとに順に nar_si5 へ upsert。--beat で nar_job_heartbeat 'si_all' を書く(毎日の便)"""
-    tracks = [t for t in a.track.split(',') if t]
+    """他 10 場の指数(o_s=0= 場ごとの物差し・2026-11-07 決定)。
+    埋め直し(--from/--to・年か月)= 照合(check3)と同じ作り: 14 場を 1 回読み(ふだんの力の走歴は全場)、書くのは対象の場だけ。
+    毎日(--days)= 日の馬場差は nar_meta baba_diff の d1(サイトの「この日の時計」と同じ値)・基準は前の 3 年の 1〜3 着の走だけ読む。
+    --apply で場ごと・月ごとに順に nar_si5 へ upsert。--beat で nar_job_heartbeat 'si_all'。--compare FILE= check3 の数と照らす"""
+    tracks = [t for t in (a.track or ','.join(TARGETS)).split(',') if t]
     bad = [t for t in tracks if t not in TARGETS]
     if bad:
         raise SystemExit(f'対象外の場: {bad}(南関は si5_store・帯広ばは書かない)')
@@ -931,40 +949,137 @@ def run(a):
         lo = (dt.date.fromisoformat(hi) - dt.timedelta(days=a.days - 1)).isoformat()
     else:
         if not a.lo or not a.hi:
-            raise SystemExit('--from と --to(YYYY-MM)か --days が要る')
+            raise SystemExit('--from と --to(YYYY か YYYY-MM)か --days が要る')
         lo, hi = month_range(a.lo, a.hi)
     base = os.environ.get('SUPABASE_URL', '').rstrip('/')
     key = os.environ.get('SUPABASE_SERVICE_KEY', '')
     if not base or not key:
         raise SystemExit('SUPABASE_URL / SUPABASE_SERVICE_KEY が無い')
-    tot_w, tot_r = 0, 0
+    t0 = time.time()
+    tot_w = 0
     try:
-        for t in tracks:
-            t0 = time.time()
-            U, R, stat = load_frames(base, key, [t], f'{max(2014, int(lo[:4]) - 3)}-01-01', hi, cols=RUN_COLS_W)
+        if a.days:
+            U, R, blob, mb = load_daily(base, key, tracks, lo, hi)
+            X = compute_daily(U, R, blob, lo, hi)
+            log(f'毎日: 読んだ 走 {len(U):,}・レース {len(R):,} 行・約 {mb:.1f} MB・baba_diff {len(blob)} 日')
+        else:
+            w = f'{max(2014, int(lo[:4]) - 3)}-01-01'
+            er, emb, esec = estimate(len(ALL), w, hi, hi)
+            log(f'見込み: 14 場×{w}〜{hi} を読む= 走 約 {er:,} 行・約 {emb:.0f} MB・所要 約 {esec / 60:.0f} 分(計算 {lo}〜{hi})')
+            U, R, stat = load_frames(base, key, ALL, w, hi, cols=RUN_COLS_W)
             mb = sum(v['mb'] for v in stat.values())
-            X, _ = compute_years(U, R, lo, hi)
+            X, ysec = compute_years(U, R, lo, hi)
+            log(f'読んだ 走 {len(U):,}・レース {len(R):,} 行・約 {mb:.1f} MB・計算 {ysec}')
+        if a.compare:
+            compare_ref(X, a.compare)
+        for t in tracks:
             x = out_frame(X[X.track == t], 'SI')
             nw = 0
             for m1, m2 in months(lo, hi):
                 xm = x[(x.race_date >= m1) & (x.race_date < m2)]
-                w = push(xm, base, key) if a.apply and len(xm) else 0
-                nw += w
-                log(f'  {t} {m1[:7]}: 指数 {len(xm):,} 行・書いた {w:,} 行')
-            log(f'{t}: 読んだ 走 {len(U):,}・レース {len(R):,} 行・約 {mb:.1f} MB / 指数 {len(x):,} 行・書いた {nw:,} 行'
-                f'({lo}〜{hi}・{time.time() - t0:.0f} 秒)')
+                wn = push(xm, base, key) if a.apply and len(xm) else 0
+                nw += wn
+                if not a.days:
+                    log(f'  {t} {m1[:7]}: 指数 {len(xm):,} 行・書いた {wn:,} 行')
+            log(f'{t}: 指数 {len(x):,} 行・書いた {nw:,} 行({lo}〜{hi})')
             tot_w += nw
-            tot_r += len(U)
             if a.out:
                 x.to_csv(a.out, index=False, mode='a', header=not os.path.exists(a.out))
     except BaseException as e:
         if a.beat:
             _beat(False, f'{type(e).__name__} {str(e)[:80]}')
         raise
-    log(f'合計: 読んだ走 {tot_r:,} 行・書いた {tot_w:,} 行')
+    log(f'合計: 書いた {tot_w:,} 行・{time.time() - t0:.0f} 秒')
     if a.beat:
         _beat(True, f'{lo}〜{hi} 書いた {tot_w}')
     return 0
+
+
+# ---------------------------------------------------------------- 毎日の便(読み量を減らす口・2026-11-07 ②)
+TOP_COLS = ['track', 'race_date', 'race_no', 'runner_number', 'finish', 'finish_note', 'time_sec']
+
+
+def daily_ranges(lo, hi):
+    """→ (基準の始め, 1〜3 着だけ読む終わり[未満], 全部読む [lo, hi])。基準= 対象の年ごとに前の 3 年"""
+    w0 = f'{max(2014, int(lo[:4]) - 3)}-01-01'
+    top_hi = min(f'{hi[:4]}-01-01', lo)
+    return w0, top_hi
+
+
+def blob_days(blob):
+    """nar_meta baba_diff の days → {(日, 場): d1}(d1 の無いセル・暫定 p のセルは入れない)"""
+    p2t = {v: k for k, v in baba.TRACK2PREFIX.items()}
+    out = {}
+    for d, cells in (blob or {}).items():
+        for pf, c in (cells or {}).items():
+            if pf in p2t and isinstance(c, dict) and 'd1' in c and not c.get('p'):
+                out[(d, p2t[pf])] = float(c['d1'])
+    return out
+
+
+def load_daily(base, key, tracks, lo, hi, workers=6):
+    w0, top_hi = daily_ranges(lo, hi)
+    last = (dt.date.fromisoformat(top_hi) - dt.timedelta(days=1)).isoformat()
+    jobs = []
+    for t in tracks:
+        if w0 < top_hi:
+            jobs += [('nar_runs', TOP_COLS, 'race_date.asc,race_no.asc,runner_number.asc', t, m1, m2,
+                      '&finish=lte.3&time_sec=not.is.null') for m1, m2 in months(w0, last)]
+            jobs += [('nar_races', RACE_COLS, 'race_date.asc,race_no.asc', t, m1, m2, '') for m1, m2 in months(w0, last)]
+        jobs += [('nar_runs', RUN_COLS_W, 'race_date.asc,race_no.asc,runner_number.asc', t, m1, m2, '')
+                 for m1, m2 in months(lo, hi)]
+        jobs += [('nar_races', RACE_COLS, 'race_date.asc,race_no.asc', t, m1, m2, '') for m1, m2 in months(lo, hi)]
+
+    def one(j):
+        rows = _fetch(base, key, j[0], j[1], j[2], j[3], j[4], j[5], j[6])
+        return j[0], rows, len(json.dumps(rows, ensure_ascii=False).encode()) / 1e6
+    runs, races, mb = [], [], 0.0
+    with ThreadPoolExecutor(workers) as ex:
+        for tb, rows, m in ex.map(one, jobs):
+            mb += m
+            (runs if tb == 'nar_runs' else races).append(pd.DataFrame(rows, columns=RUN_COLS if tb == 'nar_runs' else RACE_COLS))
+    _, body = baba.req(base, key, f'/rest/v1/nar_meta?select=value&key=eq.{baba.META_KEY}')
+    v = json.loads(body)
+    mb += len(body.encode()) / 1e6
+    blob = ((v[0].get('value') or {}).get('days') or {}) if v else {}
+    return pd.concat(runs, ignore_index=True), pd.concat(races, ignore_index=True), blob, mb
+
+
+def compute_daily(U, R, blob, lo, hi):
+    """U= 前の 3 年の 1〜3 着の走+対象の日の全部の走(nar_runs の列)・R= その期間のレース・blob= baba_diff の days。
+    基準は build_base(照合と同じ)・日の馬場差は blob の d1。セルの無い日の走は D が空= 書かない"""
+    R = races_frame(R)
+    U = runs_frame(U)
+    R = race_values(U, R)
+    years = list(range(int(lo[:4]), int(hi[:4]) + 1))
+    R = build_base(R, [[t] for t in TARGETS], years)
+    X = si_table(U[(U.race_date >= lo) & (U.race_date <= hi)], R, blob_days(blob))
+    return X.reset_index(drop=True)
+
+
+def compare_ref(X, path):
+    """check3 の数(tests/fixtures/si_all_check3_ref.json)と照らす。平均・重賞の平均は o_s の前の値(全場)・
+    級の平均/中央値は o_s が 0 の場だけ。差の最大をログに出し、0.05 を超えたら止める"""
+    ref = json.loads(Path(path).read_text(encoding='utf-8'))
+    Z = X[(X.race_date >= ref['lo']) & (X.race_date <= ref['hi'])]
+    diffs = []
+    for t in TARGETS:
+        g = Z[(Z.track == t) & np.isfinite(Z.SI)]
+        if not len(g):
+            continue
+        for nm, v in [('mean', g.SI.mean()), ('OP', g.SI[g.k0 == 'OP'].mean())]:
+            if ref[nm].get(t) is not None:
+                diffs.append((abs(round(float(v), 1) - ref[nm][t]), t, nm))
+        if all(ref['o_all'][y][t] == 0 for y in ref['o_all']):
+            ct = class_table(g, 'SI', lo=ref['lo'])
+            for k, (mu, md, n) in ref['class'].get(t, {}).items():
+                c = ct.get(t, {}).get(k)
+                diffs.append((abs(c[0] - mu) + abs(c[1] - md) + abs(c[2] - n) if c else 999, t, k))
+    mx = max(diffs) if diffs else (None,)
+    log(f'check3 との照合: {len(diffs)} 個・差の最大 {mx[0]}({mx[1:]})・差 0 の個数 {sum(1 for d in diffs if d[0] == 0)}')
+    if diffs and mx[0] > 0.05:
+        raise SystemExit('check3 と合わない')
+    return diffs
 
 
 def _beat(ok, note):
