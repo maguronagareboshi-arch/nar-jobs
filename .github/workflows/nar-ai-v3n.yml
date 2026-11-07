@@ -10,6 +10,8 @@
 #   画面に出すかはサイト(nar-viewer)の AI_TAJO_PUBLIC で決める(v3 の out/v3n_site_spec.md)。それまでは見えない。
 #   材料表に無い・馬番がそろわないレースは書かない= 2 回目の便(09:15)で埋まる。朝の行は凍結(上書きしない)。
 #   2026-11-03 段 1: base-v1 は毎日の便から外した(nar-ai-feat は材料表を作るだけ)。この便の動きは変えていない。
+# 2026-11-07 他場の材料の 1 本化(v3 の out/v3n_feat_unify_1107.md §8〜11): 朝の材料表を公式の表から自分でも作り(v3n_bf.py)、
+#   サイトの表とその日の 210 列が同じなら自分の表で当てる(予想は変わらない)・違う/作れない → サイトの表・サイトの表が無い → 自分の表(行の meta.feat_src)。
 # 読むのは nar-official の公開の表(nar_runs・nar_races・nar_run_facts・nar_horse_profiles・nar_jra_runs・nar_jra_horses)と
 # nar-ai-feat の成果物(材料表)だけ。固定ファイル = 全国 1 本の木・並び読みの重み(暗号化リリース)。
 name: nar-ai-v3n
@@ -96,7 +98,10 @@ jobs:
 
       # 2026-10-14 第 9 版: 他場版の朝の材料表 = nar-ai-feat の成果物。1 回目(workflow_run)はその便、09:15 の予備・手動は成果物のある最新の成功便。
       #   ⛔材料表に無いレースは v3n_daily が書かない(落ちない)。取れなければこの段で落ちる(何も書かない)
+      # 2026-11-07 他場の材料の 1 本化: v3n_daily が朝の材料表を自分でも作り、サイトの表と全列を比べてから使う(v3n_bf.py)。
+      #   サイトの表が取れない朝も止めない(自分の表で当てる)= この段は落ちても先へ進む
       - name: fetch features (nar-ai-feat artifact)
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ github.token }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}

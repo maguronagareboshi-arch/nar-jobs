@@ -131,6 +131,26 @@ def main():
     VK = 'mo5'   # mo5 = 決め 70 の混ぜた勝つ率で決めた k
     MV = 'mo3' if T54 else 'mo'  # 混ぜの定数(決め 40 = mo・決め 54 で学び直し = mo3)
     feat = arg('--feat', os.environ.get('V3N_FEAT', 'feat/nar_ai_feat_run.csv.gz'))
+    # 2026-11-07 他場の材料の 1 本化(v3 の out/v3n_feat_unify_1107.md §8〜11・v3n_bf.py): 朝の材料表を公式の表から自分で作り、
+    #   サイトの表(nar-ai-feat の成果物)とその日の 210 列がすべて同じなら自分の表で当てる(値は同じ = 予想は変わらない)。
+    #   自分の表を作れない・1 列でも違う → サイトの表(今まで通り)。サイトの表が無い・その日の行が無い → 自分の表。
+    #   どちらを使ったかは行の meta.feat_src(own・own-nosite・site-diff・site-ownfail・site-off)。V3N_OWN_FEAT=0 で今まで通り
+    FSRC = 'site-off'
+    if os.environ.get('V3N_OWN_FEAT', '1') == '1':
+        try:
+            import v3n_bf
+            own = work / 'own_feat.csv.gz'
+            v3n_bf.make(off, day, own, k0_dl)
+            same, msg = v3n_bf.compare(own, feat, day, [name[j] for j in tracks]) if Path(feat).exists() else (None, 'サイトの表が無い')
+            print('自分の材料表とサイトの表', {True: '同じ', False: '違う', None: '比べられない'}[same], msg, flush=True)
+            if same is False:
+                FSRC = 'site-diff'
+            else:
+                feat, FSRC = str(own), ('own' if same else 'own-nosite')
+        except Exception as e:  # noqa: BLE001
+            print('自分の材料表 作れない = サイトの表で', type(e).__name__, str(e)[:300], flush=True)
+            FSRC = 'site-ownfail'
+    print('材料表の出どころ', FSRC, flush=True)
     FD = v3n_one.feat_day(feat, day, [name[j] for j in tracks])
     print('材料表', feat, 'その日の行', len(FD), '・木', ONE['cut'], '切り(〜', ONE['trained_to'], ')・2 本目の木', RB['cut'], '切り(',
           RB['trained_from'], '〜', RB['trained_to'], ')・混ぜる模型', MX['cut'], '切り(〜', MX['trained_to'], ')', len(MX['_m']), '本', flush=True)
@@ -235,7 +255,7 @@ def main():
             mx = {'tag': v3n_mx70.TAG['mo'], 'm': MX['cut'],   # 6 本の 3 着内の割合(並び = v3n_mx70.MODELS・直前の取消の後に割り直す)
                   'sh': {str(int(n)): [round(float(shx[x][i]), 6) for x in v3n_mx70.MODELS] for i, n in enumerate(nums)}}
             meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM + (('+e1+noken' if nk_ok else '+e1') if e1on else ''), 'one': ONE['cut'], **({'one15': True} if ONE15 else {}), **({'trees54': True} if T54 else {}), 'rb61': rb, 'mx70': mx,
-                    'gamma': gm, 'trained_to': trained_to, 'seq': u is not None,
+                    'gamma': gm, 'trained_to': trained_to, 'seq': u is not None, 'feat_src': FSRC,
                     **({'u': {str(int(n)): round(float(x), 4) for n, x in zip(nums, u)}} if u is not None else {}),
                     **({'noken_z': {str(k_): float(v) for k_, v in sorted(nz.items())}} if nz else {}),
                     'runners': [{'num': int(n), 'p1': round(float(a), 4), 'p3': round(float(b_), 4)} for n, a, b_ in zip(nums, q1, p3s)],
