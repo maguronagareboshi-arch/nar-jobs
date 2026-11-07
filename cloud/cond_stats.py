@@ -42,10 +42,12 @@ VENUES = [("obihiro", "帯広ば", "帯広"), ("monbetsu", "門別", "門別"), 
           ("ooi", "大井", "大井"), ("kawasaki", "川崎", "川崎"), ("kanazawa", "金沢", "金沢"),
           ("kasamatsu", "笠松", "笠松"), ("nagoya", "名古屋", "名古屋"), ("sonoda", "園田", "園田"),
           ("himeji", "姫路", "姫路"), ("kochi", "高知", "高知"), ("saga", "佐賀", "佐賀")]
-COLS = ["d", "r", "u", "dist", "g", "w", "n", "f", "p", "j", "t", "s", "b", "st"]
+COLS = ["d", "r", "u", "dist", "g", "w", "n", "f", "p", "j", "t", "s", "b", "st", "rn", "wy", "py"]
 DROP_NOTES = ("出走取消", "競走除外")
 LEGEND = {"d": "from からの日数", "f": ">0 着順 / -2-i = fn[i]", "st": "0逃げ 1先行 2差し 3追込 -1不明(horse.js LEG)",
           "辞書列": "g,j,t,s,b は番号(-1=空)",
+          "rn": "レース名の番号(dict.rn・-1=空)", "wy": "単勝の払戻(円/100円・的中でなければ 0)",
+          "py": "複勝の払戻(円/100円・無ければ 0)",
           "馬名": "入れない(10/19 データ持ち出し対策 段2・画面は rpc stats_horse_names で引く)"}
 
 
@@ -132,12 +134,29 @@ class Dic:
         return self.idx[v]
 
 
-def build_doc(track, d_from, d_to, races, runs, ped):
+def pay_map(pays):
+    """nar_race_payouts の行 → {(日付, R): {"win": {馬番: 円}, "place": {馬番: 円}}}(同着の win 2 つも入る)。"""
+    out = {}
+    for row in pays or []:
+        m = out.setdefault((row["race_date"], row["race_no"]), {"win": {}, "place": {}})
+        for e in row.get("payouts") or []:
+            if not isinstance(e, dict) or e.get("t") not in ("win", "place"):
+                continue
+            try:
+                u, y = int(str(e.get("c")).strip()), int(e.get("y") or 0)
+            except (TypeError, ValueError):
+                continue
+            m[e["t"]][u] = y
+    return out
+
+
+def build_doc(track, d_from, d_to, races, runs, ped, pays=None):
     """試作 build() と同じ形の 1 ファイル。runs は keep_runs 済み・期間内だけを渡す。"""
     rmap = {(r["race_date"], r["race_no"]): r for r in races}
     lc = {k: last_corner_map(r.get("corners")) for k, r in rmap.items()}
+    pm = pay_map(pays)
     base = d_from
-    dJ, dT, dS, dB, dG, dN = Dic(), Dic(), Dic(), Dic(), Dic(), Dic()
+    dJ, dT, dS, dB, dG, dN, dR = Dic(), Dic(), Dic(), Dic(), Dic(), Dic(), Dic()
     cols = {k: [] for k in COLS}
     for x in runs:
         key = (x["race_date"], x["race_no"])
@@ -159,10 +178,14 @@ def build_doc(track, d_from, d_to, races, runs, ped):
         cols["b"].append(dB(hp.get("broodmare_sire") if hp else None))
         p = lc.get(key, {}).get(x["runner_number"]) if x["runner_number"] is not None else None
         cols["st"].append(leg(p))
+        cols["rn"].append(dR(rc.get("race_name") if rc else None))
+        pk = pm.get(key, {})
+        cols["wy"].append(pk.get("win", {}).get(x["runner_number"], 0))
+        cols["py"].append(pk.get("place", {}).get(x["runner_number"], 0))
     return {"v": 1, "track": track, "from": d_from.isoformat(), "to": d_to.isoformat(), "n": len(runs),
             "legend": LEGEND,
             "dict": {"g": dG.names, "j": dJ.names, "t": dT.names, "s": dS.names, "b": dB.names,
-                     "fn": dN.names},
+                     "fn": dN.names, "rn": dR.names},
             "cols": cols}
 
 
@@ -213,10 +236,11 @@ def enc(v):
 def fetch(rest, track, d_from, d_to):
     tq = enc(track)
     rng = f"&track=eq.{tq}&race_date=gte.{d_from.isoformat()}&race_date=lte.{d_to.isoformat()}"
-    races = rest.paged("nar_races?select=race_date,race_no,distance_m,going,field_size,corners" + rng,
+    races = rest.paged("nar_races?select=race_date,race_no,distance_m,going,field_size,corners,race_name" + rng,
                        "race_date,race_no")
     runs = rest.paged("nar_runs?select=race_date,race_no,runner_number,gate,horse_name,finish,finish_note,popularity,"
                       "jockey,trainer" + rng, "race_date,race_no,runner_number")
+    pays = rest.paged("nar_race_payouts?select=race_date,race_no,payouts" + rng, "race_date,race_no")
     runs = [x for x in runs if d_from.isoformat() <= x["race_date"] <= d_to.isoformat()]
     names = sorted({x["horse_name"] for x in runs if x["horse_name"]})
     ped = {}
@@ -224,18 +248,18 @@ def fetch(rest, track, d_from, d_to):
         inl = ",".join('"' + n.replace("\\", "\\\\").replace('"', '\\"') + '"' for n in names[k:k + 80])
         for h in rest.get("nar_horses?select=horse_name,sire,broodmare_sire&horse_name=in.(" + enc(inl) + ")"):
             ped[h["horse_name"]] = h
-    return races, runs, ped
+    return races, runs, ped, pays
 
 
 def build_venue(rest, track, today):
     """3y 分を 1 回だけ取り、1y はその中から切る。→ {key: (doc, raw, first_date)}"""
     f3, to = period(today, "3y")
-    races, runs, ped = fetch(rest, track, f3, to)
+    races, runs, ped, pays = fetch(rest, track, f3, to)
     out = {}
     for key in ("1y", "3y"):
         fr, _ = period(today, key)
         part = keep_runs([x for x in runs if x["race_date"] >= fr.isoformat()])
-        doc = build_doc(track, fr, to, races, part, ped)
+        doc = build_doc(track, fr, to, races, part, ped, pays)
         first = min((x["race_date"] for x in part), default=None)
         out[key] = (doc, dumps(doc), first)
     return out

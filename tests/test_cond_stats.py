@@ -14,7 +14,7 @@ cs = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(cs)
 
 # 10/19 段2: 馬名の列 h と dict.h は抜いた(画面は rpc stats_horse_names で引く)
-PROTO_COLS = ["d", "r", "u", "dist", "g", "w", "n", "f", "p", "j", "t", "s", "b", "st"]
+PROTO_COLS = ["d", "r", "u", "dist", "g", "w", "n", "f", "p", "j", "t", "s", "b", "st", "rn", "wy", "py"]
 PROTO_KEYS = ["v", "track", "from", "to", "n", "legend", "dict", "cols"]
 
 
@@ -29,7 +29,9 @@ class FakeRest:
         self.races, self.runs, self.nreq = races, runs, 0
 
     def paged(self, q, order):
-        return list(self.races if q.startswith("nar_races") else self.runs)
+        if q.startswith("nar_race_payouts"):
+            return list(getattr(self, "pays", []))
+        return list(self.races if q.startswith("nar_races?") else self.runs)
 
     def get(self, q):
         return [{"horse_name": "馬1-1", "sire": "父X", "broodmare_sire": "母父Y"}]
@@ -72,6 +74,23 @@ class TestCondStats(unittest.TestCase):
         self.assertEqual(d1["cols"]["s"], [0, -1, 0, -1])
         self.assertEqual(out["3y"][0]["n"], 6)
         json.loads(out["1y"][1].decode("utf-8"))
+
+    def test_race_name_and_win_place_pay(self):
+        races = [{"race_date": "2026-10-01", "race_no": 1, "race_name": "ファイナル特別", "distance_m": 1400,
+                  "going": "良", "field_size": 3, "corners": None},
+                 {"race_date": "2026-10-01", "race_no": 2, "race_name": "", "distance_m": 1400,
+                  "going": "良", "field_size": 3, "corners": None}]
+        runs = [run("2026-10-01", 1, 1, 1), run("2026-10-01", 1, 2, 1), run("2026-10-01", 1, 3, 3),
+                run("2026-10-01", 2, 1, 1), run("2026-10-01", 2, 2, 2)]
+        pays = [{"race_date": "2026-10-01", "race_no": 1, "payouts": [
+            {"t": "win", "c": "1", "y": 250, "p": 1}, {"t": "win", "c": "2", "y": 400, "p": 2},   # 同着
+            {"t": "place", "c": "1", "y": 110, "p": 1}, {"t": "place", "c": "2", "y": 150, "p": 2},
+            {"t": "place", "c": "3", "y": 300, "p": 3}, {"t": "quinella", "c": "1-2", "y": 900, "p": 1}]}]
+        doc = cs.build_doc("高知", dt.date(2026, 10, 1), dt.date(2026, 10, 1), races, runs, {}, pays)
+        self.assertEqual(doc["dict"]["rn"], ["ファイナル特別"])
+        self.assertEqual(doc["cols"]["rn"], [0, 0, 0, -1, -1])
+        self.assertEqual(doc["cols"]["wy"], [250, 400, 0, 0, 0])   # 払戻の無いレースは 0
+        self.assertEqual(doc["cols"]["py"], [110, 150, 300, 0, 0])
 
     def test_proto_reader_same_cols(self):
         src = open(os.path.join(ROOT, "cloud", "cond_stats.py"), encoding="utf-8").read()
