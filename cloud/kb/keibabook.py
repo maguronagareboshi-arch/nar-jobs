@@ -36,6 +36,11 @@ class KeibabookClient:
 
         self.session = requests.Session()
         self.session.headers["User-Agent"] = UA
+        try:  # 2026-11-08 競馬ブックが海外を断る間は東京の中継で読む(cloud/kb/kb_relay.py)
+            from kb_relay import install as _relay
+        except ImportError:
+            from .kb_relay import install as _relay
+        _relay(self.session)
 
         self.cookie_path = self.data_dir / "cookies.txt"
         jar = http.cookiejar.MozillaCookieJar(str(self.cookie_path))

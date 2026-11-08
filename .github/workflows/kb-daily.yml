@@ -91,6 +91,7 @@ jobs:
         env:
           KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}
           KEIBABOOK_PASSWORD: ${{ secrets.KEIBABOOK_PASSWORD }}
+          KB_RELAY_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}  # 競馬ブックが海外を断る間の東京の中継(cloud/kb/kb_relay.py)
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
           IN_DATES: ${{ github.event.inputs.works_dates }}
@@ -111,6 +112,7 @@ jobs:
         env:
           KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}
           KEIBABOOK_PASSWORD: ${{ secrets.KEIBABOOK_PASSWORD }}
+          KB_RELAY_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}  # 競馬ブックが海外を断る間の東京の中継(cloud/kb/kb_relay.py)
         run: python cloud/kb/fetch_kb_all.py --since "$W" --what seiseki --track 門別,大井,船橋,川崎,浦和,園田
       - name: gear counts
         if: '!cancelled()'
@@ -137,6 +139,7 @@ jobs:
         env:
           KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}
           KEIBABOOK_PASSWORD: ${{ secrets.KEIBABOOK_PASSWORD }}
+          KB_RELAY_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}  # 競馬ブックが海外を断る間の東京の中継(cloud/kb/kb_relay.py)
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         run: |
