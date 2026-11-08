@@ -57,8 +57,28 @@ def tag():
 
 
 # ------------------------------------------------------------------ 模型
+def load76(d):
+    """決め 76(第28版 前日版): 前日の一本の木 種 1〜3 × 2 本(452 + 調教の元の記録 88 列)。ot76.json が無ければ None。"""
+    import lightgbm as lgb
+    if not (d / 'ot76.json').exists():
+        return None
+    m = json.loads((d / 'ot76.json').read_text(encoding='utf-8'))
+    m['seedM'] = [{t: lgb.Booster(model_file=str(d / m['models'][f'{t}_s{s}']['file'])) for t in ('Y3', 'Y1')} for s in m['seeds']]
+    m['cols'], m['cy'] = list(m['base_cols']), list(m['cy_cols'])
+    assert len(m['seeds']) == 3 and len(m['cols']) == 452 and len(m['cy']) == 88, (m['seeds'], len(m['cols']), len(m['cy']))
+    for sm in m['seedM']:
+        for t, b in sm.items():
+            assert b.num_feature() == len(m['cols']) + len(m['cy']), (t, b.num_feature())
+    m['ver'] = 28
+    import cy76_live
+    c = cy76_live.consts()
+    m['aw'] = (c['W1'], c['W3'])   # 決め 76 の木の側の併せ馬の重み
+    return m
+
+
 def load(d=None):
-    """一本の木 2 本(452 列)と前日の F3 6 本(279 列)。無ければ None。"""
+    """一本の木 2 本(452 列)と前日の F3 6 本(279 列)。無ければ None。
+    ot76.json があれば決め 76 の木(種 3 本の平均 + 88 列)を主にし、決め 74 の木は 88 列の元が無い日の控え(M['alt'])。"""
     import lightgbm as lgb
     d = Path(d) if d else ASSET
     if not (d / 'ot74.json').exists() or not (d / 'f3pre.json').exists():
@@ -66,6 +86,7 @@ def load(d=None):
     m = json.loads((d / 'ot74.json').read_text(encoding='utf-8'))
     m['M'] = {t: lgb.Booster(model_file=str(d / v['file'])) for t, v in m['models'].items()}
     m['c182'] = list(consts()['C182'])
+    m['ver'] = 27
     assert set(m['c182']) <= set(m['cols']) and len(m['cols']) == len(set(m['cols'])), '一本の木の列が定数と合わない'
     assert not set(m['cols']) & set(ot.DAYC) and not set(m['cols']) & set(ot.GOING), '前日の一本の木に当日の列がある'
     for t, b in m['M'].items():
@@ -76,7 +97,30 @@ def load(d=None):
         assert len(bs) == 3 and all(b.num_feature() == len(f['cols']) for b in bs), (t, len(bs))
     m['F3'] = f
     m['dir'] = d
+    m76 = load76(d)
+    if m76 is not None:  # 主 = 決め 76・控え = 決め 74(F3 は同じ)
+        assert m76['cols'] == m['cols'], '決め 76 の木の 452 列が決め 74 と違う'
+        m76.update(c182=m['c182'], F3=f, dir=d, alt=m)
+        return m76
     return m
+
+
+def tree_z(M, X):
+    """→ (z3, z1)。決め 76 は種 3 本の z の平均(研究 cyraw76_judge.zavg と同じ)・決め 74 は onetree72_live.tree_z。"""
+    if 'seedM' not in M:
+        return ot.tree_z(M, X)
+    a = [ot.tree_z({'M': sm}, X) for sm in M['seedM']]
+    return np.mean([x[0] for x in a], axis=0), np.mean([x[1] for x in a], axis=0)
+
+
+def tree_x(M, b, cy):
+    """452 列(day_x)+ 決め 76 は調教の元の記録 88 列(cy = その日の cy76_live.feats を Q4 で引いた表・無い馬は欠け)。"""
+    X = ot.day_x(M, b)
+    if X is None or 'cy' not in M:
+        return X
+    k = pd.MultiIndex.from_arrays([b.track.astype(str), b.race_date.astype(str).str[:10], b.race_no.astype(int), b.umaban.astype(int)])
+    C = cy.reindex(k)[M['cy']].to_numpy(np.float32)
+    return np.hstack([X, C])
 
 
 def f3_x(F, b):
@@ -100,11 +144,13 @@ def f3_q(F, X):
 
 
 # ------------------------------------------------------------------ 式(研究 preday74_judge と同じ)
-def chain_pre(z3, z1, u, D):
-    """前日の並び読み → 併せ馬の相手(onetree72_live.chain_pre と同じ式・定数は pt74)。→ (p1′, p3′(合計 3)= 枠の直しの前)"""
+def chain_pre(z3, z1, u, D, W=None):
+    """前日の並び読み → 併せ馬の相手(onetree72_live.chain_pre と同じ式・定数は pt74)。→ (p1′, p3′(合計 3)= 枠の直しの前)
+    W = 一本の木の側の併せ馬の重み (W1, W3)。None は pt74(決め 74 の木)・決め 76 の木は cy76 の W1・W3(木に合わせて学んだ重み)。"""
     C = consts()
     cu, wu1 = float(C['CU']), float(C['WU1'])
-    w1, w3 = np.asarray(C['W1'], float), np.asarray(C['W3'], float)
+    W = (C['W1'], C['W3']) if W is None else W
+    w1, w3 = np.asarray(W[0], float), np.asarray(W[1], float)
     u = np.asarray(u, float)
     r1 = ot.sig(np.asarray(z1, float) + wu1 * cu * u)
     p1 = r1 / r1.sum()
@@ -140,14 +186,14 @@ def add_f3(p1, p3, q3, q1, u):
     return p1cap.cap(r1, r3), r3
 
 
-def race_tree(M, b, u, D, a):
+def race_tree(M, b, u, D, a, cy=None):
     """1 レース(馬番の順)の一本の木の側(1・2)。→ dict(p0 = 一本の木の側の直しの前の p3・t1・t3・Xf)。材料が無ければ None。"""
-    X = ot.day_x(M, b)
+    X = tree_x(M, b, cy)
     Xf = f3_x(M['F3'], b)
     if X is None or Xf is None:
         return None
-    z3, z1 = ot.tree_z(M, X)
-    p1n, p3n = chain_pre(z3, z1, u, D)
+    z3, z1 = tree_z(M, X)
+    p1n, p3n = chain_pre(z3, z1, u, D, M.get('aw'))
     t1, t3 = ot.chain_post(p1n, p3n, a)
     return {'p0': p3n, 't1': t1, 't3': t3, 'Xf': Xf, 'z3': z3, 'z1': z1}
 
@@ -159,9 +205,9 @@ def race_mix(M, r, u, s1, s3):
     return add_f3(m1, m3, q3, q1, u)
 
 
-def race(M, b, u, D, a, s1, s3):
+def race(M, b, u, D, a, s1, s3, cy=None):
     """1 レース通し(照合用)。→ dict(p0・p1・p3)か None。"""
-    r = race_tree(M, b, u, D, a)
+    r = race_tree(M, b, u, D, a, cy)
     if r is None:
         return None
     r['p1'], r['p3'] = race_mix(M, r, u, s1, s3)
@@ -193,9 +239,17 @@ def mixing_on(day, track, GT):
 
 
 # ------------------------------------------------------------------ 便の入口(v3_daily・勝つ率の守りの後)
-def apply_csv_pre(M, GT, AW, day, csv_path, base_csv, log=log0):
+def apply_csv_pre(M, GT, AW, day, csv_path, base_csv, log=log0, cy=None):
     """前日版の表の CSV(第25版の最後 = 勝つ率の守りの後)を直す: 混ぜたレースの p1・p3p(元は p1_t74・p3p_t74)・rank・mark。
-    → {(場, R): meta.pt74}(混ぜたかは meta['on'])。"""
+    → {(場, R): meta.pt74}(混ぜたかは meta['on']・どの木かは meta['ver'] = 28 決め 76 / 27 決め 74)。
+    cy = その日の調教の元の記録 88 列(cy76_live.feats)。決め 76 の木で cy が空(その日の追い切りの行が 1 本も無い)なら決め 74 の木(第27版)。"""
+    if 'cy' in M:
+        if cy is None or not len(cy):
+            log('(前日) 調教の元の記録が 0 行 = 決め 74 の木(第27版)で作る')
+            M = M['alt']
+        else:
+            cy = cy.assign(race_date=cy.race_date.astype(str).str[:10], race_no=cy.race_no.astype(int), umaban=cy.umaban.astype(int)).drop_duplicates(Q4).set_index(Q4)
+            log('(前日) 調教の元の記録', len(cy), '頭・決め 76 の木(第28版)')
     x = pd.read_csv(csv_path, encoding='utf-8-sig')
     if 'p1_t74' in x.columns:  # 2 度かけない
         raise RuntimeError('決め 74 の段は済み')
@@ -224,9 +278,9 @@ def apply_csv_pre(M, GT, AW, day, csv_path, base_csv, log=log0):
         if GT is not None:
             a = gate68_live.race_a(GT, tr, nums)
         s1, s3 = g.p1.to_numpy(float), g.p3p.to_numpy(float)
-        m = {'tag': tag(), 'on': False, 'cov': float((GT or {}).get('cover', {}).get(tr, 0.0))}
+        m = {'tag': tag(), 'ver': int(M['ver']), 'on': False, 'cov': float((GT or {}).get('cover', {}).get(tr, 0.0))}
         try:
-            r = race_tree(M, b, u, ot.aw_d(AW, tr, rno, nums), a)
+            r = race_tree(M, b, u, ot.aw_d(AW, tr, rno, nums), a, cy)
             if r is None:
                 st['none'] += 1
                 continue

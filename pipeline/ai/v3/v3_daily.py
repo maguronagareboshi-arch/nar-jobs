@@ -49,7 +49,8 @@ CAP_TAG = '決め67-2 勝つ率の守り'  # p1cap.TAG と同じ字
 STAMP_G68 = '+枠の内外の有利の直し(場 × 枠の前 56 日 + 同じ開催の前の日まで・前の日を含まない)'  # 決め 68(前日版の並び読みの後・勝つ率の守りの前)
 STAMP_PT = '+3 着内の率の温度(なだらかに・勝つ率は動かさない)'  # 決め 69(枠の内外の有利の直しの後・勝つ率の守りの前)
 STAMP_PM = '+勝つ率に 3 着内の率を混ぜる(3 着内の率・印は動かさない)'  # 決め 71(3 着内の率の温度の後・勝つ率の守りの前)
-STAMP_PT74 = '+前日の一本の木 5 割(当日の 8 列なし・勝つ率は付いていく)+前日の F3 2 割'  # 決め 74(勝つ率の守りの後・混ぜたレースだけ = 南関 第27版 前日版)
+STAMP_PT74 = '+前日の一本の木 5 割(当日の 8 列なし・勝つ率は付いていく)+前日の F3 2 割'
+STAMP_PT76 = '+前日の一本の木 5 割(種 3 本の平均・調教の元の記録 88 列・当日の 8 列なし・勝つ率は付いていく)+前日の F3 2 割'  # 決め 74(勝つ率の守りの後・混ぜたレースだけ = 南関 第27版 前日版)
 
 
 def log(*a):
@@ -381,24 +382,37 @@ def main():
             else:
                 log('前日の一本の木 読めた', M74.get('cut'), len(M74['cols']), '列・F3', len(M74['F3']['cols']), '列・混ぜる日', preday74_live.consts()['ON'])
                 GT74 = preday74_live.load_gate(day, G68m, log=log)
-                PT74 = preday74_live.apply_csv_pre(M74, GT74, A_aw, day, csv_path, out / f'{day}_v29_base.csv', log=log)
+                CY76 = None
+                if 'cy' in M74:  # 決め 76: その日の出走表の追い切り欄から調教の元の記録 88 列(出走表の全部の馬・失敗したら決め 74 の木)
+                    try:
+                        import cy76_live
+                        import debut_live
+                        Ccy, csrc = debut_live.card_src(day, t8._W.get('parsed'))
+                        CY76 = cy76_live.feats(Ccy)
+                        log('調教の元の記録', csrc, len(Ccy), '本 →', len(CY76), '頭')
+                    except Exception as e:  # noqa: BLE001
+                        log('調教の元の記録 失敗(決め 74 の木で作る)', type(e).__name__, str(e)[:200])
+                        CY76 = None
+                PT74 = preday74_live.apply_csv_pre(M74, GT74, A_aw, day, csv_path, out / f'{day}_v29_base.csv', log=log, cy=CY76)
         except Exception as e:  # noqa: BLE001
             log('前日の一本の木 失敗(第25版のまま)', type(e).__name__, str(e)[:200])
             PT74 = {}
     rows = build_rows(csv_path, day, src, ver + ' = ' + ((STAMP12 + (STAMP_DEB if nd else '') + (STAMP_TPL if nt else '') + (STAMP_AW if naw else '') + (STAMP_SQ if nsq else '') + (STAMP_G68 if ng else '') + (STAMP_PT if npt else '') + (STAMP_PM if npm else '') + (STAMP_CAP if ncap is not None else '')) if b12 else (STAMP11 if bundle else STAMP)))
     for r in rows if c67 else ():
         r['meta']['c67'] = c67
-    n74 = 0
+    n74 = n76 = 0
     for r in rows:  # 決め 74: 混ぜたレースは版の字を第27版に(混ぜないレース・影の日は第25版のまま + meta.pt74.p0)
         m74 = PT74.get((r['track'], int(r['race_no'])))
         if m74 is None:
             continue
         r['meta']['pt74'] = m74
         if m74.get('on'):
-            r['meta']['stamp'] = r['meta']['stamp'].replace('南関 第25版 前日版', '南関 第27版 前日版', 1) + STAMP_PT74
+            v28 = int(m74.get('ver', 27)) == 28   # 決め 76: 前日の一本の木を種 3 本の平均 + 調教の元の記録 88 列に = 南関 第28版 前日版
+            r['meta']['stamp'] = r['meta']['stamp'].replace('南関 第25版 前日版', '南関 第28版 前日版' if v28 else '南関 第27版 前日版', 1) + (STAMP_PT76 if v28 else STAMP_PT74)
             n74 += 1
+            n76 += v28
     if PT74:
-        log('版', '南関 第27版 前日版', n74, 'R ・第25版のまま', len(rows) - n74, 'R')
+        log('版', '南関 第28版 前日版', n76, 'R ・南関 第27版 前日版', n74 - n76, 'R ・第25版のまま', len(rows) - n74, 'R')
     if notes:
         log('ひとこと 付けた', v3_notes.attach(rows, notes), '頭')
     if cyb:
