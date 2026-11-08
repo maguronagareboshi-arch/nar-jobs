@@ -51,3 +51,22 @@ def fetch(url, timeout=40):
             raise urllib.error.HTTPError(url, r["status"], "via DB", None, io.BytesIO(body))
         return body
     raise TimeoutError(f"pg_net の返事が {timeout} 秒で来ない: {url}")
+
+
+class _Resp:
+    def __init__(self, status, content):
+        self.status_code, self.content = status, content
+
+
+def session_get(session, url, timeout=30):
+    """requests の session.get(url) の代わり(2026-11-08)。DB 経由にする先なら pg_net で取り、status_code・content だけの返事を返す。
+    先方の 4xx/5xx はその status、返事が来ない・pg_net の誤りは requests.ConnectionError(直に取ったときと同じ扱いになる)。"""
+    if not via_db(url):
+        return session.get(url, timeout=timeout)
+    import requests
+    try:
+        return _Resp(200, fetch(url, timeout=max(timeout, 40)))
+    except urllib.error.HTTPError as e:
+        return _Resp(e.code, b"")
+    except (urllib.error.URLError, TimeoutError, OSError) as e:
+        raise requests.ConnectionError(str(e))

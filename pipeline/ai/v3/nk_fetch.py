@@ -18,6 +18,8 @@ from pathlib import Path
 
 import pandas as pd
 import requests
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'cloud'))  # 2026-11-08 南関公式は国外の GitHub を 403 = 本番 DB(東京)から取る
+import jp_fetch  # noqa: E402
 
 V3 = Path(__import__('os').environ.get('V3_DATA', 'C:/Users/kouki/nankan_ai/v3'))
 HD = V3 / 'nk_html'
@@ -67,7 +69,7 @@ def fetch(jyo=None, gap=0.5):
                 time.sleep(w)
             last = time.time()
             try:
-                r = s.get(URL.format(k[:8], k[8:]), timeout=30)
+                r = jp_fetch.session_get(s, URL.format(k[:8], k[8:]), timeout=30)
                 if r.status_code == 200:
                     (HD / f'{k}.html').write_bytes(r.content); n200 += 1; streak = 0
                     break

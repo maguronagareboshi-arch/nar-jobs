@@ -336,6 +336,9 @@ jobs:
 
       - name: fetch ability trials (nk_shiken)
         if: steps.pc.outputs.run == 'yes'
+        env:  # 2026-11-08 南関公式は国外の GitHub を 403 = 本番 DB(東京)の pg_net で取る(cloud/jp_fetch.py)
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         # 失敗しても次に進む(2026-11-01 公式サイトが GitHub の機械に 403 → 60 分の時間切れで印が出なかった。手持ちの表で予想する)
         continue-on-error: true
         timeout-minutes: 15
@@ -343,6 +346,9 @@ jobs:
 
       - name: fetch pedigree and JRA runs of the day's runners (nk_pedjra)
         if: steps.pc.outputs.run == 'yes'
+        env:  # 2026-11-08 南関公式は国外の GitHub を 403 = 本番 DB(東京)の pg_net で取る(cloud/jp_fetch.py)
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
         # 失敗しても次に進む(live が無い・壊れていれば v7d_run は固定ファイルのまま動く)
         continue-on-error: true
         timeout-minutes: 15

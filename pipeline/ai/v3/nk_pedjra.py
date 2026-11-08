@@ -24,6 +24,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 import requests
+sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'cloud'))  # 2026-11-08 南関公式は国外の GitHub を 403 = 本番 DB(東京)から取る
+import jp_fetch  # noqa: E402
 
 BASE = 'https://www.nankankeiba.com'
 GAP = 1.5
@@ -57,7 +59,7 @@ class Getter:
             self.last = time.time()
             self.n += 1
             try:
-                r = self.s.get(BASE + path, timeout=30)
+                r = jp_fetch.session_get(self.s, BASE + path, timeout=30)
             except (requests.ConnectionError, requests.Timeout) as e:
                 self.streak += 1
                 if t == 0:
