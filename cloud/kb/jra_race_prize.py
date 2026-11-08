@@ -14,6 +14,23 @@ from class_calc import sb_all, upsert, http_get  # noqa: E402
 T = "nar_jra_race_prize"
 CIRC = "①②③④⑤"
 URL = "https://s.keibabook.co.jp/cyuou/seiseki/"
+_S = None
+
+
+def _get(url):
+    """2026-11-08 競馬ブックが海外を断る間は東京の中継で読む(直接 403 のときだけ・cloud/kb/kb_relay.py)。4xx/5xx は例外。"""
+    global _S
+    if _S is None:
+        import requests
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import kb_relay
+        _S = requests.Session()
+        _S.headers["User-Agent"] = "Mozilla/5.0"
+        kb_relay.install(_S)
+    r = _S.get(url, timeout=60)
+    if r.status_code >= 400:
+        raise urllib.error.HTTPError(url, r.status_code, "kb", None, None)
+    return r.content.decode("utf-8", "ignore")
 JST = dt.timezone(dt.timedelta(hours=9))
 
 
@@ -55,8 +72,7 @@ def kd_to_page(k, wait):
     bad = None
     for pid, v in kd_candidates(k):
         try:
-            req = urllib.request.Request(URL + pid, headers={"User-Agent": "Mozilla/5.0"})
-            h = urllib.request.urlopen(req, timeout=60).read().decode("utf-8", "ignore")
+            h = _get(URL + pid)
         except urllib.error.HTTPError as e:
             if e.code != 404:
                 bad = e
@@ -123,8 +139,7 @@ def main():
                 if not html:
                     print("kd の頁が見つからない", k, flush=True)
             else:
-                req = urllib.request.Request(URL + k, headers={"User-Agent": "Mozilla/5.0"})
-                v = parse(urllib.request.urlopen(req, timeout=60).read().decode("utf-8", "ignore"))
+                v = parse(_get(URL + k))
         except Exception as e:
             err += 1
             print("取れない", k, str(e)[:80], flush=True)

@@ -24,6 +24,19 @@ import requests
 sys.path.insert(0, str(Path(__file__).parent))
 import fetch_jra_runs  # noqa: E402
 from fetch_jra_runs import NAR_ENV, Nar, log  # noqa: E402
+import kb_relay  # noqa: E402
+
+_S = None
+
+
+def _session():
+    """2026-11-08 競馬ブックが海外を断る間は東京の中継で読む(直接 403 のときだけ・cloud/kb/kb_relay.py)。"""
+    global _S
+    if _S is None:
+        _S = requests.Session()
+        _S.headers["User-Agent"] = UA
+        kb_relay.install(_S)
+    return _S
 
 URL = "https://p.keibabook.co.jp/db/uma/{id}"
 UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -45,7 +58,7 @@ def parse_career(html):
 
 
 def fetch(hid):
-    r = requests.get(URL.format(id=hid), headers={"User-Agent": UA}, timeout=40)
+    r = _session().get(URL.format(id=hid), timeout=40)
     r.raise_for_status()
     r.encoding = "utf-8"
     return r.text
