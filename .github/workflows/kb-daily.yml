@@ -100,6 +100,21 @@ jobs:
           echo "$D" | grep -Eq '^[0-9]{8}(,[0-9]{8})*$' || { echo "works_dates は YYYYMMDD のカンマ区切りで"; exit 1; }
           if [ "$APPLY" = "1" ]; then python cloud/kb/push_works.py --dates "$D" --push
           else python cloud/kb/push_works.py --dates "$D"; fi
+      # 2026-11-09 厩舎の話の言い換え・札(nar_danwa_note)。原文は閲覧者に出さない(競馬ブックの許可は言い換えだけ)。
+      #   失敗はスクリプトが heartbeat(job=danwa_para)に書いて exit 0。取得の便全体は赤にしない。
+      - name: nankan danwa paraphrase and tags
+        if: '!cancelled()'
+        continue-on-error: true
+        timeout-minutes: 20
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          pip install -q anthropic || echo "anthropic が入らない= 札だけ入れる"
+          python cloud/danwa/test_danwa_para.py
+          if [ "$APPLY" = "1" ]; then python cloud/danwa/danwa_para.py
+          else python cloud/danwa/danwa_para.py --dry-run; fi
       # done.tsv(取得済みの印)だけを cache で持ち越す。無ければ 7 日分を全部取り直す(安全側)。
       - name: restore done marks
         uses: actions/cache/restore@v6

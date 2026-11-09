@@ -1,0 +1,65 @@
+# -*- coding: utf-8 -*-
+"""厩舎の話 → 「よく出る話」の札(平易な札名)。2026-11-09・モックの台本(scratchpad traits.py)と同じ対応。
+型の判定は nar-jobs pipeline/ai/v3/dw_tmpl.py の tags(変えない)。状態・口ぶり・前走など毎回出る型は入れない。
+使い方: note_tags(comment) -> ['休み明け', '流れ次第', ...](dw_tmpl の欄の順・重なりなし)。
+明日からの便はこのファイルを写して使う(DW_TMPL_DIR で dw_tmpl.py の場所を変えられる)。
+"""
+import os
+import re
+import sys
+
+# 便では repo の pipeline/ai/v3(cloud/danwa から 2 つ上)を使う
+sys.path.insert(0, os.environ.get('DW_TMPL_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                                                             '..', '..', 'pipeline', 'ai', 'v3')))
+import dw_tmpl  # noqa: E402
+
+# 渡す前に消す語(馬場・展開の札に誤って当たる言い回し)
+PRE = re.compile(r'本馬場|馬場に入|じっくり(?=調整|乗)|直線で')
+
+# (欄, 型) → (札名, 調子 pos/neu/neg)
+M = {('条件', '距離 延長'): ('長めの距離の話', 'neu'), ('条件', '距離 短縮'): ('短めの距離の話', 'neu'),
+     ('条件', '距離 合う'): ('距離が合う', 'pos'), ('条件', '距離・条件 不安'): ('距離・条件に不安', 'neg'),
+     ('条件', 'コース・回り'): ('コース・回りの話', 'neu'), ('条件', '馬場'): ('馬場の話', 'neu'),
+     ('条件', '枠・ゲート'): ('枠の話', 'neu'), ('条件', '季節・暑さ寒さ'): ('季節・暑さ寒さ', 'neg'),
+     ('上積み', '休み明け・放牧明け'): ('休み明け', 'neu'), ('上積み', '叩いて上積み'): ('使って良くなる', 'pos'),
+     ('上積み', '叩き台・使ってから'): ('一度使ってから', 'neg'),
+     ('展開', '先行・逃げたい'): ('前に行く競馬', 'neu'), ('展開', '控える・差し'): ('控えて末脚', 'neu'),
+     ('展開', '展開待ち・流れひとつ'): ('流れ次第', 'neu'), ('展開', '決め手・粘り不足'): ('最後のひと押し', 'neg'),
+     ('展開', 'スタートが鍵'): ('スタート', 'neg'), ('気性', '気性・イレ込み'): ('気性・気分', 'neg'),
+     ('馬体', '重め・太め'): ('馬体が重め', 'neg'), ('馬体', '細い・減った'): ('馬体が細い', 'neg'),
+     ('馬体', '成長・馬体増'): ('成長', 'pos'),
+     ('事情', '遠征・地元'): ('遠征・地元', 'neu'), ('事情', '馬具・去勢'): ('馬具', 'neu'),
+     ('事情', '昇級・相手が強い'): ('相手が強い', 'neg')}
+
+
+def note_tags_tone(comment):
+    """→ [(札名, 調子), ...]。病気は型名のまま(neg)・「→ その後/回復」の結びは入れない。"""
+    if not isinstance(comment, str) or not comment.strip():
+        return []
+    out = []
+    for t in dw_tmpl.tags(PRE.sub('', comment)):
+        if t in M:
+            k = M[t]
+        elif t[0] == '病気' and not t[1].startswith('→'):
+            k = (t[1], 'neg')
+        else:
+            continue
+        if k not in out:
+            out.append(k)
+    return out
+
+
+def note_tags(comment):
+    return [k[0] for k in note_tags_tone(comment)]
+
+
+def pg_array(tags):
+    """['a','b'] → '{a,b}'(札名に , { } " は無い前提・あれば引用)。"""
+    def q(s):
+        return '"' + s.replace('\\', '\\\\').replace('"', '\\"') + '"' if re.search(r'[,{}"\s\\]', s) else s
+    return '{' + ','.join(q(s) for s in tags) + '}'
+
+
+if __name__ == '__main__':
+    for line in sys.stdin:
+        print(pg_array(note_tags(line.rstrip('\n'))))

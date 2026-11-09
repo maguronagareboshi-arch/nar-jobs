@@ -160,6 +160,59 @@ jobs:
           raise SystemExit(1 if bad else 0)
           PY
 
+  # 2026-11-09 厩舎の話の言い換え(nar_danwa_note・kb-daily の cloud/danwa/danwa_para.py)の見張り。
+  #   前日以前 7 日のレースで、厩舎の話(comment)があるのに nar_danwa_note が無いか para が null の頭数が 0 でなければ赤。
+  #   読みは鍵の列だけ・日付で絞る(⛔本番 DB で集計しない)。
+  danwa-note:
+    if: github.event.schedule == '40 23 * * *' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      red: ${{ steps.c.outcome == 'failure' }}
+      reasons: ${{ steps.c.outputs.reasons }}
+    steps:
+      - name: check danwa paraphrase for past races (fail if a talk has no para)
+        id: c
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          python - <<'PY'
+          import os, json, urllib.request, datetime as dt
+          JST = dt.timezone(dt.timedelta(hours=9))
+          d1 = dt.datetime.now(JST).date() - dt.timedelta(days=1)
+          d0 = d1 - dt.timedelta(days=6)
+          def get_all(table, select, extra=''):
+              out, off = [], 0
+              while True:
+                  path = (f'{table}?select={select}&race_date=gte.{d0}&race_date=lte.{d1}{extra}'
+                          f'&order=race_id.asc,umaban.asc&limit=1000&offset={off}')
+                  req = urllib.request.Request(os.environ['SUPABASE_URL'] + '/rest/v1/' + path,
+                      headers={'apikey': os.environ['SUPABASE_SERVICE_KEY'], 'Authorization': 'Bearer ' + os.environ['SUPABASE_SERVICE_KEY']})
+                  rows = json.loads(urllib.request.urlopen(req, timeout=30).read())
+                  out += rows
+                  if len(rows) < 1000: return out
+                  off += 1000
+          bad = []
+          try:
+              talk = get_all('nar_kb_danwa', 'race_id,umaban', '&comment=not.is.null&comment=neq.')
+              note = {(r['race_id'], int(r['umaban'])): r['para'] for r in get_all('nar_danwa_note', 'race_id,umaban,para')}
+              miss = [r for r in talk if not note.get((r['race_id'], int(r['umaban'])))]
+              print(f'{d0}〜{d1}: 厩舎の話 {len(talk)} 頭・言い換え無し {len(miss)} 頭')
+              for r in miss[:10]: print('  ', r['race_id'], r['umaban'])
+              if miss:
+                  bad.append(f'厩舎の話の言い換えが無い {len(miss)} 頭({d0}〜{d1}・nar_danwa_note の行無し/para が null)')
+          except Exception as e:
+              bad.append(f'厩舎の話の言い換えが読めない: {type(e).__name__}: {str(e)[:80]}')
+          for b in bad:
+              print('::error::' + b)
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              f.write('reasons=' + json.dumps(bad, ensure_ascii=False) + '\n')
+          print('異常なし' if not bad else f'異常 {len(bad)} 件')
+          raise SystemExit(1 if bad else 0)
+          PY
+
   # 高知の自前計測(前半3F)の見張り。§157 段 3(2026-09-12)で旧 DB の見張りは外し、本体の nar_own_runs を見る
   kochi-results:
     if: github.event.schedule == '40 23 * * *' || github.event_name == 'workflow_dispatch'
@@ -547,7 +600,7 @@ jobs:
   #   nar_meta 'watchdog_last_red'({date(JST), reasons[]})と比べ、同じ JST 日付で理由が全部既出なら警告だけで緑。
   #   新しい理由が 1 つでもあれば赤(= 所有者へ失敗メール)。赤が無い run は保存を消す。中身は cloud/watchdog_dedupe.py。
   notify:
-    needs: [freshness, v3-forecast, odds-live, boards-yesterday, kochi-results, ooi-official, heartbeat, db-size]
+    needs: [freshness, v3-forecast, odds-live, boards-yesterday, danwa-note, kochi-results, ooi-official, heartbeat, db-size]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
