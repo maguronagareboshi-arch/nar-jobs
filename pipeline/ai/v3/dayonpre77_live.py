@@ -139,6 +139,7 @@ def write_base(csv_path, base_csv, PT74, pnx, log=log0):
     assert len(add) == len(vb)
     for c in COLS:
         vb[c] = add[c].to_numpy()
+    vb['D77:v'] = '29'   # 2026-11-09 決め 67-5: この土台を作った前日の便が第29版(能検の結びの直し入り)= 当日の便はこの印がある時だけ「第29版 直前版」と名乗る
     vb.to_csv(base_csv, index=False, encoding='utf-8-sig')
     n = int(d.drop_duplicates(KEY)[P + 'on'].sum())
     log('(前日) 決め 77 の土台', len(d), '頭・第28版のレース', n, '・p_Nx あり率', round(float(d[P + 'pnx'].notna().mean()), 3))
