@@ -134,7 +134,12 @@ def ns_all():
     s = s[s.date > ks_end].copy()
     s['ketto'] = (s.n_name + '|' + s.n_sire + '|' + s.n_dam).map(hmap)
     nl = s.ketto.isna().to_numpy()
-    s.loc[nl, 'ketto'] = -np.arange(1, nl.sum() + 1)
+    # 2026-11-09 台帳(KDSCOPE)は 2026-03 で止まり、新しい馬の試験が結べない(9〜10 月は約半分)。
+    # 結べない行は「馬名|生まれ年(試験の年 − 年齢)」の仮の番号(負)にし、build_n が出走馬の同じ鍵で引く。
+    age = pd.to_numeric(s.loc[nl, 'sexage'].astype(str).str.extract(r'(\d+)')[0], errors='coerce')
+    s.loc[nl, 'ketto'] = e.pseudo_ketto(s.loc[nl, 'n_name'], s.loc[nl, 'date'].dt.year - age).to_numpy()
+    still = s.ketto.isna().to_numpy()   # 名前か年齢が読めない行は前と同じ通し番号(どの馬にも結ばない)
+    s.loc[still, 'ketto'] = -np.arange(1, still.sum() + 1)
     x = pd.DataFrame({'date': s.date, 'jyo': s.jk.astype(float), 'heat': s.R.astype(float), 'ketto': s.ketto.astype('int64'),
                       'finish': s.ord.astype(float), 'time_sec': s.time_sec.astype(float), 'dist': s.dist.astype(float)})
     out = pd.concat([ns, x], ignore_index=True)

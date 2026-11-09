@@ -92,6 +92,16 @@ def nrm(s):
     return s.map(vc.norm)
 
 
+def pseudo_ketto(name, byear):
+    """台帳に無い馬の仮の番号(2026-11-09)= 「正規化した馬名|生まれ年」の sha1 から作る負の数。
+    試験の行(v7e_open.ns_all)と出走馬(build_n)で同じ式。名前か年が無い行は NaN。"""
+    import hashlib
+    nm, yr = pd.Series(name).reset_index(drop=True), pd.to_numeric(pd.Series(byear), errors='coerce').reset_index(drop=True)
+    v = [-(int(hashlib.sha1(f'{a}|{int(b)}'.encode('utf-8')).hexdigest()[:13], 16) + 10 ** 10) if isinstance(a, str) and a and np.isfinite(b) else np.nan
+         for a, b in zip(nm, yr)]
+    return pd.Series(v, dtype=float)
+
+
 def qbase(h, Q):
     hq = h.drop_duplicates(Q5)[Q5 + ['hid', 'jk', 'tr', 'nm']]
     q = Q[Q5].reset_index(drop=True).merge(hq, on=Q5, how='left', validate='1:1')
@@ -162,6 +172,23 @@ def build_n(h, Q, NT, kmap, nmap, ns_end):
     a = a.sort_values('date', kind='mergesort')
     m = pd.merge_asof(a[['_i', 'ketto', 'date']], NT.sort_values('date', kind='mergesort'), on='date', by='ketto',
                       allow_exact_matches=False, direction='backward').set_index('_i').reindex(np.arange(len(q)))
+    # 2026-11-09 台帳で引けなかった馬は「馬名|生まれ年」の仮の番号でもう一度引く(台帳の止まりの穴・v7e_open.ns_all と対)。
+    # 台帳で試験が見つかった馬は触らない。仮の番号で見つかった馬は結べた扱い(lin)にする。
+    miss = np.isnan(m.c_n.to_numpy(float))
+    if miss.any():
+        sp = lk[miss].str.extract(r'^(.*)\|(\d{4})$')
+        b = q.loc[miss, ['_i', 'date']].copy()
+        b['ketto'] = pseudo_ketto(sp[0], sp[1]).to_numpy()
+        b = b[b.ketto.notna()]
+        if len(b):
+            b['ketto'] = b.ketto.astype('int64')
+            m2 = pd.merge_asof(b.sort_values('date', kind='mergesort'), NT.sort_values('date', kind='mergesort'), on='date', by='ketto',
+                               allow_exact_matches=False, direction='backward').set_index('_i')
+            m2 = m2[m2.c_n.notna()]
+            if len(m2):
+                m.loc[m2.index, m2.columns.intersection(m.columns)] = m2[m2.columns.intersection(m.columns)]
+                lin = lin.copy()
+                lin[m2.index.to_numpy()] = True
     out = pd.DataFrame(index=np.arange(len(q)))
     v = m.c_n.to_numpy(float)
     out['nk7_n'] = np.where(lin & np.isnan(v), 0.0, v)
