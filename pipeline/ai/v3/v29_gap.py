@@ -364,8 +364,8 @@ def day_marks(Bk, odds, w, going, dm, day):
             if r_['on']:
                 p1, p3, p3p = r_['p1'], r_['p3'], r_['p3']
                 used.append('dp77')
-                ver = '南関 第28版'  # 第28版 直前版 = 第28版 前日版の最後の率 + 並び読みの差 + 当日の土台の差(前日版と同じ番号)
-                stamp = '第28版 前日版の最後の率 + 並び読みの差 + 当日の土台の差(第26版の率は meta.dp77)'
+                ver = '南関 第29版'  # 第29版 直前版 = 第29版 前日版の最後の率 + 並び読みの差 + 当日の土台の差(前日版と同じ番号・11/9 決め 67-5 で第28版から上げた)
+                stamp = '第29版 前日版の最後の率 + 並び読みの差 + 当日の土台の差(第26版の率は meta.dp77)+能力試験の記録を台帳に無い馬にも結ぶ(決め 67-5)'
             elif dp77m.get('err'):
                 log('第28版 直前版 失敗(第26版のまま)', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), dp77m['err'])
         except Exception as e:  # noqa: BLE001  落ちても第26版の印は出す
@@ -395,7 +395,7 @@ def day_marks(Bk, odds, w, going, dm, day):
     if 'p1cap' in used:
         meta['p1cap'] = sys.modules['p1cap'].TAG
         meta['p1cap_n'] = ncap  # 勝つ率を動かした頭数
-    if c67 and ver in ('南関 第22版', '南関 第23版', '南関 第26版', '南関 第28版'):
+    if c67 and ver in ('南関 第22版', '南関 第23版', '南関 第26版', '南関 第28版', '南関 第29版'):
         meta['c67'] = c67
     if dp77m is not None:
         meta['dp77'] = dp77m
