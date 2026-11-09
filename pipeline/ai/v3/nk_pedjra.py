@@ -15,6 +15,7 @@
 --cache DIR: 取った HTML を DIR に置き、あれば読み直す(手元の照合用。便では使わない)。
 """
 import re
+import json
 import sys
 import time
 import unicodedata
@@ -192,13 +193,12 @@ def main():
     cache = a[a.index('--cache') + 1] if '--cache' in a else None
     G = Getter(cache)
     H, R, nbad, nfail = [], [], 0, 0
+    races, ids = [], []
     try:
         progs = programs(G, day)
         log('day', day, 'program', progs)
-        races = []
         for p in progs:
             races += sorted(set(re.findall(r'/syousai/(%s\d{2})\.do' % p, G.get(f'/program/{p}.do'))))
-        ids = []
         for r in races:
             ids += re.findall(r'/uma_info/(\d{10})\.do', G.get(f'/syousai/{r}.do'))
         ids = list(dict.fromkeys(ids))
@@ -216,22 +216,52 @@ def main():
     except RuntimeError as e:
         log('止まった', e)
     log('fetch', G.n, 'horses', len(H), 'fail', nfail, 'unread_rows', nbad, 'jra_runs', len(R))
-    if not H:
-        log('何も取れない = live を書かない(固定ファイルのまま)'); return
     out.mkdir(parents=True, exist_ok=True)
-    Hd = pd.DataFrame(H).drop_duplicates('ketto')
-    Rd = pd.DataFrame(R, columns=['year', 'jyo', 'race', 'umaban', 'ketto', 'name', 'date', 'finish', 'time_sec', 'l3f', 'pop',
-                                  'kinryo', 'weight', 'dist', 'n_starters', 'surface', 'surf_raw', 'birth_year'])
-    if len(Rd):
-        log('中央の距離の後ろの表示', Rd.surf_raw.value_counts().to_dict())
-        Rd = Rd.drop_duplicates(['ketto', 'date', 'jyo', 'race'])
-    for df, fixed, name in ((Hd, 'kd_horse.parquet', 'kd_live_horse.parquet'), (Rd, 'kd_jra_runs.parquet', 'kd_live_jra_runs.parquet')):
+    # 2026-11-09 再発防止: 11/2〜11/8 に 0 頭のまま success で進み、3 月以降の中央の走りが黙って抜けた。
+    # ① 取れた分を out/acc にためる(便ではキャッシュで持ち越す)= 1 日失敗しても前に取った馬の中央の走りは残る
+    # ② 開催があるのに取れない・半分未満のときは終わりに exit 3(便の最後の見張りの段が赤にする・予想は止めない)
+    acc = out / 'acc'
+    st = {'day': day, 'races': len(races), 'listed': len(ids), 'fetched': len(H), 'fail': nfail, 'jra_runs': len(R),
+          'acc_horse': 0, 'acc_runs': 0, 'used_acc_only': not H}
+    Hd = pd.DataFrame(H).drop_duplicates('ketto') if H else None
+    Rd = None
+    if H:
+        Rd = pd.DataFrame(R, columns=['year', 'jyo', 'race', 'umaban', 'ketto', 'name', 'date', 'finish', 'time_sec', 'l3f', 'pop',
+                                      'kinryo', 'weight', 'dist', 'n_starters', 'surface', 'surf_raw', 'birth_year'])
+        if len(Rd):
+            log('中央の距離の後ろの表示', Rd.surf_raw.value_counts().to_dict())
+            Rd = Rd.drop_duplicates(['ketto', 'date', 'jyo', 'race'])
+    else:
+        log('何も取れない = 今日の分は無し(ためた分があればそれを書く)')
+    for df, fixed, name, key in ((Hd, 'kd_horse.parquet', 'kd_live_horse.parquet', ['ketto']),
+                                 (Rd, 'kd_jra_runs.parquet', 'kd_live_jra_runs.parquet', ['ketto', 'date', 'jyo', 'race'])):
         fp = V3 / fixed
-        x = like(df, fp) if fp.exists() else df
-        tmp = out / (name + '.tmp')
-        x.to_parquet(tmp, index=False)
-        tmp.replace(out / name)
-        log('書いた', out / name, len(x))
+        x = None if df is None else (like(df, fp) if fp.exists() else df)
+        old = None
+        pa = acc / name
+        if pa.exists():
+            try:
+                old = pd.read_parquet(pa)
+                if x is not None:
+                    old = old[list(x.columns)].astype(x.dtypes.to_dict())
+            except Exception as e:  # noqa: BLE001
+                log('ためた分が読めない・使わない', pa, repr(e)[:120]); old = None
+        if x is None and old is None:
+            log('書かない(今日の分もためた分も無し)', name); continue
+        y = x if old is None else (old if x is None else pd.concat([x, old], ignore_index=True).drop_duplicates(key, keep='first'))
+        acc.mkdir(parents=True, exist_ok=True)
+        for p in (out / name, pa):
+            tmp = p.with_name(p.name + '.tmp')
+            y.to_parquet(tmp, index=False)
+            tmp.replace(p)
+        st['acc_horse' if 'horse' in name else 'acc_runs'] = len(y)
+        log('書いた', out / name, len(y), '(今日', 0 if x is None else len(x), '・ためた分', 0 if old is None else len(old), ')')
+    (out / 'nk_pedjra_status.json').write_text(json.dumps(st, ensure_ascii=False), encoding='utf-8')
+    log('status', st)
+    # 便はこの段を南関の開催がある日にだけ回す(v3_precheck の run=yes)= 出走馬が 0 頭なのは取れていない印(11/2〜11/8 は暦の頁から 403)
+    if st['listed'] == 0 or st['fetched'] < 0.5 * st['listed']:
+        log(f"開催の日なのに馬の頁が取れない(出走表 {st['races']} R・{st['fetched']}/{st['listed']} 頭)= 終わりに赤にする")
+        sys.exit(3)
 
 
 if __name__ == '__main__':

@@ -345,15 +345,59 @@ jobs:
         timeout-minutes: 15
         run: python -X utf8 pipeline/ai/v3/t7e_forecast.py nk "${{ steps.d.outputs.day }}" 2>&1 | tee -a out_log.txt
 
+      # 2026-11-09 再発防止: 11/2〜11/8 に nk_pedjra が 0 頭のまま success で進み、3 月以降の中央の走りが黙って抜けた。
+      # 取れた馬・中央の走りを $V3_KD/acc にためてキャッシュで持ち越す(公開の repo なので V3_ASSET_KEY で暗号化・開けなければ今日の分だけ)。
+      - name: kd live acc cache key
+        id: kak
+        if: steps.pc.outputs.run == 'yes'
+        run: echo "k=kdlive-$(date -u +%F)-${{ github.run_id }}-${{ github.run_attempt }}" >> "$GITHUB_OUTPUT"
+      - name: restore kd live acc cache
+        id: kar
+        if: steps.pc.outputs.run == 'yes'
+        uses: actions/cache/restore@v6
+        with:
+          path: kdlenc
+          key: ${{ steps.kak.outputs.k }}
+          restore-keys: kdlive-
+      - name: open kd live acc cache
+        if: steps.pc.outputs.run == 'yes' && steps.kar.outputs.cache-matched-key != ''
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          mkdir -p "$V3_KD/acc"
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in kdlenc/kdlive.tar.gz.enc | tar -C "$V3_KD/acc" -xzf - || { echo "kd live acc: 開けない → 今日の分だけ"; rm -rf "$V3_KD/acc"; }
+          ls -l "$V3_KD/acc" || true
+
       - name: fetch pedigree and JRA runs of the day's runners (nk_pedjra)
+        id: pedjra
         if: steps.pc.outputs.run == 'yes'
         env:  # 2026-11-08 南関公式は国外の GitHub を 403 = 本番 DB(東京)の pg_net で取る(cloud/jp_fetch.py)
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-        # 失敗しても次に進む(live が無い・壊れていれば v7d_run は固定ファイルのまま動く)
+        # 失敗しても次に進む(live が無い・壊れていれば v7d_run は固定ファイルのまま動く)。取れない日は exit 3 → 最後の段で赤
         continue-on-error: true
         timeout-minutes: 15
-        run: python -X utf8 pipeline/ai/v3/nk_pedjra.py "${{ steps.d.outputs.day }}" "$V3_KD" 2>&1 | tee -a out_log.txt
+        run: |
+          set -o pipefail
+          python -X utf8 pipeline/ai/v3/nk_pedjra.py "${{ steps.d.outputs.day }}" "$V3_KD" 2>&1 | tee -a out_log.txt
+
+      - name: seal kd live acc cache
+        id: kas
+        if: "!cancelled() && steps.pc.outputs.run == 'yes' && hashFiles('v3/kd/acc/kd_live_jra_runs.parquet') != ''"
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          mkdir -p kdlenc
+          tar -C "$V3_KD/acc" -czf - . | openssl enc -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -out kdlenc/kdlive.tar.gz.enc
+          ls -l kdlenc
+      - name: save kd live acc cache
+        if: "!cancelled() && steps.kas.outcome == 'success'"
+        uses: actions/cache/save@v6
+        with:
+          path: kdlenc
+          key: ${{ steps.kak.outputs.k }}
 
       # ---------------------------------------------------------------- 前日版の表と書き込み(ここだけ本番の鍵を渡す)
       # 2026-10-31 通信量: 公式の表(k0_dl)の前回分を便のキャッシュで持ち越し、直近の月だけ読み直す(7 日に 1 回は丸ごと)。
@@ -488,6 +532,14 @@ jobs:
           retention-days: 7
           if-no-files-found: warn
           overwrite: true
+      # 2026-11-09 再発防止: 中央の成績・血統の取り込み(nk_pedjra)が取れなかった日は、予想を出した後で便を赤にする
+      # (= 下の heartbeat fail が見張りに載る)。予想そのものは固定ファイル + ためた分で出ている。
+      - name: guard nk_pedjra (red when the day's horse pages were not fetched)
+        if: "!cancelled() && steps.pc.outputs.run == 'yes' && steps.pedjra.outcome == 'failure'"
+        run: |
+          cat "$V3_KD/nk_pedjra_status.json" 2>/dev/null || true
+          echo "::error::nk_pedjra: 開催の日なのに出走馬の頁(中央の成績・血統)が取れていない。予想は固定ファイル + ためた分で出した。"
+          exit 1
       # 2026-10-03 監査 A-2: heartbeat を書く(見張りの fail 検査に載る)
       - name: heartbeat ok
         if: success()
