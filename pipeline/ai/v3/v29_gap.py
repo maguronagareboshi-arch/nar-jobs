@@ -236,6 +236,7 @@ def day_marks(Bk, odds, w, going, dm, day):
         p3 = np.maximum(1 / (1 + np.exp(-(lg(p3p) + b[c].fillna(0.0).to_numpy(float)))), p1)
         p3p = _sum3(p3) if len(b) > 3 else np.minimum(p3, 1.0)
         used.append(c)
+    pday77 = np.asarray(p3p, float).copy() if used == ['b14_u', 'b19_u'] else None   # 決め 77 の当日の土台 p_day(b19_u の直後・並び読みの前)
     if used == ['b14_u', 'b19_u'] and SEQ2 is not None:  # 並び読み(決め 24・2026-10-12): 第12版の p3′ の logit に外した分を足し、p3 = max(·, p1)・合計 3
         try:
             import seq2_live
@@ -353,6 +354,22 @@ def day_marks(Bk, odds, w, going, dm, day):
                     log('一本の木の混ぜ 失敗(第23版のまま)', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), ot72m['err'])
         except Exception as e:  # noqa: BLE001  一本の木が落ちても第23版の印は出す
             log('一本の木 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
+    dp77m = None
+    if ver == '南関 第26版':
+        try:  # 南関 第28版 直前版(決め 77・研究 nankan-ai-v3 dayonpre77_judge.py・判定 2026-11-09 合格): 第26版の全部の段の後。前日版の行が第28版の
+            #   レースだけ、第28版 前日版の最後の率(前日の便が土台に書いた D77:)に並び読みの差と当日の土台の差を足す。第26版の率は meta.dp77.s1・s3
+            import dayonpre77_live
+            r_ = dayonpre77_live.apply_day(b, day, u, pday77, np.asarray(p1, float), np.asarray(p3p, float), going)
+            dp77m = r_['meta']
+            if r_['on']:
+                p1, p3, p3p = r_['p1'], r_['p3'], r_['p3']
+                used.append('dp77')
+                ver = '南関 第28版'  # 第28版 直前版 = 第28版 前日版の最後の率 + 並び読みの差 + 当日の土台の差(前日版と同じ番号)
+                stamp = '第28版 前日版の最後の率 + 並び読みの差 + 当日の土台の差(第26版の率は meta.dp77)'
+            elif dp77m.get('err'):
+                log('第28版 直前版 失敗(第26版のまま)', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), dp77m['err'])
+        except Exception as e:  # noqa: BLE001  落ちても第26版の印は出す
+            log('第28版 直前版 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
     stamp = f'{ver} 直前版 = {stamp}'
     d = pd.DataFrame({'num': b.umaban.astype(int).to_numpy(), 'p1': p1, 'p3': p3p, 'p3_raw': p3})
     d = d.sort_values(['p3', 'p1', 'num'], ascending=[False, False, True], kind='mergesort').reset_index(drop=True)
@@ -378,8 +395,10 @@ def day_marks(Bk, odds, w, going, dm, day):
     if 'p1cap' in used:
         meta['p1cap'] = sys.modules['p1cap'].TAG
         meta['p1cap_n'] = ncap  # 勝つ率を動かした頭数
-    if c67 and ver in ('南関 第22版', '南関 第23版', '南関 第26版'):
+    if c67 and ver in ('南関 第22版', '南関 第23版', '南関 第26版', '南関 第28版'):
         meta['c67'] = c67
+    if dp77m is not None:
+        meta['dp77'] = dp77m
     if ot72m is not None:
         meta['ot72'] = ot72m
     if g68m is not None:

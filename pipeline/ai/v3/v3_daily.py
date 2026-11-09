@@ -229,6 +229,13 @@ def main():
             b12 = f10k_bundle.run(day, cap['h'], cap['races'], csv_path, log=log)
         except Exception as e:  # noqa: BLE001
             log('束 f10k 失敗(第11版のまま)', type(e).__name__, str(e)[:200])
+    PNX77 = None
+    if b12:  # 決め 77(南関 第28版 直前版)の前日の土台 p_Nx = 束 f10k の直後・初出走の層の前の 3 着内率を控える(読むだけ・前日版の表は変えない)
+        try:
+            import dayonpre77_live
+            PNX77 = dayonpre77_live.capture_pnx(csv_path)
+        except Exception as e:  # noqa: BLE001
+            log('決め 77 の前日の土台の控え 失敗(直前版は第26版のまま)', type(e).__name__, str(e)[:200])
     if bundle:  # 当日版も第12版に(研究 nankan-ai-v3 own_day.py・2026-10-12): 束の足し分 b14_u・b19_u を土台へ。当日の便が当日の木の後に足す
         try:
             bp = out / f'{day}_v29_base.csv'
@@ -413,6 +420,12 @@ def main():
             n76 += v28
     if PT74:
         log('版', '南関 第28版 前日版', n76, 'R ・南関 第27版 前日版', n74 - n76, 'R ・第25版のまま', len(rows) - n74, 'R')
+    try:  # 決め 77(南関 第28版 直前版・研究 nankan-ai-v3 dayonpre77_judge.py・判定 2026-11-09 合格): 第28版 前日版の最後の率・u_P・p_Nx を土台へ。
+        #   当日の便がそのレースの前日版が第28版の時だけ足す。前日版の表と行には触らない。失敗したら直前版は第26版のまま
+        import dayonpre77_live
+        dayonpre77_live.write_base(csv_path, out / f'{day}_v29_base.csv', PT74, PNX77, log=log)
+    except Exception as e:  # noqa: BLE001
+        log('決め 77 の土台 失敗(直前版は第26版のまま)', type(e).__name__, str(e)[:200])
     if notes:
         log('ひとこと 付けた', v3_notes.attach(rows, notes), '頭')
     if cyb:
