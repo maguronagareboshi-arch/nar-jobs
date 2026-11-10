@@ -45,7 +45,7 @@ SRC = "nar_kb_danwa"
 DST = "nar_danwa_note"
 JOB = "danwa_para"
 MODEL = "claude-haiku-5-5"
-MAX_TOKENS = 4000
+MAX_TOKENS = 16000                               # Haiku 5.5 は考える段階が既定でオン= 4000 では返事が切れた(11/11)
 PAGE = 1000
 CHUNK = 500
 TIMEOUT = 60
