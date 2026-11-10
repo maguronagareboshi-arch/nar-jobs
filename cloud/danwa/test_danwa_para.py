@@ -33,7 +33,7 @@ def test_8gram():
 
 def test_length():
     assert any(x.startswith('字数') for x in D.check_para(SRC, "良くなっていそう。"))
-    long = "ひと息入れた前の一戦で気が抜けた様子で、今度は良くなっていそうで、流れ次第で差は詰まりそうだと見ていて期待も大きい。"
+    long = "ひと息入れた前の一戦で気が抜けた様子で、今度は良くなっていそうで、流れ次第で差は詰まりそうだと見ていて期待も大きく、使える距離の幅もあるので今後の組み立ても楽しみになってきたという話だった。"
     assert any(x.startswith('字数') for x in D.check_para(SRC, long))
     assert D.check_para(SRC, "") == ['空'] and D.check_para(SRC, None) == ['空']
 
