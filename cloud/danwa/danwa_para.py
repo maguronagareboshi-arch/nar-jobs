@@ -123,10 +123,14 @@ def parse_items(text):
         return {}
     m = re.search(r'\{.*\}', text, re.S)
     if not m:
+        print(f"  ⚠JSON なし 長さ {len(text)}", flush=True)
         return {}
     try:
         obj = json.loads(m.group())
-    except Exception:                            # noqa: BLE001
+    except Exception as e:                       # noqa: BLE001
+        pos = getattr(e, "pos", None)
+        near = m.group()[max(0, pos - 40):pos + 40] if pos is not None else ""
+        print(f"  ⚠JSON 誤り {type(e).__name__}: {str(e)[:80]} 長さ {len(text)} 付近 {near!r}", flush=True)
         return {}
     out = {}
     for it in obj.get("items", []) if isinstance(obj, dict) else []:
@@ -146,7 +150,10 @@ def anthropic_client(api_key):
         # ⛔temperature は渡さない(news_writer.py と同じ)
         res = cl.messages.create(model=MODEL, max_tokens=MAX_TOKENS,
                                  system=system, messages=[{"role": "user", "content": user}])
-        return "".join(getattr(b, "text", "") for b in res.content)
+        text = "".join(getattr(b, "text", "") for b in res.content)
+        if res.stop_reason != "end_turn":        # 読めない返事の手掛かり(原文は出さない)
+            print(f"  ⚠stop={res.stop_reason} out_tokens={getattr(res.usage, 'output_tokens', '?')}", flush=True)
+        return text
     return call
 
 
