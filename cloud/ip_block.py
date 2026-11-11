@@ -23,9 +23,9 @@ EXEMPT_NETS = [ipaddress.ip_network(n) for n in (
     '64.233.160.0/19', '66.102.0.0/20', '72.14.192.0/18', '209.85.128.0/17',  # Google の巡回
     '157.55.39.0/24', '207.46.13.0/24', '40.77.167.0/24',  # bingbot
 )]
-# 借りたコンピューター(データセンター)の回線名。Cloudflare(WARP= 人の iPhone)・Apple(プライベートリレー)は人なので入れない。
+# 借りたコンピューター(データセンター)の回線名。Cloudflare(WARP)・Apple(プライベートリレー)・Datacamp・M247(VPN の出口)は人が混ざるので入れない。
 DC_ORG_RE = ('google llc|amazon|microsoft|tencent|alibaba|oracle|digitalocean|ovh|hetzner|linode|akamai|vultr|choopa|'
-             'contabo|sakura internet|gmo internet|xserver|idc frontier|huawei cloud|scaleway|leaseweb|m247|datacamp|'
+             'contabo|sakura internet|gmo internet|xserver|idc frontier|huawei cloud|scaleway|leaseweb|'
              'hostinger|ionos|kagoya|byteplus|bytedance|zenlayer|psychz|quadranet|colocrossing')
 EXEMPT_UA = ('Mediapartners-Google', 'AdsBot-Google', 'Google-InspectionTool')
 
