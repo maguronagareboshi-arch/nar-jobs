@@ -98,12 +98,14 @@ def src_hash(comment):
 
 # ---------------------------------------------------------------- 言い換え(呼び方は cloud/news_writer.py と同じ)
 SYSTEM = (
-    "あなたは地方競馬サイトの編集者です。厩舎関係者の談話(原文)を、意味を変えずに平易な日本語 1 文へ言い換えます。\n"
+    "あなたは地方競馬サイトの編集者です。厩舎関係者の談話(原文)を、意味を変えずに平易な日本語へ言い換えます。\n"
     "決まり:\n"
-    f"- 1 頭 1 文・{LEN_MIN}〜{LEN_MAX} 字。\n"
+    f"- 1 頭 1〜2 文・{LEN_MIN}〜{LEN_MAX} 字。長くなるなら 2 文に分ける。文末は「。」で終える。\n"
     f"- 原文と同じ {NGRAM} 字以上の並びを使わない(語順と言い回しを変える)。原文を写さない。\n"
     "- 調教師・厩舎・騎手などの人名、新聞社や他社の名前、クラス名(C1 など)・重賞・斤量・ブリンカーなどの専門語を出さない。\n"
     "- 原文を 1 つずつ読み、言っている内容は全部残す(抜かない)。\n"
+    "- 原文に無い語や事柄を足さない。原文が言っていないこと(調教・気性・体重など)を補ったり読み込んだりしない。「うれしい」などの感想も足さない。\n"
+    "- 時点と向きを変えない(「改めて」「今回」を「今後」にしない・「物足りない」を「見劣り」に強めない)。\n"
     "- 原文より断定を強めない(「必ず」「確実」「勝てる」などを足さない)。推測や情報の追加をしない。\n"
     "- 返事は JSON だけ: {\"items\":[{\"umaban\":1,\"para\":\"…\"}, …]}(前後に文を書かない)。"
 )
@@ -135,7 +137,10 @@ def parse_items(text):
     out = {}
     for it in obj.get("items", []) if isinstance(obj, dict) else []:
         try:
-            out[int(it["umaban"])] = str(it.get("para") or "").strip()
+            p = str(it.get("para") or "").strip()
+            if p and p[-1] not in "。！？!?":
+                p += "。"                        # 文末の「。」抜けは機械で補う(11/11)
+            out[int(it["umaban"])] = p
         except Exception:                        # noqa: BLE001
             continue
     return out
@@ -254,8 +259,9 @@ def load_env(path):
     return env
 
 
-def pick(src_rows, have, tags_only):
-    """対象の行を選ぶ。have = {(race_id, umaban): note 行}"""
+def pick(src_rows, have, tags_only, redo=()):
+    """対象の行を選ぶ。have = {(race_id, umaban): note 行}。
+    redo= 作り直す model の頭(例 claude-haiku-5-5)。ok でもその model の行は選ぶ。hand-* は選ばない。"""
     out = []
     for r in src_rows:
         k = (r["race_id"], int(r["umaban"]))
@@ -263,6 +269,9 @@ def pick(src_rows, have, tags_only):
         sh = src_hash(r.get("comment"))
         if h and h.get("src_hash") == sh:
             if h.get("status") == "ok":
+                m = h.get("model") or ""
+                if redo and not m.startswith("hand-") and any(m.startswith(x) for x in redo):
+                    out.append(r)
                 continue                         # 済み(手の言い換えもここで守る)
             if tags_only or not (r.get("comment") or "").strip():
                 continue                         # 札は原文で決まる= 同じ原文なら作り直さない
@@ -314,7 +323,7 @@ def run(a, env):
                 if not a.dry_run:
                     raise
                 print(f"⚠{DST} が読めない(HTTP {e.code})= dry-run なので全部を対象として数える", flush=True)
-        tg = pick(rows, have, a.tags_only)
+        tg = pick(rows, have, a.tags_only, a.redo)
         if left is not None:
             tg, left = tg[:left], max(0, left - len(tg))
         st["src"] += len(rows)
@@ -360,6 +369,8 @@ def main():
     ap.add_argument("--to", dest="date_to", help="YYYY-MM-DD(既定= 今日+1)")
     ap.add_argument("--tags-only", action="store_true", help="言い換えをせず札だけ入れる")
     ap.add_argument("--dry-run", action="store_true", help="書かない")
+    ap.add_argument("--redo", type=lambda s: tuple(x for x in s.split(",") if x), default=(),
+                    help="作り直す model の頭(, 区切り)。ok でも選ぶ。hand-* は守る")
     ap.add_argument("--limit", type=int, help="対象の行をここまで")
     ap.add_argument("--env", help="SUPABASE_* / ANTHROPIC_API_KEY のある .env")
     ap.add_argument("--src-json", help="nar_kb_danwa の行の JSON(試験用・DB の代わりに読む)")

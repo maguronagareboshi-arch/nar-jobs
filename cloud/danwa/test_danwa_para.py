@@ -58,6 +58,17 @@ def test_retry_then_fail():
     assert len(calls) == 2 and '"umaban": 1' not in calls[1].split('\n')[1]  # 作り直しは外れた馬だけ
 
 
+def test_redo_and_period():
+    r = {"race_id": "R1", "umaban": "1", "comment": SRC}
+    sh = D.src_hash(SRC)
+    have = lambda m: {("R1", 1): {"src_hash": sh, "status": "ok", "model": m}}
+    assert D.pick([r], have("claude-haiku-5-5"), False) == []
+    assert D.pick([r], have("claude-haiku-5-5"), False, ("claude-haiku-5-5",)) == [r]
+    assert D.pick([r], have("hand-20261109"), False, ("hand-", "claude-haiku-5-5")) == []   # 手は守る
+    got = D.parse_items(json.dumps({"items": [{"umaban": 1, "para": "流れ次第で差は詰まりそう"}]}, ensure_ascii=False))
+    assert got[1].endswith("。")
+
+
 if __name__ == "__main__":
     n = 0
     for k, f in list(globals().items()):

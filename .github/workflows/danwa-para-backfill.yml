@@ -25,6 +25,10 @@ on:
         default: '1'
         type: choice
         options: ['1', '0']
+      redo:
+        description: '作り直す model の頭(, 区切り・空= しない)。例 claude-haiku-5-5,haiku-hand-。hand- は守る'
+        required: false
+        default: ''
 concurrency:
   group: danwa-para-${{ inputs.from }}
   cancel-in-progress: false
@@ -50,6 +54,7 @@ jobs:
           D_TO: ${{ inputs.to }}
           TAGS_ONLY: ${{ inputs.tags_only }}
           DRY: ${{ inputs.dry }}
+          REDO: ${{ inputs.redo }}
         run: |
           for d in "$D_FROM" "$D_TO"; do
             echo "$d" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || { echo "日付は YYYY-MM-DD で"; exit 1; }
@@ -57,4 +62,8 @@ jobs:
           A="--from $D_FROM --to $D_TO"
           [ "$TAGS_ONLY" = "1" ] && A="$A --tags-only"
           [ "$DRY" = "1" ] && A="$A --dry-run"
+          if [ -n "$REDO" ]; then
+            echo "$REDO" | grep -Eq '^[a-z0-9.,-]+$' || { echo "redo は英数字と , . - だけ"; exit 1; }
+            A="$A --redo $REDO"
+          fi
           python cloud/danwa/danwa_para.py $A
