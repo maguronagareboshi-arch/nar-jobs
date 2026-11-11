@@ -54,8 +54,10 @@ def test_retry_then_fail():
         return json.dumps({"items": [{"umaban": 1, "para": GOOD}, {"umaban": 2, "para": SRC}]}, ensure_ascii=False)
     res = D.paraphrase_race(horses, call)
     assert res[1][0] == GOOD and res[1][1] == 1
-    assert res[2][0] is None and res[2][1] == 2      # 2 回だめ= None(原文は入れない)
-    assert len(calls) == 2 and '"umaban": 1' not in calls[1].split('\n')[1]  # 作り直しは外れた馬だけ
+    assert res[2][0] is None and res[2][1] == D.MAX_TRIES   # 全部だめ= None(原文は入れない)
+    assert D.check_para('次は1400メートルで巻き返したい', '1400メートルで改めて上位を狙う形になる。') == []  # 距離は写しに数えない
+    assert D.check_para('次は1400メートルで巻き返したい', '次は1400メートルで巻き返したいと話す。')       # 前後ごと写すと外れる
+    assert len(calls) == D.MAX_TRIES and '"umaban": 1' not in calls[1].split('\n')[1]  # 作り直しは外れた馬だけ
 
 
 def test_redo_and_period():

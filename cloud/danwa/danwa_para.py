@@ -49,7 +49,7 @@ MAX_TOKENS = 16000                               # Haiku 5.5 は考える段階�
 PAGE = 1000
 CHUNK = 500
 TIMEOUT = 60
-MAX_TRIES = 2                                    # 1 回目 + 作り直し 1 回
+MAX_TRIES = 3                                    # 1 回目 + 作り直し 2 回(11/12: 2 回では当日 14% が空欄)
 
 # ---------------------------------------------------------------- 検査(work/build.py と同じ決まり)
 PUN = re.compile(r'[\s、。，．,.・…「」『』()（）!！?？〜~ー―-]')
@@ -57,6 +57,7 @@ BAN = re.compile(r'調教師|厩舎|テンコー|増田|ブリンカー|Ｃ[１�
 # 断定を強める語(原文に無いのに足したら外す)
 STRONG = re.compile(r'必ず|確実|間違いな|絶対|勝てる|勝ち負け|負けられない|楽勝|圧勝|鉄板')
 LEN_MIN, LEN_MAX, NGRAM = 20, 80, 8
+DIST = re.compile(r'\d+(?:メトル|m)')               # norm 後(ー は消える・ｍ は m)
 
 
 def norm(s):
@@ -72,7 +73,9 @@ def check_para(src, para, trainer=None):
     ns, np_ = norm(src), norm(para)
     if ns and np_ == ns:
         why.append('原文と同じ')
-    hit = next((ns[i:i + NGRAM] for i in range(len(ns) - NGRAM + 1) if ns[i:i + NGRAM] in np_), None)
+    # 距離(1400メートル等)は残すべき事実= 写しに数えない(11/12 当日 7 件中 4 件がこれで落ちた)
+    ds, dp = DIST.sub('#', ns), DIST.sub('#', np_)  # 距離は 1 字に縮める(前後 7 字まで同じなら写し)
+    hit = next((ds[i:i + NGRAM] for i in range(len(ds) - NGRAM + 1) if ds[i:i + NGRAM] in dp), None)
     if hit:
         why.append('8字:' + hit)
     if not (LEN_MIN <= len(para) <= LEN_MAX):
@@ -349,7 +352,7 @@ def run(a, env):
                     if p is not None and norm(p) == norm(r["comment"]):
                         p, why = None, ['原文と同じ']            # 念のため二重に止める
                     if p is None:
-                        print(f"  ✗{rid}-{u} {' '.join(why)}", flush=True)
+                        print(f"  ✗{rid}-{u} {re.sub(r'8字:[^ ]+', '8字', ' '.join(why))}", flush=True)  # 公開 repo= 原文の断片を出さない
                     row = note_row(r, p, "ok" if p else "failed", MODEL, tries, now)
                     old = have.get((r["race_id"], u)) or {}
                     if not p and old.get("status") == "ok":
