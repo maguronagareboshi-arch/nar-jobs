@@ -351,6 +351,10 @@ def run(a, env):
                     if p is None:
                         print(f"  ✗{rid}-{u} {' '.join(why)}", flush=True)
                     row = note_row(r, p, "ok" if p else "failed", MODEL, tries, now)
+                    old = have.get((r["race_id"], u)) or {}
+                    if not p and old.get("status") == "ok":
+                        st["failed"] += 1                # 作り直しに落ちた= 前の言い換えを残す(消さない)
+                        continue
                 st[row["status"]] += 1
                 st["tagged"] += 1 if row["tags"] else 0
                 out.append(row)
