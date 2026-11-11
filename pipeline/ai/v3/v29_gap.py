@@ -34,6 +34,7 @@ import pandas as pd
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import v3_tri as TRI  # noqa: E402  3 連単・3 連複のずれ模型(記録だけ)
 import b53 as B53  # noqa: E402  全券種の参考の買い目(決め 53・書く行の runners と枠番だけから作る)
+import buy4_live as BUY4  # noqa: E402  買い方 決め 4 の段 2(組 6 券種の買い目・直前版の行の p1・p3 と 10 分前の板から)
 
 HERE = Path(__file__).resolve().parent
 JST = dt.timezone(dt.timedelta(hours=9))
@@ -446,6 +447,7 @@ NEW_META = 'buy38_new.json'
 NEW = None  # load_new の戻り。live() が mdir から読む。無ければ全部 v31
 PLACE_LINE = 1.1  # 決め 39(2026-10-15): 単勝で買う馬のうち 新しい勝つ率 × 10 分前の単勝 ≥ 1.1 を「複勝も」(記録だけ・新しい模型で決めたレースだけ)
 DAYP = {}   # (場, R) → {'p': {馬番: (p1, p3)}, 'meta': 直前版の meta}(day_marks を書いた時に入れる)
+DAY4 = {}   # (場, R) → {馬番: (p1, p3)} = 書いた直前版の行の meta.runners のまま(買い方 決め 4 の段 2 はこの率・無ければ DB の直前の行を読む)
 
 
 def load_new(mdir):
@@ -621,6 +623,32 @@ def latest_place(track, day, rno):
     r = _get(f'/rest/v1/nar_odds_ticks?track=eq.{t}&race_date=eq.{day}&race_no=eq.{rno}&f=eq.false'
              '&select=id,p&order=id.desc&limit=1')
     return {int(k): v for k, v in ((r[0].get('p') or {}) if r else {}).items() if isinstance(v, list) and v}
+
+
+def last_runners(track, day, rno):
+    """DB の直前版の行(nar_ai_marks v3-9 last)の meta.runners → {馬番: (p1, p3)}。無ければ空(便が途中で回し直された時の逃げ道)。"""
+    t = urllib.parse.quote(track)
+    r = _get(f'/rest/v1/nar_ai_marks?model=eq.v3-9&timing=eq.last&track=eq.{t}&race_date=eq.{day}&race_no=eq.{rno}&select=meta&limit=1')
+    rs = ((r[0].get('meta') or {}).get('runners') or []) if r else []
+    return {int(x['num']): (float(x['p1']), float(x['p3'])) for x in rs if x.get('p1') is not None and x.get('p3') is not None}
+
+
+def add_buy4(val, tr, day, rno, odds, cmb):
+    """買い方 決め 4 の段 2: val['buy4'] に組 6 券種の買い目(buy4_live.race)。cmb = 単勝の行で読んだ板(足りない券種はここで読み、cmb に足す)。
+    作れなくても val はそのまま(段 1 の単勝・他の記録は書く)・わけは val['buy4']['why']。⛔ログには点数だけ。"""
+    try:
+        miss = [k for k in BUY4.BOARD_KINDS if k not in cmb]
+        if miss:
+            cmb.update(latest_combos(tr, day, rno, tuple(miss)))
+        p = DAY4.get((tr, rno)) or last_runners(tr, day, rno)
+        if not p:
+            val['buy4'] = {'tag': BUY4.tag(), 'why': '直前版の行なし'}
+            return
+        val['buy4'] = BUY4.race(p, odds, latest_place(tr, day, rno), cmb)
+        val['buy4']['p_src'] = 'mem' if (tr, rno) in DAY4 else 'db'
+    except Exception as e:  # noqa: BLE001
+        val['buy4'] = {'why': f'失敗 {type(e).__name__} {str(e)[:80]}'}
+        log(f'{tr}{rno}R: 買い方 決め 4 の段 2 失敗 {type(e).__name__} {str(e)[:120]}')
 
 
 def add_b53(val, tr, day, rno, cmb=None):
@@ -933,6 +961,7 @@ def live(day, base_csv, mdir, write, until):
                         g0 = row['meta'].get('g68') if pb is None else None  # 枠の直し(決め 68)も予想だけ = F3 の無い行の買いには直しの前の率
                         if g0:
                             pb = {int(n): (g0['q0'][n], g0['p0'][n]) for n in g0['p0']}
+                        DAY4[(tr, rno)] = {int(x['num']): (float(x['p1']), float(x['p3'])) for x in row['meta']['runners']}
                         DAYP[(tr, rno)] = {'p': {int(x['num']): ((round(float(pb[int(x['num'])][0]), 4), round(float(pb[int(x['num'])][1]), 4)) if pb else
                                                                  (float(x['p1']), float(x['p3']))) for x in row['meta']['runners']},
                                            'meta': {**{k: row['meta'][k] for k in ('p1f', 'tpl', 'sitb') if k in row['meta']},
@@ -1006,6 +1035,7 @@ def live(day, base_csv, mdir, write, until):
                 if tri:
                     val['tri_model'] = {'tri': tri_name, 'trio': 'c8', 'ev_min': TRI.EV_MIN, 'cols': ['組', 'オッズ', '期待値', '模型の率', '市場の率']}
                     val.update(tri)
+                add_buy4(val, tr, day, rno, odds, cmb)  # 買い方 決め 4 の段 2(失敗しても単勝・組の記録はそのまま書く)
                 add_b53(val, tr, day, rno, cmb)  # 決め 53: 全券種の参考の買い目(失敗しても単勝・組の記録はそのまま書く)
                 try:
                     st = put_gap(k, val, tr, day, rno) if write else 'dry'
@@ -1016,7 +1046,7 @@ def live(day, base_csv, mdir, write, until):
                 n_w += 1
                 n_buy += len(c)
                 log(f'{tr}{rno}R: 発走 {at:%H:%M}・{now:%H:%M:%S} に決めた・{len(b)} 頭(体重 {val["weights"]})'
-                    f'・{val["buy_model"]}・候補 {len(c)} 頭(複勝も {len(val.get("place") or [])})・3 連単 {len(val.get("tri") or [])}・3 連複 {len(val.get("trio") or [])} 組(記録)・参考(決め 53) {B53.count(val.get("b53"))} 点・書き込み {st}')
+                    f'・{val["buy_model"]}・候補 {len(c)} 頭(複勝も {len(val.get("place") or [])})・3 連単 {len(val.get("tri") or [])}・3 連複 {len(val.get("trio") or [])} 組(記録)・参考(決め 53) {B53.count(val.get("b53"))} 点・決め 4 の段 2 {BUY4.count(val.get("buy4"))} 点{"(" + val["buy4"]["why"] + ")" if (val.get("buy4") or {}).get("why") else ""}・書き込み {st}')
         if now > end:
             log('時間切れ: 書いた', n_w, 'R・候補', n_buy, '頭')
             _record_after(day, write)
