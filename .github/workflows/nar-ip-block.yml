@@ -1,6 +1,6 @@
 # 2026-11-11 持ち出し止めの見回り。毎時 07 分に直前 1 時間の通信記録を数え、1 時間 5,000 回以上の IP を
 # 出入り禁止名簿(private.nar_block_ip)へ載せる。中身は cloud/ip_block.py。
-# 定期の実行は当面 DRY_RUN= 表を出すだけ(ユーザー了承後に '0' へ)。
+# 11/11 ユーザー了承で定期の実行は名簿に書く(DRY_RUN '0')。
 name: nar-ip-block
 
 on:
@@ -30,7 +30,7 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           HOURS: ${{ inputs.hours || '1' }}
-          DRY_RUN: ${{ inputs.dry_run || '1' }}
+          DRY_RUN: ${{ inputs.dry_run || '0' }}
         run: python3 cloud/ip_block.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: heartbeat
         if: '!cancelled() && github.event_name == ''schedule'''
