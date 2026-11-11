@@ -49,6 +49,7 @@ HIST = ['bw_norm', 'BEST', 'PREVW', 'PREVF', 'PREVD']
 MODEL_FILE, META_FILE = 'v29_gap_y1.txt', 'v29_gap.json'
 DAY_META = 't11_day.json'  # 当日版の印の上乗せ(51 本 + 当日の体重 15 本・研究 nankan-ai-v3 src/f5_scripts/t11_day.py)
 SEQ2 = None  # 並び読み(決め 24・seq2_live.load の戻り)。live() が読む。無ければ当日版は第12版のまま
+CY79 = None  # 調教入りの並び読み(決め 79・cy79_live.load の戻り)。live() が読む。無ければ決め 77 の段に足さない
 TPLM = None  # 全馬の短評の層(決め 30・tanpyo_live.load の戻り)。live() が mdir/tanpyo から読む。無ければ足さない
 F3M, F3W = None, None  # 平らな模型 F3 の混ぜ(決め 49・f3_live.load の戻りと混ぜの重み)。live() が mdir/f3 から読む。無ければ足さない
 AW = None  # 併せ馬の相手(決め 60・awase_live.load の戻り = (track, race_no, 馬番) → (res, mar))。live() がその日の nar_kb_works から読む。無ければ足さない
@@ -360,16 +361,27 @@ def day_marks(Bk, odds, w, going, dm, day):
         try:  # 南関 第28版 直前版(決め 77・研究 nankan-ai-v3 dayonpre77_judge.py・判定 2026-11-09 合格): 第26版の全部の段の後。前日版の行が第28版の
             #   レースだけ、第28版 前日版の最後の率(前日の便が土台に書いた D77:)に並び読みの差と当日の土台の差を足す。第26版の率は meta.dp77.s1・s3
             import dayonpre77_live
-            r_ = dayonpre77_live.apply_day(b, day, u, pday77, np.asarray(p1, float), np.asarray(p3p, float), going)
+            ucy = None
+            if CY79 is not None and u is not None:   # 決め 79: 調教入りの並び読み u_cy(落ちたら足さない = 第28・29版のまま)
+                try:
+                    import cy79_live
+                    ucy = cy79_live.resid(CY79, Bk.track.iloc[0], int(Bk.race_no.iloc[0]), b, going)
+                except Exception as e:  # noqa: BLE001
+                    log('調教入りの並び読み 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
+            r_ = dayonpre77_live.apply_day(b, day, u, pday77, np.asarray(p1, float), np.asarray(p3p, float), going, ucy=ucy)
             dp77m = r_['meta']
             if r_['on']:
                 p1, p3, p3p = r_['p1'], r_['p3'], r_['p3']
                 used.append('dp77')
                 # 第29版 = 前日の土台を第29版の前日の便が作った時だけ(D77:v = 29・入れた次の日は前の土台 = 第28版のまま)。前日版と同じ番号
-                v29 = 'D77:v' in b.columns and str(b['D77:v'].iloc[0]).split('.')[0] == '29'
-                ver = '南関 第29版' if v29 else '南関 第28版'
+                dv = str(b['D77:v'].iloc[0]).split('.')[0] if 'D77:v' in b.columns else ''
+                v29 = dv in ('29', '30')
+                # 第30版 = 第29版 + 調教入りの並び読みの差(決め 79)。前日の土台が第30版の前日の便の物で、このレースで決め 79 が動いた時だけ
+                v30 = dv == '30' and bool(dp77m.get('cy79', {}).get('on'))
+                ver = '南関 第30版' if v30 else '南関 第29版' if v29 else '南関 第28版'
                 stamp = (f'{ver[3:]} 前日版の最後の率 + 並び読みの差 + 当日の土台の差(第26版の率は meta.dp77)'
-                         + ('+能力試験の記録を台帳に無い馬にも結ぶ(決め 67-5)' if v29 else ''))
+                         + ('+能力試験の記録を台帳に無い馬にも結ぶ(決め 67-5)' if v29 else '')
+                         + ('+調教入りの並び読みの差(決め 79)' if v30 else ''))
             elif dp77m.get('err'):
                 log('第28版 直前版 失敗(第26版のまま)', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), dp77m['err'])
         except Exception as e:  # noqa: BLE001  落ちても第26版の印は出す
@@ -399,7 +411,7 @@ def day_marks(Bk, odds, w, going, dm, day):
     if 'p1cap' in used:
         meta['p1cap'] = sys.modules['p1cap'].TAG
         meta['p1cap_n'] = ncap  # 勝つ率を動かした頭数
-    if c67 and ver in ('南関 第22版', '南関 第23版', '南関 第26版', '南関 第28版', '南関 第29版'):
+    if c67 and ver in ('南関 第22版', '南関 第23版', '南関 第26版', '南関 第28版', '南関 第29版', '南関 第30版'):
         meta['c67'] = c67
     if dp77m is not None:
         meta['dp77'] = dp77m
@@ -813,6 +825,14 @@ def live(day, base_csv, mdir, write, until):
     except Exception as e:  # noqa: BLE001
         SEQ2 = None
         log('並び読み 読めない(第12版のまま)', type(e).__name__, str(e)[:200])
+    global CY79
+    try:  # 調教入りの並び読み(決め 79): 模型 = mdir の cy79_model.npz・cy79_prod.json、材料 = 前日の便の cy79.npz。無ければ決め 77 の段に足さない
+        import cy79_live
+        CY79 = cy79_live.load(mdir, Path(base_csv).parent / 'cy79.npz')
+        log('調教入りの並び読み', '読めた' if CY79 else '無し(足さない)', CY79['n'] if CY79 else '')
+    except Exception as e:  # noqa: BLE001
+        CY79 = None
+        log('調教入りの並び読み 読めない(足さない)', type(e).__name__, str(e)[:200])
     global TPLM
     try:  # 短評の層(決め 30): 模型 = mdir/tanpyo(便がリリース v3-tanpyo-20261015 を開ける)。無ければ足さない
         import tanpyo_live

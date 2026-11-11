@@ -120,6 +120,12 @@ jobs:
           else
             echo "並び読みの材料なし(第12版のまま)"
           fi
+          # 2026-11-11 決め 79: 調教入りの並び読みの前日の材料(無ければ決め 77 の段に足さない)
+          if [ -f in/cy79.npz.enc ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/cy79.npz.enc -out in/cy79.npz || echo "調教入りの並び読みの材料を開けない"
+          else
+            echo "調教入りの並び読みの材料なし(足さない)"
+          fi
           V3_GAP_KEY=$(printf %s "$V3_GAP_KEY" | tr -d '\r\n'); export V3_GAP_KEY
           gh release download "${TAG:-v3-gap-model-20261001}" -p 'v3_gap_model.tar.gz.enc' -D in
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_GAP_KEY -in in/v3_gap_model.tar.gz.enc | tar -C gapm -xzf -
@@ -160,6 +166,12 @@ jobs:
           if gh release download v3-seq2-20261012 -p 'v3_seq2.tar.gz.enc' -D in/prev; then
             openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/prev/v3_seq2.tar.gz.enc | tar -C gapm/prev -xzf - || echo "前の版の並び読みの模型を開けない"
           fi
+          # 2026-11-11 決め 79: 調教入りの並び読みの重み(cy79_model.npz・cy79_prod.json・V3_ASSET_KEY)。無ければ決め 77 の段に足さない
+          if gh release download v3-cy79-20261112 -p 'v3_cy79.tar.gz.enc' -D in; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_cy79.tar.gz.enc | tar -C gapm -xzf - || echo "調教入りの並び読みの模型を開けない"
+          else
+            echo "調教入りの並び読みの模型なし(足さない)"
+          fi
           # 2026-10-14 決め 30: 全馬の短評の層の模型(V3_ASSET_KEY)。無ければ当日版は短評の層を足さない
           mkdir -p gapm/tanpyo
           if gh release download v3-tanpyo-20261103 -p 'v3_tanpyo.tar.gz.enc' -D in; then
@@ -190,7 +202,7 @@ jobs:
           ls gapm; wc -l in/v29_base.csv
           echo "ok=yes" >> "$GITHUB_OUTPUT"
 
-      # 2026-10-15 予想の学んだ定数・表(勝つ率の直し・談話の印・他場の曲線など)= 暗号化したリリース v3-consts-20261113(公開のコードに置かない)。
+      # 2026-10-15 予想の学んだ定数・表(勝つ率の直し・談話の印・他場の曲線など)= 暗号化したリリース v3-consts-20261114(公開のコードに置かない)。
       #   取れない・開けない・中身が欠けている時は止める(黙って別の値で予想を出さない)。中身の確かめ = pipeline/ai/sealed.py check
       - name: download sealed constants
         id: sc
@@ -204,8 +216,8 @@ jobs:
           : "${V3_ASSET_KEY:?secrets.V3_ASSET_KEY が無い}"
           mkdir -p in sealed_consts
           for i in 1 2 3; do
-            gh release download v3-consts-20261113 -p 'v3_consts.tar.gz.enc' -D in --clobber && break
-            [ "$i" = 3 ] && { echo "::error::⛔ 予想の定数(v3-consts-20261113)を 3 回取れなかった"; exit 1; }
+            gh release download v3-consts-20261114 -p 'v3_consts.tar.gz.enc' -D in --clobber && break
+            [ "$i" = 3 ] && { echo "::error::⛔ 予想の定数(v3-consts-20261114)を 3 回取れなかった"; exit 1; }
             sleep 20
           done
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_consts.tar.gz.enc | tar -C sealed_consts -xzf -

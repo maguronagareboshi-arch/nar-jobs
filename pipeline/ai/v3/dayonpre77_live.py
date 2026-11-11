@@ -83,11 +83,17 @@ def follow(p1_0, p3_0, p3m, k):
     return cap(q / q.sum(), p3m)
 
 
-def race(n1, n3, du, eb, C=None):
-    """1 レース(馬番の順)。n1・n3 = 第28版 前日版の最後の率・du・eb = 差。→ (p1, p3) = 第28版 直前版の率(研究 day75 と同じ)。"""
+def race(n1, n3, du, eb, C=None, dcy=None, A=None):
+    """1 レース(馬番の順)。n1・n3 = 第28版 前日版の最後の率・du・eb = 差。→ (p1, p3) = 第28版 直前版の率(研究 day75 と同じ)。
+    dcy = 調教入りの並び読みの差 u_cy − u_X(決め 79・研究 seqcy79_judge / seqcy_split_1111.form)・A = (A1, A3)。
+    → 勝つ率の log に A1 × dcy・3 着内の logit に A3 × dcy を du と同じ所に足す(dcy = None なら第28・29版のまま)。"""
     C = consts() if C is None else C
     du, eb = np.asarray(du, float), np.asarray(eb, float)
-    q1, q3 = fin(ln(n1) + float(C['WDU1']) * du, lg(n3) + float(C['WDU3']) * du)
+    x1, x3 = ln(n1) + float(C['WDU1']) * du, lg(n3) + float(C['WDU3']) * du
+    if dcy is not None:
+        dcy = np.asarray(dcy, float)
+        x1, x3 = x1 + float(A[0]) * dcy, x3 + float(A[1]) * dcy
+    q1, q3 = fin(x1, x3)
     q3n = sum3(np.maximum(sig(lg(q3) + float(C['WEB']) * eb), np.minimum(q1, 0.999)))
     q1n = follow(q1, q3, q3n, float(C['KFOL']))
     return q1n, sum3(np.maximum(q3n, np.minimum(q1n, 0.999)))
@@ -140,6 +146,12 @@ def write_base(csv_path, base_csv, PT74, pnx, log=log0):
     for c in COLS:
         vb[c] = add[c].to_numpy()
     vb['D77:v'] = '29'   # 2026-11-09 決め 67-5: この土台を作った前日の便が第29版(能検の結びの直し入り)= 当日の便はこの印がある時だけ「第29版 直前版」と名乗る
+    try:  # 2026-11-11 決め 79: その日が決め 79 の ON 以降なら第30版の前日の便(当日の便は決め 79 が動いたレースだけ「第30版 直前版」)
+        import cy79_live
+        if cy79_live.is_on(str(d.race_date.max())):
+            vb['D77:v'] = '30'
+    except Exception as e:  # noqa: BLE001
+        log('(前日) 決め 79 の定数を読めない = 第29版の印のまま', type(e).__name__, str(e)[:80])
     vb.to_csv(base_csv, index=False, encoding='utf-8-sig')
     n = int(d.drop_duplicates(KEY)[P + 'on'].sum())
     log('(前日) 決め 77 の土台', len(d), '頭・第28版のレース', n, '・p_Nx あり率', round(float(d[P + 'pnx'].notna().mean()), 3))
@@ -147,7 +159,31 @@ def write_base(csv_path, base_csv, PT74, pnx, log=log0):
 
 
 # ------------------------------------------------------------------ 直前の便(v29_gap.day_marks・第26版の全部の段の後)
-def apply_day(b, day, ux, pday, s1, s3, going=''):
+def cy79_diff(day, ux, ucy):
+    """決め 79: d = u_cy − u_X。→ (d か None, meta, (A1, A3))。ON の前・定数なし・u_cy なし・欠けは None(= 第28・29版のまま)。"""
+    m = {'on': False}
+    try:
+        import cy79_live
+        C = cy79_live.consts()
+    except Exception as e:  # noqa: BLE001
+        m['why'] = f'定数なし {type(e).__name__}'
+        return None, m, None
+    m['tag'] = C['TAG']
+    if str(day) < str(C.get('ON') or '9999-12-31'):
+        m['why'] = 'ON の前'
+        return None, m, None
+    if ucy is None or ux is None:
+        m['why'] = '調教入りの並び読みが無い'
+        return None, m, None
+    ux, ucy = np.asarray(ux, float), np.asarray(ucy, float)
+    if ux.shape != ucy.shape or not (np.isfinite(ux).all() and np.isfinite(ucy).all()):
+        m['why'] = 'u_X か u_cy に欠け'
+        return None, m, None
+    m['on'] = True
+    return ucy - ux, m, (float(C['A1']), float(C['A3']))
+
+
+def apply_day(b, day, ux, pday, s1, s3, going='', ucy=None):
     """b = feats の後の 1 レース(馬番の順・取消を除く・当日の体重 bw)・going = 当日の馬場・ux = 直前の並び読み(seq2_live.resid)・pday = 当日の土台(b19_u の直後)・
     (s1, s3) = 第26版の最後の率。→ dict(on, p1, p3, meta)。on = False の時は率を変えず meta だけ(わけ why)。"""
     C = consts()
@@ -176,15 +212,32 @@ def apply_day(b, day, ux, pday, s1, s3, going=''):
     nf = int(np.nanmax(g[P + 'nf']))
     if len(b) < nf:   # 取消: p_Nx は残った馬で合計 3 にしてから(N は fin が割り直す)
         pnx = sum3(pnx)
+    def ok_(p1, p3):
+        return (np.isfinite(p1).all() and np.isfinite(p3).all() and abs(float(p1.sum()) - 1) < 1e-6 and abs(float(p3.sum()) - 3) < 1e-6
+                and (p1 <= p3 + 1e-12).all())
     try:
         du, eb = diffs(g[P + 'up'], ux, pnx, pday)
         p1, p3 = race(n1, n3, du, eb, C)
-        if not (np.isfinite(p1).all() and np.isfinite(p3).all() and abs(float(p1.sum()) - 1) < 1e-6 and abs(float(p3.sum()) - 3) < 1e-6
-                and (p1 <= p3 + 1e-12).all()):
+        if not ok_(p1, p3):
             raise ValueError('率が数でないか合計が 1・3 でないか勝つ率 > 3 着内')
     except Exception as e:  # noqa: BLE001
         m['err'] = f'{type(e).__name__} {str(e)[:80]}'
         return no('計算が落ちた')
+    # 決め 79(南関 第30版 直前版): 調教入りの並び読みの差を du と同じ所に足す。動かない・落ちた時は上の第28・29版の率のまま(わけ meta.cy79.why)
+    dcy, mc, A = cy79_diff(day, ux, ucy)
+    dv = str(b['D77:v'].iloc[0]).split('.')[0] if 'D77:v' in b.columns else ''
+    if dcy is not None and dv != '30':   # 前日の土台が第30版の前日の便の物の時だけ(版の名前と中身をそろえる)
+        dcy, mc = None, dict(mc, on=False, why='前日の土台が第30版でない')
+    if dcy is not None:
+        try:
+            q1, q3 = race(n1, n3, du, eb, C, dcy=dcy, A=A)
+            if not ok_(q1, q3):
+                raise ValueError('率が数でないか合計が 1・3 でないか勝つ率 > 3 着内')
+            p1, p3 = q1, q3
+            mc['d'] = {str(int(n)): round(float(v), 4) for n, v in zip(nums, dcy)}
+        except Exception as e:  # noqa: BLE001
+            mc = {'on': False, 'tag': mc.get('tag'), 'why': '計算が落ちた', 'err': f'{type(e).__name__} {str(e)[:80]}'}
+    m['cy79'] = mc
     m['on'] = True
     m['cx'] = int(nf - len(b))   # 取消の頭数
     m['s1'] = {str(int(n)): round(float(v), 4) for n, v in zip(nums, s1)}   # 第26版の最後の率

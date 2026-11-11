@@ -309,6 +309,11 @@ def prep(day, U, out, log=_log):
     np.savez_compressed(p, track=T.track.to_numpy().astype('U4'), race_no=T.race_no.to_numpy(int), umaban=T.umaban.to_numpy(int),
                         hk=T.hk.to_numpy().astype(str), hist=hist, ctx=ctx, bw_prev=bwp)
     log('並び読み 材料', p.name, hist.shape, ctx.shape, 'R', T[['track', 'race_no']].drop_duplicates().shape[0], '版', '決め 25' if ext else '決め 24')
+    try:  # 2026-11-11 決め 79: 同じ過去走の並びに調教 1 本ずつを挟んだ材料(OUT/DAY_cy79.npz)。落ちても今の並び読みの材料はそのまま
+        import cy79_live
+        cy79_live.prep(day, T, hist, ctx, bwp, out, log=log)
+    except Exception as e:  # noqa: BLE001
+        log('調教入りの並び 失敗(書かない = 直前版は決め 79 の足しなし)', type(e).__name__, str(e)[:160])
     return p
 
 

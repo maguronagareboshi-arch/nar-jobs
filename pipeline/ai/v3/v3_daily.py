@@ -409,6 +409,12 @@ def main():
     for r in rows if c67 else ():
         r['meta']['c67'] = c67
     n74 = n76 = 0
+    try:  # 2026-11-11 決め 79: 直前版に調教入りの並び読みを足す日から前日版も同じ番号(第30版・前日版の中身は第29版と同じ)
+        import cy79_live
+        v30 = cy79_live.is_on(day)
+    except Exception:  # noqa: BLE001
+        v30 = False
+    v29n = '南関 第30版 前日版' if v30 else '南関 第29版 前日版'
     for r in rows:  # 決め 74: 混ぜたレースは版の字を第27版に(混ぜないレース・影の日は第25版のまま + meta.pt74.p0)
         m74 = PT74.get((r['track'], int(r['race_no'])))
         if m74 is None:
@@ -416,11 +422,11 @@ def main():
         r['meta']['pt74'] = m74
         if m74.get('on'):
             v28 = int(m74.get('ver', 27)) == 28   # 決め 76: 前日の一本の木を種 3 本の平均 + 調教の元の記録 88 列に = 南関 第28版 前日版 → 11/9 決め 67-5 の能検の結びの直しを足して第29版(番号の決まり: 変えたら両方の版を 1 つ上げる)
-            r['meta']['stamp'] = r['meta']['stamp'].replace('南関 第25版 前日版', '南関 第29版 前日版' if v28 else '南関 第27版 前日版', 1) + (STAMP_PT76 + STAMP_NK675 if v28 else STAMP_PT74)
+            r['meta']['stamp'] = r['meta']['stamp'].replace('南関 第25版 前日版', v29n if v28 else '南関 第27版 前日版', 1) + (STAMP_PT76 + STAMP_NK675 if v28 else STAMP_PT74)
             n74 += 1
             n76 += v28
     if PT74:
-        log('版', '南関 第29版 前日版', n76, 'R ・南関 第27版 前日版', n74 - n76, 'R ・第25版のまま', len(rows) - n74, 'R')
+        log('版', v29n, n76, 'R ・南関 第27版 前日版', n74 - n76, 'R ・第25版のまま', len(rows) - n74, 'R')
     try:  # 決め 77(南関 第28版 直前版・研究 nankan-ai-v3 dayonpre77_judge.py・判定 2026-11-09 合格): 第28版 前日版の最後の率・u_P・p_Nx を土台へ。
         #   当日の便がそのレースの前日版が第28版の時だけ足す。前日版の表と行には触らない。失敗したら直前版は第26版のまま
         import dayonpre77_live
