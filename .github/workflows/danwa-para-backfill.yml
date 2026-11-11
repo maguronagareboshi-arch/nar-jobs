@@ -1,7 +1,7 @@
 # 2026-11-09 厩舎の話(nar_kb_danwa)→ nar_danwa_note の埋め(cloud/danwa/danwa_para.py)。手で回すだけ。
 #   tags_only=1 は言い換えをせず札だけ(過去 7.8 万件の札の埋め用・AI 不要)。0 は言い換えも(ANTHROPIC_API_KEY を使う)。
 #   status=ok で原文が同じ行は飛ばす(手の言い換え hand-20261109 も上書きしない)。読みは月ごと・書きは 500 行ずつの upsert。
-#   dry=1 は数えるだけ(書かない)。
+#   dry=1 は数えるだけ(書かない)。tags_haiku=1 は札だけを Haiku で付け直す(11/12・para・status・model は触らない)。
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY / ANTHROPIC_API_KEY(tags_only=0 のとき)
 name: danwa-para-backfill
 on:
@@ -23,6 +23,12 @@ on:
         description: '1= 書かない(数えるだけ)・0= 書く'
         required: true
         default: '1'
+        type: choice
+        options: ['1', '0']
+      tags_haiku:
+        description: '1= 札だけを Haiku で付け直す(para は触らない・tags_only/redo は使わない)・0= しない'
+        required: true
+        default: '0'
         type: choice
         options: ['1', '0']
       redo:
@@ -55,12 +61,14 @@ jobs:
           TAGS_ONLY: ${{ inputs.tags_only }}
           DRY: ${{ inputs.dry }}
           REDO: ${{ inputs.redo }}
+          TAGS_HAIKU: ${{ inputs.tags_haiku }}
         run: |
           for d in "$D_FROM" "$D_TO"; do
             echo "$d" | grep -Eq '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' || { echo "日付は YYYY-MM-DD で"; exit 1; }
           done
           A="--from $D_FROM --to $D_TO"
-          [ "$TAGS_ONLY" = "1" ] && A="$A --tags-only"
+          if [ "$TAGS_HAIKU" = "1" ]; then A="$A --tags-haiku"
+          elif [ "$TAGS_ONLY" = "1" ]; then A="$A --tags-only"; fi
           [ "$DRY" = "1" ] && A="$A --dry-run"
           if [ -n "$REDO" ]; then
             echo "$REDO" | grep -Eq '^[a-z0-9.,-]+$' || { echo "redo は英数字と , . - だけ"; exit 1; }

@@ -31,47 +31,11 @@ import danwa_para as D                           # noqa: E402
 
 D0, D1 = dt.date(2025, 11, 10), dt.date(2026, 11, 11)
 
-# 札の短い定義(一覧の順= tags.py の M の順 + 新しい 2 つ)
-DEF = {
-    '長めの距離の話': '距離延長・今回は長めの距離',
-    '短めの距離の話': '距離短縮・今回は短めの距離',
-    '距離が合う': '今回の距離が合っている・ベストの距離',
-    '距離・条件に不安': '距離や条件が合うか心配・不向き',
-    'コース・回りの話': 'コース形態・右回り/左回り・小回り/大回り',
-    '馬場の話': '重馬場・良馬場・道悪・馬場状態',
-    '枠の話': '内枠/外枠/ゲート位置',
-    '季節・暑さ寒さ': '暑さ・寒さ・季節で調子が変わる',
-    '休み明け': '休養明け・放牧明け・久々',
-    '使って良くなる': '一度使って上向いた/叩いて良化',
-    '一度使ってから': '今回は叩き台・使ってからの馬',
-    '前に行く競馬': '先行したい・逃げたい・前で運ぶ',
-    '控えて末脚': '控える・差す・追い込む',
-    '流れ次第': '展開待ち・流れひとつ・ペース次第',
-    '最後のひと押し': '決め手不足・最後に甘くなる・粘り不足',
-    'スタート': '出遅れ・ゲート・スタートが鍵',
-    '気性・気分': '気性・イレ込み・気分屋・テンション',
-    '馬体が重め': '太め・重め残り',
-    '馬体が細い': '馬体が細い・体重が減った',
-    '成長': '成長した・馬体が増えた・良くなってきた体',
-    '遠征・地元': '遠征・輸送・地元での競馬',
-    '馬具': '馬具の着用や変更・去勢',
-    '相手が強い': '相手関係・強い馬がいる・昇級',
-    '砂をかぶるのが苦手': '砂をかぶる・キックバックを嫌う',
-    '揉まれると弱い': '馬群で揉まれる・包まれると良くない',
-}
-LIST = [v[0] for v in T.M.values()] + ['砂をかぶるのが苦手', '揉まれると弱い']
-assert set(LIST) == set(DEF), set(LIST) ^ set(DEF)
+# 札の短い定義・一覧・決まりは tags.py に移した(11/12・毎日の便と同じものを使う)
+DEF = T.HK_DEF
+LIST = T.HK_LIST
 
-SYSTEM = (
-    "あなたは地方競馬の厩舎関係者の談話(原文)を分類する係です。各馬の原文に当てはまる札を、下の一覧から選びます。\n"
-    "決まり:\n"
-    "- 原文に書いてあることだけで選ぶ。推測しない・読み込まない。\n"
-    "- 当てはまる札が無ければ 0 個でよい。複数あれば全部選ぶ。\n"
-    "- 一覧に無い札を作らない。札名は一覧の字のとおりに書く。\n"
-    "札の一覧(札名= 定義):\n"
-    + "\n".join(f"- {t}= {DEF[t]}" for t in LIST) + "\n"
-    "返事は JSON だけ: {\"items\":[{\"umaban\":1,\"tags\":[\"…\"]}, …]}(前後に文を書かない)。"
-)
+SYSTEM = D.TAG_SYSTEM
 
 
 def user_prompt(horses):
@@ -81,23 +45,7 @@ def user_prompt(horses):
 
 def parse_tags(text):
     """返事 → {umaban: [札, ...]}(一覧の順・一覧に無い札は捨てる)。読めなければ {}。"""
-    m = re.search(r'\{.*\}', text or '', re.S)
-    if not m:
-        print(f"  ⚠JSON なし 長さ {len(text or '')}", flush=True)
-        return {}
-    try:
-        obj = json.loads(m.group())
-    except Exception as e:                       # noqa: BLE001
-        print(f"  ⚠JSON 誤り {type(e).__name__}", flush=True)
-        return {}
-    out = {}
-    for it in obj.get("items", []) if isinstance(obj, dict) else []:
-        try:
-            got = {str(x).strip() for x in (it.get("tags") or [])}
-            out[int(it["umaban"])] = [t for t in LIST if t in got]
-        except Exception:                        # noqa: BLE001
-            continue
-    return out
+    return {u: t for u, t in D.tags_from(D.parse_obj(text)).items()}
 
 
 def main():

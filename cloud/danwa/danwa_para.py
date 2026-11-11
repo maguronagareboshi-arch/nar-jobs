@@ -9,7 +9,9 @@
   検査(check_para)で外れた馬だけ 1 回作り直す。2 回だめなら para=null・status=failed。
 対象: --from〜--to の nar_kb_danwa のうち、nar_danwa_note に無い行 / src_hash(comment の sha1)が変わった行。
   status=ok で src_hash が同じ行は飛ばす(手の言い換え model=hand-* もこれで守られる)。
-札: 全行に tags.py(AI 不要)。--tags-only は言い換えをせず札だけ(新しい行・原文が変わった行は para=null・pending)。
+札: 言い換えと同じ呼び出しで Haiku が一覧(tags.HK_LIST)から選ぶ + 語句ルールの病気(11/12〜)。
+  取れなかった馬は語句ルール(tags.py)で埋める。--tags-only は言い換えをせず語句ルールの札だけ(AI 不要)。
+  --tags-haiku は過去分の札だけを Haiku で付け直す(nar_danwa_note の tags だけを更新・para 等は触らない)。
 ANTHROPIC_API_KEY が無いときは札だけ入れて status=pending(便を落とさない)。
 読むのは月ごと・1000 行ずつ(一意な order)。書くのは upsert・500 行ずつ。⛔重い SQL は使わない。
 終わりに nar_job_heartbeat(job=danwa_para)を書く(--dry-run・--tags-only では書かない)。
@@ -110,7 +112,17 @@ SYSTEM = (
     "- 原文に無い語や事柄を足さない。原文が言っていないこと(調教・気性・体重など)を補ったり読み込んだりしない。「うれしい」などの感想も足さない。\n"
     "- 時点と向きを変えない(「改めて」「今回」を「今後」にしない・「物足りない」を「見劣り」に強めない)。\n"
     "- 原文より断定を強めない(「必ず」「確実」「勝てる」などを足さない)。推測や情報の追加をしない。\n"
-    "- 返事は JSON だけ: {\"items\":[{\"umaban\":1,\"para\":\"…\"}, …]}(前後に文を書かない)。"
+    "あわせて各馬の原文に当てはまる札を、下の一覧から選びます(tags)。\n"
+    + T.HK_RULES +
+    "- 返事は JSON だけ: {\"items\":[{\"umaban\":1,\"para\":\"…\",\"tags\":[\"…\"]}, …]}(前後に文を書かない)。"
+)
+
+# 札だけを選ばせる指示(tag_trial.py と同じ・--tags-haiku で使う)
+TAG_SYSTEM = (
+    "あなたは地方競馬の厩舎関係者の談話(原文)を分類する係です。各馬の原文に当てはまる札を、下の一覧から選びます。\n"
+    "決まり:\n"
+    + T.HK_RULES +
+    "返事は JSON だけ: {\"items\":[{\"umaban\":1,\"tags\":[\"…\"]}, …]}(前後に文を書かない)。"
 )
 
 
@@ -120,6 +132,38 @@ def user_prompt(horses, why=None):
     if why:
         s += "\n前回は次の理由で不合格でした。直してください: " + json.dumps(why, ensure_ascii=False)
     return s
+
+
+def tag_prompt(horses):
+    body = [{"umaban": h["umaban"], "comment": h["comment"]} for h in horses]
+    return "次の各馬の談話に札を付けてください。\n" + json.dumps(body, ensure_ascii=False)
+
+
+def parse_obj(text):
+    """返事 → items の list。読めなければ []。⛔原文の断片はログに出さない。"""
+    if not text:
+        return []
+    m = re.search(r'\{.*\}', text, re.S)
+    if not m:
+        return []
+    try:
+        obj = json.loads(m.group())
+    except Exception:                            # noqa: BLE001
+        return []
+    items = obj.get("items", []) if isinstance(obj, dict) else []
+    return items if isinstance(items, list) else []
+
+
+def tags_from(items):
+    """items → {umaban: [札, ...]}(一覧の順・一覧外は捨てる)。tags の欄が無い馬は入れない(= 取れなかった)。"""
+    out = {}
+    for it in items:
+        try:
+            if isinstance(it, dict) and isinstance(it.get("tags"), list):
+                out[int(it["umaban"])] = T.clean_hk(it["tags"])
+        except Exception:                        # noqa: BLE001
+            continue
+    return out
 
 
 def parse_items(text):
@@ -166,31 +210,47 @@ def anthropic_client(api_key):
 
 
 def paraphrase_race(horses, call):
-    """1 レースの馬(comment のあるもの)→ {umaban: (para|None, tries, why)}。外れた馬だけ作り直す。"""
-    res = {h["umaban"]: (None, 0, ['未']) for h in horses}
+    """1 レースの馬(comment のあるもの)→ {umaban: (para|None, tries, why, tags|None)}。外れた馬だけ作り直す。
+    tags= Haiku の札(合格した回まで・最後に取れた回のもの)。1 回も取れなければ None(呼び手が語句ルールで埋める)。"""
+    res = {h["umaban"]: (None, 0, ['未'], None) for h in horses}
     todo, why = list(horses), None
     for _ in range(MAX_TRIES):
         if not todo:
             break
         try:
-            got = parse_items(call(SYSTEM, user_prompt(todo, why)))
+            text = call(SYSTEM, user_prompt(todo, why))
+            got, tg = parse_items(text), tags_from(parse_obj(text))
         except Exception as e:                   # noqa: BLE001
             print(f"  ⚠API {type(e).__name__}: {str(e)[:120]}", flush=True)
-            got = {}
+            got, tg = {}, {}
         nxt, why = [], {}
         for h in todo:
             u = h["umaban"]
             p = got.get(u)
             bad = check_para(h["comment"], p, h.get("trainer"))
             tries = res[u][1] + 1
+            tags = tg.get(u, res[u][3])
             if bad:
-                res[u] = (None, tries, bad)
+                res[u] = (None, tries, bad, tags)
                 nxt.append(h)
                 why[u] = bad
             else:
-                res[u] = (p, tries, [])
+                res[u] = (p, tries, [], tags)
         todo = nxt
     return res
+
+
+def tag_race(horses, call):
+    """札だけを選ばせる(--tags-haiku)→ {umaban: [札, ...]}。返事に無い馬は入れない。"""
+    try:
+        text = call(TAG_SYSTEM, tag_prompt(horses))
+    except Exception as e:                       # noqa: BLE001
+        print(f"  ⚠API {type(e).__name__}: {str(e)[:120]}", flush=True)
+        return {}
+    got = tags_from(parse_obj(text))
+    if not got:
+        print(f"  ⚠札の返事が読めない 長さ {len(text or '')}", flush=True)
+    return got
 
 
 # ---------------------------------------------------------------- DB(PostgREST・標準ライブラリだけ)
@@ -282,11 +342,55 @@ def pick(src_rows, have, tags_only, redo=()):
     return out
 
 
-def note_row(r, para, status, model, tries, now):
+def note_row(r, para, status, model, tries, now, tags=None):
+    """tags=None は語句ルールの札。"""
     return {"race_id": r["race_id"], "umaban": int(r["umaban"]), "track": r.get("track"),
             "race_date": r.get("race_date"), "horse_id": r.get("horse_id"),
-            "para": para, "tags": T.note_tags(r.get("comment")), "src_hash": src_hash(r.get("comment")),
+            "para": para, "tags": T.note_tags(r.get("comment")) if tags is None else tags,
+            "src_hash": src_hash(r.get("comment")),
             "model": model, "status": status, "tries": tries, "updated_at": now}
+
+
+def tag_row(r, tags):
+    """札だけの upsert 行(ある行の tags だけが替わる・para/status/model/src_hash/tries/updated_at は送らない)。"""
+    return {"race_id": r["race_id"], "umaban": int(r["umaban"]), "tags": tags}
+
+
+def run_tags_haiku(a, d0, d1, db, call):
+    """過去分の札の付け直し: nar_danwa_note にある行(comment あり・status 問わず・hand-* も)の tags だけを替える。
+    Haiku が返さなかった馬は今の札のまま(書かない)。書くのは月の終わりにまとめて。⛔原文はログに出さない。"""
+    st = {"src": 0, "target": 0, "api_races": 0, "haiku": 0, "missing": 0, "changed": 0, "written": 0}
+    for m0, m1 in months(d0, d1):
+        rows = db.get_all(SRC, "race_date,umaban,race_id,comment", m0, m1)
+        have = {}
+        for h in db.get_all(DST, "race_id,umaban,tags", m0, m1):
+            have[(h["race_id"], int(h["umaban"]))] = h
+        by_race = {}
+        for r in rows:
+            k = (r["race_id"], int(r["umaban"]))
+            if k in have and (r.get("comment") or "").strip():
+                by_race.setdefault(r["race_id"], []).append(dict(r, umaban=k[1]))
+        st["src"] += len(rows)
+        out = []
+        for rid, hs in sorted(by_race.items()):
+            st["target"] += len(hs)
+            got = tag_race(hs, call)
+            st["api_races"] += 1
+            for h in hs:
+                u = h["umaban"]
+                if u not in got:
+                    st["missing"] += 1
+                    continue
+                st["haiku"] += 1
+                tags = T.merge_tags(got[u], h["comment"])
+                if tags != (have[(rid, u)].get("tags") or []):
+                    st["changed"] += 1
+                out.append(tag_row(h, tags))
+        if out and not a.dry_run:
+            db.upsert(DST, out, "race_id,umaban")
+            st["written"] += len(out)
+        print(f"{m0}〜{m1}: 原文 {len(rows)}・札の付け直し {len(out)}・書き {0 if a.dry_run else len(out)}", flush=True)
+    return st
 
 
 def run(a, env):
@@ -303,6 +407,10 @@ def run(a, env):
         if db is None:
             raise RuntimeError("SUPABASE_URL / SUPABASE_SERVICE_KEY が無い")
         groups = [(m0, m1, None) for m0, m1 in months(d0, d1)]
+    if a.tags_haiku:
+        if db is None or not env.get("ANTHROPIC_API_KEY"):
+            raise RuntimeError("--tags-haiku は SUPABASE_* と ANTHROPIC_API_KEY が要る")
+        return run_tags_haiku(a, d0, d1, db, a.call or anthropic_client(env["ANTHROPIC_API_KEY"]))
     api_key = None if a.tags_only else env.get("ANTHROPIC_API_KEY")
     call = None
     if api_key:
@@ -332,7 +440,7 @@ def run(a, env):
         st["src"] += len(rows)
         st["target"] += len(tg)
         now = dt.datetime.now(dt.timezone.utc).isoformat()
-        out = []
+        out, tag_out = [], []
         by_race = {}
         for r in tg:
             by_race.setdefault(r["race_id"], []).append(r)
@@ -348,15 +456,18 @@ def run(a, env):
                 if a.tags_only or not has or not call:
                     row = note_row(r, None, "pending", None, 0, now)
                 else:
-                    p, tries, why = res.get(u, (None, 0, ['未']))
+                    p, tries, why, hk = res.get(u, (None, 0, ['未'], None))
                     if p is not None and norm(p) == norm(r["comment"]):
                         p, why = None, ['原文と同じ']            # 念のため二重に止める
                     if p is None:
                         print(f"  ✗{rid}-{u} {re.sub(r'8字:[^ ]+', '8字', ' '.join(why))}", flush=True)  # 公開 repo= 原文の断片を出さない
-                    row = note_row(r, p, "ok" if p else "failed", MODEL, tries, now)
+                    row = note_row(r, p, "ok" if p else "failed", MODEL, tries, now,
+                                   tags=T.merge_tags(hk, r.get("comment")))
                     old = have.get((r["race_id"], u)) or {}
                     if not p and old.get("status") == "ok":
                         st["failed"] += 1                # 作り直しに落ちた= 前の言い換えを残す(消さない)
+                        if hk is not None:               # 札は取れた= 札だけ替える(para は触らない)
+                            tag_out.append(tag_row(r, row["tags"]))
                         continue
                 st[row["status"]] += 1
                 st["tagged"] += 1 if row["tags"] else 0
@@ -364,6 +475,8 @@ def run(a, env):
         if out and not a.dry_run:
             db.upsert(DST, out, "race_id,umaban")
             st["written"] += len(out)
+        if tag_out and not a.dry_run:
+            db.upsert(DST, tag_out, "race_id,umaban")
         print(f"{m0}〜{m1}: 原文 {len(rows)}・対象 {len(tg)}・書き {0 if a.dry_run else len(out)}", flush=True)
         if left == 0:
             break
@@ -375,6 +488,7 @@ def main():
     ap.add_argument("--from", dest="date_from", help="YYYY-MM-DD(既定= 今日-1)")
     ap.add_argument("--to", dest="date_to", help="YYYY-MM-DD(既定= 今日+1)")
     ap.add_argument("--tags-only", action="store_true", help="言い換えをせず札だけ入れる")
+    ap.add_argument("--tags-haiku", action="store_true", help="過去分の札だけを Haiku で付け直す(para は触らない)")
     ap.add_argument("--dry-run", action="store_true", help="書かない")
     ap.add_argument("--redo", type=lambda s: tuple(x for x in s.split(",") if x), default=(),
                     help="作り直す model の頭(, 区切り)。ok でも選ぶ。hand-* は守る")
@@ -382,8 +496,9 @@ def main():
     ap.add_argument("--env", help="SUPABASE_* / ANTHROPIC_API_KEY のある .env")
     ap.add_argument("--src-json", help="nar_kb_danwa の行の JSON(試験用・DB の代わりに読む)")
     a = ap.parse_args()
+    a.call = None                                # 試験で差し替える(本番は None)
     env = load_env(a.env)
-    beat_on = not a.dry_run and not a.tags_only
+    beat_on = not a.dry_run and not a.tags_only and not a.tags_haiku
     if beat_on:
         os.environ.setdefault("SUPABASE_URL", env.get("SUPABASE_URL", ""))
         os.environ.setdefault("SUPABASE_SERVICE_KEY", env.get("SUPABASE_SERVICE_KEY", ""))
