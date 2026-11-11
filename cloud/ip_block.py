@@ -59,7 +59,7 @@ def main() -> int:
                                 'iso_timestamp_start': start.strftime('%Y-%m-%dT%H:%M:%SZ'),
                                 'iso_timestamp_end': end.strftime('%Y-%m-%dT%H:%M:%SZ')})
     req = urllib.request.Request(
-        f'https://api.supabase.com/v1/projects/{ref}/analytics/endpoints/logs.all?{q}',
+        f'https://api.supabase.com/v1/projects/{ref}/analytics/endpoints/logs?{q}',
         headers={'Authorization': f'Bearer {pat}', 'User-Agent': 'nar-jobs/1.0'})
     body = json.loads(urllib.request.urlopen(req, timeout=60).read())
     if body.get('error'):
