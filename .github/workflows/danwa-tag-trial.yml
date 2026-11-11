@@ -1,0 +1,26 @@
+# 2026-11-12 厩舎の話の札: 今の語句ルールと Haiku の選択を 200 頭前後で比べる(cloud/danwa/tag_trial.py)。手で回すだけ・DB には書かない。
+# ⛔公開 repo= ログに原文は出さない(race_id・馬番・札・トークン数だけ)。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY / ANTHROPIC_API_KEY
+name: danwa-tag-trial
+on:
+  workflow_dispatch:
+concurrency:
+  group: danwa-tag-trial
+  cancel-in-progress: false
+jobs:
+  trial:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: install
+        run: pip install -q anthropic
+      - name: tag trial
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python cloud/danwa/tag_trial.py
