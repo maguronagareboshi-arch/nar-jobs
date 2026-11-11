@@ -25,12 +25,14 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: scan logs and update block list
+        id: s
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           HOURS: ${{ inputs.hours || '1' }}
           DRY_RUN: ${{ inputs.dry_run || '0' }}
+          DC_DRY: '1'   # 借りたコンピューターの線(300/時)は数日 表だけ。了承後に '0'
         run: python3 cloud/ip_block.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: heartbeat
         if: '!cancelled() && github.event_name == ''schedule'''
@@ -39,3 +41,15 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
           OK: ${{ job.status == 'success' && 'ok' || 'fail' }}
         run: python3 cloud/beat.py ip_block "$OK" "見回り"
+      # 名簿に載せたら 1 日 1 通= その日最初の 1 回だけ赤にする(赤= 所有者へ GitHub のメール)
+      - name: notify once a day
+        if: steps.s.outputs.listed != '' && steps.s.outputs.listed != '0' && github.event_name == 'schedule'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          IPS: ${{ steps.s.outputs.ips }}
+        run: |
+          if [ "$(python3 cloud/beat.py --today ip_block_notice)" = "1" ]; then echo "今日は知らせ済み $IPS"; exit 0; fi
+          python3 cloud/beat.py ip_block_notice ok "$IPS"
+          echo "::error::出入り禁止名簿に載せた(知らせだけ・便は正常) $IPS"
+          exit 1
