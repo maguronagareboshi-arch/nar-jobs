@@ -82,9 +82,10 @@ def _mix(c, lp, lm, lh, K):
     return np.clip(K * e / e.sum(), 1e-12, 0.995)
 
 
-def select_arrays(p1, p3, ow, pl, ph, od):
+def select_arrays(p1, p3, ow, pl, ph, od, need_axis=True):
     """研究 buy4_judge.select_race と同じ計算(17 個の配列・馬番で引く・無い馬は 0・od = {研究の券種名: 表(ワイドは [..., 2])})。
-    → (軸の馬番の一覧, [(研究の券種名, 組, 混ぜた率, 期待値用オッズ, 市場の率)]) か (None, 理由)。"""
+    → (軸の馬番の一覧, [(研究の券種名, 組, 混ぜた率, 期待値用オッズ, 市場の率)]) か (None, 理由)。
+    need_axis=False(2026-11-12 画面の参考だけ・判定に数えない): 軸を求めず、期待値 ≥ LINE の組を全部(軸の一覧は空で返す)。"""
     C = consts()
     A2, B2, A3, B3 = C['A2'], C['B2'], C['A3'], C['B3']
     AX_P, AX_EV, LINE = C['AX_P'], C['AX_EV'], C['LINE']
@@ -135,11 +136,13 @@ def select_arrays(p1, p3, ow, pl, ph, od):
         p = _mix(c, np.log(AI[c][X]), np.log(MK[c][X]), np.log(np.clip(MH[c][X], 1e-12, None)), K)
         oe, mk = OE[c][X], MK[c][X]
         if c == '単勝':
+            if not need_axis:
+                continue
             axis = [int(h) for h in X[0][(p >= AX_P) & (p * oe >= AX_EV)]]
             if not axis:
                 return [], []
             continue
-        inc = np.zeros(len(p), bool)
+        inc = np.zeros(len(p), bool) if need_axis else np.ones(len(p), bool)
         for h in axis:
             for x in X:
                 inc |= x == h
@@ -206,13 +209,29 @@ def race(p, win, place, boards):
             hi = _odds(pv[1]) if len(pv) > 1 else lo
             if lo > 0:
                 a['pl'][u], a['ph'][u] = lo, (hi if hi > 0 else lo)
-    ax, tk = select_arrays(a['p1'], a['p3'], a['ow'], a['pl'], a['ph'], board_arrays(boards))
+    od = board_arrays(boards)
+    ax, tk = select_arrays(a['p1'], a['p3'], a['ow'], a['pl'], a['ph'], od)
     if ax is None:
         out['why'] = tk
         return out
     out['axis'] = ax
     out['n'] = len(nums)
     out['cols'] = ['組', 'オッズ', '混ぜた率', '市場の率', '期待値']
+    _put(out, tk)
+    if not ax:
+        # 2026-11-12 ユーザー「画面だけ広げて、判定は今の決まりのまま」: 軸のいないレースの参考(期待値 ≥ LINE の組・券種ごとに REF_MAX 点まで)。
+        #   判定は axis と券種の鍵(上)だけを数える = ref は数えない
+        _, rt = select_arrays(a['p1'], a['p3'], a['ow'], a['pl'], a['ph'], od, need_axis=False)
+        ref = _put({}, rt or [])
+        out['ref_total'] = {k: len(v) for k, v in ref.items()}
+        out['ref'] = {k: v[:REF_MAX] for k, v in ref.items()}
+    return out
+
+
+REF_MAX = 30  # 参考の組は券種ごとにこの点数まで書く(行を大きくしない・画面も 30 点まで)
+
+
+def _put(out, tk):
     inv = {v: k for k, v in KINDS.items()}
     for c, key, pr, oe, mk in tk:
         out.setdefault(inv[c], []).append([key, round(oe, 1), round(pr, 5), round(mk, 5), round(pr * oe, 3)])
@@ -223,7 +242,14 @@ def race(p, win, place, boards):
 
 
 def count(v):
-    """ログ用の点数(券種の中身は出さない)"""
+    """ログ用の点数(券種の中身は出さない・参考の組は数えない)"""
     if not isinstance(v, dict):
         return 0
     return sum(len(v.get(k) or []) for k in KINDS)
+
+
+def count_ref(v):
+    """ログ用の参考の組の点数(軸のいないレース・全部の点数)"""
+    if not isinstance(v, dict):
+        return 0
+    return sum((v.get('ref_total') or {}).values())
