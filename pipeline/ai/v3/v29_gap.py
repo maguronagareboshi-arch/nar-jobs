@@ -616,9 +616,57 @@ def latest_combos(track, day, rno, kinds=('wide', 'umaren')):
     out = {}
     for k in kinds:
         r = _get(f'/rest/v1/nar_odds_full_ticks?track=eq.{t}&race_date=eq.{day}&race_no=eq.{rno}&kind=eq.{k}'
-                 '&f=eq.false&select=kind,combos&order=id.desc&limit=1')
+                 f'&f=eq.false&select=kind,combos,observed_at&order=id.desc&limit={MED_N}')
         if r:
-            out[k] = r[0].get('combos') or []
+            out[k] = med_board(k, r)
+    return out
+
+
+MED_N = 3        # 2026-11-12 ユーザー: 一瞬だけ跳ねた板に乗らない = 直近 3 本の板の真ん中の値(川崎 2R ワイド 2-3 が 15:04 の 1 本だけ 9.0 倍)
+MED_AGE_S = 360  # 一番新しい板から 6 分より古い板は混ぜない(取り込みが止まっていた時の古い値を避ける)
+
+
+def _ts(x):
+    try:
+        return dt.datetime.fromisoformat(str(x).replace('Z', '+00:00'))
+    except ValueError:
+        return None
+
+
+def med_board(kind, rows):
+    """rows = 新しい順の板(combos・observed_at)。組ごとに倍率の位置(上限も)を真ん中の値にし、人気などは一番新しい板のまま。
+    一番新しい板に無い組は出さない。本数が 1 なら一番新しい板そのまま。"""
+    t0 = _ts(rows[0].get('observed_at'))
+    rows = [x for x in rows if t0 is None or (_ts(x.get('observed_at')) is not None and (t0 - _ts(x.get('observed_at'))).total_seconds() <= MED_AGE_S)]
+    new = rows[0].get('combos') or []
+    if len(rows) < 2:
+        return new
+    spec = B53.BOARD.get(kind)
+    nn = spec[0] if spec else (3 if kind.startswith('sanren') else 2)
+    pos = [nn] + ([spec[2]] if spec and spec[2] is not None else [])
+    hist = {}
+    for x in rows:
+        for e in x.get('combos') or []:
+            if isinstance(e, list) and len(e) > nn:
+                hist.setdefault(tuple(e[:nn]), []).append(e)
+    out = []
+    for e in new:
+        if not isinstance(e, list) or len(e) <= nn:
+            out.append(e)
+            continue
+        e2 = list(e)
+        for p in pos:
+            vs = []
+            for h in hist.get(tuple(e[:nn]), []):
+                try:
+                    v = float(h[p])
+                except (TypeError, ValueError, IndexError):
+                    continue
+                if v > 0:
+                    vs.append(v)
+            if vs and len(e2) > p:
+                e2[p] = float(np.median(vs))
+        out.append(e2)
     return out
 
 
@@ -694,8 +742,15 @@ def exists(key):
 
 
 def done_keys(day):
-    r = _get(f"{GAP}?race_date=eq.{day}&select=key")
-    return {x['key'] for x in r}
+    """決めた印 = 'key@発走'(2026-11-12: 決めた後に発走が遅れたら、新しい発走の 10 分前に決め直す)。"""
+    r = _get(f"{GAP}?race_date=eq.{day}&select=key,post:value->>post")
+    return {f"{x['key']}@{x.get('post') or ''}" for x in r}
+
+
+def stored_post(key):
+    """DB に書いた行の発走(HH:MM)。行が無ければ None。"""
+    r = _get(f"{GAP}?key=eq.{urllib.parse.quote(key)}&select=post:value->>post")
+    return (r[0].get('post') or '') if r else None
 
 
 def put_gap(key, value, track=None, day=None, rno=None):
@@ -942,11 +997,11 @@ def live(day, base_csv, mdir, write, until):
             if at is not None and at <= end + dt.timedelta(minutes=DECIDE_MIN) and (last_at is None or at > last_at):
                 last_at = at
             k = f"{day}:{r['track']}:{int(r['race_no'])}"
-            if at is None or k in done or at > end + dt.timedelta(minutes=DECIDE_MIN):
+            if at is None or f'{k}@{at:%H:%M}' in done or at > end + dt.timedelta(minutes=DECIDE_MIN):
                 continue
             mins = (at - now).total_seconds() / 60
             if mins < LATE_MIN:
-                done.add(k)
+                done.add(f'{k}@{at:%H:%M}')
                 continue
             todo.append((mins, r, k, at))
         if not todo:
@@ -999,10 +1054,15 @@ def live(day, base_csv, mdir, write, until):
                 wt_at = now
             for mins, r, k, at in due:
                 tr, rno = r['track'], int(r['race_no'])
+                dk = f'{k}@{at:%H:%M}'
+                prev_post = None
                 try:
-                    if write and exists(k):  # もう 1 本の便が先に決めた
-                        done.add(k)
-                        continue
+                    if write:
+                        sp = stored_post(k)
+                        if sp == f'{at:%H:%M}':  # もう 1 本の便が先に決めた
+                            done.add(dk)
+                            continue
+                        prev_post = sp  # 前の発走で決めた行がある = 発走が遅れた(決め直して上書き)
                     odds, asof = latest_odds(tr, day, rno)
                 except Exception as e:  # noqa: BLE001
                     log(f'{tr}{rno}R: 読めない {type(e).__name__}(次の回)')
@@ -1010,12 +1070,12 @@ def live(day, base_csv, mdir, write, until):
                 Bk = B[(B.track == tr) & (B.race_no == rno)]
                 if not odds or Bk.empty:
                     log(f'{tr}{rno}R: オッズか土台が無い(見送り)')
-                    done.add(k)
+                    done.add(dk)
                     continue
                 w = wt.get((tr, rno), {})
                 b, bm = decide_buy(Bk, odds, w, go.get((tr, rno)) or r.get('going') or '', model, meta, (tr, rno))
                 if b.empty:
-                    done.add(k)
+                    done.add(dk)
                     continue
                 c = b[b.buy]
                 rk = {int(u): i for i, u in enumerate(b.sort_values(['p3p', 'p1', 'umaban'], ascending=[False, False, True]).umaban)}
@@ -1047,6 +1107,8 @@ def live(day, base_csv, mdir, write, until):
                                     'ev': round(float(x.ev), 3), 'buy': bool(x.buy), 'pg1_v31': round(float(x.pg1_v31), 4)}
                                    for x in b.itertuples()],
                        'combo_line': lines['wide'], 'combo_lines': lines, 'combo': combo, 'combo_all': combo_all}
+                if prev_post:  # 2026-11-12: 発走が遅れて決め直した(前の発走で決めた行を上書き)
+                    val['redecided_from'] = prev_post
                 val.update(bm)  # 決め 38-1: どちらの模型で決めたか(buy_model = b38… / v31・buy_model_why・day_at・day_parts)
                 if bm.get('buy_model', 'v31') != 'v31':  # 決め 39: 複勝も(記録だけ・取消は答え合わせで数えない)
                     val['place_line'] = PLACE_LINE
@@ -1062,10 +1124,10 @@ def live(day, base_csv, mdir, write, until):
                 except Exception as e:  # noqa: BLE001
                     log(f'{tr}{rno}R: 書けない {type(e).__name__}(次の回)')
                     continue
-                done.add(k)
+                done.add(dk)
                 n_w += 1
                 n_buy += len(c)
-                log(f'{tr}{rno}R: 発走 {at:%H:%M}・{now:%H:%M:%S} に決めた・{len(b)} 頭(体重 {val["weights"]})'
+                log(f'{tr}{rno}R: 発走 {at:%H:%M}・{now:%H:%M:%S} に決めた{"(発走 " + prev_post + " から遅れて決め直し)" if prev_post else ""}・{len(b)} 頭(体重 {val["weights"]})'
                     f'・{val["buy_model"]}・候補 {len(c)} 頭(複勝も {len(val.get("place") or [])})・3 連単 {len(val.get("tri") or [])}・3 連複 {len(val.get("trio") or [])} 組(記録)・参考(決め 53) {B53.count(val.get("b53"))} 点・決め 4 の段 2 {BUY4.count(val.get("buy4"))} 点・参考 {BUY4.count_ref(val.get("buy4"))} 点{"(" + val["buy4"]["why"] + ")" if (val.get("buy4") or {}).get("why") else ""}・書き込み {st}')
         if now > end:
             log('時間切れ: 書いた', n_w, 'R・候補', n_buy, '頭')
