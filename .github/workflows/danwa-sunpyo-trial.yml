@@ -1,0 +1,45 @@
+# 2026-11-12 厩舎の話から馬ごとの寸評を Haiku で作る試し(cloud/danwa/sunpyo_trial.py)。手で回すだけ・DB には書かない。
+# ⛔公開 repo= ログに文・原文は出さない(件数と状態だけ)。結果の tsv は 1 日だけの成果物で持ち帰り、取ったら消す。
+# 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY / ANTHROPIC_API_KEY
+name: danwa-sunpyo-trial
+on:
+  workflow_dispatch:
+    inputs:
+      track:
+        description: 場の名前
+        required: true
+        default: 川崎
+      date:
+        description: 日付 YYYY-MM-DD
+        required: true
+        default: '2026-11-11'
+concurrency:
+  group: danwa-sunpyo-trial
+  cancel-in-progress: false
+jobs:
+  trial:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: install
+        run: pip install -q anthropic
+      - name: sunpyo trial
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          TRACK: ${{ inputs.track }}
+          DATE: ${{ inputs.date }}
+        run: python cloud/danwa/sunpyo_trial.py --track "$TRACK" --date "$DATE" --out out/sunpyo_trial.tsv
+      - name: upload tsv
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: sunpyo-trial
+          path: out/sunpyo_trial.tsv
+          retention-days: 1
+          if-no-files-found: ignore
