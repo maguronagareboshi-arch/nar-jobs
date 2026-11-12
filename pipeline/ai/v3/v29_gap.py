@@ -505,6 +505,8 @@ def score_new(b, nm):
     b['pg1'] = p / p.sum()
     b['ev'] = b.pg1 * b.win
     b['buy'] = (b.p3p >= nm['p3_min']) & (b.ev >= nm['line'])
+    if nm.get('odds_lo') is not None:  # 2026-11-13 単勝の買い目の決め直し(研究 nankan-ai-v3 buy_win_verify_1112.py): 10 分前の単勝の帯(数は定数の json)
+        b['buy'] &= (b.win >= float(nm['odds_lo'])) & (b.win < float(nm['odds_hi']))
     return b
 
 
@@ -936,7 +938,8 @@ def live(day, base_csv, mdir, write, until):
     global NEW
     try:  # 決め 38-1: 直前版の勝つ率で学んだ買いの模型(mdir/buy38_new.json・種 3 本)。無ければ全部 v31
         NEW = load_new(mdir)
-        log('買いの模型 決め38-1', f'読めた(種 {len(NEW["boosters"])} 本)' if NEW else '無し(v31 のまま)')
+        log('買いの模型', f'読めた(種 {len(NEW["boosters"])} 本・{NEW.get("tag")}・渡す率 {NEW.get("ai_rate", "混ぜの前")}・線 {NEW.get("line")}'
+            f'・単勝 {NEW.get("odds_lo", "-")}〜{NEW.get("odds_hi", "-")})' if NEW else '無し(v31 のまま)')
     except Exception as e:  # noqa: BLE001
         NEW = None
         log('買いの模型 決め38-1 読めない(v31 のまま)', type(e).__name__, str(e)[:200])
@@ -1032,8 +1035,9 @@ def live(day, base_csv, mdir, write, until):
                     else:
                         took = write_day(row, day) if write else 'dry'
                         n_day += 1
-                        pb = PREB.get((tr, rno)) if row['meta'].get('f3') else None  # F3 を混ぜた行は、買いには混ぜの前の率(決め 49 は予想だけ)
-                        g0 = row['meta'].get('g68') if pb is None else None  # 枠の直し(決め 68)も予想だけ = F3 の無い行の買いには直しの前の率
+                        final = bool(NEW and NEW.get('ai_rate') == 'final')  # 2026-11-13: 今の版の AI で学び直した買いの模型 = 画面と同じ最後の率を渡す
+                        pb = PREB.get((tr, rno)) if row['meta'].get('f3') and not final else None  # 古い模型(決め 38-1): F3 を混ぜた行は、買いには混ぜの前の率(決め 49 は予想だけ)
+                        g0 = row['meta'].get('g68') if pb is None and not final else None  # 古い模型: 枠の直し(決め 68)も予想だけ = F3 の無い行の買いには直しの前の率
                         if g0:
                             pb = {int(n): (g0['q0'][n], g0['p0'][n]) for n in g0['p0']}
                         DAY4[(tr, rno)] = {int(x['num']): (float(x['p1']), float(x['p3'])) for x in row['meta']['runners']}

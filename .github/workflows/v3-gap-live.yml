@@ -194,7 +194,13 @@ jobs:
             echo "一本の木の模型なし(混ぜない)"
           fi
           # 2026-10-15 決め 38-1: 直前版の勝つ率で学んだ買いの模型(種 3 本・V3_ASSET_KEY)。無ければ全部 v31 で決める
-          if gh release download v3-buy38-20261015 -p 'v3_buy38.tar.gz.enc' -D in; then
+          # 2026-11-13: 単勝の買い目の決め直し = 今の版(南関 第30版 直前版)の率で学び直した買いの模型(種 3 本)+ 線と単勝の帯(json の中)。
+          #   同じ名前 buy38_new.json で置く(ai_rate = final = 画面と同じ最後の率を渡す)。取れない・開けない時は決め 38-1 の模型に戻る
+          if gh release download v3-buywin-20261113 -p 'v3_buywin.tar.gz.enc' -D in \
+             && openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_buywin.tar.gz.enc | tar -C gapm -xzf - \
+             && [ -s gapm/buy38_new.json ]; then
+            echo "買いの模型 = 今の版で学び直した物(v3-buywin-20261113)"
+          elif gh release download v3-buy38-20261015 -p 'v3_buy38.tar.gz.enc' -D in --clobber; then
             openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_buy38.tar.gz.enc | tar -C gapm -xzf - || echo "買いの模型 決め38-1 を開けない(v31 のまま)"
           else
             echo "買いの模型 決め38-1 なし(v31 のまま)"
