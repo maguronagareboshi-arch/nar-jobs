@@ -200,6 +200,13 @@ jobs:
              && openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_buywin.tar.gz.enc | tar -C gapm -xzf - \
              && [ -s gapm/buy38_new.json ]; then
             echo "買いの模型 = 今の版で学び直した物(v3-buywin-20261113)"
+            # 紙の試し(馬連・ワイド・馬単・全券種の参考 〜12/28)の入力は 決め 38-1 の模型の率のまま = gapm/b38old に置く
+            mkdir -p gapm/b38old in/b38old
+            if gh release download v3-buy38-20261015 -p 'v3_buy38.tar.gz.enc' -D in/b38old                && openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/b38old/v3_buy38.tar.gz.enc | tar -C gapm/b38old -xzf -; then
+              echo "決め 38-1 の模型(紙の試しの入力)= gapm/b38old"
+            else
+              echo "決め 38-1 の模型を開けない(紙の試しの入力も新しい率になる)"
+            fi
           elif gh release download v3-buy38-20261015 -p 'v3_buy38.tar.gz.enc' -D in --clobber; then
             openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_buy38.tar.gz.enc | tar -C gapm -xzf - || echo "買いの模型 決め38-1 を開けない(v31 のまま)"
           else

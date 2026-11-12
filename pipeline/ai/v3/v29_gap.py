@@ -457,6 +457,7 @@ def decide(B, odds, wt, going, model, meta):
 # 同じ便が発走 30〜16 分前に作った直前版の p1・p3 で作る。直前版(勝つ率の直し入り)が無いレースは今の v31 で決める。
 NEW_META = 'buy38_new.json'
 NEW = None  # load_new の戻り。live() が mdir から読む。無ければ全部 v31
+OLD38 = None  # 2026-11-13: 新しい模型(ai_rate final)のとき、決め 38-1 の模型(mdir/b38old)も読む = 紙の試し(馬連・ワイド・馬単・全券種の参考 〜12/28)の入力 runners[].pg1 を替えないため
 PLACE_LINE = 1.1  # 決め 39(2026-10-15): 単勝で買う馬のうち 新しい勝つ率 × 10 分前の単勝 ≥ 1.1 を「複勝も」(記録だけ・新しい模型で決めたレースだけ)
 DAYP = {}   # (場, R) → {'p': {馬番: (p1, p3)}, 'meta': 直前版の meta}(day_marks を書いた時に入れる)
 DAY4 = {}   # (場, R) → {馬番: (p1, p3)} = 書いた直前版の行の meta.runners のまま(買い方 決め 4 の段 2 はこの率・無ければ DB の直前の行を読む)
@@ -525,6 +526,13 @@ def decide_buy(B, odds, wt, going, model, meta, key):
             if b2 is not None:
                 new = score_new(b2, NEW)
                 new['pg1_v31'] = old.pg1.to_numpy()
+                if NEW.get('ai_rate') == 'final' and OLD38 is not None and d.get('p_old'):
+                    try:  # 2026-11-13: 決め 38-1 の模型の率も(紙の試しの入力 runners[].pg1・組の記録)。落ちたら新しい率のまま
+                        b3, _ = use_day(b, d['p_old'])
+                        if b3 is not None:
+                            new['pg1_b38'] = score_new(b3, OLD38).pg1.to_numpy()
+                    except Exception as e:  # noqa: BLE001
+                        log('決め 38-1 の模型の率 失敗', type(e).__name__, str(e)[:120])
                 m = d['meta']
                 return new, {'buy_model': NEW.get('tag', 'b38'), 'day_at': m.get('at'),
                              'day_parts': [k for k in ('p1f', 'tpl', 'sitb') if k in m]}
@@ -935,7 +943,13 @@ def live(day, base_csv, mdir, write, until):
     except Exception as e:  # noqa: BLE001
         OT72, OT72G = None, None
         log('一本の木 読めない(混ぜない)', type(e).__name__, str(e)[:200])
-    global NEW
+    global NEW, OLD38
+    try:  # 2026-11-13: 新しい模型のときだけ 決め 38-1 の模型も(mdir/b38old)
+        OLD38 = load_new(Path(mdir) / 'b38old') if (Path(mdir) / 'b38old' / NEW_META).exists() else None
+        log('決め 38-1 の模型(紙の試しの入力)', f'読めた(種 {len(OLD38["boosters"])} 本)' if OLD38 else '無し')
+    except Exception as e:  # noqa: BLE001
+        OLD38 = None
+        log('決め 38-1 の模型(紙の試しの入力) 読めない', type(e).__name__, str(e)[:200])
     try:  # 決め 38-1: 直前版の勝つ率で学んだ買いの模型(mdir/buy38_new.json・種 3 本)。無ければ全部 v31
         NEW = load_new(mdir)
         log('買いの模型', f'読めた(種 {len(NEW["boosters"])} 本・{NEW.get("tag")}・渡す率 {NEW.get("ai_rate", "混ぜの前")}・線 {NEW.get("line")}'
@@ -1036,13 +1050,15 @@ def live(day, base_csv, mdir, write, until):
                         took = write_day(row, day) if write else 'dry'
                         n_day += 1
                         final = bool(NEW and NEW.get('ai_rate') == 'final')  # 2026-11-13: 今の版の AI で学び直した買いの模型 = 画面と同じ最後の率を渡す
-                        pb = PREB.get((tr, rno)) if row['meta'].get('f3') and not final else None  # 古い模型(決め 38-1): F3 を混ぜた行は、買いには混ぜの前の率(決め 49 は予想だけ)
-                        g0 = row['meta'].get('g68') if pb is None and not final else None  # 古い模型: 枠の直し(決め 68)も予想だけ = F3 の無い行の買いには直しの前の率
+                        pb = PREB.get((tr, rno)) if row['meta'].get('f3') else None  # 決め 38-1 の模型: F3 を混ぜた行は、買いには混ぜの前の率(決め 49 は予想だけ)
+                        g0 = row['meta'].get('g68') if pb is None else None  # 決め 38-1 の模型: 枠の直し(決め 68)も予想だけ = F3 の無い行の買いには直しの前の率
                         if g0:
                             pb = {int(n): (g0['q0'][n], g0['p0'][n]) for n in g0['p0']}
                         DAY4[(tr, rno)] = {int(x['num']): (float(x['p1']), float(x['p3'])) for x in row['meta']['runners']}
-                        DAYP[(tr, rno)] = {'p': {int(x['num']): ((round(float(pb[int(x['num'])][0]), 4), round(float(pb[int(x['num'])][1]), 4)) if pb else
-                                                                 (float(x['p1']), float(x['p3']))) for x in row['meta']['runners']},
+                        p_old = {int(x['num']): ((round(float(pb[int(x['num'])][0]), 4), round(float(pb[int(x['num'])][1]), 4)) if pb else
+                                                 (float(x['p1']), float(x['p3']))) for x in row['meta']['runners']}
+                        p_fin = {int(x['num']): (float(x['p1']), float(x['p3'])) for x in row['meta']['runners']}
+                        DAYP[(tr, rno)] = {'p': p_fin if final else p_old, 'p_old': p_old,
                                            'meta': {**{k: row['meta'][k] for k in ('p1f', 'tpl', 'sitb') if k in row['meta']},
                                                     'at': now.strftime('%H:%M:%S')}}
                         log(f'{tr}{rno}R: 当日版の印 発走 {at:%H:%M}・{now:%H:%M:%S}・体重 {row["meta"]["weights"]}/{row["meta"]["n"]} 頭'
@@ -1087,7 +1103,8 @@ def live(day, base_csv, mdir, write, until):
                 cmb = {}
                 try:
                     cmb = latest_combos(tr, day, rno, TRI.KINDS if tm is not None else ('wide', 'umaren'))
-                    combo, combo_all = combo_pick(b, {k: cmb.get(k) for k in ('wide', 'umaren')}, lines)
+                    bc = b.assign(pg1=b.pg1_b38.to_numpy()) if 'pg1_b38' in b.columns else b  # 組の記録(紙の試し)は 決め 38-1 の模型の率のまま
+                    combo, combo_all = combo_pick(bc, {k: cmb.get(k) for k in ('wide', 'umaren')}, lines)
                 except Exception as e:  # noqa: BLE001  組は記録だけ= 取れなくても単勝は書く
                     log(f'{tr}{rno}R: 組のオッズ 失敗 {type(e).__name__}')
                     combo, combo_all = {}, {}
@@ -1107,7 +1124,10 @@ def live(day, base_csv, mdir, write, until):
                                 'p3': round(float(x.p3p), 4)} for x in c.itertuples()],
                        'runners': [{'num': int(x.umaban), 'name': x.horse_name, 'rank': rk[int(x.umaban)] + 1,
                                     'mark': MARKS[rk[int(x.umaban)]] if rk[int(x.umaban)] < 5 else '',
-                                    'p3': round(float(x.p3p), 4), 'odds': float(x.win), 'pg1': round(float(x.pg1), 4),
+                                    'p3': round(float(x.p3p), 4), 'odds': float(x.win),
+                                    # 2026-11-13: pg1 = 紙の試し(〜12/28)の入力 = 決め 38-1 の模型の率のまま。新しい模型の率は pg1w(ev・buy はこちら)
+                                    'pg1': round(float(getattr(x, 'pg1_b38', x.pg1)), 4),
+                                    **({'pg1w': round(float(x.pg1), 4)} if hasattr(x, 'pg1_b38') else {}),
                                     'ev': round(float(x.ev), 3), 'buy': bool(x.buy), 'pg1_v31': round(float(x.pg1_v31), 4)}
                                    for x in b.itertuples()],
                        'combo_line': lines['wide'], 'combo_lines': lines, 'combo': combo, 'combo_all': combo_all}
