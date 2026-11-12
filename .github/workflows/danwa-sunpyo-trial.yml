@@ -1,4 +1,4 @@
-# 2026-11-12 厩舎の話から馬ごとの寸評を Haiku で作る試し(cloud/danwa/sunpyo_trial.py)。手で回すだけ・DB には書かない。
+# 2026-11-12 厩舎の話から馬ごとの寸評を Haiku で作る試し(cloud/danwa/sunpyo_trial.py・考える段階 off と low を 1 回で両方)。手で回すだけ・DB には書かない。
 # ⛔公開 repo= ログに文・原文は出さない(件数と状態だけ)。結果の tsv は 1 日だけの成果物で持ち帰り、取ったら消す。
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY / ANTHROPIC_API_KEY
 name: danwa-sunpyo-trial
@@ -13,10 +13,6 @@ on:
         description: 日付 YYYY-MM-DD
         required: true
         default: '2026-11-11'
-      thinking:
-        description: 考える段階 on か off
-        required: false
-        default: 'on'
 concurrency:
   group: danwa-sunpyo-trial
   cancel-in-progress: false
@@ -38,8 +34,7 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TRACK: ${{ inputs.track }}
           DATE: ${{ inputs.date }}
-          THINKING: ${{ inputs.thinking }}
-        run: python cloud/danwa/sunpyo_trial.py --track "$TRACK" --date "$DATE" --out out/sunpyo_trial.tsv --thinking "$THINKING"
+        run: python cloud/danwa/sunpyo_trial.py --track "$TRACK" --date "$DATE" --out out/sunpyo_trial.tsv
       - name: upload tsv
         if: always()
         uses: actions/upload-artifact@v7
