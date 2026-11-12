@@ -115,6 +115,20 @@ jobs:
           python cloud/danwa/test_danwa_para.py
           if [ "$APPLY" = "1" ]; then python cloud/danwa/danwa_para.py
           else python cloud/danwa/danwa_para.py --dry-run; fi
+      # 2026-11-12 寸評(過去の話と着順の答え合わせ+今回の話・nar_danwa_note の sunpyo* だけ)。cloud/danwa/sunpyo.py。
+      #   言い換えの後(当日の para が要る)。落ちても exit 0・continue-on-error= 取得の便全体を赤にしない。
+      - name: nankan danwa sunpyo
+        if: '!cancelled()'
+        continue-on-error: true
+        timeout-minutes: 30
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python cloud/danwa/test_sunpyo.py
+          if [ "$APPLY" = "1" ]; then python cloud/danwa/sunpyo.py
+          else python cloud/danwa/sunpyo.py --dry-run --limit 5; fi
       # done.tsv(取得済みの印)だけを cache で持ち越す。無ければ 7 日分を全部取り直す(安全側)。
       - name: restore done marks
         uses: actions/cache/restore@v6
