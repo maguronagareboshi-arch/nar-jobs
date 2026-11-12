@@ -13,6 +13,10 @@ on:
         description: 日付 YYYY-MM-DD
         required: true
         default: '2026-11-11'
+      thinking:
+        description: 考える段階 on か off
+        required: false
+        default: 'on'
 concurrency:
   group: danwa-sunpyo-trial
   cancel-in-progress: false
@@ -34,7 +38,8 @@ jobs:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
           TRACK: ${{ inputs.track }}
           DATE: ${{ inputs.date }}
-        run: python cloud/danwa/sunpyo_trial.py --track "$TRACK" --date "$DATE" --out out/sunpyo_trial.tsv
+          THINKING: ${{ inputs.thinking }}
+        run: python cloud/danwa/sunpyo_trial.py --track "$TRACK" --date "$DATE" --out out/sunpyo_trial.tsv --thinking "$THINKING"
       - name: upload tsv
         if: always()
         uses: actions/upload-artifact@v7

@@ -38,6 +38,7 @@ SYSTEM = (
     "- 陣営の話であることが分かる書き方にする(例「〜という話が続く」「陣営は〜と見ている」)。\n"
     "- 1 回だけ出た話より、何度も出た話を優先する。\n"
     "- 勝ち負け・着順・買い目の見立ては書かない。並んだ文に無い事柄を足さない。断定を強めない。\n"
+    "- 「上位」「勝機」「勝ち負け」など、着順や勝敗の見込みを表す言い方はしない。\n"
     "- 調教師・厩舎・騎手などの人名、新聞社や他社の名前、クラス名(C1 など)・重賞・斤量・ブリンカーなどの専門語を出さない。\n"
     f"- 並んだ文や元の談話と同じ {D.NGRAM} 字以上の並びを使わない(言い回しを変える)。\n"
     "- 返事は JSON だけ: {\"sunpyo\":\"…\"}(前後に文を書かない)。"
@@ -111,11 +112,14 @@ def main():
     ap.add_argument("--track", required=True)
     ap.add_argument("--date", required=True)
     ap.add_argument("--out", default="out/sunpyo_trial.tsv")
+    ap.add_argument("--thinking", choices=["on", "off"], default="on")   # off= 考える段階を切る(Haiku 5.5 は effort high 以下で disabled 可)
     a = ap.parse_args()
     env = os.environ
     db = D.Rest(env["SUPABASE_URL"], env["SUPABASE_SERVICE_KEY"])
     import anthropic
     cl = anthropic.Anthropic(api_key=env["ANTHROPIC_API_KEY"])
+    kw = ({"max_tokens": 600, "thinking": {"type": "disabled"}} if a.thinking == "off"
+          else {"max_tokens": D.MAX_TOKENS})
 
     src = db.get(f"{D.SRC}?select=*&race_date=eq.{a.date}&track=eq.{q(a.track)}"
                  f"&order=race_no.asc,umaban.asc&limit=1000")
@@ -149,7 +153,7 @@ def main():
         s, why, hi, ho = "", ["未"], 0, 0
         for k in range(2):                       # 1 回目 + 作り直し 1 回
             try:
-                res = cl.messages.create(model=D.MODEL, max_tokens=D.MAX_TOKENS, system=SYSTEM,
+                res = cl.messages.create(model=D.MODEL, system=SYSTEM, **kw,
                                          messages=[{"role": "user", "content": user_prompt(talks, why if k else None)}])
                 hi += getattr(res.usage, "input_tokens", 0) or 0
                 ho += getattr(res.usage, "output_tokens", 0) or 0
