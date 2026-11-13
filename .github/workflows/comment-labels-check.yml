@@ -1,6 +1,6 @@
 # 2026-11-13 高知コメント分類の毎日分(cloud/comment_labels_daily.py)の試し。DB には書かない。
 # - ドライラン(未分類の件数と見本 5 文)と、分類済みから無作為 40 文の付け直しで既存との一致率(--check 40)。
-# - wip 枝への push でも走る(手で回す便は既定の枝に無いと押せないため)。
+# - wip 枝への push でも走る(手で回す便は既定の枝に無いと押せないため)。分類の決まりは data/comment_taxonomy_v2.md(data/ は ignore= -f で入れた)。
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY / ANTHROPIC_API_KEY
 name: comment-labels-check
 
