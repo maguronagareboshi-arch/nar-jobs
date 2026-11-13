@@ -399,6 +399,18 @@ jobs:
           else
             python cloud/kochi_comments.py --apply
           fi
+      # 2026-11-13 高知コメントの「よく出る話」分類(nar_comment_labels)を毎便足す。cloud/comment_labels_daily.py。
+      #   labels の無い一意な文だけ Sonnet 5.5 に 40 文ずつ(無ければ API を呼ばない)。heartbeat 'comment_labels'(台本の中で書く)。
+      #   ⛔落ちても続行(台本は exit 0・continue-on-error)= 便を止めない
+      - name: kochi comment labels (daily)
+        if: env.MODE != 'monthly' && !cancelled()
+        continue-on-error: true
+        timeout-minutes: 15
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: python cloud/comment_labels_daily.py --apply --limit 400
 
       # §54.3-bc 移籍・在籍変化(転入・転厩=直近7日窓の自己修復 / 馬主変更=日次スナップショット差分)。
       # 毎朝1回で足りるので monthly 便(05:33 JST=このリポジトリの日次集計の置き場)に置く。
