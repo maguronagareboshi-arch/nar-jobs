@@ -66,6 +66,7 @@ def read_rows(path):
 def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--file", default=str(SRC))
+    ap.add_argument("--model", default=MODEL, help="model 列に入れる値(11/13 追加分の埋め直しで使う)")
     ap.add_argument("--dry-run", action="store_true", help="件数を数えるだけ(書かない・鍵は要らない)")
     a = ap.parse_args()
 
@@ -82,7 +83,7 @@ def main():
     if not url or not key:
         log("SUPABASE_URL / SUPABASE_SERVICE_KEY が無い"); return 2
 
-    send = [{"hid": h, "labels": l, "model": MODEL} for h, l in sorted(rows.items())]
+    send = [{"hid": h, "labels": l, "model": a.model} for h, l in sorted(rows.items())]
     for i in range(0, len(send), BATCH):
         st, msg, _ = req(url, key, "/rest/v1/%s?on_conflict=hid" % TABLE, "POST",
                          json.dumps(send[i:i + BATCH], ensure_ascii=False).encode("utf-8"))
