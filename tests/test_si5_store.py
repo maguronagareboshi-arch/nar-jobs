@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """2026-10-26 pipeline/ai/v3/si5_store.py= 南関だけ・SI5 の無い走は書かない・直近 21 日(全期間)・読み直しの照合。
-2026-10-27 表示の直し disp(流れの升 − 帯の平均・大井の砂替え)= 定数が 0 なら SI5 のまま・手で数えた値と一致。"""
+2026-10-27 表示の直し disp(流れの升 − 帯の平均・大井の砂替え)= 定数が 0 なら SI5 のまま・手で数えた値と一致。
+2026-11-13 ③ レースの時計の揺れ race_shake = K_RACE が無ければ 0・手で数えた値と一致・交流は 0。"""
 import sys
 import unittest
 from pathlib import Path
@@ -74,6 +75,21 @@ class Si5StoreTest(unittest.TestCase):
         np.testing.assert_allclose(S.disp(U, R), [72.7, 75.9, 75.7, 75.7, 72.7, 72.7])
         x = S.frame(U.assign(track=["川崎"] * n), R)
         np.testing.assert_allclose(x.si5, [69.5, 69.5, 72.5, 72.5, 69.5, 69.5])
+
+
+class RaceShakeTest(unittest.TestCase):
+    def test_hand(self):
+        U = pd.DataFrame({"track": ["川崎"] * 4, "race_date": ["2026-11-01"] * 4, "race_no": [1, 2, 3, 3],
+                          "dtk": ["d"] * 4, "r_T": [1.0, -1.0, 3.0, 3.0], "bc_T": [62.5] * 4,
+                          "b_kind": [0, 0, 4, 4], "kT": ["C3", "C3", "A1", "A1"]})
+        R = pd.DataFrame({"rval": [np.nan, 4.0, 0.0, 0.0], "D_proj_raw": [0.5] * 4})
+        self.assertTrue((S.race_shake(U, R, {}) == 0).all())
+        c = {"K_RACE": 0.5, "K_SHR": 0.5, "MU": [["川崎|0|C3", 1.0]]}
+        v = S.race_shake(U, R, c)
+        # R1: 走破 (1 − 1)×0.5 = 0・力 欠け → 0・平均 0 → 0 × 16 − 1 = −1 → × 0.5 = −0.5
+        # R2: 走破 (−1 − 1)×0.5 = −1・力 4 − 真ん中 2 = 2・平均 0.5 → 0.5 × 16 − 1 = 7 → 3.5
+        # R3: 交流 → 0
+        self.assertTrue(np.allclose(v, [-0.5, 3.5, 0.0, 0.0]), v)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,7 @@
                      python -X utf8 pipeline/ai/v3/si5_store.py check FILE.parquet  = DB の値と FILE を照らす(書かない)
 
 - 値 = 便が予想の材料に作る t5_open.si5_of(U)(= t5_base.make_si5)の SI5 に、表示の直し(disp・2026-10-27・ユーザー承認:
-  流れと大井の砂替え)を足したもの。予想の材料の SI5 は変えない。直しの数は暗号化した定数のリリースに置く(公開のコードに数を置かない)。
+  流れと大井の砂替え)・2026-11-13 ③ レースの時計の揺れ(race_shake)を足したもの。予想の材料の SI5 は変えない。直しの数は暗号化した定数のリリースに置く(公開のコードに数を置かない)。
 - 確定した日の値は後から動かない(2015〜21 の 25.5 万走で差 0)= 毎日は直近 DAYS 日だけ書き直す。
 - 表の nar_si5 は DB のトリガーで nar_runs.si5 に写り、サイトは今までの窓口(runs_*)で読む(sql/si5_store.sql)。
 - 2026-10-26 南関の「その日の馬場の速さ」D5(SI5 の計算に使う日×場の 1000m あたりの秒)も nar_meta nankan_d5 に書く
@@ -83,7 +83,32 @@ def disp(U, R):
     for t, lo, hi in c['SAND']:
         m = ((U.track == t).to_numpy() & (rd >= lo).to_numpy() & (rd <= hi).to_numpy() & (U.n_T > 0).to_numpy())
         sand[m] = ((U.Draw_T - U.D_T).to_numpy(float) * f * 1000 / U.bc_T.to_numpy(float))[m]
-    return (R.SI5.to_numpy(float) + sand) + pace
+    return (R.SI5.to_numpy(float) + sand) + pace + race_shake(U, R, c)
+
+
+def race_shake(U, R, c):
+    """③ そのレースの時計の揺れを戻す(2026-11-13・ユーザー「指数も別欄で出すので正確であって欲しい」・予想の材料の SI5 は変えない)。
+    作りと確かめは v3 の src/si5_disp2_consts.py・out/si5_disp2_consts.md。定数に K_RACE が無ければ 0(今までどおり)。
+    揺れ = そのレースの値 − その日×場のレースの値の真ん中(走破 r_T は × K_SHR・力からの rval はそのまま・その日に D_proj_raw が
+    あれば 2 つの平均・無ければ走破だけ・値の無いレースは 0)× 1000 / b − 場 × 格 × 区分の平均(MU・無い群は 0)。交流(b_kind 4)は 0。"""
+    k = float(c.get('K_RACE', 0.0))
+    if k == 0.0:
+        return np.zeros(len(U))
+    rd = pd.to_datetime(U.race_date).dt.strftime('%Y-%m-%d')
+    W = pd.DataFrame({'track': U.track.to_numpy(), 'rd': rd.to_numpy(), 'race_no': U.race_no.astype(int).to_numpy(),
+                      'dtk': U.dtk.to_numpy(), 'rT': U.r_T.to_numpy(float), 'rV': R.rval.to_numpy(float),
+                      'dpr': R.D_proj_raw.to_numpy(float)})
+    K = ['track', 'rd', 'race_no']
+    RR = W.drop_duplicates(K).copy()
+    dT = (RR.rT - RR.groupby('dtk').rT.transform('median')).fillna(0.0) * float(c['K_SHR'])
+    dV = (RR.rV - RR.groupby('dtk').rV.transform('median')).fillna(0.0)
+    RR['d'] = np.where(RR.dpr.notna(), (dT + dV) / 2, dT)
+    d = W[K].merge(RR[K + ['d']], on=K, how='left').d.to_numpy(float) * 1000 / U.bc_T.to_numpy(float)
+    g = (U.track.astype(str) + '|' + U.b_kind.fillna(-1).astype(int).astype(str) + '|' + U.kT.fillna('').astype(str)).to_numpy()
+    mu = dict((str(a), float(v)) for a, v in c['MU'])
+    d = np.nan_to_num(d) - np.array([mu.get(x, 0.0) for x in g])
+    d[(U.b_kind == 4).to_numpy()] = 0.0
+    return k * d
 
 
 def frame(U=None, R=None):
