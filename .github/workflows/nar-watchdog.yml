@@ -547,6 +547,7 @@ jobs:
             cloud/beat.py
             cloud/sb_gzip.py
             cloud/db_sizes.py
+            cloud/viewer_cap_watch.py
           sparse-checkout-cone-mode: false
       - name: record db sizes once a day and check thresholds
         id: c
@@ -582,6 +583,11 @@ jobs:
               bad.append(f'db_sizes の記録が 36 時間より古い({at})')
           for w in v.get('warn') or []:
               bad.append('DB の大きさ: ' + w)
+          # 2026-11-14 閲覧者が書ける 7 表= 上限(trigger _viewer_cap)の半分を超えたら赤。毎回数える(HEAD の count だけ・軽い)
+          import viewer_cap_watch
+          vc, vbad = viewer_cap_watch.check()
+          print('閲覧者の表: ' + ' / '.join(f'{t.replace("nar_", "")} {n}' for t, n in vc.items()))
+          bad += vbad
           g = v.get('growth_per_day')
           print(f"DB {int(v.get('db_bytes') or 0) / 1024**3:.2f}GB 伸び/日 {g}")
           for t in (v.get('tables') or [])[:5]:
