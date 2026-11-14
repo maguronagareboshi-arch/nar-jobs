@@ -39,7 +39,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: install
-        run: pip install -q requests beautifulsoup4 lxml pdfplumber
+        run: pip install -q requests==2.34.2 beautifulsoup4==4.15.0 lxml==6.1.3 pdfplumber==0.11.10
       - name: restore done marks
         uses: actions/cache/restore@v6
         with:

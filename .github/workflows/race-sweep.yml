@@ -34,7 +34,7 @@ jobs:
           python-version: '3.12'
       - name: install playwright chromium
         run: |
-          pip install -q playwright
+          pip install -q playwright==1.65.2
           python -m playwright install --with-deps chromium
       - name: sweep all race pages
         id: sweep
