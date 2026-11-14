@@ -80,7 +80,7 @@ const STEPS = steps(BODY);
   for (const c of copies) {
     // ⛔列名を明記する(2026-09-22)= 本番に列が増えても地元への読み込みが落ちないように。`select *` は禁止。
     assert.ok(!/select \* from/.test(c), '本番の \\copy が select * のまま: ' + c);
-    assert.match(c, /^\\copy \(select [a-z0-9_]+(, [a-z0-9_]+)+ from public\.[a-z_]+( where [^)]*)?\)\s+to /,
+    assert.match(c, /^\\copy \(select [a-z0-9_]+(, [a-z0-9_]+)+ from public\.[a-z_]+( where (?:[^()]|\([^()]*\))*)?\)\s+to /,
       '本番の \\copy が「(select 列名… from …) to」の形でない: ' + c);
   }
   assert.ok(!/\bfrom '/.test(prod.text), '本番に繋ぐ step に \\copy … from(書き込み)がある');
@@ -94,12 +94,18 @@ const STEPS = steps(BODY);
   assert.ok(/^\s*schedule:/m.test(BODY), 'schedule: が無い');
   assert.equal((BODY.match(/- cron:/g) || []).length, 1, 'cron は 1 本');
   assert.match(BODY, /cron: '30 21 \* \* \*'/, 'cron は 06:30 JST(21:30 UTC)');
-  // 本番へ書く step は 1 つだけ= REST の upsert(python)。service key を持つ step がそれ以外に無い
-  const keySteps = (BODY.match(/NAR_SUPABASE_SERVICE_KEY/g) || []).length;
-  assert.equal(keySteps, 1, 'service key を使う step が 1 つでない: ' + keySteps);
-  assert.match(BODY, /base_v1\.py predict/, 'predict の step が無い');
-  assert.match(BODY, /base_v1\.py fit/, 'fit の step が無い');
-  console.log('3) cron 1 本(06:30 JST)・本番へ書く step は predict だけ: OK');
+  // 本番の鍵(service key)を持つ step は下の 5 つだけ(2026-11-14 今の便の形に合わせた)。
+  //   11/3 に base-v1 を毎日の便から外した(7346a2d)ので predict / fit の step はもう無い。
+  //   鍵を持つ step を足すときは、ここに名前を足す= 黙って増えたら落ちる。
+  const KEY_STEPS = ["skip when today's run is already done", 'heartbeat ok (write only)',
+    'seal dumps (A3)', 'seal features (A3)', 'heartbeat fail'];
+  const holders = BODY.split(/^      - (?=name:|uses:|run:)/m).slice(1)
+    .filter((st) => st.includes('NAR_SUPABASE_SERVICE_KEY'))
+    .map((st) => (/^name:\s*(.+?)\s*$/m.exec(st) || [null, '(名前なし)'])[1]);
+  assert.deepEqual(holders.slice().sort(), KEY_STEPS.slice().sort(),
+    'service key を持つ step が決めた 5 つと違う: ' + JSON.stringify(holders));
+  assert.ok(!/base_v1\.py/.test(BODY), 'base-v1 は毎日の便から外したはず(11/3)');
+  console.log('3) cron 1 本(06:30 JST)・本番の鍵を持つ step は決めた 5 つだけ: OK');
 }
 
 // ---- 4) 止まらないための 2 つ(時間切れ・二重起動よけ)
