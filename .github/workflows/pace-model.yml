@@ -30,7 +30,7 @@ jobs:
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'
-      - run: pip install -r cloud/requirements.txt scikit-learn
+      - run: pip install -r cloud/requirements.txt scikit-learn==1.9.1 scipy==1.18.1
       - name: unit tests
         run: python -m unittest tests.pace_pred_test_test tests.pace_model_test
       - name: pace model

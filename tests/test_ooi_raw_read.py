@@ -10,6 +10,7 @@ import datetime as dt
 import os
 import sys
 import unittest
+from unittest import mock
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "cloud"))
 import health_org_ooi as ooi                                       # noqa: E402
@@ -76,6 +77,14 @@ class FreshPages(unittest.TestCase):
 
 
 class ListDocuments(unittest.TestCase):
+    # 2026-11-14 list_documents は「今」を自分で見るので、取った時刻(NOW= 9/17)が 3 日より古くなる 9/20 以降は
+    #   5) と 7) が落ちていた(試験の便を足して気づいた)。試験の中だけ「今」を NOW に止める。本体は変えない。
+    def setUp(self):
+        real = ooi.fresh_pages
+        p = mock.patch.object(ooi, "fresh_pages", lambda rows, now=None, **kw: real(rows, now=now or NOW, **kw))
+        p.start()
+        self.addCleanup(p.stop)
+
     # 5) 表の行から今までどおり読める(⛔fetch は 1 回も呼ばれない)
     def test_reads_from_table(self):
         called = []

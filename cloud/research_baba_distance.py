@@ -138,7 +138,7 @@ def load_track(rest, track, cache):
     if p and os.path.exists(p):
         with open(p, "rb") as f:
             return pickle.load(f)
-    wins, races = baba_hist.fetch_track(rest, track, H_START, D1)
+    wins, races, _ = baba_hist.fetch_track(rest, track, H_START, D1)
     runs = fetch_all_runs(rest, track, TQ0, D1)
     if p:
         os.makedirs(cache, exist_ok=True)

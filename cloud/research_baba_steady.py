@@ -236,7 +236,7 @@ def main():
         if track in baba.AI_TRACKS:
             continue
         since = lo - dt.timedelta(days=baba.fetch_days("classfirst"))
-        wins, races = bh.fetch_track(rest, track, since, today)
+        wins, races, _ = bh.fetch_track(rest, track, since, today)
         samples = bh.to_samples(track, wins, races)
         targets = {s[1] for s in samples if lo.isoformat() <= s[1] <= today.isoformat()}
         fr = rest.get("nar_races?select=race_date&track=eq.%s&order=race_date.asc&limit=1" % cond_stats.enc(track))

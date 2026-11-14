@@ -5,3 +5,5 @@ pyarrow==25.0.1   # 本番の便と同じ版(test_k0_cache.py が parquet を読
 beautifulsoup4==4.15.0   # cloud/kb/jra_runs.py(test_parse_guard_mid_b.py が読む)
 soupsieve==4.1
 lxml==6.1.3
+scikit-learn==1.9.1   # pace_model_test.py(展開の模型)。pace-model / pace-pred-test の便と同じ版
+scipy==1.18.1

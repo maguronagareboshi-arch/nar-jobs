@@ -133,7 +133,7 @@ def run(rest, out_path=OUT, nb=None, today=None, log=print):
     runs_all, race_meta = [], {}
     n_wins = n_races = 0
     for track in TRACKS:
-        wins, races = baba_hist.fetch_track(rest, track, H_START, end)
+        wins, races, _ = baba_hist.fetch_track(rest, track, H_START, end)
         n_wins += len(wins)
         n_races += len(races)
         smp = baba_hist.to_samples(track, wins, races)
