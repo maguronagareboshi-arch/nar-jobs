@@ -14,6 +14,7 @@ from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 sys.path.append(str(Path(__file__).resolve().parents[3] / 'cloud'))  # 2026-11-06 送信量: 受け取りを gzip で
 import sb_gzip  # noqa: E402
+from jst import jst_today  # noqa: E402  (cloud/jst.py・#8 JST の今日)
 import pandas as pd
 D = 'C:/Users/kouki/nankan_ai/v3/official/'
 URL = os.environ.get('SUPABASE_URL', 'https://qgsnsdjvzzeazbazjlwa.supabase.co').rstrip('/')
@@ -65,7 +66,7 @@ def _base(table, sel):
     if not CACHE:
         return None, None
     m, f = _meta().get(table, {}), Path(CACHE) / f'{table}.parquet'
-    today = dt.date.today()
+    today = jst_today()
     if not f.exists() or m.get('sel') != sel or m.get('ver') != CACHE_VER or not m.get('full') or (today - dt.date.fromisoformat(m['full'])).days >= FULL_DAYS:
         print(table, '控え 無し/古い → 丸ごと', m.get('full'), flush=True)
         return None, None

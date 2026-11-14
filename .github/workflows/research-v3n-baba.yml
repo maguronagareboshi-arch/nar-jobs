@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: install python packages
-        run: pip install -q "pandas==2.2.3" "numpy==1.26.4" "pyarrow==25.0.1" "lightgbm==4.7.0" requests
+        run: pip install -q "pandas==2.2.3" "numpy==1.26.4" "pyarrow==25.0.1" "lightgbm==4.7.0" requests==2.34.2
       - name: compare A and B
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}

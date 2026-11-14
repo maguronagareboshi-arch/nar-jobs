@@ -24,7 +24,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: install
-        run: pip install -q anthropic
+        run: pip install -q anthropic==2.8.0
       - name: tag trial
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}

@@ -11,6 +11,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from odds import http_get  # noqa: E402
+from jst import jst_today  # noqa: E402  (cloud/jst.py・#8 JST の今日)
 
 BASE = "https://www.nagoyakeiba.com/info/program"
 LINK = re.compile(r"/file/(\d{4})-(\d+)-(\d)\.pdf")
@@ -154,7 +155,7 @@ def fetch_kasamatsu(today=None):
     if not mc:
         return {}, None, set()
     head = re.match(r"\s*</span>([^<]*)", html[mc.end():])
-    days = ks_dates(head.group(1) if head else "", today or dt.date.today())
+    days = ks_dates(head.group(1) if head else "", today or jst_today())
     ml = KS_LINK.search(html, mc.end())
     if not ml:
         return {}, None, set()

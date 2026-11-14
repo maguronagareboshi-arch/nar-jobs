@@ -41,6 +41,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # cloud/jst.py
+from jst import jst_today  # noqa: E402  (cloud/jst.py・#8 JST の今日)
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -378,8 +380,8 @@ def verify(base, key):
 
     log("\n■ ② 内外 ρ と 旧DB {prefix}_stats.corner4_inout の向き(3場・日単位)")
     log("   ⛔向きは**逆**が正しい: ρ>0= 内が有利 / corner4_inout>0= 外伸び")
-    lo = (dt.date.today() - dt.timedelta(days=365)).isoformat()
-    hi = dt.date.today().isoformat()
+    lo = (jst_today() - dt.timedelta(days=365)).isoformat()
+    hi = jst_today().isoformat()
     races2, runs2 = fetch(base, key, lo, hi)
     days = day_values(race_rhos(races2, runs2), {})
     anon = kochi_anon(ROOT)

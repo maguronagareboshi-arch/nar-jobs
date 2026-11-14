@@ -30,6 +30,10 @@ jobs:
       - name: pytest tests
         if: ${{ !cancelled() }}
         run: python -X utf8 -m pytest tests -q
+      # 2026-11-14 tests/ の外に置いた試験(通信も鍵も使わない 5 本)
+      - name: pytest outside tests
+        if: ${{ !cancelled() }}
+        run: python -X utf8 -m pytest -q cloud/danwa/test_danwa_para.py cloud/danwa/test_sunpyo.py cloud/kb/test_push_kb_runs.py pipeline/stats_local/test_ob_alias.py pipeline/stats_local/test_same_abbr_keep.py
       - name: script style tests
         if: ${{ !cancelled() }}
         run: |

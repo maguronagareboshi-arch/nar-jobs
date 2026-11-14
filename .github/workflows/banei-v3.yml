@@ -67,7 +67,7 @@ jobs:
       # 手元の通しと同じ版に固定(pandas 3.x などで材料が変わらないように)
       - name: install python packages (手元と同じ版)
         run: |
-          pip install -q "pandas==2.2.3" "numpy==1.26.4" "pyarrow==25.0.1" "lightgbm==4.7.0" requests beautifulsoup4 lxml
+          pip install -q "pandas==2.2.3" "numpy==1.26.4" "pyarrow==25.0.1" "lightgbm==4.7.0" requests==2.34.2 beautifulsoup4==4.15.0 lxml==6.1.3
           pip install -q "torch==2.14.1" --index-url https://download.pytorch.org/whl/cpu
 
       - name: day

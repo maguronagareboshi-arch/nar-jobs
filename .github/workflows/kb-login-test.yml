@@ -18,7 +18,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: install
-        run: pip install -q requests
+        run: pip install -q requests==2.34.2
       - name: login test
         env:
           KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}

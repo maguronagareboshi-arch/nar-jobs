@@ -42,6 +42,8 @@ import sys
 import urllib.parse
 from collections import Counter, defaultdict
 from pathlib import Path
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # cloud/jst.py
+from jst import jst_today  # noqa: E402  (cloud/jst.py・#8 JST の今日)
 
 HERE = Path(__file__).resolve().parent
 ROOT = HERE.parent
@@ -3309,7 +3311,7 @@ def hist_calc(kind, ctx, r, b, d, track):
     runs = r.get("runs") or []
     lag = ctx["lag"]
     # 11/3 監査: 生年の無い馬は今の年齢 r["age"] しか無い= 過去の日 x の年齢は年の差だけ戻す(年齢は 1/1 に 1 つ上がる)
-    now_y = dt.date.today().year
+    now_y = jst_today().year
     try:
         age_now = int(r.get("age")) if r.get("age") is not None else None
     except (TypeError, ValueError):

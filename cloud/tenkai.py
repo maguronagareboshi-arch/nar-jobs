@@ -50,6 +50,8 @@ import urllib.parse
 import urllib.request
 sys.path.append(os.path.dirname(os.path.abspath(__file__)))  # 2026-11-06 送信量: 受け取りを gzip で
 import sb_gzip  # noqa: E402
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))  # cloud/jst.py
+from jst import jst_today  # noqa: E402  (cloud/jst.py・#8 JST の今日)
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -1270,7 +1272,7 @@ def backtest(base, key, days, pace=False, kochi_q=False, order=False):
       ⛔**旧で見込みのある馬が 3 頭以上**の
       レースだけで、全部の版を**同じレース**で比べる。答え= 公式の 1 番目のコーナーの順位
     """
-    hi = dt.date.today()
+    hi = jst_today()
     lo = hi - dt.timedelta(days=days)
     far = (lo - dt.timedelta(days=PAST_DAYS)).isoformat()
     log("バックテスト %s 〜 %s(過去走は %s から)" % (lo, hi - dt.timedelta(days=1), far))

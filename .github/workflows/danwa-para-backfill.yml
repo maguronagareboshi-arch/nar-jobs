@@ -56,7 +56,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: install
-        run: pip install -q anthropic
+        run: pip install -q anthropic==2.8.0
       - name: unit tests
         run: |
           python cloud/danwa/test_danwa_para.py

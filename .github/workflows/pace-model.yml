@@ -23,6 +23,9 @@ on:
     - cron: '20 1 1 * *'         # 毎月 1 日 10:20 JST(= 1 日 01:20 UTC)
 permissions:
   contents: read
+concurrency:
+  group: pace-model
+  cancel-in-progress: false
 jobs:
   model:
     runs-on: ubuntu-latest

@@ -18,6 +18,9 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: nar-ip-block
+  cancel-in-progress: false
 jobs:
   scan:
     runs-on: ubuntu-latest

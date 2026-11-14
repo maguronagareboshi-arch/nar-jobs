@@ -71,7 +71,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: install
-        run: pip install -q "pandas==2.2.3" "numpy==1.26.4" "pyarrow==25.0.1" "lightgbm==4.7.0" requests
+        run: pip install -q "pandas==2.2.3" "numpy==1.26.4" "pyarrow==25.0.1" "lightgbm==4.7.0" requests==2.34.2
 
       - name: day
         id: d

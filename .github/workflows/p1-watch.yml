@@ -14,6 +14,9 @@ on:
 
 permissions:
   contents: read
+concurrency:
+  group: p1-watch
+  cancel-in-progress: false
 jobs:
   watch:
     runs-on: ubuntu-latest

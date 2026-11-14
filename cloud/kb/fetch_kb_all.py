@@ -34,6 +34,7 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from fetch import DATA, fetch_race, make_client                          # noqa: E402
 from parsers import parse_nittei, race_id_parts                          # noqa: E402
+from jst import jst_today  # noqa: E402  (cloud/jst.py・#8 JST の今日)
 
 try:
     sys.stdout.reconfigure(encoding="utf-8")
@@ -235,7 +236,7 @@ def collect_day(client, date, what, track, logged_in, refresh=False):
 
 
 def today():
-    return dt.date.today().strftime("%Y%m%d")
+    return jst_today().strftime("%Y%m%d")
 
 
 def main():
@@ -261,7 +262,7 @@ def main():
         dates = [args.date]
     else:
         d = dt.datetime.strptime(args.since, "%Y%m%d").date()
-        end = dt.date.today()
+        end = jst_today()
         dates = []
         while d <= end:
             dates.append(d.strftime("%Y%m%d"))

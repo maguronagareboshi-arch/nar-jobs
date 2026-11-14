@@ -22,6 +22,8 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent))
 
 from keibabook import KeibabookClient, LoginError
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))  # cloud/jst.py
+from jst import jst_today  # noqa: E402  (cloud/jst.py・#8 JST の今日)
 from parsers import (parse_cyokyo, parse_danwa, parse_nittei, parse_nouryoku, parse_seiseki,
                      parse_syutuba, race_id_parts, seiseki_is_masked)
 import parsers as _parsers
@@ -116,7 +118,7 @@ def fetch_race(client, race_id, what, refresh=False, push=False, logged_in=False
         print(f"  seiseki {race_id}: {n}頭 前半3F取得{got3f}頭 -> {f.name}")
         out["seiseki"] = parsed
     # 未来・当日のレースは出馬表/調教が更新されうるので取り直す
-    is_upcoming = race_id_parts(race_id)["date"] >= dt.date.today().strftime("%Y%m%d")
+    is_upcoming = race_id_parts(race_id)["date"] >= jst_today().strftime("%Y%m%d")
     if "syutuba" in what:
         html = client.get(client.syutuba_path(race_id), refresh=refresh or is_upcoming)
         parsed = parse_syutuba(html, race_id)
@@ -170,7 +172,7 @@ def fetch_race(client, race_id, what, refresh=False, push=False, logged_in=False
 
 def cmd_day(client, date, args, logged_in=False):
     # 日程は当日・未来なら更新されうるので毎回取り直す
-    is_past = date < dt.date.today().strftime("%Y%m%d")
+    is_past = date < jst_today().strftime("%Y%m%d")
     try:
         html = client.get(client.nittei_path(date), refresh=not is_past or args.refresh)
     except Exception as e:

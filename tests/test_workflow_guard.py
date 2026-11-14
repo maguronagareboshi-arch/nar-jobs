@@ -39,3 +39,30 @@ def test_inputs_are_not_embedded_in_scripts():
                 continue
             bad.append(f"{p.name}:{i} {line.strip()[:80]}")
     assert bad == [], "入力をスクリプトに直に埋めている: " + " / ".join(bad)
+
+
+# 2026-11-14 総合レビュー #15。字だけ= yaml を読むだけ(通信なし)。pyyaml は "on" を True と読む。
+def _load(p):
+    import yaml
+    return yaml.safe_load(p.read_text(encoding="utf-8")) or {}
+
+
+def test_scheduled_workflows_have_concurrency():
+    """定期便(schedule あり)は concurrency を持つ(前の回が長引いて重なるのを防ぐ)。"""
+    bad = []
+    for p in WF:
+        d = _load(p)
+        on = d.get("on", d.get(True)) or {}
+        if isinstance(on, dict) and "schedule" in on and "concurrency" not in d:
+            bad.append(p.name)
+    assert bad == [], "concurrency が無い定期便: " + ", ".join(bad)
+
+
+def test_jobs_have_timeout():
+    """job は timeout-minutes を持つ(無いと既定の 360 分)。他の便の呼び出し(uses:)は持てないので除く。"""
+    bad = []
+    for p in WF:
+        for name, job in (_load(p).get("jobs") or {}).items():
+            if isinstance(job, dict) and "uses" not in job and "timeout-minutes" not in job:
+                bad.append(f"{p.name}:{name}")
+    assert bad == [], "timeout-minutes が無い job: " + ", ".join(bad)

@@ -30,7 +30,7 @@ jobs:
         with:
           python-version: '3.12'
       - name: install
-        run: pip install -q requests beautifulsoup4 lxml
+        run: pip install -q requests==2.34.2 beautifulsoup4==4.15.0 lxml==6.1.3
       - name: jra runs by ids
         env:
           KEIBABOOK_LOGIN_ID: ${{ secrets.KEIBABOOK_LOGIN_ID }}

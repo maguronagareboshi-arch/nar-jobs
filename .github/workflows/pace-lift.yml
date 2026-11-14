@@ -30,6 +30,9 @@ on:
     - cron: '40 19 1 * *'        # 毎月 2 日 04:40 JST(= 前月 1 日 19:40 UTC)
 permissions:
   contents: read
+concurrency:
+  group: pace-lift
+  cancel-in-progress: false
 jobs:
   lift:
     runs-on: ubuntu-latest
