@@ -1,9 +1,66 @@
-requests>=2.31
-pdfplumber>=0.11
+# 版は全部 == で固定する(2026-11-14)。10/29 に scramp 1.5.0 が勝手に入って DB 接続が落ちた再発防止。
+# 値= 11/14 朝の horse-health の成功便(run 43542241991・ubuntu / Python 3.12)が実際に入れた版そのまま。
+# 上げるとき= 月 1 回・手で。枝でこのファイルを書き換えて push → tests の便(.github/workflows/tests.yml)が通ってから master へ。
+# 例外は yt-dlp だけ(下の注記)。
+
+# ── 直接使うもの ──
+requests==2.34.2
+pdfplumber==0.11.10
 pg8000==1.31.5   # §54.3-bc horse_changes.py(検出SQLをDB側で流すため)
-scramp>=1.4.5,<1.5   # 10/29 1.5.0 で make_channel_binding が消え pg8000 1.31.5 の接続が落ちる
-anthropic>=0.40   # §140 news_writer.py(記事の下書きを書く)/ §146 sand_depth.py の予備の読み手
-pytesseract>=0.3.10   # §146 sand_depth.py(名古屋の砂厚は 1 断面が画像= 文字認識で読む。⚠便には apt-get install -y tesseract-ocr も要る)
-pywebpush>=2.0   # §291 push_notify.py(チェック馬のお知らせ・web push)
-yt-dlp>=2025.1   # 10/2 noken_public.py 金沢・名古屋の能検の映像(チャンネルの動画一覧だけ・映像は落とさない)
-pymupdf>=1.24   # 10/20 tokai_official.py 名古屋の編成馬一覧 PDF(pdfplumber は日本語が化ける)
+scramp==1.4.18   # 10/29 1.5.0 で make_channel_binding が消え pg8000 1.31.5 の接続が落ちる(1.5 未満に留める)
+anthropic==2.8.0   # §140 news_writer.py(記事の下書きを書く)/ §146 sand_depth.py の予備の読み手
+pytesseract==0.3.13   # §146 sand_depth.py(名古屋の砂厚は 1 断面が画像= 文字認識で読む。⚠便には apt-get install -y tesseract-ocr も要る)
+pywebpush==2.5.0   # §291 push_notify.py(チェック馬のお知らせ・web push)
+pymupdf==2.1   # 10/20 tokai_official.py 名古屋の編成馬一覧 PDF(pdfplumber は日本語が化ける)
+# yt-dlp だけ固定しない= 動画サイト側の変更に追従する版が数週ごとに出て、古い版のほうが先に壊れる。
+yt-dlp>=2026.10.26   # 10/2 noken_public.py 金沢・名古屋の能検の映像(チャンネルの動画一覧だけ・映像は落とさない)
+
+# ── 上が連れてくるもの(間接の依存。scramp と同じ事故を防ぐため、これも固定する) ──
+Pillow==13.0.0
+aiohappyeyeballs==2.7.1
+aiohttp==3.14.5
+aiosignal==1.4.0
+annotated-types==0.8.0
+anyio==4.16.0
+asn1crypto==1.5.1
+attrs==26.1.0
+certifi==2026.10.23
+cffi==2.1.1
+charset_normalizer==3.5.2
+cryptography==50.0.2
+docstring-parser==0.18.0
+flatbuffers==25.12.19
+frozenlist==1.8.0
+h11==0.16.0
+http-ece==1.2.1
+httpcore2==2.16.0
+httpx2==2.16.0
+idna==3.20
+jiter==0.19.0
+multidict==7.2.1
+networkx==3.7
+numpy==2.5.4
+onnxruntime==1.32.0
+opentelemetry-api==1.45.2
+packaging==26.3
+pdfminer.six==20260107
+propcache==0.5.4
+protobuf==7.36.2
+psutil==7.2.2
+py-vapid==1.9.6
+pycparser==3.12
+pydantic==2.14.3
+pydantic-core==2.50.4
+pymupdf-layout==2.1
+pymupdf4llm==2.1
+pypdfium2==5.15.2
+python-dateutil==4.0.0
+pyyaml==6.0.3
+sniffio==1.3.1
+tabulate==0.10.0
+truststore==0.10.5
+typing-extensions==4.16.0
+typing-inspection==0.4.5
+tzdata==2026.6
+urllib3==2.8.0
+yarl==1.25.1

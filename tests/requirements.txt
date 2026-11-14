@@ -1,0 +1,3 @@
+# 試験の便(.github/workflows/tests.yml)だけが使う。本番の便は cloud/requirements.txt。
+pytest==9.2.0
+pandas==2.2.3   # 本番の便(si-all・v3 など)と同じ版

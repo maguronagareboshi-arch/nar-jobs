@@ -1,0 +1,52 @@
+# 2026-11-14 push のたびに tests/ を全部流す(それまで試験を流す便は 3 か所だけで、壊れても気づけなかった)。
+# ⛔通信も DB も使わない= 鍵を渡さない。鍵や本番のデータが要る試験は、それぞれの便(check-odds-combo・si-all-check・nar-ai-feat)で流す。
+# 依存の版を上げるときも、まず枝でこの便を通す(cloud/requirements.txt の頭の注記)。
+name: tests
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: tests-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+      - name: install pinned deps
+        run: pip install -q -r cloud/requirements.txt -r tests/requirements.txt
+      - name: pip check
+        run: pip check
+      - name: pytest tests
+        if: ${{ !cancelled() }}
+        run: python -X utf8 -m pytest tests -q
+      - name: script style tests
+        if: ${{ !cancelled() }}
+        run: |
+          rc=0
+          for f in tests/test_day_trend_norm.py tests/test_k0_cache.py tests/test_pre_race_only.py tests/test_tokai_official.py tests/wind_backfill_test.py tests/test_partition_s240_sql.py; do
+            echo "::group::$f"
+            python -X utf8 "$f" || { rc=1; echo "::error::$f が落ちた"; }
+            echo "::endgroup::"
+          done
+          exit $rc
+      - name: node tests
+        if: ${{ !cancelled() }}
+        run: |
+          rc=0
+          for f in tests/ai_feat_workflow_test.mjs tests/fetch_relay_test.mjs; do
+            echo "::group::$f"
+            node "$f" || { rc=1; echo "::error::$f が落ちた"; }
+            echo "::endgroup::"
+          done
+          exit $rc
