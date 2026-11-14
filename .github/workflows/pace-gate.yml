@@ -8,6 +8,8 @@ on:
       pubkey:
         description: 'RSA public key (PEM or base64 DER)'
         required: true
+permissions:
+  contents: read
 jobs:
   dump:
     runs-on: ubuntu-latest

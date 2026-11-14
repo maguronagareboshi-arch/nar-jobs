@@ -18,6 +18,8 @@ on:
         description: '最新回を見込み日に関係なく取り直す(読み取りを直した後の上書き用)'
         type: boolean
         default: false
+permissions:
+  contents: read
 concurrency:
   group: monbetsu-class
   cancel-in-progress: false

@@ -18,6 +18,8 @@ on:
         required: false
         default: false
         type: boolean
+permissions:
+  contents: read
 concurrency:
   group: odds-adj
   cancel-in-progress: false

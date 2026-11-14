@@ -23,6 +23,8 @@ on:
         required: false
         default: false
         type: boolean
+permissions:
+  contents: read
 concurrency:
   group: odds-record
   cancel-in-progress: false

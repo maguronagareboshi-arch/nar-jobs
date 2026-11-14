@@ -74,6 +74,7 @@ jobs:
         id: d
         env:
           IN_DATE: ${{ github.event.inputs.date }}
+          MODE: ${{ github.event.inputs.mode }}
         run: |
           if [ "$IN_DATE" = "next" ]; then
             DAY=$(TZ=Asia/Tokyo date -d tomorrow +%F)   # 前日版: 前の晩に次の日を学んで朝の形の印を書く
@@ -85,7 +86,7 @@ jobs:
           fi
           N=$(python -X utf8 -c "import sys; sys.path.insert(0,'pipeline/ai/banei'); import bn_kb, urllib.parse as u; print(len(bn_kb.rest('/rest/v1/nar_races?select=race_no&track=eq.'+u.quote('帯広ば')+'&race_date=eq.$DAY&limit=50')))")
           echo "day=$DAY" >> "$GITHUB_OUTPUT"; echo "races=$N" >> "$GITHUB_OUTPUT"
-          echo "day=$DAY 帯広のレース $N 本 mode=${{ github.event.inputs.mode }} write=$WRITE"
+          echo "day=$DAY 帯広のレース $N 本 mode=$MODE write=$WRITE"
           [ "$N" -gt 0 ] || echo "::notice::$DAY は帯広の開催なし = 何もしない"
 
       - name: download frozen tables (banei-v3-frozen-20261030)
@@ -198,6 +199,7 @@ jobs:
         env:
           DAY: ${{ steps.d.outputs.day }}
           UNTIL: ${{ github.event.inputs.until }}
+          MODE: ${{ github.event.inputs.mode }}
         run: |
           if [ "$WRITE" = "yes" ]; then W=--write; else W=; fi
           START=$(date +%s)
@@ -206,7 +208,7 @@ jobs:
           END_21=$(TZ=Asia/Tokyo date -d "$TODAY 21:00" +%s)
           END=$(( END_DEF < END_21 ? END_DEF : END_21 ))
           if [ -n "$UNTIL" ]; then END=$(TZ=Asia/Tokyo date -d "$TODAY $UNTIL" +%s); fi
-          if [ "${{ github.event.inputs.mode }}" = "once" ]; then END=$((START + 1)); fi
+          if [ "$MODE" = "once" ]; then END=$((START + 1)); fi
           n=0; nf=0
           while [ "$n" -eq 0 ] || [ "$(date +%s)" -lt "$END" ]; do
             n=$((n+1))

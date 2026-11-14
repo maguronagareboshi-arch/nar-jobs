@@ -9,6 +9,8 @@ on:
   schedule:
     - cron: '0 1 * * 1,4'    # JST 月・木 10:00
   workflow_dispatch:
+permissions:
+  contents: read
 concurrency:
   group: hyogo-roster
   cancel-in-progress: false

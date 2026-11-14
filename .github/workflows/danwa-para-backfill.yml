@@ -41,6 +41,8 @@ on:
         description: '作り直す model の頭(, 区切り・空= しない)。例 claude-haiku-5-5,haiku-hand-。hand- は守る'
         required: false
         default: ''
+permissions:
+  contents: read
 concurrency:
   group: danwa-para-${{ inputs.from }}
   cancel-in-progress: false

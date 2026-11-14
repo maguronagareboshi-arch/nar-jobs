@@ -13,6 +13,8 @@ on:
         description: この日以降を作り直す(YYYY-MM-DD)
         required: true
         default: '2026-09-01'
+permissions:
+  contents: read
 concurrency:
   group: class-recalc
   cancel-in-progress: false

@@ -6,6 +6,8 @@ on:
   push:
     branches: [si5-all]
   workflow_dispatch:
+permissions:
+  contents: read
 concurrency:
   group: si-all-check
   cancel-in-progress: true

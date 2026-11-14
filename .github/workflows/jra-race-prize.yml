@@ -16,6 +16,8 @@ on:
         description: 佐賀を走った馬の範囲(日)
         required: false
         default: '400'
+permissions:
+  contents: read
 concurrency:
   group: jra-race-prize
   cancel-in-progress: false

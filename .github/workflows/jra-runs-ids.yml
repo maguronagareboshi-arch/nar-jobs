@@ -11,6 +11,8 @@ on:
         description: '1= 本番へ書く。空= 書かない'
         required: false
         default: ''
+permissions:
+  contents: read
 concurrency:
   group: kb-daily
   cancel-in-progress: false

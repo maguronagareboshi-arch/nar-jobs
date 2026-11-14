@@ -11,6 +11,8 @@ on:
   schedule:
     - cron: '20 17 * * *'    # JST 02:20(夜間・1 日 1 回)
   workflow_dispatch:
+permissions:
+  contents: read
 concurrency:
   group: trainer-roster
   cancel-in-progress: false

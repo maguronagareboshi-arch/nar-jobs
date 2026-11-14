@@ -9,6 +9,8 @@ on:
         description: この日以降の走で検算する(YYYY-MM-DD)
         required: true
         default: '2026-09-04'
+permissions:
+  contents: read
 concurrency:
   group: class-verify
   cancel-in-progress: false

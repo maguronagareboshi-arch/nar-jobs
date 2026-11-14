@@ -6,6 +6,8 @@ on:
       horse:
         description: 馬名(カンマ区切りで複数可)
         required: true
+permissions:
+  contents: read
 jobs:
   trace:
     runs-on: ubuntu-latest

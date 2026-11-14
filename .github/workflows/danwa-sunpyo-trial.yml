@@ -13,6 +13,8 @@ on:
         description: 日付 YYYY-MM-DD
         required: true
         default: '2026-11-11'
+permissions:
+  contents: read
 concurrency:
   group: danwa-sunpyo-trial
   cancel-in-progress: false

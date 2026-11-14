@@ -5,6 +5,8 @@
 name: kd-pedigree-load
 on:
   workflow_dispatch:
+permissions:
+  contents: read
 concurrency:
   group: kd-pedigree-load
   cancel-in-progress: false

@@ -10,6 +10,8 @@ on:
   schedule:
     - cron: '20 21 * * *'    # JST 毎朝 06:20
   workflow_dispatch:
+permissions:
+  contents: read
 concurrency:
   group: graded-schedule
   cancel-in-progress: false

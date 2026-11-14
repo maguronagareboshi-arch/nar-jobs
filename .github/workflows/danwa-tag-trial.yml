@@ -9,6 +9,8 @@ on:
         description: 'race_id-umaban の一覧ファイル(空なら従来のランダム)'
         required: false
         default: ''
+permissions:
+  contents: read
 concurrency:
   group: danwa-tag-trial
   cancel-in-progress: false

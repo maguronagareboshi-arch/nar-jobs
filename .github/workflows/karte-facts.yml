@@ -27,6 +27,8 @@ on:
         required: false
         default: false
         type: boolean
+permissions:
+  contents: read
 jobs:
   karte:
     runs-on: ubuntu-latest

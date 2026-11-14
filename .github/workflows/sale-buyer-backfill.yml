@@ -15,6 +15,8 @@ on:
         description: 'true で書く(false はドライラン)'
         required: true
         default: 'false'
+permissions:
+  contents: read
 concurrency:
   group: sale-listings
   cancel-in-progress: false

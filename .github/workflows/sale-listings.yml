@@ -10,6 +10,8 @@ on:
   schedule:
     - cron: '10 19 * * 0'    # JST 毎週月曜 04:10
   workflow_dispatch:
+permissions:
+  contents: read
 concurrency:
   group: sale-listings
   cancel-in-progress: false

@@ -24,6 +24,8 @@ on:
         default: 'no'
         type: choice
         options: ['no', 'yes']
+permissions:
+  contents: read
 concurrency:
   group: si-all-backfill
   cancel-in-progress: false

@@ -12,6 +12,8 @@ on:
   schedule:
     - cron: '30 13 * * *'   # JST 22:30(集計便 22:15 の後・その日の最後のレースの後)
 
+permissions:
+  contents: read
 jobs:
   watch:
     runs-on: ubuntu-latest

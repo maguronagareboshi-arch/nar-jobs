@@ -11,6 +11,8 @@ on:
     - cron: '37 13 * * *'   # UTC 13:37 = JST 22:37
   workflow_dispatch:
 
+permissions:
+  contents: read
 concurrency:
   group: push-night
   cancel-in-progress: false

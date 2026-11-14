@@ -9,6 +9,8 @@ on:
     - cron: '0 1 * * 1,4'    # JST 月・木 10:00
     - cron: '0 22 * * *'     # JST 毎朝 7:00(前日に開催があった日だけ)
   workflow_dispatch:
+permissions:
+  contents: read
 concurrency:
   group: tokai-demotion
   cancel-in-progress: false

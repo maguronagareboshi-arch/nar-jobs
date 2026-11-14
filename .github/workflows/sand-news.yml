@@ -13,6 +13,8 @@ on:
         description: '前回の items を読まずに作り直す(1 回だけ)'
         type: boolean
         default: false
+permissions:
+  contents: read
 concurrency:
   group: sand-news
   cancel-in-progress: false
