@@ -186,7 +186,8 @@ def gap_oof(D2, have, day):
         lo, hi = str(p.start_time.date()), min(str((p + 1).start_time.date()), day)
         days = sorted(miss[(miss.race_date >= lo) & (miss.race_date < hi)].race_date.unique())
         c = tree_apply(tree_fit(D2, lo), D2, lo, hi)
-        c = c[c.race_date.isin(days)]
+        # 一部のレースだけ本番の行が欠けた日(11/8 は 12 R 中 11 R)に、その日の全馬を足すと二重になる → 欠けた馬だけ足す
+        c = c.merge(miss[K], on=K, how='inner')
         outs.append(c.assign(off=lg(c.p_v2.to_numpy(float)))[K + ['off']])
         log('月ごとの埋め', p, len(days), '日', len(c), '頭')
     return pd.concat(outs, ignore_index=True)
