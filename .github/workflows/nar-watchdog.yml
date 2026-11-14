@@ -595,12 +595,80 @@ jobs:
           raise SystemExit(1 if bad else 0)
           PY
 
+  # 2026-11-14 ばんえい(banei-v3)の見張り。11/13 夜〜11/14 朝に学びが 2 回落ちても誰も気づかず、予想が 1 本も出なかった。
+  #   帯広の開催日に次のどれかなら赤: ① 今日(と前の晩 23 時から)の banei-v3 の便が failure
+  #   ② 12 時以降に朝の版(timing='morning')の行がレースの数より少ない ③ 発走を 5 分過ぎたのに直前の版(timing='last')の行が無いレース
+  #   ④ 今日の行に meta.fallback_from(学びが落ち、前の開催日の模型で書いた)。読むだけ。
+  banei:
+    if: github.event.schedule != '40 23 * * *'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+      actions: read
+    outputs:
+      red: ${{ steps.c.outcome == 'failure' }}
+      reasons: ${{ steps.c.outputs.reasons }}
+    steps:
+      - name: check banei-v3 runs and marks (fail if a run failed or a race has no mark)
+        id: c
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          python - <<'PY'
+          import os, json, re, subprocess, urllib.request, urllib.parse, datetime as dt
+          JST = dt.timezone(dt.timedelta(hours=9))
+          now = dt.datetime.now(JST); today = now.date().isoformat(); nm = now.hour * 60 + now.minute
+          T = urllib.parse.quote('帯広ば')
+          def get(path):
+              req = urllib.request.Request(os.environ['SUPABASE_URL'] + '/rest/v1/' + path,
+                  headers={'apikey': os.environ['SUPABASE_SERVICE_KEY'], 'Authorization': 'Bearer ' + os.environ['SUPABASE_SERVICE_KEY']})
+              return json.loads(urllib.request.urlopen(req, timeout=30).read())
+          def pm(s):
+              m = re.fullmatch(r'(\d{2})(\d{2})', str(s or '').strip()); return int(m.group(1)) * 60 + int(m.group(2)) if m else None
+          bad = []
+          races = [r for r in get(f'nar_races?select=race_no,post_time,cancelled&track=eq.{T}&race_date=eq.{today}')
+                   if not str(r.get('cancelled') or '').strip()]
+          print(f'JST {now:%H:%M} 帯広のレース {len(races)} 本')
+          if races:
+              since = (dt.datetime.combine(now.date(), dt.time(0), JST) - dt.timedelta(hours=1)).astimezone(dt.timezone.utc)
+              out = subprocess.run(['gh', 'run', 'list', '-R', os.environ['GITHUB_REPOSITORY'], '-w', 'banei-v3.yml', '-L', '30',
+                                    '--json', 'databaseId,createdAt,conclusion'], capture_output=True, text=True)
+              if out.returncode != 0:
+                  bad.append('banei-v3 の便の一覧が読めない: ' + out.stderr.strip()[:200])
+              else:
+                  for r in json.loads(out.stdout):
+                      if dt.datetime.fromisoformat(r['createdAt'].replace('Z', '+00:00')) >= since and r.get('conclusion') == 'failure':
+                          bad.append(f"banei-v3 の便 {r['databaseId']}({r['createdAt']})が failure")
+              mk = get(f'nar_ai_marks?select=race_no,timing,meta->fallback_from&model=eq.banei-3&track=eq.{T}&race_date=eq.{today}')
+              morning = {m['race_no'] for m in mk if m['timing'] == 'morning'}
+              last = {m['race_no'] for m in mk if m['timing'] == 'last'}
+              fb = sorted({m.get('fallback_from') for m in mk if m.get('fallback_from')})
+              print(f'朝の版 {len(morning)} R・直前の版 {len(last)} R・控え {fb}')
+              if nm >= 12 * 60 and len(morning) < len(races):
+                  bad.append(f'ばんえいの朝の版が {len(morning)}/{len(races)} R')
+              miss = sorted(r['race_no'] for r in races if pm(r.get('post_time')) is not None and pm(r['post_time']) + 5 <= nm and r['race_no'] not in last)
+              if miss:
+                  print('直前の版が無いレース', miss); bad.append('ばんえいの直前の版が無いレースがある')   # 毎時メールにならないよう理由の字は固定
+              if fb:
+                  bad.append('ばんえいの学びが落ち、控えの模型(' + ','.join(fb) + ' の学び)で書いた')
+          for b in bad:
+              print('::error::' + b)
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              f.write('reasons=' + json.dumps(bad, ensure_ascii=False) + '\n')
+          print('異常なし' if not bad else f'異常 {len(bad)} 件')
+          raise SystemExit(1 if bad else 0)
+          PY
+
   # 2026-10-03 同じ赤のメールは 1 日 1 通(監査 B-1: 同じ警告で毎時メールが来た)。
   #   上の点検は continue-on-error= job は緑のまま outputs red/reasons を出す。ここでまとめて
   #   nar_meta 'watchdog_last_red'({date(JST), reasons[]})と比べ、同じ JST 日付で理由が全部既出なら警告だけで緑。
   #   新しい理由が 1 つでもあれば赤(= 所有者へ失敗メール)。赤が無い run は保存を消す。中身は cloud/watchdog_dedupe.py。
   notify:
-    needs: [freshness, v3-forecast, odds-live, boards-yesterday, danwa-note, kochi-results, ooi-official, heartbeat, db-size]
+    needs: [freshness, v3-forecast, odds-live, boards-yesterday, danwa-note, kochi-results, ooi-official, heartbeat, db-size, banei]
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5

@@ -207,7 +207,11 @@ def offsets(Z, o, extra=None):
     E = pd.DataFrame({'race_date': Z['date'], 'race_no': Z['race_no'].astype(int), 'runner_number': Z['umaban'].astype(int)})
     if extra is not None:
         o = pd.concat([o, extra[K + ['off']]]).drop_duplicates(K, keep='last')
-    return E.merge(o, on=K, how='left').off.to_numpy(np.float32)
+    # 2026-11-14 入口の守り: どこから来ても同じ馬が 2 行あれば先の行を残す(二重のまま合わせると長さがずれて学びが落ちる)
+    n0 = len(o); o = o.drop_duplicates(K, keep='first')
+    if len(o) < n0:
+        log('外した分の重なりを消した', n0 - len(o), '行')
+    return E.merge(o, on=K, how='left', validate='m:1').off.to_numpy(np.float32)
 
 
 # ---------------------------------------------------------------- 入力をそろえる
@@ -373,6 +377,8 @@ def rows_of(out, info, day, need_bw=True, timing='last'):
                 'p': {str(int(n)): round(float(x), 4) for n, x in zip(nums, g.p)},
                 'nk': {str(int(n)): round(float(x), 4) for n, x in zip(nums, g.nk) if x != 0}, 'nk_b': info.get('nk_b'), 'nk_src': info.get('nk_src'),
                 'p1_b': info.get('p1_b'), 'p1_src': info.get('p1_src')}
+        if info.get('fallback_from'):   # 2026-11-14 当日の学びが落ち、前の開催日の模型で書いた印(見張りが赤にする)
+            meta['fallback_from'] = info['fallback_from']
         rows.append({'track': '帯広ば', 'race_date': day, 'race_no': int(rno), 'marks': marks, 'meta': meta})
     return rows, skip
 

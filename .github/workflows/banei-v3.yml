@@ -35,6 +35,10 @@ on:
         description: 'loop を止める JST の時刻(空 = 周の始めから 5 時間か 21:00 の早い方)。例 13:30'
         required: false
         default: ''
+      force_fallback:
+        description: '試し: 学びを飛ばして控えの模型(前の開催日)で書く(yes/no・2026-11-14)'
+        required: false
+        default: 'no'
 
 concurrency:
   group: banei-v3${{ github.ref_name != 'master' && format('-{0}', github.ref_name) || '' }}
@@ -128,6 +132,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           DAY: ${{ steps.d.outputs.day }}
           MODE: ${{ github.event.inputs.mode }}
+          FORCE_FALLBACK: ${{ github.event.inputs.force_fallback }}
         run: |
           set -o pipefail
           mkdir -p models
@@ -141,28 +146,45 @@ jobs:
           fi
           if [ -n "$GOT" ]; then
             echo "模型 = run $GOT の成果物"; echo "fitted=0" >> "$GITHUB_OUTPUT"
-          else
-            python -X utf8 -W ignore pipeline/ai/banei/banei_v3.py fit "$DAY" models 2>&1 | tee fit_log.txt
+          elif [ "$FORCE_FALLBACK" != "yes" ] && python -X utf8 -W ignore pipeline/ai/banei/banei_v3.py fit "$DAY" models 2>&1 | tee fit_log.txt; then
             echo "fitted=1" >> "$GITHUB_OUTPUT"
+          else
+            rc=$?
+            # rc=2 は決めた止まり(当日の行が無い・前の開催日の競馬ブックが無い)= 控えも使わずに止まる
+            [ "$rc" -eq 2 ] && { echo "::error::ばんえいの学びが決めた止まり(rc=2)"; exit 2; }
+            # 2026-11-14 控え: 学びが落ちたら、前の開催日(14 日以内)の模型で書く。印の meta.fallback_from に元の日が残り、見張りが赤にする
+            echo "::error::ばんえいの学びが落ちた(rc=$rc・試し=$FORCE_FALLBACK)→ 前の開催日の模型で書く"
+            rm -rf models modeldl; mkdir -p models
+            for k in $(seq 1 14); do
+              N="banei-v3-models-$(date -d "$DAY -$k day" +%F)"
+              L=$(gh api "repos/$GITHUB_REPOSITORY/actions/artifacts?name=$N&per_page=5" --jq '[.artifacts[] | select(.expired | not)][0].workflow_run.id // empty' 2>/dev/null || true)
+              if [ -n "$L" ] && gh run download "$L" -R "$GITHUB_REPOSITORY" -n "$N" -D modeldl 2>/dev/null; then
+                bash ops/artifact_seal.sh unseal modeldl && cp -r modeldl/. models/ && GOT=$L && break
+              fi
+              rm -rf modeldl
+            done
+            [ -n "$GOT" ] || { echo "::error::控えの模型も無い(14 日以内)"; exit 1; }
+            python -X utf8 -c "import json,sys; p='models/info.json'; i=json.load(open(p,encoding='utf-8')); i['fallback_from']=i.get('fallback_from') or i['day']; i['day']=sys.argv[1]; json.dump(i,open(p,'w',encoding='utf-8'),ensure_ascii=False,indent=1)" "$DAY"
+            echo "模型 = 控え run $GOT($N)"; echo "fitted=fallback" >> "$GITHUB_OUTPUT"
           fi
           cat models/info.json
 
       - name: seal models
-        if: steps.d.outputs.races != '0' && steps.m.outputs.fitted == '1'
+        if: steps.d.outputs.races != '0' && steps.m.outputs.fitted != '0'
         run: bash ops/artifact_seal.sh seal models sealed/banei_v3_models.tar.gz.enc
 
       - uses: actions/upload-artifact@v4
-        if: steps.d.outputs.races != '0' && steps.m.outputs.fitted == '1'
+        if: steps.d.outputs.races != '0' && steps.m.outputs.fitted != '0'
         with:
           name: banei-v3-models-${{ steps.d.outputs.day }}
           path: sealed/
-          retention-days: 3
+          retention-days: 14   # 控えの模型(前の開催日・間が 6 日空く週がある)を取れるように 3 → 14(2026-11-14)
           if-no-files-found: error
 
       # ②b 朝の版(学んだ便で 1 回): 体重 = 前走・1R の水分と天候 = 前の開催日の 1R で当て、timing='morning' で書く(凍結 = 既にある行は触らない)。
       #     ⛔落ちても ③ は回す
       - name: predict morning (once, after fit)
-        if: steps.d.outputs.races != '0' && steps.m.outputs.fitted == '1'
+        if: steps.d.outputs.races != '0' && steps.m.outputs.fitted != '0'
         continue-on-error: true
         env:
           DAY: ${{ steps.d.outputs.day }}
