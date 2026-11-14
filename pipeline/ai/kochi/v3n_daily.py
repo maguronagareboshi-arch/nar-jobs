@@ -45,6 +45,21 @@ def arg(name, default=None):
     return sys.argv[sys.argv.index(name) + 1] if name in sys.argv else default
 
 
+def degraded_parts(seq_ok, noken_ok, feat_src, adv_ok):
+    """code.md #7(2026-11-14): 失敗しても書き続ける段のうち、欠けたものの名前の並び(空 = 全部そろった)。
+    ⛔朝の行は書く(凍結の前に止めることはしない= ユーザー判断)。知らせ(::warning::)と heartbeat の note に使うだけ"""
+    out = []
+    if not seq_ok:
+        out.append('並び読み')
+    if not noken_ok:
+        out.append('能検')
+    if feat_src == 'site-ownfail':
+        out.append('自前の材料表')
+    if not adv_ok:
+        out.append('有利の直し')
+    return out
+
+
 def main():
     day, work = sys.argv[1], Path(sys.argv[2])
     write, fetch = '--write' in sys.argv, '--no-fetch' not in sys.argv
@@ -277,6 +292,13 @@ def main():
         import ai_common
         took = ai_common.write_marks(rows, day, 'morning', model=MODEL_ID)
         print('書いた', took, '/', len(rows))
+        # code.md #7: 劣化した材料で書いたら Actions に黄の知らせ+ heartbeat(job ai_v3n)の note に「劣化」を残す(状態は ok のまま= 見張りは赤にしない)
+        deg = degraded_parts(SQ is not None, nk_ok, FSRC, AT is not None)
+        if deg:
+            print(f"::warning::朝の印を劣化した材料で書いた(欠け= {'・'.join(deg)})。朝の行は凍結されるので後から直らない", flush=True)
+        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'cloud'))
+        import beat
+        beat.beat('ai_v3n', True, (f"劣化: {'・'.join(deg)}" if deg else '全部そろった') + f" 書いた {took}/{len(rows)}")
 
 
 if __name__ == '__main__':
