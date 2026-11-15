@@ -116,10 +116,9 @@ def race_class_parts(name, kind=None, track=None):
     s = re.sub(r"[\s　]+", " ", "" if name is None else str(name)).strip()
     if not s:
         return None
-    h = half(s)
-    # 重賞は None。準重賞も None だが、名前に「Ｂ１級」「Ｃ級以下」の級の書き込みがあるときだけ読む(11/15・JS と同じ)
-    if kind == "重賞" or (kind == "準重賞" and not re.search(r"[A-D][0-9]?級", h)):
+    if kind in ("重賞", "準重賞"):
         return None
+    h = half(s)
     nk = str(track or "") in NK
     hit = _find_letter(h, True)
     knd = "letter" if hit else None
