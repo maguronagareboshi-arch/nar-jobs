@@ -116,9 +116,10 @@ def race_class_parts(name, kind=None, track=None):
     s = re.sub(r"[\s　]+", " ", "" if name is None else str(name)).strip()
     if not s:
         return None
-    if kind in ("重賞", "準重賞"):
-        return None
     h = half(s)
+    # 重賞は None。準重賞も None だが、名前に「Ｂ１級」「Ｃ級以下」の級の書き込みがあるときだけ読む(11/15・JS と同じ)
+    if kind == "重賞" or (kind == "準重賞" and not re.search(r"[A-D][0-9]?級", h)):
+        return None
     nk = str(track or "") in NK
     hit = _find_letter(h, True)
     knd = "letter" if hit else None
@@ -195,12 +196,15 @@ def race_class_parts(name, kind=None, track=None):
                     cls += dd.group(0).replace("組", "")
                     p += len(dd.group(0))
                     return {"cls": cls, "grp": None, "age": None, "extra": _tidy(t[p:]), "label": t[:p], "src": src}
-                if len(blk) == 1 and re.match(r"[0-9]", t[p:p + 1]):
-                    cls += t[p]
-                    p += 1
-                if t[p:p + 1] == "級":
-                    p += 1
-                grp, rest = _take_group(t[p:])
+                if len(blk) == 1 and re.match(r"[2-4]", t[p:p + 1]) and t[p + 1:p + 2] == "歳":
+                    rest = t[p:]   # Ａ３歳以上= A と 3歳以上(数字は馬齢・11/15 JS と同じ)
+                else:
+                    if len(blk) == 1 and re.match(r"[0-9]", t[p:p + 1]):
+                        cls += t[p]
+                        p += 1
+                    if t[p:p + 1] == "級":
+                        p += 1
+                    grp, rest = _take_group(t[p:])
                 cls_label = cls
     elif knd == "word":
         cls = word[1]
