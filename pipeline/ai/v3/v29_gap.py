@@ -1194,6 +1194,8 @@ def record(days):
         ran = None
         for r in rows:
             _, tr, rno = r['key'].split(':')
+            if tr not in NANKAN:  # 2026-11-15: ばんえいの単勝の買い目(banei_win2.py)も同じ表に書く = 南関の記録に数えない
+                continue
             v = r.get('value') or {}
             p = pay.get((tr, int(rno)))
             if p and v.get('tri'):

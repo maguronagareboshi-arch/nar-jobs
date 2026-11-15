@@ -112,6 +112,22 @@ jobs:
           done
           ls -lR work | head -30
 
+      # ⓪' ばんえいの単勝の買い目の数(ばんえい 買い方 決め 2・2026-11-15)。⛔取れなくても予想は続ける(買い目を出さないだけ)
+      - name: download banei win2 consts (banei-win2-20261116)
+        if: steps.d.outputs.races != '0'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          mkdir -p in work/banei_kb
+          gh release download banei-win2-20261116 -p 'banei_win2.json.enc' -D in --clobber || { echo "::warning::買い目の数(banei-win2-20261116)が取れない = 今日は買い目を出さない"; exit 0; }
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/banei_win2.json.enc -out work/banei_kb/banei_win2.json
+          rm -f in/banei_win2.json.enc
+          python -X utf8 -c "import json; c=json.load(open('work/banei_kb/banei_win2.json',encoding='utf-8')); print('買い目の数 読めた', sorted(c))"
+
       # ① 前の開催日の競馬ブック(DB に無い日だけ)。⛔取れない日は書かない = ② が「前の開催日の競馬ブックが無い」で止まる
       - name: keibabook banei results
         if: steps.d.outputs.races != '0'
@@ -216,7 +232,11 @@ jobs:
             python -X utf8 -W ignore pipeline/ai/banei/banei_v3.py predict "$DAY" models $W || { rc=$?; [ "$rc" -eq 2 ] || nf=$((nf+1)); echo "round $n: 失敗 rc=$rc(周は続ける)"; }
             echo "::endgroup::"
             [ "$(date +%s)" -lt "$END" ] || break
-            sleep 600
+            # 周の間(10 分)は 2 分ごとに単勝の買い目(発走 10 分前を過ぎたレースを 1 回だけ決める・ばんえい 買い方 決め 2)
+            for k in 1 2 3 4 5; do
+              python -X utf8 -W ignore pipeline/ai/banei/banei_win2.py tick "$DAY" $W || echo "買い目 失敗(周は続ける)"
+              sleep 120
+            done
           done
           echo "周 $n 回・失敗 $nf 回"
           # 監査 11/3: 全部の周が例外で落ちた日は赤(rc=2 は「入力が無いので書かない」の決めた止まり= 数えない)
