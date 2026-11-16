@@ -871,6 +871,56 @@ def make(off, day, out_csv, K):
     return len(o)
 
 
+def _mem_avail_mb():
+    """Linux の /proc/meminfo の MemAvailable(MB)。読めなければ None(Windows の手元など)。"""
+    try:
+        with open('/proc/meminfo', encoding='ascii') as f:
+            for line in f:
+                if line.startswith('MemAvailable:'):
+                    return int(line.split()[1]) // 1024
+    except OSError:
+        return None
+    return None
+
+
+def make_sub(off, day, out_csv, floor_mb=None, limit_s=None):
+    """make を別の処理で動かす(2026-11-16)。
+    11/16 朝と昼の試しの便で、make の中(前走 5 本 → 人の数の段・全期間 220 万行の表に列を継ぎ足す所)でメモリが尽き、
+    GitHub の機械ごと固まった(lost communication・記録なし・1 分おきの様子の記録は 9 分目・使用 8GB で止まった)。
+    別の処理にして、空きメモリが floor_mb を切ったら・limit_s を超えたらその処理だけ止めて例外にする
+    = 呼び手(v3n_daily)はいつもの逃げ道(サイトの表 = site-ownfail)で書き続ける。終われば make のメモリは全部返る。
+    中身(式・出口の列と値)は make と同じ。V3N_BF_FLOOR_MB・V3N_BF_LIMIT_S で線を変えられる(試し用)。"""
+    import subprocess
+    import sys
+    floor_mb = int(floor_mb or os.environ.get('V3N_BF_FLOOR_MB', '2048'))
+    limit_s = int(limit_s or os.environ.get('V3N_BF_LIMIT_S', '1500'))
+    here = str(Path(__file__).resolve().parent)
+    code = ('import sys; sys.path.insert(0, %r); import k0_dl, v3n_bf; v3n_bf.make(%r, %r, %r, k0_dl)'
+            % (here, str(off), str(day), str(out_csv)))
+    p = subprocess.Popen([sys.executable, '-X', 'utf8', '-W', 'ignore', '-c', code])
+    t0, low = time.time(), None
+    while True:
+        try:
+            rc = p.wait(timeout=1)
+            break
+        except subprocess.TimeoutExpired:
+            pass
+        a = _mem_avail_mb()
+        if a is not None:
+            low = a if low is None else min(low, a)
+            if a < floor_mb:
+                p.kill()
+                p.wait()
+                raise MemoryError(f'空きメモリ {a}MB < 線 {floor_mb}MB で自前の材料表の処理を止めた({time.time() - t0:.0f} 秒目)')
+        if time.time() - t0 > limit_s:
+            p.kill()
+            p.wait()
+            raise TimeoutError(f'自前の材料表の処理が {limit_s} 秒を超えたので止めた')
+    print('自前の材料表の処理', f'終わり {rc}', f'{time.time() - t0:.0f} 秒', f'空きメモリの底 {low}MB', flush=True)
+    if rc != 0:
+        raise RuntimeError(f'自前の材料表の処理が {rc} で終わった')
+
+
 def compare(own_csv, site_csv, day, tracks):
     """その日・その場の行で、自分の材料表とサイトの材料表を 210 列すべて比べる → (同じか(比べられなければ None), 説明)"""
     def rd(p):

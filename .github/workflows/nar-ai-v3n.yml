@@ -233,8 +233,14 @@ jobs:
           mkdir -p k0cache
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in k0enc/k0.tar.gz.enc | tar -C k0cache -xzf - || { echo "k0 cache: 開けない → 丸ごと読む"; rm -rf k0cache; }
           rm -f k0cache/dirty.flag
+      # 2026-11-16 11/16 朝この段の途中で機械ごと落ち(lost communication・52 分・記録なし)原因が言えなかった。
+      #   ・1 分おきに「時刻・メモリ・スワップ・負荷・最後のログ 1 行」を heartbeat の ai_v3n_step(試しの便は ai_v3n_step_try)の note に書く
+      #     = 機械ごと消えても最後の様子が DB に残る(状態は ok = 見張りは赤にしない)
+      #   ・成功の便は 11〜22 分 → 40 分で打ち切る(詰まったら早く失敗にして見張りの回し直しを待たせない)
       - name: v3n 10 tracks (fetch → features → one model → write)
+        timeout-minutes: 40
         env:
+          PYTHONUNBUFFERED: '1'
           K0_CACHE: ${{ github.workspace }}/k0cache
           V3N_SEQ: v3n_seq
           V3N_ONE: v3n_one
@@ -249,7 +255,20 @@ jobs:
           set -o pipefail
           if [ "$WRITE" = "yes" ]; then W=--write; else W=; fi
           echo "day=${{ steps.d.outputs.day }} write=$WRITE"
+          if [ "$WRITE" = "yes" ]; then PJ=ai_v3n_step; else PJ=ai_v3n_step_try; fi
+          : > out_log.txt
+          ( set +e +o pipefail; T0=$(date +%s); PK=0
+            while :; do
+              U=$(free -m | awk '/^Mem:/{print $3}'); A=$(free -m | awk '/^Mem:/{print $7}'); SW=$(free -m | awk '/^Swap:/{print $3}')
+              [ "${U:-0}" -gt "$PK" ] && PK=$U
+              LAST=$(grep -v '^\s*$' out_log.txt 2>/dev/null | tail -n 1 | tr -d '\r' | cut -c1-110)
+              python3 cloud/beat.py "$PJ" ok "run ${{ github.run_id }} $(( ($(date +%s)-T0)/60 ))分 mem ${U}MB(峰 ${PK}・空き ${A}) swap ${SW}MB load $(cut -d' ' -f1 /proc/loadavg) df $(df -h / | awk 'NR==2{print $5}') | $LAST" > /dev/null 2>&1 || true
+              sleep 60
+            done ) &
+          PROG=$!
           python -X utf8 -W ignore pipeline/ai/kochi/v3n_daily.py "${{ steps.d.outputs.day }}" work $W 2>&1 | tee out_log.txt
+          kill "$PROG" 2> /dev/null || true
+          python3 cloud/beat.py "$PJ" ok "run ${{ github.run_id }} 終わり | $(grep -v '^\s*$' out_log.txt | tail -n 1 | tr -d '\r' | cut -c1-110)" > /dev/null 2>&1 || true
           df -h / | tail -n 1
       - name: seal k0 cache
         id: k0s
