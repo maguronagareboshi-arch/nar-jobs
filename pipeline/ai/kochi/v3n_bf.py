@@ -20,6 +20,9 @@ import numpy as np
 import pandas as pd
 
 KX = ['track', 'race_date', 'race_no', 'runner_number']
+# build_ab の後半の集計の元(全行)に残す列(2026-11-16 メモリ減らし・v3 の out/v3n_bf_lean_plan_1116.md 段 1)
+A_COLS = KX + ['horse_key', 'horse_name', 'd_idx', 'is_run', 'finish', 'hit3', 'jockey', 'trainer', 'distance_m', 'dist_band',
+               'field_size', 'gate', 'pos1', 'p_pos1', 'p_pos4']
 
 JYO = {'帯広ば': 0, '門別': 1, '盛岡': 2, '水沢': 3, '浦和': 4, '船橋': 5, '大井': 6, '川崎': 7,
        '金沢': 8, '笠松': 9, '名古屋': 10, '園田': 11, '姫路': 12, '高知': 13, '佐賀': 14}
@@ -52,7 +55,9 @@ def win(day, keys, vals, q, lo=None, cnt_days=False):
     def at(off):
         z = qq.assign(t=(qq.d_idx - off).astype('int64')).sort_values('t')
         z = pd.merge_asof(z, C, on='t', by=keys, direction='backward')
-        return z.set_index(keys + ['d_idx'])[vals].fillna(0)
+        # 2026-11-16 float64 に固定: 当てる行を今日の馬に絞ると全部当たって整数のまま出る列がある(CSV の 14.0 が 14 に)。
+        # 全行に当てていた時はどの窓にも空の行があり必ず float64 だった = 値も型も今までと同じ
+        return z.set_index(keys + ['d_idx'])[vals].fillna(0).astype('float64')
     out = at(1)
     if lo is not None:
         out = out - at(lo + 1)
@@ -282,7 +287,18 @@ def build_ab(F, u, r, pt, hs, out_from, out_to=None):
     log('時計の物差し 済み')
 
     # ---------------------------------------------------- t_rn・t_self・t_np・t_lay
-    d = d.sort_values(['horse_key', 'race_date', 'track', 'race_no', 'runner_number']).reset_index(drop=True)
+    # 2026-11-16 メモリ減らし(v3 の out/v3n_bf_lean_plan_1116.md 段 1): ここで全行の幅広い d を手放し、
+    #   A = 全行・19 列(集計の元・読むだけ)と d = 今日の馬の全部の行(当てる先)に割る。
+    # 窓・最後の値の部品(win・latest)の答えは当てる行ごとに独立(集計の元は全行のまま)= 値は今までと同じ。
+    # 並べ替えの鍵は KX を含み唯一 = A と d の行の順は今までの d と同じ(小数の和の順も同じ)。
+    SORT = ['horse_key', 'race_date', 'track', 'race_no', 'runner_number']
+    inT = (d.race_date >= out_from) & (d.race_date <= (out_to or '9999'))
+    inH = inT | d.horse_key.isin(d.loc[inT, 'horse_key'].dropna().unique())
+    if d.loc[inT, 'horse_key'].isna().any():      # 鍵が空の馬は merge で空どうしが結ばれる = 空の行を全部持つ
+        inH = inH | d.horse_key.isna()
+    A = d[A_COLS].sort_values(SORT).reset_index(drop=True)
+    d = d[inH].sort_values(SORT).reset_index(drop=True)
+    log('全行', len(A), '今日の馬の行', len(d))
     s = d[d.is_run].copy()
     s['rn'] = s.groupby('horse_key').cumcount() + 1
     s['gap'] = s.groupby('horse_key').d_idx.diff()
@@ -302,14 +318,28 @@ def build_ab(F, u, r, pt, hs, out_from, out_to=None):
           'sa', 'tz', 'rz', 'rzin', 'tza', 'lappace', 'lapfade', 'ra_pace', 'l3z']
     for k in range(1, 6):
         x = s[['horse_key'] + SC].rename(columns={c: f'p{k}_{c}' for c in SC})
+        for c in SC:   # 整数の列は float64 に(今まで当たらない行が必ずあり float64 だった・K1)。鍵の rn はそのまま
+            if c != 'rn' and pd.api.types.is_integer_dtype(x[f'p{k}_{c}']):
+                x[f'p{k}_{c}'] = x[f'p{k}_{c}'].astype('float64')
         d['_rn'] = d.n_prev - (k - 1)
         d = d.merge(x, left_on=['horse_key', '_rn'], right_on=['horse_key', f'p{k}_rn'], how='left')
+    # 全行ぶんの前の騎手と乗り替わり(下の乗り替わりの組の率の元)= 上の k=1 と同じ結び方を 1 列だけ
+    gA = A.groupby(['horse_key', 'd_idx']).agg(nr=('is_run', 'sum')).reset_index()
+    A['n_prev'] = win(gA, ['horse_key'], ['nr'], A[['horse_key', 'd_idx']]).nr.astype(int).to_numpy()
+    sA = A.loc[A.is_run, ['horse_key', 'jockey']].copy()
+    sA['p1_rn'] = sA.groupby('horse_key').cumcount() + 1
+    A['_rn'] = A.n_prev
+    A = A.merge(sA.rename(columns={'jockey': 'p1_jockey'}), left_on=['horse_key', '_rn'], right_on=['horse_key', 'p1_rn'],
+                how='left').drop(columns=['_rn', 'p1_rn'])
+    A['changed'] = np.where(A.p1_jockey.notna() & A.jockey.notna(), (A.p1_jockey != A.jockey).astype(float), np.nan)
+    del gA, sA
     log('前走 5 本 済み')
 
     # ---------------------------------------------------- 騎手・調教師・組(t_ent → t_asof)
     for kind, keys, lo in (('jk', ['jockey'], 365), ('tr', ['trainer'], 365), ('pr', ['trainer', 'jockey'], 1095), ('jk3', ['jockey'], 1095)):
         m = d[keys].notna().all(axis=1)
-        gg = d[m].groupby(keys + ['d_idx']).agg(sh=('hit3', 'sum'), cn=('hit3', 'count')).reset_index()
+        mA = A[keys].notna().all(axis=1)     # 集計の元は全行(A)・当てる先は d
+        gg = A.loc[mA, keys + ['d_idx', 'hit3']].groupby(keys + ['d_idx']).agg(sh=('hit3', 'sum'), cn=('hit3', 'count')).reset_index()
         z = win(gg, keys, ['sh', 'cn'], d.loc[m, keys + ['d_idx']].drop_duplicates(), lo=lo, cnt_days=True)
         z[kind + '_f'] = z.sh / nz(z.cn)
         z[kind + '_n'] = z.cn.where(z._nd > 0)
@@ -337,7 +367,7 @@ def build_ab(F, u, r, pt, hs, out_from, out_to=None):
             day_buf.append(jk)
     d['jc_rejoin'] = rej
     d['norikae'] = d['jc_changed'] = d.changed
-    ch = d[d.changed == 1]
+    ch = A.loc[A.changed == 1, ['track', 'p1_jockey', 'jockey', 'trainer', 'd_idx', 'hit3']]   # 全行の乗り替わりの行(A)
     for nm, keys in (('jp', ['track', 'p1_jockey', 'jockey']), ('jt2', ['track', 'trainer', 'jockey'])):
         c2 = ch[ch[keys].notna().all(axis=1)]
         gg = c2.groupby(keys + ['d_idx']).agg(sh=('hit3', 'sum'), cn=('hit3', 'count')).reset_index()
@@ -351,19 +381,23 @@ def build_ab(F, u, r, pt, hs, out_from, out_to=None):
 
     # 前年 t_hyr
     hy = d.groupby(['horse_key', 'yr']).agg(prevyear_n=('hit3', 'count'), _s=('hit3', 'sum')).reset_index()
+    hy['prevyear_n'] = hy.prevyear_n.astype('float64')    # K1(今まで当たらない行が必ずあり float64 だった)
     hy['prevyear_fukusho'] = hy._s / nz(hy.prevyear_n.astype(float))
     hy['yr'] = hy.yr + 1
     d = d.merge(hy[['horse_key', 'yr', 'prevyear_n', 'prevyear_fukusho']], on=['horse_key', 'yr'], how='left')
     log('人の数 済み')
 
     # ---------------------------------------------------- (b) 血統・馬主・前の騎手・場の傾き
-    d = d.merge(hs[['horse_name', 'sire', 'broodmare_sire', 'owner', 'breeder']], on='horse_name', how='left')
-    d['band_s'] = d.dist_band.map(lambda v: str(int(v)) if pd.notna(v) else None)
+    HS = hs[['horse_name', 'sire', 'broodmare_sire', 'owner', 'breeder']]
+    d = d.merge(HS, on='horse_name', how='left', validate='m:1')
+    A = A.merge(HS, on='horse_name', how='left', validate='m:1')
+    for X in (A, d):
+        X['band_s'] = X.dist_band.map(lambda v: str(int(v)) if pd.notna(v) else None)
     ent = {}
 
     def asof_ent(nm, keys, lo, rows=None, val='hit3'):
-        """t_ent → t_asof: 鍵ごとの日の行と、その日の窓 [e-lo, e-1](lo=None は全部)の率・数(空の窓の数は空)"""
-        x = d if rows is None else rows
+        """t_ent → t_asof: 鍵ごとの日の行と、その日の窓 [e-lo, e-1](lo=None は全部)の率・数(空の窓の数は空)。元の既定は全行(A)"""
+        x = A if rows is None else rows
         m = x[keys].notna().all(axis=1)
         gg = x[m].groupby(keys + ['d_idx']).agg(sh=('hit3', 'sum'), wn=('win1', 'sum'), cn=('hit3', 'count')).reset_index()
         z = win(gg, keys, ['sh', 'wn', 'cn'], gg[keys + ['d_idx']], lo=lo, cnt_days=True)
@@ -372,14 +406,16 @@ def build_ab(F, u, r, pt, hs, out_from, out_to=None):
         z['n'] = z.cn.where(z._nd > 0)
         ent[nm] = z[keys + ['d_idx', 'f', 'wr', 'n']]
         return ent[nm]
-    d['win1'] = np.where(d.is_run, (d.finish == 1).astype(float), np.nan)
+    for X in (A, d):
+        X['win1'] = np.where(X.is_run, (X.finish == 1).astype(float), np.nan)
     for nm, keys, lo, outc in (('sb', ['sire', 'band_s'], None, 'sire'), ('mb', ['broodmare_sire', 'band_s'], None, 'mf'),
                                ('ow', ['owner'], 365, 'owner'), ('br', ['breeder'], 365, 'breeder')):
         z = asof_ent(nm, keys, lo)
         d = d.merge(z[keys + ['d_idx', 'f', 'n']].rename(columns={'f': outc + '_f', 'n': outc + '_n'}), on=keys + ['d_idx'], how='left')
     # 騎手(場×騎手)の 1 年・前の騎手の「その日より前で最後の」値
-    d['tj_k'] = d.track + '|' + d.jockey.fillna('')
-    d.loc[d.jockey.isna(), 'tj_k'] = None
+    for X in (A, d):
+        X['tj_k'] = X.track + '|' + X.jockey.fillna('')
+        X.loc[X.jockey.isna(), 'tj_k'] = None
     zjt = asof_ent('jt', ['tj_k'], 365)
     d = d.merge(zjt[['tj_k', 'd_idx', 'f', 'n']].rename(columns={'f': 'jt_f', 'n': 'jt_n'}), on=['tj_k', 'd_idx'], how='left')
     zjk = asof_ent('jk', ['jockey'], 365)
@@ -392,7 +428,7 @@ def build_ab(F, u, r, pt, hs, out_from, out_to=None):
     tier = np.where(dd >= 0.05, 1.0, np.where(dd <= -0.05, -1.0, 0.0))
     d['jc_tier'] = np.where((d.changed == 1) & (d.jt_n >= 20) & (d.pjt_n >= 20), tier, np.nan)
     # 場の傾き(t_bday → t_bias・その日より前で最後の日)
-    x = d[d.is_run].copy()
+    x = A.loc[A.is_run, ['track', 'd_idx', 'field_size', 'gate', 'finish', 'p_pos1', 'p_pos4']].copy()   # 全行(A)・要る列だけ
     fs = x.field_size.replace(0, np.nan)
     x['g'], x['f'], x['q'], x['c'] = x.gate / fs, x.finish / fs, x.p_pos1, x.p_pos4
     agg = {}
@@ -423,15 +459,17 @@ def build_ab(F, u, r, pt, hs, out_from, out_to=None):
     z = latest(bias, ['track'], BI, d[['track', 'd_idx']], strict=True)
     for c_ in BI:
         d[c_] = z[c_].to_numpy()
-    d['td_k'] = np.where(d.distance_m.notna(), d.track + '|' + d.distance_m.fillna(0).astype(int).astype(str), None)
-    d['gate_s'] = d.gate.map(lambda v: str(int(v)) if pd.notna(v) else None)
+    for X in (A, d):
+        X['td_k'] = np.where(X.distance_m.notna(), X.track + '|' + X.distance_m.fillna(0).astype(int).astype(str), None)
+        X['gate_s'] = X.gate.map(lambda v: str(int(v)) if pd.notna(v) else None)
     zcw = asof_ent('cw', ['td_k', 'gate_s'], 365)
     d = d.merge(zcw[['td_k', 'gate_s', 'd_idx', 'f']].rename(columns={'f': 'course_waku_hit'}), on=['td_k', 'gate_s', 'd_idx'], how='left')
-    zcf = asof_ent('cf', ['td_k'], 365, rows=d[d.pos1 == 1])
+    zcf = asof_ent('cf', ['td_k'], 365, rows=A.loc[A.pos1 == 1, ['td_k', 'd_idx', 'hit3', 'win1']])
     d['course_front_win'] = latest(zcf[['td_k', 'd_idx', 'wr']], ['td_k'], ['wr'], d[['td_k', 'd_idx']], strict=False).wr.to_numpy()
-    xq = d[d.p_pos1.notna()].copy()
+    xq = A.loc[A.p_pos1.notna(), ['td_k', 'd_idx', 'hit3', 'win1', 'p_pos1']].copy()
     xq['qb'] = np.minimum(3, np.floor(xq.p_pos1 * 4)).astype(int).astype(str)
     zcq = asof_ent('cq', ['td_k', 'qb'], 365, rows=xq)
+    del A, x, xq
     log('血統・騎手・傾き 済み')
 
     # ---------------------------------------------------- 当てる行だけに絞ってから最後の列
