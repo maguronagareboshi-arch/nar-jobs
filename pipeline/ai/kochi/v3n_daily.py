@@ -155,7 +155,7 @@ def main():
         try:
             import v3n_bf
             own = work / 'own_feat.csv.gz'
-            v3n_bf.make(off, day, own, k0_dl)
+            v3n_bf.make_sub(off, day, own)   # 2026-11-16 別の処理で(メモリが尽きそうならそれだけ止めてサイトの表で書く)
             same, msg = v3n_bf.compare(own, feat, day, [name[j] for j in tracks]) if Path(feat).exists() else (None, 'サイトの表が無い')
             print('自分の材料表とサイトの表', {True: '同じ', False: '違う', None: '比べられない'}[same], msg, flush=True)
             if same is False:
