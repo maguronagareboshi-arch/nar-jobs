@@ -6,9 +6,7 @@
 name: race-sweep
 
 on:
-  schedule:
-    - cron: '30 2 * * *'    # JST 11:30 出馬表
-    - cron: '40 13 * * *'   # JST 22:40 結果・払戻の後
+  # 2026-11-16 GitHub の定時(schedule)は 4〜7 時間遅れるので外した。起動は本番 DB の pg_cron(cron.job の行)から。
   workflow_dispatch:
     inputs:
       date:

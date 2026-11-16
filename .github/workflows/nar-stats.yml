@@ -28,8 +28,8 @@ on:
         default: check
   # 10/13: 夜にも 1 回(JST 22:15)= AI予想の成績・騎手などを「当日の確定分まで」にそろえる(朝 5:33 の回は nar-refresh の stats_check)。
   #   結果の取り込みは JST 21:37 の回が最後。schedule は inputs が無いので下の MODE で apply にする
-  schedule:
-    - cron: '15 13 * * *'
+  # 2026-11-16 GitHub の定時(22:15)は翌 04 時ごろに遅れて来て 2 回目の apply になっていたので外した。
+  #   夜の回は本番 DB の pg_cron(nar-stats-night-2155・mode=apply)だけ。
 
 concurrency:
   group: nar-stats

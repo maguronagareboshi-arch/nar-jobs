@@ -32,8 +32,8 @@ on:
   workflow_run:
     workflows: [nar-ai-feat]
     types: [completed]
-  schedule:
-    - cron: '15 0 * * *'    # 09:15 JST の予備(1 回目に材料表に無くて書かなかったレースを埋める)
+  # 2026-11-16 09:15 JST の予備(1 回目に材料表に無くて書かなかったレースを埋める)は GitHub の定時が 6 時間遅れるので外し、
+  #   本番 DB の pg_cron から write=yes で起こす。
 
 concurrency:
   # 2026-10-15 master 以外の枝の試しの便は別の列(本番の待ちを消さない・本番は今までどおり nar-ai-v3n)

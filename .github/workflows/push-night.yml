@@ -7,8 +7,7 @@
 name: push-night
 
 on:
-  schedule:
-    - cron: '37 13 * * *'   # UTC 13:37 = JST 22:37
+  # 2026-11-16 GitHub の定時(schedule)は 4〜7 時間遅れるので外した。起動は本番 DB の pg_cron(cron.job の行)から。
   workflow_dispatch:
 
 permissions:

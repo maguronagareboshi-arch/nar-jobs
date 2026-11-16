@@ -7,8 +7,7 @@
 name: Paper first3f
 
 on:
-  schedule:
-    - cron: '17 22 * * *'          # JST 07:17(nar-ai-feat 06:30 の後)
+  # 2026-11-16 GitHub の定時(schedule)は 4〜7 時間遅れるので外した。起動は本番 DB の pg_cron(cron.job の行)から。
   workflow_dispatch:
     inputs:
       dates:

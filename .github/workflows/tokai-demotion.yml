@@ -5,10 +5,13 @@
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
 name: tokai-demotion
 on:
-  schedule:
-    - cron: '0 1 * * 1,4'    # JST 月・木 10:00
-    - cron: '0 22 * * *'     # JST 毎朝 7:00(前日に開催があった日だけ)
+  # 2026-11-16 GitHub の定時(schedule)は 4〜7 時間遅れるので外した。起動は本番 DB の pg_cron(cron.job の行)から。
   workflow_dispatch:
+    inputs:
+      only_raced:
+        description: '1= 前日に笠松・名古屋の開催があった日だけ作り直す(毎朝 7:00 の回)。空= 必ず作り直す(月・木 10:00 の回)'
+        required: false
+        default: ''
 permissions:
   contents: read
 concurrency:
@@ -43,7 +46,7 @@ jobs:
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
-          ONLY_RACED: ${{ github.event.schedule == '0 22 * * *' && '--if-raced-yesterday' || '' }}
+          ONLY_RACED: ${{ (github.event.schedule == '0 22 * * *' || inputs.only_raced == '1') && '--if-raced-yesterday' || '' }}
         run: python cloud/tokai_demotion.py --apply $ONLY_RACED --out "$RUNNER_TEMP/tokai_demotion.csv"
 
       - name: heartbeat probe fail

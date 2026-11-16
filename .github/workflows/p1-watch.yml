@@ -9,8 +9,7 @@ on:
         description: '見る日(空= JST の今日)'
         required: false
         default: ''
-  schedule:
-    - cron: '30 13 * * *'   # JST 22:30(集計便 22:15 の後・その日の最後のレースの後)
+  # 2026-11-16 GitHub の定時(schedule)は 4〜7 時間遅れるので外した。起動は本番 DB の pg_cron(cron.job の行)から。
 
 permissions:
   contents: read

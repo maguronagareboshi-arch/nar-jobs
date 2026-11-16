@@ -4,8 +4,7 @@
 name: nar-ip-block
 
 on:
-  schedule:
-    - cron: '7 * * * *'
+  # 2026-11-16 GitHub の定時(schedule)は 4〜7 時間遅れるので外した。起動は本番 DB の pg_cron(cron.job の行)から。
   workflow_dispatch:
     inputs:
       hours:
@@ -14,6 +13,9 @@ on:
       dry_run:
         description: 1= 名簿に書かない
         default: '1'
+      beat:
+        description: 1= 定期の回として heartbeat と 1 日 1 通の知らせを出す(本番 DB の pg_cron が毎時 1 を渡す)
+        default: '0'
 
 permissions:
   contents: read
@@ -38,7 +40,7 @@ jobs:
           DC_DRY: '1'   # 借りたコンピューターの線(300/時)は数日 表だけ。了承後に '0'
         run: python3 cloud/ip_block.py | tee -a "$GITHUB_STEP_SUMMARY"
       - name: heartbeat
-        if: '!cancelled() && github.event_name == ''schedule'''
+        if: '!cancelled() && (github.event_name == ''schedule'' || inputs.beat == ''1'')'
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
@@ -46,7 +48,7 @@ jobs:
         run: python3 cloud/beat.py ip_block "$OK" "見回り"
       # 名簿に載せたら 1 日 1 通= その日最初の 1 回だけ赤にする(赤= 所有者へ GitHub のメール)
       - name: notify once a day
-        if: steps.s.outputs.listed != '' && steps.s.outputs.listed != '0' && github.event_name == 'schedule'
+        if: steps.s.outputs.listed != '' && steps.s.outputs.listed != '0' && (github.event_name == 'schedule' || inputs.beat == '1')
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
           SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}

@@ -8,15 +8,8 @@
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
 name: top-band
 on:
-  schedule:
-    # 10/29 夜の回を 3 本に= GitHub の予約は 4〜6 時間遅れて起きる日がある(10/26・10/27 は 22:10 の予約が翌 3〜4 時)
-    #   ユーザー「日付が変わって 5 分後には出ていてほしい」= 早い 2 本のどれかが 0 時までに済めばよい(冪等= 後の回が上書き)
-    - cron: '10 8 * * *'         # JST 17:10= 前の晩の回(翌日分を top_band_next と auction_next へ)
-    - cron: '10 11 * * *'        # JST 20:10= 前の晩の回
-    - cron: '10 13 * * *'        # JST 22:10= 前の晩の回(取消・追加の反映)
-    - cron: '50 21 * * *'        # JST 06:50= 朝の回(移籍の表が 05:33 の便で 06:15 ごろまでに入った後)
-    - cron: '40 0 * * *'         # JST 09:40(取消の反映)
-    - cron: '40 3 * * *'         # JST 12:40(念のため)
+  # 2026-11-16 GitHub の定時(schedule)は 4〜7 時間遅れるので外した。起動は本番 DB の pg_cron(cron.job の行)から。
+  #   夜の回(night=true)= JST 17:10・20:10・22:10 / 朝の回= 06:50・09:40・12:40(冪等= 後の回が上書き)
   workflow_dispatch:
     inputs:
       dry_run:

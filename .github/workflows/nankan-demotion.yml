@@ -3,8 +3,7 @@
 # 必要な Secrets: NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY
 name: nankan-demotion
 on:
-  schedule:
-    - cron: '15 13 * * *'    # JST 毎晩 22:15
+  # 2026-11-16 GitHub の定時(JST 毎晩 22:15)は遅れるので外した。起動は本番 DB の pg_cron から。
   workflow_dispatch:
 permissions:
   contents: read

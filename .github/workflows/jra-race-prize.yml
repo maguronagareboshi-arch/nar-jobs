@@ -4,8 +4,7 @@
 # 頁は 1 本 10〜15 秒= 埋め直しは手押しで max を大きく(1 本ごとに書くので途中で切れても次は続きから)。heartbeat 'jra_race_prize'
 name: jra-race-prize
 on:
-  schedule:
-    - cron: '37 5 * * *'   # JST 14:37
+  # 2026-11-16 GitHub の定時(schedule)は 4〜7 時間遅れるので外した。起動は本番 DB の pg_cron(cron.job の行)から。
   workflow_dispatch:
     inputs:
       max:
