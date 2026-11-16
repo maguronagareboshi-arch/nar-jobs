@@ -97,6 +97,8 @@ class T(unittest.TestCase):
         self.assertIsNone(H.kaku_of_race("オーガスト賞Ａ２二Ｂ１二選抜特別", "特別"))   # 混合
         self.assertEqual(H.kaku_of_race("こと座特別Ｃ１二三四選抜特別", "特別"), "C1")  # §294b 単一級の選抜= その級
         self.assertEqual(H.kaku_of_race("特選Ｃ２選抜牝馬", "普通"), "C2")             # §294b 浦和 9/25 7R
+        self.assertIsNone(H.kaku_of_race("ノベンバー賞Ａ２以下選抜特別", "特別"))      # 11/17 大井 11/18 10R= 幅のある級
+        self.assertIsNone(H.kaku_of_race("Ｂ３以上", "普通"))
         self.assertIsNone(H.kaku_of_race("エトワール賞Ａ２下選定馬", "特別"))            # 選定= 格上編成あり
         self.assertIsNone(H.kaku_of_race("Ｃ１イＣ２ア選抜馬", "特別"))                  # 混合の選抜
         self.assertIsNone(H.kaku_of_race("日吉オープンＡ１下", "特別"))                  # オープン

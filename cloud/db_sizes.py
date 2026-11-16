@@ -25,7 +25,9 @@ GB = 1024 ** 3
 MB = 1024 ** 2
 WARN_DB_GB = float(os.environ.get("DB_SIZE_WARN_DB_GB", "7.0"))                 # DB 全体(ディスク 12GB の 95%=11.4GB で読み取り専用・WAL 4GB+システム 0.2GB を引く)
 WARN_GROWTH_MB = float(os.environ.get("DB_SIZE_WARN_GROWTH_MB", "150"))         # 1 日の伸び
-WARN_ODDS_FULL_TICKS_GB = float(os.environ.get("DB_SIZE_WARN_ODDS_FULL_TICKS_GB", "1.0"))  # nar_odds_full_ticks
+WARN_ODDS_FULL_TICKS_GB = float(os.environ.get("DB_SIZE_WARN_ODDS_FULL_TICKS_GB", "1.3"))  # nar_odds_full_ticks
+# 11/17 1.0→1.3GB: 60 日を超えた分は odds_archive が消すので頭打ち= 11/17 実測 1.13GB(本体 449MB・索引 91MB・残りは長い値の置き場)。
+#   書き出しが止まると 1 日約 17MB 伸びる= 1.3GB には約 10 日で届く。
 
 PG_HOST = "aws-0-ap-northeast-1.pooler.supabase.com"
 PG_USER = "postgres.qgsnsdjvzzeazbazjlwa"

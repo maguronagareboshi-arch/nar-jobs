@@ -57,6 +57,13 @@ class T(unittest.TestCase):
         self.assertEqual(M.timing(kais, mon, end, at("2027-04-01T12:30"))[0], "season_end")
         self.assertEqual(M.timing(kais, mon, end, at("2027-04-09T12:30")), ("due", D("2027-04-09")))
 
+    def test_after_last_day(self):          # 11/17: 見込み 11/6 の回が出ないまま今季の最終日(11/12)を過ぎた
+        kais = [{"kai": 15, "asof": "2026-10-23"}]
+        mon, end = sched("2026-11-05", "2026-11-10", "2026-11-12", end="2027-01-31")
+        self.assertEqual(M.timing(kais, mon, end, at("2026-11-07T15:30"))[0], "overdue")    # 開催が残る間は赤のまま
+        self.assertEqual(M.timing(kais, mon, end, at("2026-11-13T15:30")), ("season_end", D("2026-11-06")))
+        self.assertEqual(M.timing(kais, mon, end, at("2026-11-17T09:00"))[0], "season_end")
+
     def test_no_stored(self):
         self.assertEqual(M.timing([], *IN_SEASON, at("2026-09-25T12:30")), ("unknown", None))
 

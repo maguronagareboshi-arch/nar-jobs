@@ -163,6 +163,12 @@ def timing(kais, mon_days, sched_end, now):
                 exp = nxt[0] - dt.timedelta(days=6)
             else:
                 return "season_end", exp
+    # 11/17 見込み日の後に門別の開催が残っていない(今季の最終日を過ぎた)= 今季の発表はもう無い。
+    # 2026 は最終日 11/12・見込み 11/6 の第16回が出ないまま「未取得」で赤が続いた。
+    if (mon_days is not None and sched_end is not None and today > exp
+            and sched_end >= today + dt.timedelta(days=SEASON_WIN)
+            and not any(d >= today for d in mon_days)):
+        return "season_end", exp
     if today < exp - dt.timedelta(days=EARLY_DAYS):
         return "before", exp
     if today < exp or (today == exp and now.hour < OVERDUE_HOUR):

@@ -142,9 +142,10 @@ def meetings(dates_by_track):
 
 def kaku_of_race(name, kind):
     """条件の級(単一クラス。選抜・特選は含む= RULES §4 の 1)→ 'C3' など / それ以外は None。
-    除く= 選定(川崎 §23 の格上編成)・オープン(上限なし)・重賞・準重賞・混合"""
+    除く= 選定(川崎 §23 の格上編成)・オープン(上限なし)・重賞・準重賞・混合・「以下」「以上」(幅のある級)
+    11/17: 大井「ノベンバー賞Ａ２以下選抜特別」を A2 だけと読み、B1・B2 の 8 頭を「ずれ」と数えていた"""
     cls = race_classes(name)
-    if len(cls) != 1 or kind in ("重賞", "準重賞") or re.search(r"選定|オープン", str(name or "")):
+    if len(cls) != 1 or kind in ("重賞", "準重賞") or re.search(r"選定|オープン|以下|以上", str(name or "")):
         return None
     return cls[0]
 
