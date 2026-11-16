@@ -209,6 +209,22 @@ jobs:
           rm -f in/v3_seq2.tar.gz.enc
           ls -l v3/seq2
 
+      # 2026-11-16 展開図(各馬の最初の角・4 角の位置の予想 = 見せ方だけ・予想の率と印にはつながない)の模型 tk.json・tk_r1.txt・tk_r4.txt。
+      # 無ければ展開図を作らないだけ(予想は変わらない)
+      - name: download tenkai files
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3-tk-20261116 -p 'v3_tk.tar.gz.enc' -D in
+          mkdir -p v3/tk
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_tk.tar.gz.enc | tar -C v3/tk -xzf -
+          rm -f in/v3_tk.tar.gz.enc
+          ls -l v3/tk
+
       # 決め 63(2026-10-30)= 前日版の並び読みの重み(seqpre_model.npz・seqpre_prod.json)を同じ置き場 v3/seq2 へ。
       # 別の包み・別の手順 = 取れなくても当日版の並び読みの材料(上)は変わらない(前日版は第19版のまま)
       - name: download seqpre files
@@ -450,6 +466,22 @@ jobs:
           if [ "$WRITE" = "yes" ]; then W=--write; else W=; fi
           echo "day=${{ steps.d.outputs.day }} write=$WRITE"
           python -X utf8 pipeline/ai/v3/v3_daily.py "${{ steps.d.outputs.day }}" out $W 2>&1 | tee -a out_log.txt
+
+      # 2026-11-16 展開図 = 上の v3_daily が落とした公式の表(v3/official)から、その日の南関の出走馬の位置を予想して
+      # 公開バケット cond-stats/tenkai/v1/<日>/<場>-<R>.json へ置く(DB の表は読まない・書かない)。落ちても予想の行は変わらない
+      - name: tenkai (position preview to public bucket)
+        if: steps.pc.outputs.run == 'yes' && hashFiles('v3/tk/tk.json') != '' && hashFiles('v3/official/runs.parquet') != ''
+        continue-on-error: true
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          WRITE: ${{ github.event_name == 'schedule' && 'yes' || github.event.inputs.write }}
+          V3_OFFICIAL: v3/official
+          V3_TK: v3/tk
+        run: |
+          set -o pipefail
+          if [ "$WRITE" = "yes" ]; then W=--write; else W=; fi
+          python -X utf8 pipeline/ai/v3/tenkai_live.py "${{ steps.d.outputs.day }}" --out out_tenkai $W 2>&1 | tee -a out_log.txt
 
       - name: seal k0 cache
         id: k0s
