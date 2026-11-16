@@ -442,7 +442,12 @@ def main():
         v30 = cy79_live.is_on(day)
     except Exception:  # noqa: BLE001
         v30 = False
-    v29n = '南関 第30版 前日版' if v30 else '南関 第29版 前日版'
+    try:  # 決め 82: 直前版を第31版にする日から前日版も同じ番号(前日版の中身は第29版と同じ)
+        import b82_live
+        v31 = v30 and b82_live.is_on(day)
+    except Exception:  # noqa: BLE001
+        v31 = False
+    v29n = '南関 第31版 前日版' if v31 else '南関 第30版 前日版' if v30 else '南関 第29版 前日版'
     for r in rows:  # 決め 74: 混ぜたレースは版の字を第27版に(混ぜないレース・影の日は第25版のまま + meta.pt74.p0)
         m74 = PT74.get((r['track'], int(r['race_no'])))
         if m74 is None:

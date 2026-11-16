@@ -314,6 +314,11 @@ def prep(day, U, out, log=_log):
         cy79_live.prep(day, T, hist, ctx, bwp, out, log=log)
     except Exception as e:  # noqa: BLE001
         log('調教入りの並び 失敗(書かない = 直前版は決め 79 の足しなし)', type(e).__name__, str(e)[:160])
+    try:  # 2026-11-1x 決め 82: 調教入りの並び + 併せ馬 + ① の 21 列(OUT/DAY_b82.npz)。落ちても上の材料はそのまま(直前版は第30版の形)
+        import b82_live
+        b82_live.prep(day, T, hist, ctx, bwp, out, log=log)
+    except Exception as e:  # noqa: BLE001
+        log('3 案まとめの並び 失敗(書かない = 直前版は第30版の形)', type(e).__name__, str(e)[:160])
     return p
 
 

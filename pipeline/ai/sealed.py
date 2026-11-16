@@ -32,6 +32,7 @@ NEED = {'p1_follow': ['FORM', 'TAG'], 'danwa_marks': ['CONST'], 't14_bundle': ['
         'buy4': ['MIX', 'A2', 'B2', 'A3', 'B3', 'AX_P', 'AX_EV', 'LINE', 'TAG'],
         'buyfin': ['AX_EV', 'AX_LO', 'AX_HI', 'P3', 'EV_S', 'TAG'],   # 2026-11-18 買い方の最終案(軸 + 相手の 7 券・記録だけ・v3/buyfin_live)   # 2026-11-11 買い方 決め 4 の段 2 組 6 券種の買い目(v3/buy4_live)
         'cy79': ['A1', 'A3', 'ON', 'TAG', 'z', 'TL', 'NT', 'NP', 'NPAST', 'NPP'],   # 2026-11-11 決め 79 南関 第30版 直前版 = 直前の並び読みに調教を挟んだ差(v3/cy79_live・v3/dayonpre77_live)
+        'b82': ['A1', 'A3', 'ON', 'TAG'],   # 2026-11-1x 決め 82 南関 第31版 直前版 = 調教入りの差を 3 案まとめの並び読みの差に替える(v3/b82_live・v3/dayonpre77_live)
         'cy76': ['maps', 'z', 'nk', 'cols', 'old_e', 'W1', 'W3'],   # 2026-11-09 決め 76 南関 前日版の調教の元の記録 88 列の番号の表と時計の物差し(v3/cy76_live)
         'v3n_rb61': ['W', 'WIN', 'LAM', 'gamma', 'nb', 'curve', 'TAG']}   # 2026-10-31 決め 61 他場の 2 本目の木の混ぜ・内外の有利(v3n_rb61)   # 2026-10-28 決め 60 併せ馬の相手の層(awase_live)   # 2026-10-27 サイトの指数の表示の直し(si5_store.disp)   # 2026-10-22 決め 49 F3 の混ぜの重み
 _C = None

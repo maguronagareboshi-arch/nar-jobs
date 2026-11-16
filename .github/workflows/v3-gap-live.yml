@@ -126,6 +126,12 @@ jobs:
           else
             echo "調教入りの並び読みの材料なし(足さない)"
           fi
+          # 2026-11-1x 決め 82: 3 案まとめの並び読みの前日の材料(無ければ第30版の形のまま)
+          if [ -f in/b82.npz.enc ]; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/b82.npz.enc -out in/b82.npz || echo "3 案まとめの並び読みの材料を開けない"
+          else
+            echo "3 案まとめの並び読みの材料なし(替えない)"
+          fi
           V3_GAP_KEY=$(printf %s "$V3_GAP_KEY" | tr -d '\r\n'); export V3_GAP_KEY
           gh release download "${TAG:-v3-gap-model-20261001}" -p 'v3_gap_model.tar.gz.enc' -D in
           openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_GAP_KEY -in in/v3_gap_model.tar.gz.enc | tar -C gapm -xzf -
@@ -171,6 +177,12 @@ jobs:
             openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_cy79.tar.gz.enc | tar -C gapm -xzf - || echo "調教入りの並び読みの模型を開けない"
           else
             echo "調教入りの並び読みの模型なし(足さない)"
+          fi
+          # 2026-11-1x 決め 82: 3 案まとめの並び読みの重み(b82_model.npz・b82_prod.json)と見込みの木(seqai_wf.json・seqai_wf_2026.txt)。無ければ第30版の形・見込みを書かない
+          if gh release download v3-b82-20261117 -p 'v3_b82.tar.gz.enc' -D in; then
+            openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_b82.tar.gz.enc | tar -C gapm -xzf - || echo "3 案まとめの並び読みの模型を開けない"
+          else
+            echo "3 案まとめの並び読みの模型なし(替えない)"
           fi
           # 2026-10-14 決め 30: 全馬の短評の層の模型(V3_ASSET_KEY)。無ければ当日版は短評の層を足さない
           mkdir -p gapm/tanpyo

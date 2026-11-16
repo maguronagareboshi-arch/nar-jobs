@@ -11,11 +11,18 @@
   見込み = 見込みの木(seqai_wf_{年}.txt)を直前の便が当日の材料に当てた値(行の meta.b82.wf・9/1〜11/16 は埋めた表)・馬主 = v7c_owner の走った時の馬主。
 """
 import json
+import os
 import re
+import urllib.parse
+import urllib.request
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
+
+ASSET = Path(os.environ.get('V3_B82', 'C:/Users/kouki/nankan_ai/v3/b82_prod'))   # リリース v3-b82 を開いた所
+NKT = ('大井', '船橋', '川崎', '浦和')
+WATCH = {'過去走の行に ① が結べた割合 ≥': 0.60, '今回の行がある割合 ≥': 0.30, '出走馬 ≥': 20}
 
 K = ['track', 'race_date', 'race_no', 'umaban']
 G1 = ['mg_has', 'm_to2', 'm_to3', 'm_ahead', 'm_behind', 'm_near']
@@ -34,8 +41,25 @@ PAT = re.compile(r'^(?P<name>.+?)（(?P<cls>[^）]*)）(?P<pash>[^の同先遅]+
                  r'(?:を(?P<dist>\d)Ｆ(?P<how>併|付))?(?:(?P<mar>\d+\.\d+)秒)?(?P<res>先着|同入|遅れ|併入)?$')
 
 
+_C = None
+
+
 def log0(*a):
     print('[b82]', *a, flush=True)
+
+
+def consts():
+    """暗号化したリリース v3-consts の consts.json の b82(A1・A3・ON・TAG)。"""
+    global _C
+    if _C is None:
+        import sealed
+        _C = sealed.get('b82')
+    return _C
+
+
+def is_on(day):
+    """その日(レースの日)が決め 82 の ON 以降か(定数が読めなければ例外)。"""
+    return str(day) >= str(consts().get('ON') or '9999-12-31')
 
 
 # ------------------------------------------------------------------ ① の群(研究 seqall_1116 / seqtalk_1115 と同じ式)
@@ -189,6 +213,217 @@ def seq_hist(Tg, hist, Wt, A, C=None):
     out, i2 = attach(Hn, Tg, A, hist.shape[2])
     info.update(i2)
     return out, info
+
+
+# ------------------------------------------------------------------ 本番の元(CUT から)の読み口
+def _get_all(path):
+    """REST を 1000 行ずつ(path に order を必ず入れる・race_date を先に)。"""
+    import kb_works
+    base, key = kb_works.creds()
+    if not base:
+        raise RuntimeError('DB の鍵が無い')
+    out, off = [], 0
+    while True:
+        req = urllib.request.Request(f'{base}{path}&limit=1000&offset={off}',
+                                     headers={'apikey': key, 'Authorization': f'Bearer {key}', 'User-Agent': 'nar-ai-v3'})
+        with urllib.request.urlopen(req, timeout=60) as r:
+            got = json.loads(r.read().decode('utf-8'))
+        out += got
+        if len(got) < 1000:
+            return out
+        off += 1000
+
+
+def official_runs(official=None, cols=('finish', 'time_sec', 'horse_name')):
+    """公式の成績表(seq2_live.OFFICIAL/runs.parquet)→ K + cols(race_date は字・馬番は int)。"""
+    if official is None:
+        import seq2_live
+        official = seq2_live.OFFICIAL
+    r = pd.read_parquet(Path(official) / 'runs.parquet', columns=['track', 'race_date', 'race_no', 'runner_number'] + list(cols))
+    r = r.rename(columns={'runner_number': 'umaban'})
+    r['race_date'] = r.race_date.astype(str).str[:10]
+    r['race_no'] = pd.to_numeric(r.race_no, errors='coerce')
+    r['umaban'] = pd.to_numeric(r.umaban, errors='coerce')
+    r = r.dropna(subset=['race_no', 'umaban'])
+    r['race_no'], r['umaban'] = r.race_no.astype(int), r.umaban.astype(int)
+    return r.drop_duplicates(K).reset_index(drop=True)
+
+
+def src_margins(R, day):
+    """着差 = 公式の成績表の CUT から前の日まで。"""
+    return margins(R[(R.race_date >= CUT) & (R.race_date < day)])
+
+
+def src_talk(day, rows=None):
+    """談話 = nar_kb_danwa(CUT から day まで)。rows は照合用(DB のかわり)。"""
+    if rows is None:
+        rows = _get_all('/rest/v1/nar_kb_danwa?select=track,race_date,race_no,umaban,raw,headline,comment'
+                        f'&track=in.({",".join(NKT)})&race_date=gte.{CUT}&race_date=lte.{day}&order=race_date,track,race_no,umaban')
+    D = pd.DataFrame(rows, columns=K + ['raw', 'headline', 'comment'])
+    if not len(D):
+        return pd.DataFrame(columns=K + G2[:6])
+    D['race_date'] = D.race_date.astype(str).str[:10]
+    D['race_no'], D['umaban'] = D.race_no.astype(int), D.umaban.astype(int)
+    D['raw'] = D.raw.fillna('').astype(str).str.strip()
+    return talk(D)
+
+
+def src_tanpyo(parsed, day, M):
+    """短評 = nar_kb_works の頁の形(t8_forecast._W['parsed'])の馬の短評・最終追いの短評(研究 debut_tp.build と同じ = debut_live.entries)。"""
+    import debut_live
+    import tanpyo_live
+    C = tanpyo_live._flat(parsed)
+    C = C[(C.race_date.astype(str).str[:10] >= CUT) & (C.race_date.astype(str).str[:10] <= day)]
+    if not len(C):
+        return pd.DataFrame(columns=K + G2[6:])
+    R = debut_live.entries(C)
+    R = R[R.tp_w.notna() | R.tp_h.notna()]
+    return tanpyo(R, M)
+
+
+def src_ai(day, R, fill=None, rows=None):
+    """その時の見込み = 埋めた表(リリースの b82_wf_fill.parquet・K + wf_p3)+ その後は直前版の行の meta.b82.wf({馬番: 見込み})。
+    Y3 = 公式の着順 ≤ 3(着順の無い馬 = 中止など は 0)。"""
+    F = pd.read_parquet(ASSET / 'b82_wf_fill.parquet') if fill is None else fill
+    F = F[K + ['wf_p3']].copy()
+    F['race_date'] = F.race_date.astype(str).str[:10]
+    lo = max(CUT, str(F.race_date.max()) if len(F) else CUT)
+    if rows is None:
+        rows = _get_all('/rest/v1/nar_ai_marks?select=track,race_date,race_no,wf:meta->b82->wf'
+                        f'&model=eq.v3-9&timing=eq.last&track=in.({",".join(NKT)})&race_date=gt.{lo}&race_date=lt.{day}'
+                        '&order=race_date,track,race_no')
+    add = [(r['track'], str(r['race_date'])[:10], int(r['race_no']), int(u), float(p))
+           for r in rows if isinstance(r.get('wf'), dict) for u, p in r['wf'].items() if p is not None]
+    F = pd.concat([F, pd.DataFrame(add, columns=K + ['wf_p3'])], ignore_index=True)
+    F['race_no'], F['umaban'] = F.race_no.astype(int), F.umaban.astype(int)
+    F = F[(F.race_date >= CUT) & (F.race_date < day)].drop_duplicates(K, keep='last')
+    fin = R[K + ['finish']].copy()
+    fin['Y3'] = (pd.to_numeric(fin.finish, errors='coerce') <= 3).astype(float)
+    return ai(F.merge(fin[K + ['Y3']], on=K, how='inner'))
+
+
+def src_owner(day, R, Tg, frozen, kd=None, db=None, cd=None):
+    """馬主 = 走った時の馬主のコード(研究 kd_se_owner の owner_cd と同じ物差し・000000 = 馬主なし)。
+    写しの終わり(kmax = 2026-09-30)までは K ごとのコード(リリースの b82_owner_cd.parquet)・その後は DB の今の馬主と替わりの記録の名前
+    (v7c_owner.owner_rt と同じならし)→ 写しの中の同じ名前の最後のコード(写しに無い名前は名前そのものを 1 つのコードとして扱う)。
+    CUT より前の 2024〜 の走りも並べて CUT からの行の替わりを数える。替わった回数 = 固めた表の CUT より前の最後の own_n × 4 + CUT からの替わり。"""
+    import cy79_live
+    import v7c_owner
+    KD = (pd.read_parquet(v7c_owner.OWN_KD) if kd is None else kd).copy()
+    CD = (pd.read_parquet(ASSET / 'b82_owner_cd.parquet') if cd is None else cd).copy()
+    for X in (KD, CD):
+        X['race_date'] = X.race_date.astype(str).str[:10]
+        X['race_no'], X['umaban'] = X.race_no.astype(int), X.umaban.astype(int)
+    kmax = str(KD.race_date.max())
+    nc = KD.drop_duplicates(K, keep='last')[K + ['owner']].merge(CD.drop_duplicates(K, keep='last')[K + ['owner_cd']], on=K)
+    n2c = nc.sort_values(['race_date', 'race_no']).groupby('owner').owner_cd.last().to_dict()
+    S = R[R.track.isin(NKT) & (R.race_date >= '2024-01-01') & (R.race_date < day)][K + ['horse_name']]
+    S = pd.concat([S, Tg[K + ['horse_name']]], ignore_index=True).drop_duplicates(K, keep='last')
+    S = S.merge(CD.drop_duplicates(K, keep='last')[K + ['owner_cd']].rename(columns={'owner_cd': 'owner'}), on=K, how='left')
+    late = (S.owner.isna() & (S.race_date > kmax)).to_numpy()
+    keys = set(KD.owner.dropna())
+    pre = sorted((k for k in keys if len(k) >= 4), key=len, reverse=True)
+
+    def fit(s):
+        s = cy79_live.norm(s)
+        if not isinstance(s, str):
+            return None
+        s = v7c_owner.RE_CORP.sub('', s)
+        return s if s in keys else next((k for k in pre if s.startswith(k)), s)
+    n_late = int(late.sum())
+    if n_late:
+        hn_, dd_ = S.horse_name.to_numpy()[late], S.race_date.to_numpy()[late]
+        got = v7c_owner.db_owner_asof(list(hn_), kmax, sorted(set(dd_))) if db is None else db
+        nm_ = [fit(got.get(n, {}).get(d)) for n, d in zip(hn_, dd_)]
+        S.loc[late, 'owner'] = [None if s is None else n2c.get(s, 'N:' + s) for s in nm_]
+        log0('馬主 写しの後の名前 → コード', sum(s is not None and s in n2c for s in nm_), '/ 名前あり', sum(s is not None for s in nm_))
+    S['hkey'] = S.horse_name.map(cy79_live.norm)
+    S = S.dropna(subset=['hkey'])
+    S['owner'] = S.owner.where(S.owner.notna(), '')
+    O = owner(S, None).merge(S[K + ['hkey']], on=K)
+    Fz = frozen[(frozen.race_date < CUT) & frozen.horse_name.notna()].copy()
+    Fz['hkey'] = Fz.horse_name.map(cy79_live.norm)
+    n0 = Fz.sort_values(['race_date', 'race_no']).groupby('hkey').own_n.last() * 4
+    O = O[O.race_date >= CUT].sort_values(['hkey', 'race_date', 'race_no']).copy()
+    O['own_n'] = np.minimum(O.hkey.map(n0).fillna(0.0) + O.groupby('hkey').own_chg.cumsum(), 4) / 4
+    log0('馬主 CUT からの行', len(O), '・写しの後で DB から', n_late, '・馬主なし', int((O.own_has == 0).sum()), '・替わり', int(O.own_chg.sum()))
+    return O[K + G5]
+
+
+def src_awase(Wt, parsed, bf=None):
+    """併せ馬 = 研究の拾い直し(リリースの b82_awase.parquet = 他場/data/backfill/awase の 4 場)+ nar_kb_works の相手の行。
+    鍵 = race_id・馬番・調教の日・コース。相手の字の順で最初の 1 本(研究 seqall_1116.awase_rows と同じ)。拾い直しを先に。→ Wt + AWC。"""
+    B = pd.read_parquet(ASSET / 'b82_awase.parquet') if bf is None else bf
+    rows = []
+    for p in parsed or []:
+        rid = str(p.get('race_id') or '')
+        for h in p.get('horses') or []:
+            for w in h.get('works') or []:
+                for s in (w.get('partners') or []):
+                    if w.get('date') and h.get('umaban') is not None:
+                        rows.append((rid, str(int(h['umaban'])), str(w['date'])[:10], str(w.get('course')), s))
+    P = pd.DataFrame(rows, columns=['race_id', 'umaban', 'work_date', 'course', 'partner'])
+    P = P.sort_values('partner').drop_duplicates(['race_id', 'umaban', 'work_date', 'course'])
+    v = [awase_cols(s) for s in P.partner]
+    for i, c in enumerate(AWC):
+        P[c] = [x[i] for x in v]
+    A = pd.concat([B[['race_id', 'umaban', 'work_date', 'course'] + AWC].astype({'umaban': str, 'course': str}), P.drop(columns=['partner'])],
+                  ignore_index=True).drop_duplicates(['race_id', 'umaban', 'work_date', 'course'], keep='first')
+    k = pd.DataFrame({'race_id': Wt.race_id.astype(str), 'umaban': Wt.umaban.astype(int).astype(str),
+                      'work_date': Wt.work_date.astype(str).str[:10], 'course': Wt.course.astype(str)})
+    M = k.merge(A, on=['race_id', 'umaban', 'work_date', 'course'], how='left', validate='m:1')
+    Wt = Wt.copy()
+    for c in AWC:
+        Wt[c] = M[c].fillna(0.0).to_numpy(np.float32)
+    log0('併せ馬 拾い直し', len(B), '・本番の相手の行', len(P), '・調教の行に結べた', int((Wt.aw_has > 0).sum()), '/', len(Wt))
+    return Wt
+
+
+def prep(day, T, hist, ctx, bwp, out, W=None, parsed=None, log=log0, src=None):
+    """前日の便(seq2_live.prep の cy79 の後): その日の南関の出走馬の 3 案まとめの並びを OUT/DAY_b82.npz に。書けたらそのパス・書かなければ None。
+    src は照合用(official・frozen・talk_rows・ai_rows・fill・kd・db・bf・M を差し替える)。"""
+    import cy79_live
+    src = src or {}
+    C = cy79_live.consts()
+    if W is None or parsed is None:
+        import t8_forecast as t8
+        W = t8.works()[0] if W is None else W
+        parsed = t8._W.get('parsed') if parsed is None else parsed
+    Tg = T[K].copy()
+    Tg['horse_name'] = T.hk.astype(str).str.split('|').str[0]
+    W = W[W.race_date.astype(str).str[:10] <= day]
+    R = official_runs(src.get('official'))
+    if int(pd.to_numeric(W.umaban, errors='coerce').isna().sum()):
+        W, _ = cy79_live.fill_umaban(W, R)
+    Wt = src_awase(cy79_live.works_tbl(W, C), parsed, src.get('bf'))
+    Fz = pd.read_parquet(ASSET / 'b82_table.parquet') if src.get('frozen') is None else src['frozen']
+    Fz = Fz.merge(R[K + ['horse_name']], on=K, how='left')
+    if 'M' in src:
+        M = src['M']
+    else:
+        import tanpyo_live
+        M = tanpyo_live.load()
+    parts = [src_margins(R, day), src_talk(day, src.get('talk_rows')), src_tanpyo(parsed, day, M), src_ai(day, R, src.get('fill'), src.get('ai_rows'))]
+    O = src_owner(day, R, Tg, Fz, src.get('kd'), src.get('db'))
+    A = table(Fz, parts + [O])
+    nm = pd.concat([R[K + ['horse_name']], Tg[K + ['horse_name']]], ignore_index=True).drop_duplicates(K, keep='last')
+    A = A.merge(nm, on=K, how='left')
+    A = A[A.horse_name.isin(set(Tg.horse_name))]
+    cnt = {c: int((A[A.race_date >= CUT][c] > 0).sum()) for c in ('mg_has', 'dw_has', 'tp_has', 'ai_has', 'own_has')}
+    log('3 案まとめ CUT からの ① の行', cnt)
+    Hn, info = seq_hist(Tg, hist, Wt, A, C)
+    v = {'過去走の行に ① が結べた割合 ≥': info['① に結べた'] / max(info['過去走の行'], 1),
+         '今回の行がある割合 ≥': info['今回の行あり'] / max(info['頭'], 1), '出走馬 ≥': info['頭']}
+    ok = all(v[k] >= w for k, w in WATCH.items())
+    info.update(cnt)
+    log('3 案まとめ 見張り', {k: round(x, 3) if isinstance(x, float) else x for k, x in info.items()}, '→', '○' if ok else '× = 書かない')
+    if not ok:
+        return None
+    p = Path(out) / f'{day}_b82.npz'
+    np.savez_compressed(p, track=T.track.to_numpy().astype('U4'), race_no=T.race_no.to_numpy(int), umaban=T.umaban.to_numpy(int),
+                        hist=Hn, ctx=ctx, bw_prev=bwp, info=json.dumps(info, ensure_ascii=False))
+    log('3 案まとめ 材料', p.name, Hn.shape)
+    return p
 
 
 # ------------------------------------------------------------------ 当日の便
