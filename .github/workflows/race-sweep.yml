@@ -39,6 +39,7 @@ jobs:
         env:
           IN_DATE: ${{ github.event.inputs.date }}
           PYTHONIOENCODING: utf-8
+          SWEEP_PASS: ${{ secrets.SWEEP_PASS }}
         run: |
           set +e
           if [ -n "$IN_DATE" ]; then D="--date $IN_DATE"; else D=""; fi

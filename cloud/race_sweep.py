@@ -108,10 +108,21 @@ def main():
         br = pw.chromium.launch(headless=True)
         try:
             ctxs = {
-                1280: br.new_context(viewport={"width": 1280, "height": 1080}, user_agent=UA_PC, color_scheme="light"),
+                1280: br.new_context(viewport={"width": 1280, "height": 1080}, user_agent=UA_PC, color_scheme="light",
+                                     service_workers="block"),
                 375: br.new_context(viewport={"width": 375, "height": 812}, is_mobile=True, has_touch=True,
-                                    device_scale_factor=2, user_agent=UA_SP, color_scheme="light"),
+                                    device_scale_factor=2, user_agent=UA_SP, color_scheme="light",
+                                    service_workers="block"),
             }
+            # 11/16 Cloudflare の「海外の自動巡回」規則(11/15〜)で米国にある GitHub の機械は確認画面(403)になる。
+            # 規則は見出し x-nar-sweep が合言葉と同じ要求を外す。見出しは自サイトへの要求にだけ付ける(広告など他社へ送らない)。
+            # service worker 経由の要求は route を通らないので、上で service worker を止めている。
+            pass_key = os.environ.get("SWEEP_PASS", "").strip()
+            if pass_key:
+                def _with_pass(route, req):
+                    route.continue_(headers={**req.headers, "x-nar-sweep": pass_key})
+                for c in ctxs.values():
+                    c.route(f"{ORIGIN}/**", _with_pass)
             # 1) 当日の場と R を拾う(同時 1 タブ・間隔 1 秒以上)
             pg = ctxs[1280].new_page()
             for p in ["/", "/calendar"]:
