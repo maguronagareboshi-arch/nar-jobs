@@ -12,19 +12,22 @@
 
   python -X utf8 tenkai_sim_live.py <日> [--timing morning|last] [--write] [--out DIR]
     --write なし = 手元の DIR(既定 out_tksim)に書くだけ。--write = 公開バケット cond-stats/tenkai/sim/v1/<日>/<場の英字>.json へ置く。
-    便に入れる版は勝負服を載せない(公式サイトの図の扱いが決まるまで・ページは仮の柄で描く)。
+    TKSIM_SILKS=1 で騎手の本物の勝負服も載せる(tenkai_silks_db.py・2026-11-17 ユーザー「許可はもらっています」)。
+      升目は tenkai_silks_seed.json(手元で読み取り済み)+ 公開バケットの tenkai/sim/v1/silks.json にため、新しい騎手の図だけ公式サイトから取る(10 秒あける)。
 環境変数: SUPABASE_URL・SUPABASE_SERVICE_KEY(読むだけなら公開の鍵 SUPABASE_ANON_KEY でも良い)
 """
 import argparse
 import datetime as dt
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 JST = dt.timezone(dt.timedelta(hours=9))
 V = 1
 MODEL = 'v3-9'
@@ -202,6 +205,29 @@ def upload(path, data):
          {'Content-Type': 'application/json; charset=utf-8', 'x-upsert': 'true', 'Cache-Control': CACHE})
 
 
+def silks_into(data, write):
+    """騎手の本物の勝負服を足す。落ちても data はそのまま(仮の柄で描く)。"""
+    try:
+        import tenkai_silks_db as S
+        store = {}
+        seed = Path(__file__).resolve().parent / 'tenkai_silks_seed.json'
+        if seed.exists():
+            store.update(json.loads(seed.read_text(encoding='utf-8')))
+        raw = _req(f'/storage/v1/object/public/{BUCKET}/{SIM_ROOT}silks.json', auth=False)
+        if raw:
+            store.update(json.loads(raw))
+        n0 = len(store)
+        _log('勝負服', S.attach(data, store), '升目の持ち合わせ', n0, '→', len(store))
+        if write and (len(store) > n0 or not raw):
+            upload(SIM_ROOT + 'silks.json', json.dumps(store, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+    except Exception as e:  # noqa: BLE001
+        for r in data['races']:
+            for h in r['h']:
+                h.pop('sk', None)
+        data.pop('silks', None)
+        _log('勝負服は載せられなかった(仮の柄で描く)', type(e).__name__, e)
+
+
 def run(day, write=False, out_dir='out_tksim', timing='morning'):
     """入口(便から呼ぶ)。戻り = 置いた R の数(作らない日は 0)。"""
     t0 = time.time()
@@ -209,6 +235,8 @@ def run(day, write=False, out_dir='out_tksim', timing='morning'):
     if data is None:
         _log(day, 'ページを作らない:', info['why'])
         return 0
+    if os.environ.get('TKSIM_SILKS') == '1':
+        silks_into(data, write)
     doc = {'v': V, 'computed_at': dt.datetime.now(JST).isoformat(timespec='seconds'), **data}
     body = json.dumps(doc, ensure_ascii=False, separators=(',', ':')).encode('utf-8')
     p = path_of(day, data['track'])
