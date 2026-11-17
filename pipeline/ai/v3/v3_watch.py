@@ -119,20 +119,29 @@ FEAT_TAG = "材料の欠け"   # emergency_issue.classify がこの頭の字で�
 
 
 def feat_check(day):
-    """朝の行の meta の見張り用の数: 模型に入れた列の数が学習済み模型の列の数と違う、または列の半分を超えて空の馬が頭数の半分以上。
-    n_feat の無い行(足す前の行)は見ない。"""
-    sel = urllib.parse.quote("track,race_no,model,n:meta->>n,nf:meta->>n_feat,nfm:meta->>n_feat_model,nan:meta->>feat_nan_horses", safe=",:>-")
-    bad = []
+    """朝の行の meta の見張り用の数: 模型に入れた列の数が学習済み模型の列の数と違う(南関・他場)、
+    または南関で、過去の走りがある馬の半分以上が列の半分を超えて空(初出走は空が正常なので数えない)。
+    他場の空の数は手元で確かめていない = ログに出すだけ。n_feat の無い行(足す前の行)は見ない。"""
+    sel = urllib.parse.quote("track,race_no,model,n:meta->>n,nf:meta->>n_feat,nfm:meta->>n_feat_model,nan:meta->>feat_nan_horses,nr:meta->>n_horses_with_runs", safe=",:>-")
+    bad, note = [], []
     for m in ("v3-9", "v3n-1"):
         for r in rest(f"nar_ai_marks?select={sel}&model=eq.{m}&timing=eq.morning&race_date=eq.{day}"):
             try:
-                nf, n, nan = int(r["nf"]), int(r["n"]), int(r["nan"])
+                nf, nan = int(r["nf"]), int(r["nan"])
             except (TypeError, ValueError, KeyError):
                 continue
             nfm = r.get("nfm")
-            if (nfm not in (None, "") and nf != int(nfm)) or (n > 0 and nan * 2 >= n):
-                bad.append((r["track"], int(r["race_no"]), m, nf, nfm, nan, n))
+            nr = r.get("nr")
+            many = nr not in (None, "") and int(nr) > 0 and nan * 2 >= int(nr)
+            if nfm not in (None, "") and nf != int(nfm):
+                bad.append((r["track"], int(r["race_no"]), m, nf, nfm, nan, nr))
+            elif many and m == "v3-9":
+                bad.append((r["track"], int(r["race_no"]), m, nf, nfm, nan, nr))
+            elif nan and m == "v3n-1":
+                note.append((r["track"], int(r["race_no"]), nan, r.get("n")))
     print(f"今日 {day} の材料の見張り: 引っかかったレース {len(bad)} R {bad[:12]}", flush=True)
+    if note:
+        print(f"(知らせない)他場で材料の半分を超えて空の馬がいるレース {len(note)} R {note[:12]}", flush=True)
     if bad:
         return [f"{FEAT_TAG}: 今日 {day} の予想で、模型の列の数が違うか材料の空の馬が半分以上のレース {len(bad)} R: {[(t, r) for t, r, *_ in bad][:12]}"]
     return []

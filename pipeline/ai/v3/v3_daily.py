@@ -58,18 +58,20 @@ def log(*a):
     print('[v3]', *a, flush=True)
 
 
-FEATQ = {}   # (場, R) → (n_feat, feat_nan_horses)。t9.table の直後に材料 T から数える(見張り用・予想の値は変えない)
+FEATQ = {}   # (場, R) → (n_feat, feat_nan_horses, n_horses_with_runs)。t9.table の直後に材料 T から数える(見張り用・予想の値は変えない)
 FEATQ_MODEL = [None]   # 学習済み模型(t9_Y1)の列の数
 
 
 def feat_quality(T, day, cols):
-    """模型に入れた列の数と、その列の半分を超えて空の馬の数(レースごと)。読むだけ。"""
+    """模型に入れた列の数と、過去の走りがある馬(初出走 = g_starts が 0 の馬を外す・空なら外さない)のうち
+    その列の半分を超えて空の馬の数と、過去の走りがある馬の数(レースごと)。読むだけ。"""
     t = T[T.race_date.astype(str).str[:10] == str(day)]
+    t = t.assign(_run=~(t.g_starts == 0) if 'g_starts' in t.columns else True)
     use = [c for c in cols if c in t.columns]
     fr = t[use].isna().mean(axis=1) if use else pd.Series(1.0, index=t.index)
     out = {}
-    for (tr, rno), g in t.assign(_bad=(fr > 0.5)).groupby(['track', 'race_no'], sort=False):
-        out[(str(tr), int(rno))] = (len(use), int(g._bad.sum()))
+    for (tr, rno), g in t.assign(_bad=(fr > 0.5) & t._run).groupby(['track', 'race_no'], sort=False):
+        out[(str(tr), int(rno))] = (len(use), int(g._bad.sum()), int(g._run.sum()))
     return out
 
 
@@ -111,7 +113,7 @@ def build_rows(csv_path, day, src, stamp=STAMP):
             meta['p1cap_n'] = int(((g.p1_t74 if 'p1_t74' in g.columns else g.p1) != g.p1_cap0).sum())   # 決め 74 の段の前の勝つ率で数える
         q = FEATQ.get((str(tr), int(rno)))
         if q is not None:  # 見張り用: 模型に入れた列の数・半分を超えて空の馬の数・模型の列の数(足す前の行には無い)
-            meta['n_feat'], meta['feat_nan_horses'] = q
+            meta['n_feat'], meta['feat_nan_horses'], meta['n_horses_with_runs'] = q
             if FEATQ_MODEL[0] is not None:
                 meta['n_feat_model'] = FEATQ_MODEL[0]
         rows.append({'track': tr, 'race_date': str(day), 'race_no': int(rno), 'marks': marks, 'meta': meta})
