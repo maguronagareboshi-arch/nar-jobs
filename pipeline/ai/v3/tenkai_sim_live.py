@@ -38,6 +38,7 @@ DRAWN = {'大井'}            # 絵のコースがある場
 NO_DIST = {'大井': {1650}}  # 絵が無い距離(大井の 1650m は左回り)
 CHECKED = {'大井': {1200, 1400, 1600, 1800, 2400}}  # 絵を自分で見て確かめた距離(他は同じ式で描くが未確認)
 UA = 'nar-jobs tenkai_sim_live'
+KEIRO = {1: '栗毛', 2: '栃栗毛', 3: '鹿毛', 4: '黒鹿毛', 5: '青鹿毛', 6: '青毛', 7: '芦毛', 11: '白毛'}   # 馬の台帳(KDS)の毛色の番号。南関の血統の台帳の字と 4,204/4,208 頭で一致(11/17)
 
 
 def _log(*a):
@@ -91,9 +92,39 @@ def tracks_of(day):
     return sorted({r['track'] for r in rows}, key=NK.index)
 
 
-def build(day, timing='morning', track=None):
+def coat_table(paths):
+    """馬の台帳(parquet・列 name・birth〔20240207〕・keiro〔番号〕か keiro_name〔字〕)→ {(馬名, 生年月日 8 桁): 毛色}。先に渡した台帳を優先。
+    毛色は事実(公式サイトの画像ではない)。台帳が無い・読めないときは空 = ページは名前から決めた仮の色で描く。"""
+    out = {}
+    for p in paths or []:
+        try:
+            import pandas as pd
+            import pyarrow.parquet as pq
+            cols = [c for c in ['name', 'birth', 'keiro', 'keiro_name'] if c in pq.read_schema(str(p)).names]
+            d = pd.read_parquet(p, columns=cols).dropna(subset=['name', 'birth'])
+            nm = d['keiro_name'] if 'keiro_name' in d else pd.Series(index=d.index, dtype=object)
+            if 'keiro' in d:
+                nm = nm.where(nm.notna(), d['keiro'].map(lambda v: KEIRO.get(int(v)) if v == v else None))
+            for n, b, k in zip(d['name'], d['birth'], nm):
+                if isinstance(k, str) and k:
+                    out.setdefault((n, str(int(b))), k)
+        except Exception as e:  # noqa: BLE001
+            _log('毛色の台帳が読めない', p, type(e).__name__, e)
+    return out
+
+
+def coat_paths():
+    """便 = 予想の便が開けた固定の台帳 $V3_KD/kd_horse.parquet。ほかは TKSIM_COAT(os.pathsep 区切り)で足す。"""
+    ps = [x for x in os.environ.get('TKSIM_COAT', '').split(os.pathsep) if x]
+    if os.environ.get('V3_KD'):
+        ps.append(str(Path(os.environ['V3_KD']) / 'kd_horse.parquet'))
+    return [p for p in ps if Path(p).exists()]
+
+
+def build(day, timing='morning', track=None, coat=None):
     """→ (DATA または None, 数え)。None のときは 数え['why'] に理由。"""
-    info = {'day': day, 'tracks': tracks_of(day), 'skip': [], 'unchecked': []}
+    info = {'day': day, 'tracks': tracks_of(day), 'skip': [], 'unchecked': [], 'nocoat': []}
+    coat = coat_table(coat_paths()) if coat is None else coat
     if not info['tracks']:
         info['why'] = '南関の開催が無い(またはレースの表がまだ無い)'
         return None, info
@@ -129,7 +160,7 @@ def build(day, timing='morning', track=None):
             continue
         pos = {int(h['num']): h for h in tk['horses']}
         rate = {int(x['num']): x for x in by[no][tm] if x.get('p1') is not None and x.get('p3') is not None}
-        runs = rpc('runs_race', {'p_track': track, 'p_date': day, 'p_no': no}, 'select=runner_number,gate,horse_name,jockey&order=runner_number.asc')
+        runs = rpc('runs_race', {'p_track': track, 'p_date': day, 'p_no': no}, 'select=runner_number,gate,horse_name,jockey,age,birth_date&order=runner_number.asc')
         hs = []
         for r in runs:
             u = int(r['runner_number'])
@@ -140,6 +171,13 @@ def build(day, timing='morning', track=None):
                  'r1': round(float(pos[u]['r1']), 4), 'r4': round(float(pos[u]['r4']), 4)}
             if r.get('jockey'):
                 h['jk'] = r['jockey']
+            if r.get('age') is not None:
+                h['ag'] = int(r['age'])           # 年齢(芦毛は年を取るほど白い)
+            kc = coat.get((r['horse_name'], str(r.get('birth_date') or '').replace('-', '')))
+            if kc:
+                h['kc'] = kc                      # 本物の毛色(馬の台帳)。無い馬はページが名前から決めた仮の色で描く
+            else:
+                info['nocoat'].append((no, u, r['horse_name']))
             hs.append(h)
         if len(hs) < 3:
             info['skip'].append((no, f'そろった馬が {len(hs)} 頭'))
@@ -181,7 +219,7 @@ def run(day, write=False, out_dir='out_tksim', timing='morning'):
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_bytes(body)
     _log(day, data['track'], '置いた', info['n_race'], 'R', info['n_horse'], '頭', len(body), 'バイト', 'バケット' if write else out_dir,
-         '・抜いた R', info['skip'], '・絵が未確認の距離', info['unchecked'], f'{time.time() - t0:.0f}s')
+         '・抜いた R', info['skip'], '・絵が未確認の距離', info['unchecked'], '・毛色あり', info['n_horse'] - len(info['nocoat']), '無し', len(info['nocoat']), f'{time.time() - t0:.0f}s')
     return info['n_race']
 
 
