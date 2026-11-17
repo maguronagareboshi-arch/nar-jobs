@@ -58,3 +58,15 @@ jobs:
           python3 cloud/beat.py ip_block_notice ok "$IPS"
           echo "::error::出入り禁止名簿に載せた(知らせだけ・便は正常) $IPS"
           exit 1
+      # 11/17 追: 海外の多くの IP に散った巡回を見つけたら 1 日 1 通(名簿には載せない・止めるのは人が決める)
+      - name: notify spread once a day
+        if: '!cancelled() && steps.s.outputs.spread != '''' && (github.event_name == ''schedule'' || inputs.beat == ''1'')'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          SPREAD: ${{ steps.s.outputs.spread }}
+        run: |
+          if [ "$(python3 cloud/beat.py --today ip_spread_notice)" = "1" ]; then echo "今日は知らせ済み $SPREAD"; exit 0; fi
+          python3 cloud/beat.py ip_spread_notice ok "$SPREAD"
+          echo "::error::海外の多くの IP から同じ端末名の巡回(知らせだけ・便は正常) $SPREAD"
+          exit 1

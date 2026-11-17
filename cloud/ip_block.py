@@ -40,6 +40,43 @@ def exempt(ip: str, ua: str) -> bool:
     return any(k in (ua or '') for k in EXEMPT_UA) and ip.startswith(('66.249.', '74.125.'))
 
 
+# 11/17 追: 多くの IP に散って 1 つあたりは少なく読む巡回(11/14〜 海外の家庭回線プロキシ)は上の線にかからない。
+# 同じ端末名が海外の SPREAD_IPS 個以上の IP から 1 時間 SPREAD_N 回以上来たら、知らせるだけ(名簿には載せない)。
+def spread_check(ref, pat, start, end):
+    ips_min = int(os.environ.get('SPREAD_IPS') or 50)
+    n_min = int(os.environ.get('SPREAD_N') or 2000)
+    sql = (
+        "select ua, max(ips) as ips, max(n) as n from ("
+        " select substring(log_attributes['request.headers.user_agent'],1,160) as ua, toStartOfHour(timestamp) as h,"
+        " uniq(log_attributes['request.headers.cf_connecting_ip']) as ips, count() as n"
+        " from logs where source='edge_logs'"
+        " and log_attributes['request.cf.country'] != 'JP'"
+        " and log_attributes['request.sb.jwt.apikey.payload.role']!='service_role'"
+        " and log_attributes['request.method'] != 'OPTIONS'"
+        " and log_attributes['response.status_code'] not in ('403', '429')"  # もう断っている分は知らせない
+        " group by ua,h) group by ua"
+        f" having ips >= {ips_min} and n >= {n_min} order by n desc limit 10"
+    )
+    q = urllib.parse.urlencode({'sql': sql,
+                                'iso_timestamp_start': start.strftime('%Y-%m-%dT%H:%M:%SZ'),
+                                'iso_timestamp_end': end.strftime('%Y-%m-%dT%H:%M:%SZ')})
+    req = urllib.request.Request(
+        f'https://api.supabase.com/v1/projects/{ref}/analytics/endpoints/logs?{q}',
+        headers={'Authorization': f'Bearer {pat}', 'User-Agent': 'nar-jobs/1.0'})
+    body = json.loads(urllib.request.urlopen(req, timeout=60).read())
+    if body.get('error'):
+        print('散らばり見回りのログ取得に失敗:', body['error'], file=sys.stderr)
+        return
+    rows = [r for r in (body.get('result') or []) if not any(k in (r.get('ua') or '') for k in EXEMPT_UA)]
+    print(f'\n散らばり見回り(海外・同じ端末名が {ips_min} IP 以上・1時間 {n_min} 回以上)・該当 {len(rows)}')
+    for r in rows:
+        print(f"| {r['ips']} IP | {r['n']} 回 | {(r.get('ua') or '')[:110]} |")
+    out = os.environ.get('GITHUB_OUTPUT')
+    if rows and out:
+        with open(out, 'a', encoding='utf8') as f:
+            f.write('spread=' + ' / '.join(f"{r['ips']}IP {r['n']}回 {(r.get('ua') or '')[:60]}" for r in rows).replace('\n', ' ') + '\n')
+
+
 def main() -> int:
     url = os.environ['SUPABASE_URL'].rstrip('/')
     key = os.environ['SUPABASE_SERVICE_KEY']
@@ -92,6 +129,11 @@ def main() -> int:
     for r in hit + dc_only + skip:
         mark = '' if r in hit else ('(借・表だけ)' if r in dc_only else '(除外)')
         print(f"| {r['ip']}{mark} | {r['max_h']} | {r['total']} | {r.get('org') or ''} | {(r.get('ua') or '')[:50]} |")
+
+    try:
+        spread_check(ref, pat, start, end)
+    except Exception as e:  # 見回りの追加分で本体を落とさない
+        print('散らばり見回りで失敗:', e, file=sys.stderr)
 
     if dry or not hit:
         return 0
