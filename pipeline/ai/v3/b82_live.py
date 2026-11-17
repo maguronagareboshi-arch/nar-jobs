@@ -258,7 +258,7 @@ def src_talk(day, rows=None):
     """談話 = nar_kb_danwa(CUT から day まで)。rows は照合用(DB のかわり)。"""
     if rows is None:
         rows = _get_all('/rest/v1/nar_kb_danwa?select=track,race_date,race_no,umaban,raw,headline,comment'
-                        f'&track=in.({",".join(NKT)})&race_date=gte.{CUT}&race_date=lte.{day}&order=race_date,track,race_no,umaban')
+                        f'&track=in.({urllib.parse.quote(",".join(NKT))})&race_date=gte.{CUT}&race_date=lte.{day}&order=race_date,track,race_no,umaban')
     D = pd.DataFrame(rows, columns=K + ['raw', 'headline', 'comment'])
     if not len(D):
         return pd.DataFrame(columns=K + G2[:6])
@@ -290,7 +290,7 @@ def src_ai(day, R, fill=None, rows=None):
     lo = max(CUT, str(F.race_date.max()) if len(F) else CUT)
     if rows is None:
         rows = _get_all('/rest/v1/nar_ai_marks?select=track,race_date,race_no,wf:meta->b82->wf'
-                        f'&model=eq.v3-9&timing=eq.last&track=in.({",".join(NKT)})&race_date=gt.{lo}&race_date=lt.{day}'
+                        f'&model=eq.v3-9&timing=eq.last&track=in.({urllib.parse.quote(",".join(NKT))})&race_date=gt.{lo}&race_date=lt.{day}'
                         '&order=race_date,track,race_no')
     add = [(r['track'], str(r['race_date'])[:10], int(r['race_no']), int(u), float(p))
            for r in rows if isinstance(r.get('wf'), dict) for u, p in r['wf'].items() if p is not None]
