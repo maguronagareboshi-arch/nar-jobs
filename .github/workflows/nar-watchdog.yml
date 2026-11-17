@@ -27,6 +27,7 @@ jobs:
     outputs:
       red: ${{ steps.c.outcome == 'failure' }}
       reasons: ${{ steps.c.outputs.reasons }}
+      age_min: ${{ steps.c.outputs.age_min }}   # 2026-11-17 緊急の issue(cloud/emergency_issue.py)が読む
     steps:
       - name: check nar_races freshness (fail if stale > 3h)
         id: c
@@ -44,6 +45,8 @@ jobs:
           last = dt.datetime.fromisoformat(rows[0]['updated_at'].replace('Z', '+00:00'))
           age = (dt.datetime.now(dt.timezone.utc) - last).total_seconds()
           print(f'nar_races last update: {last.isoformat()} ({age/60:.0f} min ago)')
+          with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+              f.write(f'age_min={age/60:.0f}\n')
           raise SystemExit(0 if age < 3 * 3600 else 1)
           PY
 
@@ -83,6 +86,7 @@ jobs:
     outputs:
       red: ${{ steps.c.outcome == 'failure' }}
       reasons: ${{ steps.c.outputs.reasons }}
+      stale_min: ${{ steps.c.outputs.stale_min }}   # 2026-11-17 緊急の issue が読む(止まって何分か)
     steps:
       - name: check 2-minute odds ticks (fail if stale > 12 min while races are near)
         id: c
@@ -111,9 +115,15 @@ jobs:
           t = get(f'nar_odds_ticks?select=t&race_date=eq.{today}&order=id.desc&limit=1')
           last = t[0]['t'] if t else None
           print(f'latest tick today: {last}')
+          def out(v):
+              with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as f:
+                  f.write(f'stale_min={v}\n')
           if not last:
+              # 今日 1 本も無い= 最初のレースの発走 40 分前から数える
+              out(nm - (min(pm(r['post_time']) for r in races if pm(r.get('post_time')) is not None) - 40))
               raise SystemExit(1)
           lm = int(last[:2]) * 60 + int(last[3:5]); age = nm - lm
+          out(age)
           print(f'age {age} min')
           raise SystemExit(0 if 0 <= age <= 12 else 1)
           PY
@@ -681,6 +691,9 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     timeout-minutes: 5
+    permissions:
+      contents: read
+      issues: write
     steps:
       - uses: actions/checkout@v7
         with:
@@ -688,7 +701,16 @@ jobs:
             cloud/beat.py
             cloud/sb_gzip.py
             cloud/watchdog_dedupe.py
+            cloud/emergency_issue.py
           sparse-checkout-cone-mode: false
+      # 2026-11-17 緊急(当日の情報が 1 時間以上止まる/AI 予想の抜け/置き場が止まりそう)だけ日本語の issue= 持ち主へメール。
+      #   同じ種別が開いていれば立てない・直ったら閉じる。失敗しても下の赤の記録は今どおり動く。
+      - name: open or close emergency issues in Japanese
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+          NEEDS: ${{ toJSON(needs) }}
+        run: python3 cloud/emergency_issue.py --from-needs
       - name: mail once a day for the same red
         env:
           SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}

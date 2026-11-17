@@ -1,0 +1,35 @@
+# 2026-11-17 yukochi.com が開けるかの点検(10 分ごと)。続けて 2 回開けなければ日本語の緊急 issue(持ち主へメール)。
+#   中身は cloud/site_up.py(トップ ?nocount=1 と画面の部品 1 つ)。前回の結果= この workflow の 1 つ前の run の結論。
+#   開けないときはこの run を赤で終える(= 次の run が「前回は失敗」と読む)。戻ったら issue を閉じる。
+name: site-up
+
+on:
+  schedule:
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+  issues: write
+
+concurrency:
+  group: site-up
+  cancel-in-progress: false
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          sparse-checkout: |
+            cloud/site_up.py
+            cloud/emergency_issue.py
+          sparse-checkout-cone-mode: false
+      - name: open top page and one bundle (fail if not)
+        env:
+          SWEEP_PASS: ${{ secrets.SWEEP_PASS }}
+          GH_TOKEN: ${{ github.token }}
+        run: python3 cloud/site_up.py --issue
