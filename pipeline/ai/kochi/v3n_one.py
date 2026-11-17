@@ -57,10 +57,8 @@ def feat_day(path, day, tracks):
     return B.add_relative(df)
 
 
-def predict(m, F, Vt):
-    """F = feat_day の行・Vt = 場の材料(track・race_date(文字)・race_no・runner_number・元の列名)
-    → F の鍵 + g3(3 着内の見込み)・pw_raw(R で合計 1)・pwg(帯の表の後 R で合計 1)"""
-    import ai_common as B
+def _matrix(m, F, Vt):
+    """predict が木に入れる表 X(鍵・rid・m['cols'])。predict と feat_quality が同じ物を使う"""
     X = F.copy()
     X['race_no'], X['runner_number'] = X.race_no.astype('int64'), X.runner_number.astype('int64')
     v = Vt.rename(columns={c: 'v_' + c for c in m['vcols']})
@@ -74,6 +72,24 @@ def predict(m, F, Vt):
     cols = m['cols']
     miss = [c for c in cols if c not in X.columns]
     assert not miss, ('材料に無い列', miss[:10], len(miss))
+    return X
+
+
+def feat_quality(m, F, Vt):
+    """見張り用(読むだけ): {(場, R): (木に入れた列の数, その列の半分を超えて空の馬の数)}・学習済みの木の列の数"""
+    X = _matrix(m, F, Vt)
+    cols = m['cols']
+    bad = X[cols].isna().mean(axis=1) > 0.5
+    q = {(str(t), int(r)): (len(cols), int(g.sum())) for (t, r), g in bad.groupby([X.track, X.race_no])}
+    return q, int(m['_b'][0].num_feature())
+
+
+def predict(m, F, Vt):
+    """F = feat_day の行・Vt = 場の材料(track・race_date(文字)・race_no・runner_number・元の列名)
+    → F の鍵 + g3(3 着内の見込み)・pw_raw(R で合計 1)・pwg(帯の表の後 R で合計 1)"""
+    import ai_common as B
+    X = _matrix(m, F, Vt)
+    cols = m['cols']
     Xc = X[cols]
     pb = np.mean([b.predict(Xc) for b in m['_b']], axis=0)
     raw = pd.Series(m['_r'].predict(Xc), index=X.index)

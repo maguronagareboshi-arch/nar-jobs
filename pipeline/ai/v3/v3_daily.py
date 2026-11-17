@@ -58,6 +58,21 @@ def log(*a):
     print('[v3]', *a, flush=True)
 
 
+FEATQ = {}   # (場, R) → (n_feat, feat_nan_horses)。t9.table の直後に材料 T から数える(見張り用・予想の値は変えない)
+FEATQ_MODEL = [None]   # 学習済み模型(t9_Y1)の列の数
+
+
+def feat_quality(T, day, cols):
+    """模型に入れた列の数と、その列の半分を超えて空の馬の数(レースごと)。読むだけ。"""
+    t = T[T.race_date.astype(str).str[:10] == str(day)]
+    use = [c for c in cols if c in t.columns]
+    fr = t[use].isna().mean(axis=1) if use else pd.Series(1.0, index=t.index)
+    out = {}
+    for (tr, rno), g in t.assign(_bad=(fr > 0.5)).groupby(['track', 'race_no'], sort=False):
+        out[(str(tr), int(rno))] = (len(use), int(g._bad.sum()))
+    return out
+
+
 def build_rows(csv_path, day, src, stamp=STAMP):
     x = pd.read_csv(csv_path, encoding='utf-8-sig')
     rows = []
@@ -94,6 +109,11 @@ def build_rows(csv_path, day, src, stamp=STAMP):
         if 'p1_cap0' in g.columns:  # 勝つ率の守り(決め 67-2)を通したレース = 元の勝つ率は p1_cap0・動かした頭数
             meta['p1cap'] = CAP_TAG
             meta['p1cap_n'] = int(((g.p1_t74 if 'p1_t74' in g.columns else g.p1) != g.p1_cap0).sum())   # 決め 74 の段の前の勝つ率で数える
+        q = FEATQ.get((str(tr), int(rno)))
+        if q is not None:  # 見張り用: 模型に入れた列の数・半分を超えて空の馬の数・模型の列の数(足す前の行には無い)
+            meta['n_feat'], meta['feat_nan_horses'] = q
+            if FEATQ_MODEL[0] is not None:
+                meta['n_feat_model'] = FEATQ_MODEL[0]
         rows.append({'track': tr, 'race_date': str(day), 'race_no': int(rno), 'marks': marks, 'meta': meta})
     return rows
 
@@ -174,6 +194,12 @@ def main():
     except Exception as e:  # noqa: BLE001
         log('SI5 の控え 失敗', type(e).__name__, str(e)[:200])
     t9.table(day, 'pre', str(out))
+    try:  # 見張り用の数(材料 T のその日の分・模型の列一覧)。失敗しても予想は止めない
+        FEATQ.update(feat_quality(cap['T'], day, list(t8.e7.COLS)))
+        FEATQ_MODEL[0] = int(t8.e7.booster('Y1').num_feature())
+        log('材料の数', '模型の列', FEATQ_MODEL[0], '入れた列', sorted({v[0] for v in FEATQ.values()}), '半分超え空の馬', sum(v[1] for v in FEATQ.values()))
+    except Exception as e:  # noqa: BLE001
+        log('材料の数 失敗', type(e).__name__, str(e)[:200])
     if __import__('os').environ.get('V3_SI5_DUMP'):  # 照合・過去分の書き込み用: 控えた SI5 を全期間 parquet に出す(手元だけ)
         si5_store.frame().to_parquet(__import__('os').environ['V3_SI5_DUMP'])
     si5_all = __import__('os').environ.get('V3_SI5_ALL') == 'yes'

@@ -200,8 +200,14 @@ def main():
                                    for c in ONE['vcols']}}))
         print(name[j], '・その日の出走', len(te), '・場の材料の欠け列', sum(c not in te.columns for c in ONE['vcols']), flush=True)
     PR, PM, PX = {}, {}, {}
+    FQ, FQM = {}, None
     if VT and not FD.empty:
         pr = v3n_one.predict(ONE, FD, pd.concat(VT, ignore_index=True))
+        try:  # 見張り用の数(木に入れた列の数・半分を超えて空の馬の数・木の列の数)。読むだけ・失敗しても止めない
+            FQ, FQM = v3n_one.feat_quality(ONE, FD, pd.concat(VT, ignore_index=True))
+            print('材料の数', '木の列', FQM, '半分超え空の馬', sum(v[1] for v in FQ.values()), flush=True)
+        except Exception as e:  # noqa: BLE001
+            print('材料の数 失敗', type(e).__name__, str(e)[:200], flush=True)
         PR = {(t_, int(r_)): g_.set_index('runner_number') for (t_, r_), g_ in pr.groupby(['track', 'race_no'])}
         pm = v3n_one.predict(RB, FD, pd.concat(VT, ignore_index=True))
         PM = {(t_, int(r_)): g_.set_index('runner_number') for (t_, r_), g_ in pm.groupby(['track', 'race_no'])}
@@ -278,6 +284,11 @@ def main():
                     **({'p1_raw': {str(int(n)): round(float(a), 6) for n, a in zip(nums, q1r)}, 'p1mix': v3n_p1mix.TAG[MV]} if mixed else {}),
                     'p': {str(int(n)): round(float(x), 4) for n, x in zip(nums, c)},
                     'own': {str(int(n)): [round(float(a), 4), round(float(b_), 4)] for n, a, b_ in zip(nums, c1t, g3)}}
+            q = FQ.get((trk, int(rno)))
+            if q is not None:  # 見張り用(足す前の行には無い)
+                meta['n_feat'], meta['feat_nan_horses'] = q
+                if FQM is not None:
+                    meta['n_feat_model'] = FQM
             rows.append({'track': trk, 'race_date': day, 'race_no': int(rno), 'marks': marks, 'meta': meta})
             show.append(f"{trk}{int(rno)}R " + ' '.join(f"{x['mark']}{x['num']}({x['score']})" for x in marks))
     (work / f'v3n_{day}.json').write_text(json.dumps(rows, ensure_ascii=False, indent=1), encoding='utf-8')

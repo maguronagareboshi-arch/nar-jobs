@@ -115,6 +115,29 @@ def base_artifact(day):
     return any(not a.get("expired") for a in arts)
 
 
+FEAT_TAG = "材料の欠け"   # emergency_issue.classify がこの頭の字で見分ける(ai の緊急・「予想が無い」とは別の文)
+
+
+def feat_check(day):
+    """朝の行の meta の見張り用の数: 模型に入れた列の数が学習済み模型の列の数と違う、または列の半分を超えて空の馬が頭数の半分以上。
+    n_feat の無い行(足す前の行)は見ない。"""
+    sel = urllib.parse.quote("track,race_no,model,n:meta->>n,nf:meta->>n_feat,nfm:meta->>n_feat_model,nan:meta->>feat_nan_horses", safe=",:>-")
+    bad = []
+    for m in ("v3-9", "v3n-1"):
+        for r in rest(f"nar_ai_marks?select={sel}&model=eq.{m}&timing=eq.morning&race_date=eq.{day}"):
+            try:
+                nf, n, nan = int(r["nf"]), int(r["n"]), int(r["nan"])
+            except (TypeError, ValueError, KeyError):
+                continue
+            nfm = r.get("nfm")
+            if (nfm not in (None, "") and nf != int(nfm)) or (n > 0 and nan * 2 >= n):
+                bad.append((r["track"], int(r["race_no"]), m, nf, nfm, nan, n))
+    print(f"今日 {day} の材料の見張り: 引っかかったレース {len(bad)} R {bad[:12]}", flush=True)
+    if bad:
+        return [f"{FEAT_TAG}: 今日 {day} の予想で、模型の列の数が違うか材料の空の馬が半分以上のレース {len(bad)} R: {[(t, r) for t, r, *_ in bad][:12]}"]
+    return []
+
+
 def check(day, label):
     want = db_races(day) | official(day)
     got = marks(day)
@@ -137,6 +160,10 @@ def main():
         if want and got and not base_artifact(today):
             errs.append(f"今日 {today} の印はあるのに前日の土台(v3-gap-base-{today})が無い = 当日の買い候補が出ない")
         errs += last_miss(today, now)
+        try:
+            errs += feat_check(today)
+        except Exception as e:  # noqa: BLE001  材料の見張りが読めなくても他の見張りは止めない
+            print(f"材料の見張りが読めない({type(e).__name__}: {str(e)[:120]})", flush=True)
     if now.hour >= 22:
         e, _, _ = check(tomorrow, "明日")
         errs += e
@@ -144,6 +171,9 @@ def main():
         print("::error::⛔ " + x, flush=True)
     if not errs:
         print("v3 の予想: 問題なし", flush=True)
+    if os.environ.get("GITHUB_OUTPUT"):   # notify(emergency_issue)が理由の頭の字で種類を見分ける
+        with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as f:
+            f.write("reasons=" + json.dumps(errs, ensure_ascii=False) + "\n")
     return 1 if errs else 0
 
 

@@ -37,9 +37,9 @@ TEXT = {
     "live": ("【緊急】開催日の出馬表・オッズ・結果が止まっています",
              "{cause}",
              "見ている人の画面で、今日の情報が古いままです。"),
-    "ai": ("【緊急】AI 予想が出ていないレースがあります",
+    "ai": ("【緊急】AI 予想が出ていないか、いつもの作りで出ていないレースがあります",
            "{cause}",
-           "見ている人の画面で、一部のレースに AI 予想が出ていません。"),
+           "見ている人の画面で、一部のレースの AI 予想が出ていないか、いつもより当てにならない値で出ています。"),
     "cost": ("【緊急】データの置き場がいっぱいに近づいています",
              "{cause}",
              "このままだと、データの保存が止まり、サイトの更新も止まるおそれがあります。"),
@@ -94,10 +94,17 @@ def classify(needs, now):
     out["live"] = " ".join(cause) if cause else ("ok" if _ran(needs, LIVE_JOBS) else None)
     # ai: (a) 南関 v3 の見張りの赤(予想の無いレース・直前版の抜け)・ばんえいの朝/直前の版の抜け
     cause = []
-    if _red(needs.get("v3-forecast")):
+    rs = _reasons(needs.get("v3-forecast"))
+    feat = [r for r in rs if r.startswith("材料の欠け")]   # v3_watch.FEAT_TAG
+    if _red(needs.get("v3-forecast")) and (not rs or len(feat) < len(rs)):
         cause.append("AI 予想の点検で、予想が出ていないレースが見つかりました。")
-    if any(("朝の版が" in r or "直前の版が無い" in r) for r in _reasons(needs.get("banei"))):
+    if feat:
+        cause.append("AI 予想が、いつもの材料がそろわないまま(古い作りか、空の値が多いまま)出ているレースがあります。")
+    rs = _reasons(needs.get("banei"))
+    if any(("朝の版が" in r or "直前の版が無い" in r) for r in rs):
         cause.append("ばんえいの AI 予想が出ていないレースがあります。")
+    if any("控えの模型" in r for r in rs):
+        cause.append("ばんえいの AI 予想が、その日の学び直しに失敗し、前の日の模型のまま出ています。")
     # 10 時前は v3 の見張りが今日を見ない= 緑でも「直った」とは言えない
     out["ai"] = " ".join(cause) if cause else ("ok" if _ran(needs, AI_JOBS) and now.hour >= 10 else None)
     # cost: 「このままだと止まる」ものだけ(DB 全体の大きさ・閲覧者が書ける表の上限の半分)
