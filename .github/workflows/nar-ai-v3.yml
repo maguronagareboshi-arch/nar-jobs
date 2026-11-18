@@ -501,6 +501,23 @@ jobs:
           export TKSIM_SILKS=1 TKSIM_SILK_CACHE="$RUNNER_TEMP/tksilk"   # 騎手の本物の勝負服(2026-11-17 ユーザー「許可はもらっています」。引っ込めるときはこの行を消す)
           python -X utf8 pipeline/ai/v3/tenkai_sim_live.py "${{ steps.d.outputs.day }}" --out out_tksim $W 2>&1 | tee -a out_log.txt
 
+      # 2026-11-18 トリプル馬単の買い目 = 上の v3_daily が書いた前日版の印の行(勝つ率・3 着内率)だけから、その日の最終 3 レースの
+      # 馬単の買い目(200 枚 = 1 万円まで)を作り、公開バケット cond-stats/triple/v1/<日>.json へ置く(読むだけ・予想の行は変えない・オッズは使わない)。
+      # 持ち越しは公式の結果の一覧から(国外からは本番 DB 経由)。前の開催日の結果が出る前は「結果待ち」= 便 nk-triple が夜と朝に書き直す。
+      # 落ちても予想の行は変わらない
+      - name: triple umatan picks (public bucket)
+        if: steps.pc.outputs.run == 'yes'
+        continue-on-error: true
+        timeout-minutes: 5
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          WRITE: ${{ github.event_name == 'schedule' && 'yes' || github.event.inputs.write }}
+        run: |
+          set -o pipefail
+          if [ "$WRITE" = "yes" ]; then W=--write; else W=; fi
+          python -X utf8 pipeline/ai/v3/triple_live.py "${{ steps.d.outputs.day }}" --out out_triple $W 2>&1 | tee -a out_log.txt
+
       - name: seal k0 cache
         id: k0s
         if: "!cancelled() && hashFiles('k0cache/dirty.flag') != '' && hashFiles('k0cache/meta.json') != ''"
