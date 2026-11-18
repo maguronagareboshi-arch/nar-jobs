@@ -87,6 +87,7 @@ def relabel(meta, gone, ud=None, sf=None, rk=None):
         mx = meta.get('mx70') or None   # 第 13 版(決め 70)の朝の行 = 6 本の割合も取消の後で割り直して混ぜる
         if mx is not None:
             import v3n_mx70
+            v3n_mx70.use(mx.get('set', 'mx70'))   # 決め 83: 朝に出した組(na83 か mx70)の模型の並び・γ・曲線で割り直す(定数に無い組なら KeyError = 止める)
             sh = {int(k): v for k, v in (mx.get('sh') or {}).items()}
             assert all(n in sh for n in keep), ('meta.mx70.sh に無い馬', rk)
             shx = {}
@@ -131,7 +132,7 @@ def relabel(meta, gone, ud=None, sf=None, rk=None):
     if pc and all(n in pc for n in keep):
         import v3n_p1
         xs = np.array([(u[n] if (u and all(m in u for m in keep)) else 0.0) + (v3n_e1.BETA_NOKEN * nz.get(n, 0.0) if e1on else 0.0) + (fs[n] if fs is not None else 0.0) for n in keep])
-        ver = ('di' if ud is not None else 'mo') + ('5' if meta.get('mx70') else '4' if rb is not None else '3' if meta.get('trees54') else '2' if meta.get('one15') else '1' if one else '')  # 第 10 版(決め 32)の朝の行 = k mo2・di2・第 11 版(決め 54)= mo3・di3・第 12 版(決め 61)= mo4・di4・第 13 版(決め 70)= mo5・di5
+        ver = ('di' if ud is not None else 'mo') + (('6' if (meta.get('mx70') or {}).get('set') == 'na83' else '5') if meta.get('mx70') else '4' if rb is not None else '3' if meta.get('trees54') else '2' if meta.get('one15') else '1' if one else '')  # 第 10 版(決め 32)の朝の行 = k mo2・di2・第 11 版(決め 54)= mo3・di3・第 12 版(決め 61)= mo4・di4・第 13 版(決め 70)= mo5・di5
         p1n = dict(zip(keep, v3n_p1.follow([pc[n] for n in keep], xs, ver)))
         import v3n_p1mix
         if meta.get('one15') and len(keep) >= v3n_p1mix.MIN_N:  # 決め 40: 画面の勝つ率を 3 着内率(E1・能検の後・max の前)と混ぜる。第 10 版の行だけ・印は key の順のまま
