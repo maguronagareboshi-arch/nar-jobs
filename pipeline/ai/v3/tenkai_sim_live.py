@@ -137,7 +137,7 @@ def build(day, timing='morning', track=None, coat=None):
         info['why'] = f'{track} は絵のコースがまだ無い(作ってあるのは {"・".join(sorted(DRAWN))} だけ)'
         return None, info
     t = _q(track)
-    races = rest(f'nar_races?select=race_no,post_time,race_name,distance_m,cancelled&track=eq.{t}&race_date=eq.{day}&order=race_no.asc')
+    races = rest(f'nar_races?select=race_no,post_time,race_name,distance_m,cancelled,going,prize_yen&track=eq.{t}&race_date=eq.{day}&order=race_no.asc')
     marks = rest(f'nar_ai_marks?select=race_no,timing,runners:meta->runners&model=eq.{_q(MODEL)}&track=eq.{t}&race_date=eq.{day}')
     by = {}
     for m in marks:
@@ -181,6 +181,7 @@ def build(day, timing='morning', track=None, coat=None):
                 h['kc'] = kc                      # 本物の毛色(馬の台帳)。無い馬はページが名前から決めた仮の色で描く
             else:
                 info['nocoat'].append((no, u, r['horse_name']))
+            h['_bd'] = str(r.get('birth_date') or '').replace('-', '')[:8]
             hs.append(h)
         if len(hs) < 3:
             info['skip'].append((no, f'そろった馬が {len(hs)} 頭'))
@@ -188,12 +189,46 @@ def build(day, timing='morning', track=None, coat=None):
         if dist not in CHECKED.get(track, ()):
             info['unchecked'].append((no, dist))
         out.append({'no': no, 'name': rc.get('race_name') or '', 'dist': dist or int(tk.get('distance_m') or 0), 'post': rc.get('post_time') or '',
-                    'c1': tk.get('c1name') or '最初の角', 'timing': tm, 'h': hs})
+                    'c1': tk.get('c1name') or '最初の角', 'timing': tm, 'h': hs, '_go': str(rc.get('going') or ''), '_pz': rc.get('prize_yen')})
     if not out:
         info['why'] = f'{track} の予想と位置の予想がまだそろっていない(前日の便の後に回す)'
         return None, info
+    pace_into(day, out, info)
     info['n_race'], info['n_horse'] = len(out), sum(len(r['h']) for r in out)
     return {'date': day, 'track': track, 'races': out}, info
+
+
+def pace_into(day, out, info):
+    """出走馬の近 5 走(AI と同じ元 = 公式の成績の表)→ 馬ごとの癖 h.pf と、レースの流れ・時計の読み r.pace(見せ方だけ・tenkai_sim_pace_live.py)。
+    pf = [前に行く度合い, 前半の速さ(1000m あたり・− = 速い), 上がり − レースの上がり, 捲り, 走った数]。読めない時はページは作り、絵はくじだけで走る。
+    DB から読むのは出走馬の過去 2 年の走り(runs_by_horses)と、その走りのレースの行(通過順・上がり・馬場)だけ。"""
+    import pandas as pd
+    import tenkai_sim_pace_live as TP
+    try:
+        P, m = TP.live_profiles(day, [h['nm'] for r in out for h in r['h']], rest, rpc, _q)
+    except Exception as e:
+        info['pace'] = f'読めず {type(e).__name__}: {e}'
+        for r in out:
+            r.pop('_go', None); r.pop('_pz', None)
+            for h in r['h']:
+                h.pop('_bd', None)
+        return
+    nk = 0
+    for r in out:
+        rows = []
+        for h in r['h']:
+            k = f"{h['nm']}|{h.pop('_bd', '')}"
+            v = P.loc[k] if len(P) and k in P.index else None
+            if v is not None and v['nr'] > 0:
+                f = lambda c, d=0.0, n=3: round(float(v[c]), n) if v[c] == v[c] else d
+                h['pf'] = [f('pos1', None), f('fr', 0.0, 2), f('ag', 0.9, 2), f('mv'), int(v['nr'])]
+                nk += 1
+                rows.append({'pos1': v['pos1'], 'fr': v['fr'], 'ag': v['ag'], 'tm': v['tm'], 'mv': v['mv'], 'nr': v['nr']})
+            else:
+                rows.append({'pos1': None, 'fr': None, 'ag': None, 'tm': None, 'mv': None, 'nr': 0})
+        go, pz = r.pop('_go', ''), r.pop('_pz', None)
+        r['pace'] = TP.live_pace(m, pd.DataFrame(rows), r['dist'], go, pz)
+    info['pace'] = f"近走の記録あり {nk} 頭 / {sum(len(r['h']) for r in out)} 頭"
 
 
 def path_of(day, track):
@@ -247,7 +282,7 @@ def run(day, write=False, out_dir='out_tksim', timing='morning'):
         f.parent.mkdir(parents=True, exist_ok=True)
         f.write_bytes(body)
     _log(day, data['track'], '置いた', info['n_race'], 'R', info['n_horse'], '頭', len(body), 'バイト', 'バケット' if write else out_dir,
-         '・抜いた R', info['skip'], '・絵が未確認の距離', info['unchecked'], '・毛色あり', info['n_horse'] - len(info['nocoat']), '無し', len(info['nocoat']), f'{time.time() - t0:.0f}s')
+         '・抜いた R', info['skip'], '・絵が未確認の距離', info['unchecked'], '・毛色あり', info['n_horse'] - len(info['nocoat']), '無し', len(info['nocoat']), '・流れ', info.get('pace'), f'{time.time() - t0:.0f}s')
     return info['n_race']
 
 
