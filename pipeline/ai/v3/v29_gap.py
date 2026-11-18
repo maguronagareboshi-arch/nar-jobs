@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import v3_tri as TRI  # noqa: E402  3 連単・3 連複のずれ模型(記録だけ)
 import b53 as B53  # noqa: E402  全券種の参考の買い目(決め 53・書く行の runners と枠番だけから作る)
 import buy4_live as BUY4  # noqa: E402  買い方 決め 4 の段 2(組 6 券種の買い目・直前版の行の p1・p3 と 10 分前の板から)
+import buyfin_live as BUYFIN  # noqa: E402  買い方の最終案(2026-11-18・軸 + 相手の 7 券・記録だけ)
 
 HERE = Path(__file__).resolve().parent
 JST = dt.timezone(dt.timedelta(hours=9))
@@ -721,6 +722,23 @@ def add_buy4(val, tr, day, rno, odds, cmb):
         log(f'{tr}{rno}R: 買い方 決め 4 の段 2 失敗 {type(e).__name__} {str(e)[:120]}')
 
 
+def add_buyfin(val, b, tr, day, rno, odds, cmb):
+    """買い方の最終案(2026-11-18): val['buyfin'] に軸と相手の 7 券の買い目(buyfin_live.race)。b = いま決めた全頭(丸めない ev・p3p・win)。
+    新しい買いの模型で決めたレースだけ(v31 の逃げ道は why)。作れなくても val はそのまま。⛔ログには点数だけ。"""
+    try:
+        if val.get('buy_model', 'v31') == 'v31':
+            val['buyfin'] = {'tag': BUYFIN.tag(), 'why': '買いの模型が v31'}
+            return
+        miss = [k for k in ('wide', 'umaren', 'umatan', 'sanrenpuku') if k not in cmb]
+        if miss:
+            cmb.update(latest_combos(tr, day, rno, tuple(miss)))
+        rows = [(int(x.umaban), float(x.ev), float(x.p3p), float(x.win)) for x in b.itertuples()]
+        val['buyfin'] = BUYFIN.race(rows, odds, latest_place(tr, day, rno), cmb)
+    except Exception as e:  # noqa: BLE001
+        val['buyfin'] = {'why': f'失敗 {type(e).__name__} {str(e)[:80]}'}
+        log(f'{tr}{rno}R: 買い方の最終案 失敗 {type(e).__name__} {str(e)[:120]}')
+
+
 def add_b53(val, tr, day, rno, cmb=None):
     """決め 53(2026-10-24): val['b53'] に全券種の参考の買い目を足す。いま書く行の val['runners'] と枠番だけから作る(組のオッズは選びに使わない)。
     2026-10-28: 選んだ組に 10 分前の実際のオッズを添える(cmb = 単勝の行で読んだ板・足りない券種と複勝はここで読む)。板が読めなくても選びは書く。
@@ -1142,6 +1160,7 @@ def live(day, base_csv, mdir, write, until):
                     val['tri_model'] = {'tri': tri_name, 'trio': 'c8', 'ev_min': TRI.EV_MIN, 'cols': ['組', 'オッズ', '期待値', '模型の率', '市場の率']}
                     val.update(tri)
                 add_buy4(val, tr, day, rno, odds, cmb)  # 買い方 決め 4 の段 2(失敗しても単勝・組の記録はそのまま書く)
+                add_buyfin(val, b, tr, day, rno, odds, cmb)  # 買い方の最終案(2026-11-18・記録だけ・失敗しても他はそのまま書く)
                 add_b53(val, tr, day, rno, cmb)  # 決め 53: 全券種の参考の買い目(失敗しても単勝・組の記録はそのまま書く)
                 try:
                     st = put_gap(k, val, tr, day, rno) if write else 'dry'
@@ -1152,7 +1171,7 @@ def live(day, base_csv, mdir, write, until):
                 n_w += 1
                 n_buy += len(c)
                 log(f'{tr}{rno}R: 発走 {at:%H:%M}・{now:%H:%M:%S} に決めた{"(発走 " + prev_post + " から遅れて決め直し)" if prev_post else ""}・{len(b)} 頭(体重 {val["weights"]})'
-                    f'・{val["buy_model"]}・候補 {len(c)} 頭(複勝も {len(val.get("place") or [])})・3 連単 {len(val.get("tri") or [])}・3 連複 {len(val.get("trio") or [])} 組(記録)・参考(決め 53) {B53.count(val.get("b53"))} 点・決め 4 の段 2 {BUY4.count(val.get("buy4"))} 点・参考 {BUY4.count_ref(val.get("buy4"))} 点{"(" + val["buy4"]["why"] + ")" if (val.get("buy4") or {}).get("why") else ""}・書き込み {st}')
+                    f'・{val["buy_model"]}・候補 {len(c)} 頭(複勝も {len(val.get("place") or [])})・3 連単 {len(val.get("tri") or [])}・3 連複 {len(val.get("trio") or [])} 組(記録)・参考(決め 53) {B53.count(val.get("b53"))} 点・決め 4 の段 2 {BUY4.count(val.get("buy4"))} 点・参考 {BUY4.count_ref(val.get("buy4"))} 点・最終案 {BUYFIN.count(val.get("buyfin"))} 点{"(" + val["buy4"]["why"] + ")" if (val.get("buy4") or {}).get("why") else ""}・書き込み {st}')
         if now > end:
             log('時間切れ: 書いた', n_w, 'R・候補', n_buy, '頭')
             _record_after(day, write)
