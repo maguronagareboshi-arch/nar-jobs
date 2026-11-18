@@ -24,7 +24,8 @@ NEED = {'p1_follow': ['FORM', 'TAG'], 'danwa_marks': ['CONST'], 't14_bundle': ['
         'c67_sand': ['SPANS', 'Q', 'TAG'],   # 2026-11-03 決め 67-1 大井の砂替えの馬場差を寄せない場・期間(t4_base._sand)
         'g68': ['WIN', 'LAM56', 'LAMM', 'GAP', 'TAG'],   # 2026-11-04 決め 68 南関 枠の内外の有利の直し(v3/gate68_live)
         'pt69': ['A', 'K', 'TAG'],   # 2026-11-04 決め 69 南関 前日版の 3 着内の率の温度(v3/pre69_live)
-        'v3n_mx70': ['W', 'models', 'seed_of', 'nb', 'gamma', 'curve', 'TAG'],   # 2026-11-06 決め 70 他場の CatBoost・ニューラルネットの混ぜ(v3n_mx70)
+        'v3n_mx70': ['W', 'models', 'seed_of', 'nb', 'gamma', 'curve', 'TAG'],
+        'v3n_na83': ['W', 'models', 'seed_of', 'nb', 'gamma', 'curve', 'TAG'],   # 2026-11-19 決め 83 他場 第 14 版 NN をレース全体を読む NN に入れ替えた組(v3n_mx70.use('na83'))   # 2026-11-06 決め 70 他場の CatBoost・ニューラルネットの混ぜ(v3n_mx70)
         'pm71': ['B', 'BETA', 'TAG'],   # 2026-11-05 決め 71 南関 前日版の勝つ率に 3 着内の率を混ぜる(v3/p1mix71_live)
         'ot72': ['MIX', 'CU', 'WU1', 'W1', 'W3', 'FOL', 'ON', 'COVER', 'C182', 'TAG'],
         'pt74': ['MIX', 'CU', 'WU1', 'W1', 'W3', 'FOL', 'WF3', 'ON', 'COVER', 'C182', 'TAG'],   # 2026-11-06 決め 74 南関 前日版の作り直し(v3/preday74_live)   # 2026-11-06 決め 72 南関 直前版に一本の木を混ぜる・決め 73 勝つ率は付いていく(v3/onetree72_live)
@@ -60,7 +61,7 @@ def check():
         miss = [k for k in keys if k not in get(part)]
         if miss:
             raise KeyError(f'consts.json の {part} に {miss} が無い')
-    miss = [v for v in ('mo4', 'di4', 'mo5', 'di5') if v not in get('v3n_p1')['K']]   # 決め 61・決め 70 の勝つ率の直しの k
+    miss = [v for v in ('mo4', 'di4', 'mo5', 'di5', 'mo6', 'di6') if v not in get('v3n_p1')['K']]   # 決め 61・決め 70・決め 83 の勝つ率の直しの k
     if miss:
         raise KeyError(f'consts.json の v3n_p1.K に {miss} が無い')
     for f in ('v3n_one_p5.json', 'k26_cal_table.json'):

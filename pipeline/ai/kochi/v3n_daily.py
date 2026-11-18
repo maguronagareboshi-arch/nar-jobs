@@ -38,6 +38,7 @@ W = {30: 0.75, 35: 0.75, 36: 0.5, 46: 0.5, 47: 0.75, 48: 0.5, 50: 0.75, 51: 0.5,
 MARKS = ['◎', '○', '▲', '△', '△']  # 2026-10-10 ユーザー決定: 印は 5 頭(◎○▲△△)
 NO_MORNING = ['e_baba', 'e_tenko']  # 当日の馬場・天気 = 公式の表は前の日まで空欄 = 朝の模型に入れない(入れて空で当てると確率がずれる)
 FORM = 'v3n-13: mx70 (trees54 4 割 + 直近 2 年の木 2 割 + CatBoost 3 本 2 割 + ニューラルネット 3 本 2 割 + 内外の有利 56 日) + seq-trees54'  # meta に残す作りの名前(model の名前は v3n-1 のまま = サイト・成績の読み口を変えない)・v3n_one.FORM と同じ
+FORM83 = 'v3n-14: na83 (trees54 4 割 + 直近 2 年の木 2 割 + CatBoost 3 本 2 割 + レース全体を読むニューラルネット 3 本 2 割 + 内外の有利 56 日) + seq-trees54'  # 2026-11-19 決め 83(混ぜの組 na83 で出した行)
 # γ(頭数の帯ごとの s^γ ÷ Σ)と 3 着内の曲線は第 9 版から v3n_one_p5.json(イの選びで決め直した値)
 
 
@@ -212,6 +213,8 @@ def main():
         pm = v3n_one.predict(RB, FD, pd.concat(VT, ignore_index=True))
         PM = {(t_, int(r_)): g_.set_index('runner_number') for (t_, r_), g_ in pm.groupby(['track', 'race_no'])}
         px = v3n_mx70.predict(MX, ONE, FD, pd.concat(VT, ignore_index=True))
+        VK = v3n_mx70.VKEY[v3n_mx70.SET]['mo']   # 決め 83 の組 = mo6・第 13 版の組 = mo5(当てが落ちて戻った日も合う)
+        print('混ぜの組', v3n_mx70.SET, '・模型', v3n_mx70.MODELS, '・勝つ率の直し', VK, flush=True)
         PX = {(t_, int(r_)): g_.set_index('runner_number') for (t_, r_), g_ in px.groupby(['track', 'race_no'])}
     trained_to = ONE['trained_to']
     for j, te in TE.items():
@@ -273,9 +276,9 @@ def main():
                   'fin0': {str(int(n)): round(float(x), 6) for n, x in zip(nums, fin0)},
                   'q0': {str(int(n)): round(float(x), 6) for n, x in zip(nums, q0)},
                   'g0': {str(int(n)): round(float(x), 6) for n, x in zip(nums, np.maximum(fin0, q0))}}
-            mx = {'tag': v3n_mx70.TAG['mo'], 'm': MX['cut'],   # 6 本の 3 着内の割合(並び = v3n_mx70.MODELS・直前の取消の後に割り直す)
+            mx = {'tag': v3n_mx70.TAG['mo'], 'm': MX['cut'], 'set': v3n_mx70.SET, **({'na': MX['na_cut']} if v3n_mx70.SET == 'na83' else {}),   # 6 本の 3 着内の割合(並び = v3n_mx70.MODELS・直前の取消の後に割り直す)
                   'sh': {str(int(n)): [round(float(shx[x][i]), 6) for x in v3n_mx70.MODELS] for i, n in enumerate(nums)}}
-            meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM + (('+e1+noken' if nk_ok else '+e1') if e1on else ''), 'one': ONE['cut'], **({'one15': True} if ONE15 else {}), **({'trees54': True} if T54 else {}), 'rb61': rb, 'mx70': mx,
+            meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': (FORM83 if v3n_mx70.SET == 'na83' else FORM) + (('+e1+noken' if nk_ok else '+e1') if e1on else ''), 'one': ONE['cut'], **({'one15': True} if ONE15 else {}), **({'trees54': True} if T54 else {}), 'rb61': rb, 'mx70': mx,
                     'gamma': gm, 'trained_to': trained_to, 'seq': u is not None, 'feat_src': FSRC,
                     **({'u': {str(int(n)): round(float(x), 4) for n, x in zip(nums, u)}} if u is not None else {}),
                     **({'noken_z': {str(k_): float(v) for k_, v in sorted(nz.items())}} if nz else {}),
