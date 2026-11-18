@@ -9,7 +9,7 @@
   3 つとも当たる見込みが一番高い配り方を選ぶ。
 持ち越し(キャリーオーバー)は場ごと。公式の結果の一覧(nankankeiba.com・国外からは本番 DB 経由 = cloud/jp_fetch.py)から、
   その場の前の開催日の値を読む。前の開催日の結果がまだ一覧に無い(前日の夜の最終レースの前)ときは「結果待ち」と書き、
-  後の便(前夜 22:40・当日 8:30・12:00)が書き直す。持ち越しありの日は「見送り」(過去の数字では五分)。
+  後の便(前夜 22:40・当日 8:30・12:00)が書き直す。持ち越しの 1 回目は「見送り」(五分)・なし と 2 回以上続いた日は「買う日」(11/19 ユーザーの決め)。
 出力: 公開バケット cond-stats/triple/v1/<日>.json(1 日 1 本)。--write なしは DIR(既定 out_triple)に同じ JSON と、手で回す台本と同じ形の字(.txt)。
   ⛔DB の表は読むだけ(印の行)・書かない。⛔当たる見込み % は JSON に入れない(高く出すぎる = 画面に出さない決め)。
 環境変数: SUPABASE_URL・SUPABASE_SERVICE_KEY(読むだけなら公開の鍵 SUPABASE_ANON_KEY でも良い)。NK_VIA_DB=0 で公式を直に読む(国内の PC)。
@@ -117,7 +117,10 @@ def carry_rows(html):
 
 
 def carry_of(track, day, lists):
-    """→ {state: none(なし)| yes(あり)| wait(前の開催日の結果待ち)| unknown(読めない), yen, from}。lists = 年 → carry_rows の結果(使い回す)。"""
+    """→ {state: none(なし)| yes(あり)| wait(前の開催日の結果待ち)| unknown(読めない), yen, from, times, buy}。lists = 年 → carry_rows の結果(使い回す)。
+    times = 持ち越しが何回続いたか(前の開催日から数えて、当たりなしが続いた開催日の数)。
+    buy = 買う日か(2026-11-19 ユーザーの決め: 持ち越しなし と 2 回以上続いた持ち越し = 買う・1 回目 = 見送り)。
+      2 回以上続いた日は、買った人全体への戻りが売上を超える日が多い(南関 2014〜 165 日で中央値 1.09 倍・88% の日で 1 倍超)。"""
     d8 = day.replace('-', '')
     try:
         rows = {}
@@ -128,16 +131,27 @@ def carry_of(track, day, lists):
             if rows:
                 break
         if not rows:
-            return {'state': 'unknown', 'yen': None, 'from': None}
+            return {'state': 'unknown', 'yen': None, 'from': None, 'times': None, 'buy': False}
+        times = 0
+        for k in sorted(rows, reverse=True):            # 前の開催日から遡って、持ち越しが続いた日を数える
+            if rows[k] <= 0:
+                break
+            times += 1
+        if times and times == len(rows) and int(d8[:4]) - 1 not in lists:   # 年をまたいで続いている = 前の年も見る
+            lists[int(d8[:4]) - 1] = carry_rows(result_list(int(d8[:4]) - 1))
+            for k in sorted(lists[int(d8[:4]) - 1].get(JO[track], {}), reverse=True):
+                if lists[int(d8[:4]) - 1][JO[track]][k] <= 0:
+                    break
+                times += 1
         last = max(rows)
         frm = f'{last[:4]}-{last[4:6]}-{last[6:]}'
         pd_ = prev_day(track, day)
         if pd_ and pd_ > frm:
-            return {'state': 'wait', 'yen': None, 'from': pd_}
-        return {'state': 'yes' if rows[last] > 0 else 'none', 'yen': rows[last], 'from': frm}
+            return {'state': 'wait', 'yen': None, 'from': pd_, 'times': None, 'buy': False}
+        return {'state': 'yes' if rows[last] > 0 else 'none', 'yen': rows[last], 'from': frm, 'times': times, 'buy': times == 0 or times >= 2}
     except Exception as e:  # noqa: BLE001
         _log(track, '持ち越しが読めなかった', type(e).__name__, e)
-        return {'state': 'unknown', 'yen': None, 'from': None}
+        return {'state': 'unknown', 'yen': None, 'from': None, 'times': None, 'buy': False}
 
 
 def exacta(run):
@@ -186,8 +200,10 @@ def build(day):
             lines.append('  持ち越し: 読めなかった(公式の頁で確かめる)')
         elif ci['state'] == 'wait':
             lines.append(f'  持ち越し: 前の開催日({frm})の結果待ち')
+        elif ci['state'] == 'yes' and ci['buy']:
+            lines.append(f"  持ち越し: あり {ci['yen']:,} 円({ci['times']} 回続き・{frm} から)→ 買う日(2 回以上続いた持ち越しは戻りが売上を超えやすい)")
         elif ci['state'] == 'yes':
-            lines.append(f"  持ち越し: あり {ci['yen']:,} 円({frm} から)→ 見送り(過去の数字では持ち越しありの日は五分)。買うなら下の買い目")
+            lines.append(f"  持ち越し: あり {ci['yen']:,} 円(1 回目・{frm} から)→ 見送り(1 回目の持ち越しは五分)。買うなら下の買い目")
         else:
             lines.append(f'  持ち越し: なし(前回 {frm})→ 買う日')
         lines.append(f'  組数 {ks[0]} × {ks[1]} × {ks[2]} = {n} 枚・{n * 50:,} 円(過去 456 日では 9 日に 1 本の当たり)')
