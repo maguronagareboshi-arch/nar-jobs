@@ -39,6 +39,7 @@ import feat_v2 as f2  # noqa: E402
 import class_fix as cf  # noqa: E402
 import seq_core as sc  # noqa: E402
 import noken as nkm  # noqa: E402
+import bn_v5 as v5m  # noqa: E402
 
 V = f1.OUT
 OUTD = V + 'prod/'
@@ -46,6 +47,7 @@ K = ['race_date', 'race_no', 'runner_number']
 MODEL_ID = 'banei-3'
 MARKS = ['◎', '○', '▲', '△', '△']
 FORM = 'banei-4: v2tree355 0.8 + flat 0.2 + seq res + b*noken(debut) / clsfix / p3 sum3 / p1 = exp(b1*z) share'
+FORM5 = 'banei-5: (0.6 tree s0-2 + 0.2 cb + 0.2 nn0-2) 0.8 + flat 0.2 + seqX30 res + b*noken(debut) / clsfix / p3 sum3 / p1 = exp(b1*z) share'
 GAP_FROM = '2026-09-01'   # 固めた表の前の版(〜2026-08)より後 = 月ごとの埋めの対象
 LOCAL = os.environ.get('BANEI_LOCAL') == '1'
 JST = dt.timezone(dt.timedelta(hours=9))
@@ -84,8 +86,8 @@ def tables(cutoff, fix=True, drop_race=None):
     return D1, D2, ru
 
 
-def seq_arrays(D1, ru, cutoff=None):
-    """seq_banei.build と同じ入力(過去 10 走 × 29・今回 19)を、保存せずに返す。"""
+def seq_arrays(D1, ru, cutoff=None, h=10):
+    """seq_banei.build と同じ入力(過去 h 走 × 29・今回 19)を、保存せずに返す。第 5 版の並び読み X は h = 30(研究の seq_tensors_h30)。"""
     import seq_banei as sb
     f = D1[K + ['hk', 'rkey', 'scratch', 'dnf', 'finish', 'y_top3', 'a08_age', 'a09_sex', 'f99_cw', 'g127_bw', 'g128_bw_diff',
                 'h139_cls_level', 'h147_prize1', 'b17_going_day', 'ref_going_race', 'a11_n_start', 'f117_mare_mixed', 'b29_month']].copy()
@@ -108,10 +110,13 @@ def seq_arrays(D1, ru, cutoff=None):
         return orig_read(path, columns=columns, filters=filters)
     pd.read_parquet = rp
     np.savez = lambda _p, **kw: saved.update(kw)
+    h0 = sb.H
+    sb.H = h
     try:
         sb.build()
     finally:
         pd.read_parquet, np.savez = orig_read, orig_save
+        sb.H = h0
     return saved
 
 
@@ -156,13 +161,14 @@ def db_oof(since):
     return pd.DataFrame(out, columns=K + ['off'])
 
 
-def tree_fit(D2, lo):
+def tree_fit(D2, lo, seed=0):
     import lightgbm as lgb
     L, P, COLS = lock()
+    P = dict(P, seed=seed)   # 第 5 版の種 1・2(研究 seedavg_check.make_parts = dict(v2.P, seed=s))
     d = D2[(D2.scratch == 0)]
     tr = d[d.y_top3.notna() & (d.race_date >= L['start']) & (d.race_date < lo)]
     m = lgb.train(P, lgb.Dataset(tr[COLS], tr.y_top3.astype(int)), num_boost_round=L['iters'])
-    log('第 2 版の木', lo, '学び', len(tr))
+    log('第 2 版の木', lo, '種', seed, '学び', len(tr))
     return m
 
 
@@ -238,6 +244,67 @@ def get_inputs(day, refresh_today_only=False):
     bn_dl.zip_step(root, day)
 
 
+# ---------------------------------------------------------------- 第 5 版(ばんえい 決め 12・bn_v5.py)
+def x_inputs(D1, ru, day, o, mdir, extra=None, fit=False):
+    """並び読み X の入力(過去 30 走 + 過去走の AI の見込み・外れ・馬主)。馬主は学ぶ便で一度だけ引いて mdir に置く(直前の周は DB を引かない)。"""
+    Z30 = seq_arrays(D1, ru, day, h=v5m.H)
+    S30 = S_of(Z30, offsets(Z30, o, extra))
+    S30['hk'] = Z30['hk']
+    E = pd.DataFrame({'race_date': Z30['date'], 'race_no': Z30['race_no'].astype(int), 'runner_number': Z30['umaban'].astype(int),
+                      'rkey': Z30['rkey']})
+    names = pd.Series(Z30['hk']).str.rsplit('_', n=1).str[0].to_numpy()
+    if fit or not (Path(mdir) / 'owners.parquet').exists():
+        ow, _ = v5m.owner_table(E, names, day)
+        ow.to_parquet(Path(mdir) / 'owners.parquet', index=False)
+    else:
+        ow = pd.read_parquet(Path(mdir) / 'owners.parquet')
+        nw = ~E.set_index(K).index.isin(ow.set_index(K).index)
+        if nw.any():   # 学んだ後に増えた行(普通は無い)は馬主の分からない走り
+            log('馬主の無い新しい行', int(nw.sum()))
+    own = E[K].merge(ow.drop_duplicates(K), on=K, how='left', validate='m:1').owner.to_numpy(object)
+    own = np.where(pd.notna(own), own, None)
+    return v5m.x5(S30, own), S30, E
+
+
+def fit_v5(D1, D2, ru, day, o, mdir):
+    C = v5m.consts()
+    for s in v5m.SEEDS_T:
+        (mdir / f'tree_s{s}.txt').write_text(tree_fit(D2, day, seed=s).model_to_string(), encoding='utf-8')
+    tr, cols = v5m.train_rows(D2, day)
+    t0 = time.time(); v5m.cb_fit(tr, cols).save_model(str(mdir / 'cb.cbm')); log('CatBoost', '学び', len(tr), '秒', round(time.time() - t0))
+    sts = []
+    for s in v5m.NN_SEEDS:
+        t0 = time.time(); sts.append(v5m.nn_fit(tr, cols, int(C['nn_epochs']), s)); log('NN', s, '学び', len(tr), '秒', round(time.time() - t0))
+    v5m.nn_save(sts, mdir / 'nn.pt')
+    hist, S30, E = x_inputs(D1, ru, day, o, mdir, fit=True)
+    aux = v5m.market_aux(E, day)[:, None]
+    sc.save_states(v5m.x_fit(hist, aux, S30, day, float(C.get('x_lam', 1.0))), mdir / 'seqx.pt')
+
+
+def score_v5(D1, D2, ru, day, nxt, mdir, o, v2):
+    """当日の行の 並び読み X の外した分(Z30 の行の順で返す前に K で合わせる)と T(木の混ぜのロジット)。"""
+    C = v5m.consts()
+    hist, S30, E = x_inputs(D1, ru, day, o, mdir, extra=v2.assign(off=lg(v2.p_v2.to_numpy(float))))
+    rx = v5m.x_apply(sc.load_states(mdir / 'seqx.pt'), hist, S30, day, nxt)
+    cur = (S30['date'] >= day) & (S30['date'] < nxt)
+    RX = E.loc[cur, K].assign(rx=rx[cur])
+    d = D2[(D2.scratch == 0) & (D2.race_date >= day) & (D2.race_date < nxt)]
+    _, _, COLS = lock()
+    ps = [v2.set_index(K).p_v2.reindex(pd.MultiIndex.from_frame(d[K])).to_numpy(float)]
+    for s in v5m.SEEDS_T:
+        ps.append(sc.booster_from((mdir / f'tree_s{s}.txt').read_text(encoding='utf-8')).predict(d[COLS]))
+    pcb = v5m.cb_load(mdir / 'cb.cbm').predict_proba(d[COLS])[:, 1]
+    pnn = [v5m.nn_apply(st, d, COLS) for st in v5m.nn_load(mdir / 'nn.pt')]
+    T5 = d[K].copy()
+    T5['T5'] = v5m.tree_mix(ps, pcb, pnn, C)
+    T5['p_s1'], T5['p_s2'], T5['p_cb'] = ps[1], ps[2], pcb
+    T5['p_nn'] = np.mean(pnn, 0)
+    T5 = T5.merge(RX, on=K, how='left', validate='1:1')
+    log('第 5 版', '木の混ぜ', len(T5), '頭', '並び読み X の空', int(T5.rx.isna().sum()))
+    # 並び読みの外した分は Z(10 走)の行の順の res の代わりに X を使う(K で合わせる)
+    return None, T5
+
+
 # ---------------------------------------------------------------- 入口
 def fit(day, mdir, use_db=True, use_gap=True):
     """朝: 前の日までで 木・並び読み(3 種)・平らな模型を学んで mdir に置く。止まる時は 2 を返す(書かない)。"""
@@ -253,13 +320,16 @@ def fit(day, mdir, use_db=True, use_gap=True):
     o = oof_table(D2, day, use_db, use_gap)
     Z = seq_arrays(D1, ru, day)
     S = S_of(Z, offsets(Z, o))
-    states = sc.seq_fit(S['hist'], S['ctx'], S, day, log)
+    V5 = v5m.on()
+    if V5:
+        fit_v5(D1, D2, ru, day, o, mdir)          # 第 5 版: 種 1・2 の木・CatBoost・NN 0〜2・並び読み X(第 4 版の並び読みは学ばない)
+    else:
+        sc.save_states(sc.seq_fit(S['hist'], S['ctx'], S, day, log), mdir / 'seq.pt')
     fm = sc.flat_fit(S['hist'], S['ctx'], S, day, 0)
     (mdir / 'tree.txt').write_text(tm.model_to_string(), encoding='utf-8')
     (mdir / 'flat.txt').write_text(fm.model_to_string(), encoding='utf-8')
-    sc.save_states(states, mdir / 'seq.pt')
     o.to_parquet(mdir / 'oof.parquet', index=False)
-    info = dict(day=day, prev=prev, form=FORM, oof_rows=int(len(o)), oof_to=str(o.race_date.max()),
+    info = dict(day=day, prev=prev, form=FORM5 if V5 else FORM, v5=V5, oof_rows=int(len(o)), oof_to=str(o.race_date.max()),
                 has_off=int(S['has_off'].sum()), made=dt.datetime.now(JST).isoformat(timespec='seconds'))
     (mdir / 'info.json').write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding='utf-8')
     log('学び済み', info)
@@ -286,14 +356,23 @@ def score(day, mdir, drop_race=None, no_going=False):
     Z = seq_arrays(D1, ru, day)
     o = pd.read_parquet(mdir / 'oof.parquet')
     S = S_of(Z, offsets(Z, o, v2.assign(off=lg(v2.p_v2.to_numpy(float)))))
-    res = sc.seq_apply(sc.load_states(mdir / 'seq.pt'), S['hist'], S['ctx'], S, day, nxt)
+    V5 = bool(info.get('v5'))
+    if V5:
+        res, T5 = score_v5(D1, D2, ru, day, nxt, mdir, o, v2)
+    else:
+        res = sc.seq_apply(sc.load_states(mdir / 'seq.pt'), S['hist'], S['ctx'], S, day, nxt)
     fl = sc.flat_apply(sc.booster_from((mdir / 'flat.txt').read_text(encoding='utf-8')), S['hist'], S['ctx'], S, day, nxt)
     cur = (S['date'] >= day) & (S['date'] < nxt)
     out = pd.DataFrame({'race_date': Z['date'][cur], 'race_no': Z['race_no'][cur].astype(int), 'runner_number': Z['umaban'][cur].astype(int),
-                        'rkey': Z['rkey'][cur], 'res': res[cur], 'flat': fl[cur]})
+                        'rkey': Z['rkey'][cur], 'res': res[cur] if res is not None else np.nan, 'flat': fl[cur]})
     out = out.merge(v2, on=K, how='left', validate='1:1')
     out = out.merge(today[K + ['horse_name', 'a12_runs']], on=K, how='left', validate='1:1')
+    if V5:
+        out = out.merge(T5, on=K, how='left', validate='1:1')
+        out['res'] = out.rx   # 第 5 版: 並び読みの外した分 = X
     P = nkm.params()
+    if V5:
+        P = dict(P, b=float(v5m.consts()['noken_b']))   # 第 5 版の能検の重み(ばんえい 決め 12 の最後の月 N)
     try:
         out['nk'], hit, deb, nt = nkm.nk_of(out, P)
         log('能検', '新馬', deb, '頭のうち結べた', hit, '・合格の回', nt, '・b', P['b'])
@@ -301,13 +380,14 @@ def score(day, mdir, drop_race=None, no_going=False):
         out['nk'] = 0.0; P = dict(P, src='none')
         log('能検が読めない = 足さない', repr(e)[:200])
     info = dict(info, nk_b=P['b'], nk_src=P.get('src', 'ok'))
-    z = (1 - sc.W_FLAT) * lg(out.p_v2.to_numpy(float)) + sc.W_FLAT * out.flat + out.res + float(P['b']) * out.nk
+    base = out.T5.to_numpy(float) if V5 else lg(out.p_v2.to_numpy(float))
+    z = (1 - sc.W_FLAT) * base + sc.W_FLAT * out.flat + out.res + float(P['b']) * out.nk
     out['p'] = 1 / (1 + np.exp(-z))
     out['p3'] = (out.p / out.groupby('rkey').p.transform('sum') * 3).clip(1e-4, 1 - 1e-4)      # 案 1: 割り直すだけ
     out['p1'], b1, src = p1_of(out, z)                                                          # イ: exp(b1 × z) の割合
     info = dict(info, p1_b=b1, p1_src=src)
     log('勝つ率', src, 'b1', b1)
-    bad = int(out[['res', 'flat', 'p_v2']].isna().any(axis=1).sum())
+    bad = int(out[['res', 'flat', 'p_v2'] + (['T5'] if V5 else [])].isna().any(axis=1).sum())
     log('当て', len(out), '頭', out.rkey.nunique(), 'R', '空', bad)
     if out[['p', 'p3', 'p1']].isna().any().any():
         log('止まる: 率に空'); return None, None
@@ -318,6 +398,8 @@ def score(day, mdir, drop_race=None, no_going=False):
 
 
 def p1_params():
+    if v5m.on():   # 第 5 版の z で決めた b1(固めた表の banei_v5.json)
+        return dict(b1=v5m.consts()['p1_b1'])
     return json.load(open(os.environ.get('BANEI_P1', f1.OUT + 'banei_p1.json'), encoding='utf-8'))
 
 
@@ -371,7 +453,7 @@ def rows_of(out, info, day, need_bw=True, timing='last'):
         sc_ = g.p3.to_numpy() / g.p3.sum()
         nums = g.runner_number.to_numpy()
         marks = [{'num': int(nums[i]), 'mark': MARKS[k], 'score': round(float(sc_[i]) * 100, 1)} for k, i in enumerate(order[:5])]
-        meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': FORM, 'timing': timing, 'trained_to': info['prev'], 'going_day': g.going_day.iloc[0],
+        meta = {'n': int(len(g)), 'model': MODEL_ID, 'form': info.get('form', FORM), 'timing': timing, 'trained_to': info['prev'], 'going_day': g.going_day.iloc[0],
                 'runners': [{'num': int(n), 'p1': round(float(a), 4), 'p3': round(float(b), 4)} for n, a, b in zip(nums, g.p1, g.p3)],
                 'p_v2': {str(int(n)): round(float(x), 6) for n, x in zip(nums, g.p_v2)},
                 'p': {str(int(n)): round(float(x), 4) for n, x in zip(nums, g.p)},
