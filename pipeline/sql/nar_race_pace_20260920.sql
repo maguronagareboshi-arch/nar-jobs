@@ -17,7 +17,12 @@ create table if not exists public.nar_race_pace (
   primary key (track, race_date, race_no)
 );
 create index if not exists nar_race_pace_date_idx on public.nar_race_pace (race_date desc, track);
-alter table public.nar_race_pace enable row level security;
+-- 11/19 定義の書き換えは足りないときだけ(毎回流すと、済んでいても表に強い鍵を取り、DB の窓口が表の一覧を読み直す= 11/19 の全読み込み 503 の引き金と同じ動き)
+do $$ begin
+  if not (select relrowsecurity from pg_class where oid = 'public.nar_race_pace'::regclass) then
+    alter table public.nar_race_pace enable row level security;
+  end if;
+end $$;
 do $$ begin
   if not exists (select 1 from pg_policies where schemaname = 'public' and tablename = 'nar_race_pace' and policyname = 'nar_race_pace_read') then
     create policy nar_race_pace_read on public.nar_race_pace for select to anon, authenticated using (true);

@@ -10,9 +10,15 @@
 
 begin;
 
-alter table public.nar_penalties add column if not exists cause text;
-alter table public.nar_penalties add column if not exists prize_suspended boolean not null default false;
-alter table public.nar_penalties add column if not exists suspension_days date[];
+-- 11/19 定義の書き換えは足りないときだけ(毎回流すと、済んでいても表に強い鍵を取り、DB の窓口が表の一覧を読み直す= 11/19 の全読み込み 503 の引き金と同じ動き)
+do $$ begin
+  if (select count(*) from information_schema.columns where table_schema = 'public'
+        and table_name = 'nar_penalties' and column_name in ('cause', 'prize_suspended', 'suspension_days')) < 3 then
+    alter table public.nar_penalties add column if not exists cause text;
+    alter table public.nar_penalties add column if not exists prize_suspended boolean not null default false;
+    alter table public.nar_penalties add column if not exists suspension_days date[];
+  end if;
+end $$;
 
 do $$
 declare

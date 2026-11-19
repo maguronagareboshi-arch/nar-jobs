@@ -6,8 +6,14 @@
 -- ⛔出走= finish が入っている行だけ(取消・除外の行は finish が空)。競走中止/失格は finish 無しになることがあり
 --   少し少なめに数える(§52 の「走った」より狭い)= 初出走の判定が甘くなる方向ではない(走った馬を初出走と言わない)。
 
-alter table public.auction_sales add column if not exists runs_after  integer;
-alter table public.auction_sales add column if not exists first_after date;
+-- 11/19 定義の書き換えは足りないときだけ(毎回流すと、済んでいても表に強い鍵を取り、DB の窓口が表の一覧を読み直す= 11/19 の全読み込み 503 の引き金と同じ動き)
+do $$ begin
+  if (select count(*) from information_schema.columns where table_schema = 'public'
+        and table_name = 'auction_sales' and column_name in ('runs_after', 'first_after')) < 2 then
+    alter table public.auction_sales add column if not exists runs_after  integer;
+    alter table public.auction_sales add column if not exists first_after date;
+  end if;
+end $$;
 
 with jst as (select (now() at time zone 'Asia/Tokyo')::date as today),
 cnt as (
