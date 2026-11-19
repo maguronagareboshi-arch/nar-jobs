@@ -641,6 +641,26 @@ def _delete_filter(keys, part):
     return name + "=" + urllib.parse.quote(val, safe="")
 
 
+def _input_short(t, n, est, exact_fn):
+    """入力の写しが足りないときだけ止める文を返す(足りていれば None)。
+    11/19 推定行数(pg_class.reltuples)は自動掃除でずれる= auction_sales が実数 63,890 のまま推定 70,337 になり、
+    写しは正しいのに 2 日続けて止まった(→ 予備の便が昼に月次を丸ごとやり直した)。
+    推定で足りないと出たときだけ本番の実数を数え直し、実数でも足りないときに止める。数えられないときは止める側。"""
+    if n >= INPUT_MIN_RATIO * est:
+        return None
+    try:
+        exact = exact_fn()
+    except Exception as e:  # noqa: BLE001 数えられない= 安全側(止める)
+        log(f"入力 {t} の実数を数えられない: {e}")
+        exact = None
+    if exact is None:
+        return f"入力 {t} {n} 行 < 本番の推定 {est} の {INPUT_MIN_RATIO:.0%}(実数は数えられず)"
+    if n >= INPUT_MIN_RATIO * exact:
+        log(f"入力 {t} {n} 行: 推定 {est} には足りないが実数 {exact} には足りている= 通す")
+        return None
+    return f"入力 {t} {n} 行 < 本番の実数 {exact} の {INPUT_MIN_RATIO:.0%}(推定 {est})"
+
+
 def cmd_apply(allow_large):
     summary = cmd_diff()
     est = dict((a, int(b)) for a, b in (ln.split("\t") for ln in open(os.path.join(DUMP, "prod_est.tsv"), encoding="utf-8")
@@ -651,8 +671,9 @@ def cmd_apply(allow_large):
         stop.append(f"本番に {t} が無い= 先に器を作る(pipeline/sql/ の *_table_*.sql)")
     for t in INPUTS:
         n = int(rows(f"select count(*) from public.{t}")[0][0])
-        if n < INPUT_MIN_RATIO * est.get(t, 0):
-            stop.append(f"入力 {t} {n} 行 < 本番の推定 {est.get(t)} の {INPUT_MIN_RATIO:.0%}")
+        m = _input_short(t, n, est.get(t, 0), lambda t=t: _rest("HEAD", f"{t}?select=*&limit=1", prefer="count=exact"))
+        if m:
+            stop.append(m)
     for t, s in summary.items():
         if s["prod"] >= CHANGE_MIN_ROWS:
             if s["ratio"] > CHANGE_MAX_RATIO and not allow_large:
