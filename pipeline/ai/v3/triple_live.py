@@ -193,6 +193,8 @@ def build(day):
         cum = [np.cumsum([p for p, _, _ in e[0]]) for e in E]
         ks = split(cum)
         n = ks[0] * ks[1] * ks[2]
+        lp = [float(c[k - 1]) for c, k in zip(cum, ks)]   # 各レースの買った組で当たる見込み
+        hp = lp[0] * lp[1] * lp[2]                        # 3 つとも当たる見込み(2023-01〜26-08 の 750 日で 見込み 73.3 本 = 実際 73 本)
         ci = carry_of(track, day, lists)
         frm = (ci['from'] or '').replace('-', '')
         lines.append(f'■ {d8} {track} トリプル馬単({legs[0]}R・{legs[1]}R・{legs[2]}R)')
@@ -206,19 +208,19 @@ def build(day):
             lines.append(f"  持ち越し: あり {ci['yen']:,} 円(1 回目・{frm} から)→ 見送り(1 回目の持ち越しは五分)。買うなら下の買い目")
         else:
             lines.append(f'  持ち越し: なし(前回 {frm})→ 買う日')
-        lines.append(f'  組数 {ks[0]} × {ks[1]} × {ks[2]} = {n} 枚・{n * 50:,} 円(過去 456 日では 9 日に 1 本の当たり)')
+        lines.append(f'  組数 {ks[0]} × {ks[1]} × {ks[2]} = {n} 枚・{n * 50:,} 円・当たる見込み {100 * hp:.0f}%(過去 750 日で見込みの合計 73.3 本・実際 73 本)')
         races = []
-        for r, e, k in zip(legs, E, ks):
+        for r, e, k, q in zip(legs, E, ks, lp):
             by = {}
             for _, a, b in e[0][:k]:
                 by.setdefault(a, []).append(b)
-            lines.append(f'  {r}R  本命 {e[2]} 番(勝つ率 {100 * e[1]:.0f}%)・{k} 組')
+            lines.append(f'  {r}R  本命 {e[2]} 番(勝つ率 {100 * e[1]:.0f}%)・{k} 組・このレースで当たる見込み {100 * q:.0f}%')
             for a, bs in by.items():
                 lines.append(f'      1 着 {a:>2} → 2 着 ' + '・'.join(map(str, bs)))
-            races.append({'no': int(r), 'k': int(k), 'pairs': [[a, bs] for a, bs in by.items()]})
+            races.append({'no': int(r), 'k': int(k), 'p': round(q, 4), 'pairs': [[a, bs] for a, bs in by.items()]})
         lines.append('')
         tracks.append({'track': track, 'prefix': PREFIX[track], 'legs': [int(x) for x in legs], 'carry': ci,
-                       'ks': [int(x) for x in ks], 'n': int(n), 'yen': int(n * 50), 'races': races})
+                       'ks': [int(x) for x in ks], 'hit': round(hp, 4), 'n': int(n), 'yen': int(n * 50), 'races': races})
     return tracks, lines
 
 
