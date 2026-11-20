@@ -97,8 +97,9 @@ def _logit(p, eps):
 
 
 # ---------------------------------------------------------------- 1 レース
-def race(h, combos, models):
-    """h = 1 レースの馬(オッズのある馬)の表: umaban・win(単勝)・pg1(v31 の勝つ率)・p1(第10版)・p3p_base(前日の表の 3 着内・そろえ直す前)。
+def race(h, combos, models, full=None):
+    """full = dict を渡すと 3 連単の全部の組の {組: (オッズ, 模型の率)} をそこへ入れる(2026-11-20 最終案の 3 連単の期待値用)。
+    h = 1 レースの馬(オッズのある馬)の表: umaban・win(単勝)・pg1(v31 の勝つ率)・p1(第10版)・p3p_base(前日の表の 3 着内・そろえ直す前)。
     combos = {券種: REST の combos}。→ {'tri': [...], 'trio': [...]}(期待値 ≥ EV_MIN・期待値の大きい順)か None。"""
     h = h[(h.win > 0) & h.pg1.notna()].sort_values('umaban')
     n = len(h)
@@ -122,13 +123,13 @@ def race(h, combos, models):
     out = {}
     m_tri, m_trio = models
     if D['sanrentan']:
-        out['tri'] = _tri(um, T, q, pg1, p1, p3, rk, gd, _match3(pg1, p3, T), ai, D, m3, mu, mw, m_tri)
+        out['tri'] = _tri(um, T, q, pg1, p1, p3, rk, gd, _match3(pg1, p3, T), ai, D, m3, mu, mw, m_tri, full)
     if m3:
         out['trio'] = _trio(um, T, TRIOS, to3, q, pg1, p1, p3, rk, gd, ai, D, mu, mw, m_trio)
     return out or None
 
 
-def _tri(um, T, q, pg1, p1, p3, rk, gd, g, ai, D, m3, mu, mw, mdl):
+def _tri(um, T, q, pg1, p1, p3, rk, gd, g, ai, D, m3, mu, mw, mdl, full=None):
     """3 連単(d3_sept_tri.race と同じ材料)。"""
     keys = np.array(['-'.join(map(str, um[t])) for t in T])
     odds = np.array([D['sanrentan'].get(k) or 0.0 for k in keys], float)
@@ -166,6 +167,8 @@ def _tri(um, T, q, pg1, p1, p3, rk, gd, g, ai, D, m3, mu, mw, mdl):
     X = pd.DataFrame(X)[mdl.feature_name()].astype(np.float32)
     p = 1 / (1 + np.exp(-(_logit(m, 1e-9) + mdl.predict(X, raw_score=True))))
     p = p / p.sum()
+    if isinstance(full, dict):
+        full.update({str(k): (float(oo), float(pp)) for k, oo, pp in zip(keys, o, p)})
     return _keep(keys, o, p, m)
 
 

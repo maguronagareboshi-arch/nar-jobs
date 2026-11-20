@@ -741,7 +741,7 @@ def add_buy4(val, tr, day, rno, odds, cmb):
         log(f'{tr}{rno}R: 買い方 決め 4 の段 2 失敗 {type(e).__name__} {str(e)[:120]}')
 
 
-def add_buyfin(val, b, tr, day, rno, odds, cmb):
+def add_buyfin(val, b, tr, day, rno, odds, cmb, tri_full=None):
     """買い方の最終案(2026-11-18): val['buyfin'] に軸と相手の 7 券の買い目(buyfin_live.race)。b = いま決めた全頭(丸めない ev・p3p・win)。
     新しい買いの模型で決めたレースだけ(v31 の逃げ道は why)。作れなくても val はそのまま。⛔ログには点数だけ。"""
     try:
@@ -756,6 +756,50 @@ def add_buyfin(val, b, tr, day, rno, odds, cmb):
     except Exception as e:  # noqa: BLE001
         val['buyfin'] = {'why': f'失敗 {type(e).__name__} {str(e)[:80]}'}
         log(f'{tr}{rno}R: 買い方の最終案 失敗 {type(e).__name__} {str(e)[:120]}')
+    add_tri2(val, tr, day, rno, cmb, tri_full)
+
+
+TRI2_CAP = 3  # 画面 nar-viewer js/data-race.js NK_TRI_AXIS2_CAP と同じ
+
+
+def tri2_keys(axes, p3):
+    """最終案の 3 連単(2026-11-20〜・画面 nkTriAxis2 と同じ決まり): 組 = 相手 → 軸 → 相手。相手が 4 頭以上なら
+    3 着内率(行の runners[].p3 = 画面の ev_all[].p3)の高い 3 頭まで(同じ率は馬番の小さい順)。率が読めない = その軸は作らない。"""
+    out = []
+    for x in axes or []:
+        a = int(x['num'])
+        ps = sorted({int(n) for n in (x.get('partners') or []) if int(n) != a})
+        if len(ps) > TRI2_CAP:
+            if any(p3.get(n) is None for n in ps):
+                return None
+            ps = sorted(ps, key=lambda n: (-p3[n], n))[:TRI2_CAP]
+        out += [f'{u}-{a}-{v}' for u in ps for v in ps if u != v]
+    return out
+
+
+def add_tri2(val, tr, day, rno, cmb, tri_full):
+    """val['buyfin']['tri2'] = [[組, 10 分前のオッズ, 期待値], …](2026-11-20 ユーザー「進めて」)。
+    期待値 = 丙と同じ 3 連単の模型の率 × オッズ。板に無い組はオッズ・期待値とも None・模型が無いレースは期待値 None。失敗しても他はそのまま。"""
+    bf = val.get('buyfin')
+    if not isinstance(bf, dict) or bf.get('why') or not bf.get('axes'):
+        return
+    try:
+        p3 = {int(r['num']): r.get('p3') for r in val.get('runners') or []}
+        keys = tri2_keys(bf['axes'], p3)
+        if not keys:
+            return
+        if 'sanrentan' not in cmb:
+            cmb.update(latest_combos(tr, day, rno, ('sanrentan',)))
+        board = TRI._rows(cmb.get('sanrentan'), 3, True)
+        rows = []
+        for k in keys:
+            o = board.get(k)
+            o = float(o) if o is not None and o > 0 else None
+            f = (tri_full or {}).get(k)
+            rows.append([k, o, round(f[1] * o, 3) if (f and o) else None])
+        bf['tri2'] = rows
+    except Exception as e:  # noqa: BLE001
+        log(f'{tr}{rno}R: 最終案の 3 連単のオッズ 失敗 {type(e).__name__} {str(e)[:120]}')
 
 
 def add_b53(val, tr, day, rno, cmb=None):
@@ -1161,11 +1205,12 @@ def live(day, base_csv, mdir, write, until):
                     log(f'{tr}{rno}R: 組のオッズ 失敗 {type(e).__name__}')
                     combo, combo_all = {}, {}
                 tri = None
+                tri_full = {}  # 3 連単の全部の組 {組: (オッズ, 模型の率)}(最終案の 3 連単の期待値用・2026-11-20)
                 if tm is not None and cmb:
                     try:  # 3 連単(d1b)・3 連複(c8)の期待値 ≥ 1.0 の組 = 記録だけ(買わない)
                         p3b = Bk.drop_duplicates('umaban').set_index('umaban').p3p
                         h3 = b[['umaban', 'win', 'p1']].assign(pg1=b.pg1_v31.to_numpy(), p3p_base=b.umaban.map(p3b).to_numpy())  # 3 連単・3 連複は v31 の率で学んだ = v31 のまま
-                        tri = TRI.race(h3, cmb, tm)
+                        tri = TRI.race(h3, cmb, tm, tri_full)
                     except Exception as e:  # noqa: BLE001
                         log(f'{tr}{rno}R: 3 連単・3 連複 失敗 {type(e).__name__} {str(e)[:120]}')
                 val = {'model': 'v29', 'line': meta['line'], 'p3_min': meta['p3_min'], 'post': at.strftime('%H:%M'),
@@ -1194,7 +1239,7 @@ def live(day, base_csv, mdir, write, until):
                     val['tri_model'] = {'tri': tri_name, 'trio': 'c8', 'ev_min': TRI.EV_MIN, 'cols': ['組', 'オッズ', '期待値', '模型の率', '市場の率']}
                     val.update(tri)
                 add_buy4(val, tr, day, rno, odds, cmb)  # 買い方 決め 4 の段 2(失敗しても単勝・組の記録はそのまま書く)
-                add_buyfin(val, b, tr, day, rno, odds, cmb)  # 買い方の最終案(2026-11-18・記録だけ・失敗しても他はそのまま書く)
+                add_buyfin(val, b, tr, day, rno, odds, cmb, tri_full)  # 買い方の最終案(2026-11-18・記録だけ・失敗しても他はそのまま書く)
                 add_b53(val, tr, day, rno, cmb)  # 決め 53: 全券種の参考の買い目(失敗しても単勝・組の記録はそのまま書く)
                 try:
                     st = put_gap(k, val, tr, day, rno) if write else 'dry'
