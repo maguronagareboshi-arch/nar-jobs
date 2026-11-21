@@ -742,7 +742,7 @@ def add_buy4(val, tr, day, rno, odds, cmb):
 
 
 def add_buyfin(val, b, tr, day, rno, odds, cmb, tri_full=None):
-    """買い方の最終案(2026-11-18 → 2026-11-21 決め 7): val['buyfin'] に軸と相手の買い目(buyfin_live.race・券種は定数の KINDS)。b = いま決めた全頭(丸めない ev・p3p・win)。
+    """買い方の最終案(2026-11-18 → 2026-11-21 決め 7 → 2026-11-21 決め 9): val['buyfin'] に軸と相手の買い目(buyfin_live.race・券種は定数の KINDS)。b = いま決めた全頭(丸めない ev・p3p・win)。
     定数 buyfin に PREV(前の形)があれば val['buyfin_prev'] にも同じ作りで並べて書く(記録だけ・画面は buyfin だけを読む)。
     新しい買いの模型で決めたレースだけ(v31 の逃げ道は why)。作れなくても val はそのまま。⛔ログには点数だけ。"""
     forms = [('buyfin', None)] + ([('buyfin_prev', BUYFIN.prev())] if BUYFIN.prev() else [])
@@ -759,7 +759,8 @@ def add_buyfin(val, b, tr, day, rno, odds, cmb, tri_full=None):
         except Exception as e:  # noqa: BLE001
             val[key] = {'why': f'失敗 {type(e).__name__} {str(e)[:80]}'}
             log(f'{tr}{rno}R: 買い方の最終案({key}) 失敗 {type(e).__name__} {str(e)[:120]}')
-    add_tri2(val, tr, day, rno, cmb, tri_full)
+    if BUYFIN.form() != 'k9':   # 決め 9(2026-11-21〜)は 3 連単を買わない = 画面用の 3 連単 tri2 も書かない
+        add_tri2(val, tr, day, rno, cmb, tri_full)
 
 
 TRI2_CAP = 3  # 画面 nar-viewer js/data-race.js NK_TRI_AXIS2_CAP と同じ

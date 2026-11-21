@@ -1,6 +1,13 @@
 # -*- coding: utf-8 -*-
 """南関 買い方の最終案。参考の買い目の記録だけ(今の単勝の買いは変えない)。
-  2026-11-18 の形(研究 nankan-ai-v3 out/buy_final_1118.md)→ 2026-11-21 買い方 決め 7 の形(研究 out/buy_judge7_1121_judge.md・2024-01〜10 で合格)。
+  2026-11-18 の形(研究 nankan-ai-v3 out/buy_final_1118.md)→ 2026-11-21 買い方 決め 7 の形(研究 out/buy_judge7_1121_judge.md・2024-01〜10 で合格)
+  → 2026-11-21 買い方 決め 9 の形(研究 out/buy9_1121_k6_judge.md・持ち回り 690 日で合格・定数の FORM = 'k9')。
+
+  決め 9(FORM k9): 軸 = 下と同じ(期待値 ≥ AX_EV・単勝 AX_LO 以上 AX_HI 未満)。券 = 単勝 + ワイド W_N 点 + 馬連 U_N 点(軸−相手)。
+    相手の選び = 組の当たる率(勝つ率 = 期待値 ÷ 単勝 と 3 着内率から作る率)と、単勝のオッズだけから作る組の率。
+      ワイド: 相手の期待値 ≥ EV_S かつ ワイドの当たる率 ≥ W_FLOOR の馬を、割安さ(当たる率 ÷ 単勝から作る率)の高い順に W_N 頭。
+      馬連:   相手の期待値 ≥ EV_S の馬を、馬連の当たる率の高い順に U_N 頭。
+    同じレースで同じ組は 1 枚だけ(軸が 2 頭以上でも重ねない・研究の数え方と同じ)。相手の 3 着内率の線 P3 は使わない。
 
   軸   = 10 分前の買いの模型の期待値(runners の ev = 新しい模型の勝つ率 × 10 分前の単勝)≥ AX_EV かつ 単勝 AX_LO 以上 AX_HI 未満の馬。
   相手 = 同じレースで 3 着内率(p3)≥ P3 かつ その馬の期待値 ≥ EV_S の馬(軸を除く・頭数の制限なし)。
@@ -75,6 +82,76 @@ def pick(rows, C=None):
     return out
 
 
+def form(C=None):
+    return (C or consts()).get('FORM') or 'axp'
+
+
+def _tensors(w, u, v):
+    """研究 buy_tickets_1118_combo.tensors の写し(17 × 17・17 × 17 × 17)"""
+    import numpy as np
+    I17 = np.eye(17, dtype=bool)
+    P12 = w[:, None] * u[None, :] / np.clip(u.sum() - u[:, None], 1e-12, None)
+    P12[I17] = 0.0
+    d = np.clip(v.sum() - v[:, None] - v[None, :], 1e-12, None)
+    T3 = P12[:, :, None] * v[None, None, :] / d[:, :, None]
+    T3[I17[:, :, None] | I17[:, None, :] | I17[None, :, :]] = 0.0
+    return P12, T3
+
+
+def _wide_umaren(P12, T3):
+    """研究 buy_tickets_1118_combo.by_type のワイドと馬連"""
+    S = T3 + T3.transpose(1, 0, 2) + T3.transpose(0, 2, 1) + T3.transpose(1, 2, 0) + T3.transpose(2, 0, 1) + T3.transpose(2, 1, 0)
+    return S.sum(2), P12 + P12.T
+
+
+def combo_probs(ok):
+    """ok = [(馬番, 期待値, 3 着内率, 単勝)](馬番の順)→ (AI のワイド・馬連, 単勝から作るワイド・馬連)の 17 × 17。研究 buy8_1121.build と同じ作り。"""
+    import numpy as np
+    um = np.array([u for u, *_ in ok]); ev = np.array([e for _, e, _, _ in ok], float)
+    p3 = np.array([p for _, _, p, _ in ok], float); o = np.array([x for *_, x in ok], float)
+    p = ev / o; nh = len(um)
+    v = np.zeros(17, bool); v[um] = True
+    w = np.zeros(17); w[um] = p / p.sum()
+    t3 = np.zeros(17); t3[um] = np.clip(p3, 1e-4, .995)
+    t3 = np.clip(t3 / t3.sum() * min(3, nh), 1e-4, .995) * v
+    u = np.where(v, np.clip(w, 1e-9, None) ** 0.27 * np.clip(t3, 1e-9, None) ** 0.85, 0.0)
+    vv = np.where(v, np.clip(w, 1e-9, None) ** -0.06 * np.clip(t3, 1e-9, None) ** 1.02, 0.0)
+    qx = (1 / o) / (1 / o).sum(); pm = np.zeros(17); pm[um] = qx
+    AI = _wide_umaren(*_tensors(w, u, vv)); MK = _wide_umaren(*_tensors(pm, pm, pm))
+    return AI, MK
+
+
+def _top(prob, mkt, pe, ev_s, floor, n, by_value):
+    """研究 buy8_1121._ranks の 1 通り(v1 = 割安さの順・p1 = 当たる率の順・どちらも相手の期待値 ≥ ev_s)。同じ値は馬番の小さい順。→ 選んだ位置"""
+    import numpy as np
+    el = pe >= ev_s
+    if by_value:
+        el &= prob >= floor
+    sc = np.where(el, prob / np.clip(mkt, 1e-12, None) if by_value else prob, -np.inf)
+    o = np.argsort(-sc, kind='stable')
+    return [int(i) for i in o[:min(n, int(el.sum()))]]
+
+
+def pick9(rows, C=None):
+    """決め 9: → [(軸, {'wide': [相手], 'umaren': [相手]})](軸は馬番の順)。"""
+    import numpy as np
+    C = C or consts()
+    ok = sorted((int(u), e, p, o) for u, e, p, o in rows if e is not None and p is not None and o is not None and o > 0)
+    if len(ok) < 2:
+        return []
+    (AW, AU), (MW, MU) = combo_probs(ok)
+    um = [u for u, *_ in ok]; ev = {u: e for u, e, _, _ in ok}
+    out = []
+    for a, e, _, o in ok:
+        if not (e >= C['AX_EV'] and C['AX_LO'] <= o < C['AX_HI']):
+            continue
+        oth = np.array([x for x in um if x != a]); pe = np.array([ev[x] for x in oth])
+        iw = _top(AW[a, oth], MW[a, oth], pe, C['EV_S'], C['W_FLOOR'], C['W_N'], True)
+        iu = _top(AU[a, oth], MU[a, oth], pe, C['EV_S'], 0.0, C['U_N'], False)
+        out.append((a, {'wide': [int(oth[i]) for i in iw], 'umaren': [int(oth[i]) for i in iu]}))
+    return out
+
+
 def tickets(a, S, ks=KINDS_1118):
     """軸 a と相手 S → {券種: [組の字]}(馬連・ワイド・3連複は小さい順・馬単は 1 着-2 着・3連単は 1 着-2 着(軸)-3 着)。"""
     j = lambda xs: '-'.join(str(x) for x in xs)  # noqa: E731
@@ -126,8 +203,19 @@ def race(rows, win, place, boards, C=None):
     bo = _board_odds(boards)
     ev = {int(u): e for u, e, _, _ in rows}
     axes = []
-    for a, S in pick(rows, C):
-        tk = tickets(a, S, ks)
+    k9 = form(C) == 'k9'
+    seen = set()
+    for a, S in (pick9(rows, C) if k9 else pick(rows, C)):
+        if k9:
+            tk = {'tan': [str(a)]}
+            for k in ('wide', 'umaren'):
+                cs = [c for c in tickets(a, S[k], (k,))[k] if (k, c) not in seen]   # 同じレースで同じ組は 1 枚
+                seen.update((k, c) for c in cs)
+                tk[k] = cs
+            tk = {k: tk.get(k, []) for k in ks}
+            S = sorted(set(S['wide']) | set(S['umaren']))
+        else:
+            tk = tickets(a, S, ks)
         od = {'tan': {str(a): _f((win or {}).get(a))},
               'fuku': {str(a): _f(((place or {}).get(a) or [None])[0])}}
         od.update(bo)
