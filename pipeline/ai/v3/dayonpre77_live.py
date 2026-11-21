@@ -158,6 +158,11 @@ def write_base(csv_path, base_csv, PT74, pnx, log=log0):
             vb['D77:v'] = '31'
     except Exception as e:  # noqa: BLE001
         log('(前日) 決め 82 の定数を読めない = 第30版の印のまま', type(e).__name__, str(e)[:80])
+    if 'sq87' in x.columns and (vb['D77:v'] == '31').all():  # 2026-11-21 決め 87: 前日の並び読みを替えたレース(表の sq87)= 第32版の前日の便の土台(当日の便は決め 82 が動いた時だけ「第32版 直前版」)
+        r87 = {(str(t), int(r)) for t, r, f in zip(x.track, x.race_no, pd.to_numeric(x.sq87, errors='coerce').fillna(0)) if f == 1}
+        m87 = np.array([(str(t), int(float(r))) in r87 for t, r in zip(vb.track, vb.race_no)], bool)
+        vb.loc[m87, 'D77:v'] = '32'
+        log('(前日) 決め 87 の土台(D77:v = 32)', len(r87), 'R')
     vb.to_csv(base_csv, index=False, encoding='utf-8-sig')
     n = int(d.drop_duplicates(KEY)[P + 'on'].sum())
     log('(前日) 決め 77 の土台', len(d), '頭・第28版のレース', n, '・p_Nx あり率', round(float(d[P + 'pnx'].notna().mean()), 3))
@@ -256,11 +261,11 @@ def apply_day(b, day, ux, pday, s1, s3, going='', ucy=None, ub=None):
     # 決め 79(南関 第30版 直前版): 調教入りの並び読みの差を du と同じ所に足す。動かない・落ちた時は上の第28・29版の率のまま(わけ meta.cy79.why)
     dcy, mc, A = cy79_diff(day, ux, ucy)
     dv = str(b['D77:v'].iloc[0]).split('.')[0] if 'D77:v' in b.columns else ''
-    if dcy is not None and dv not in ('30', '31'):   # 前日の土台が第30版(か第31版)の前日の便の物の時だけ(版の名前と中身をそろえる)
+    if dcy is not None and dv not in ('30', '31', '32'):   # 前日の土台が第30版(か第31・32版)の前日の便の物の時だけ(版の名前と中身をそろえる)
         dcy, mc = None, dict(mc, on=False, why='前日の土台が第30版でない')
     # 決め 82(南関 第31版 直前版): 調教入りの差 d = u_cy − u_X を 3 案まとめの差 d = u_b − u_X に替える(倍は同じ)。動かない・落ちた時は第30版の形のまま(わけ meta.b82.why)
     d82, mb, A82 = b82_diff(day, ux, ub)
-    if d82 is not None and dv != '31':
+    if d82 is not None and dv not in ('31', '32'):   # 決め 87: 第32版の前日の便の土台(前日の並び読みを替えた)でも同じ形で足す
         d82, mb = None, dict(mb, on=False, why='前日の土台が第31版でない')
     if d82 is not None:
         try:

@@ -385,15 +385,18 @@ def day_marks(Bk, odds, w, going, dm, day):
                 used.append('dp77')
                 # 第29版 = 前日の土台を第29版の前日の便が作った時だけ(D77:v = 29・入れた次の日は前の土台 = 第28版のまま)。前日版と同じ番号
                 dv = str(b['D77:v'].iloc[0]).split('.')[0] if 'D77:v' in b.columns else ''
-                v29 = dv in ('29', '30', '31')
+                v29 = dv in ('29', '30', '31', '32')
                 # 第31版 = 第30版の調教入りの差を 3 案まとめの差に替えた物(決め 82)。前日の土台が第31版の前日の便の物で、このレースで決め 82 が動いた時だけ
-                v31 = dv == '31' and bool(dp77m.get('b82', {}).get('on'))
+                v31 = dv in ('31', '32') and bool(dp77m.get('b82', {}).get('on'))
+                # 第32版 = 第31版の前日版の並び読みを 3 案まとめ + 調教の挟みに替えた物(決め 87)。前日の土台が第32版の前日の便の物(D77:v = 32)で、決め 82 が動いた時だけ
+                v32 = v31 and dv == '32'
                 # 第30版 = 第29版 + 調教入りの並び読みの差(決め 79)。前日の土台が第30版の前日の便の物で、このレースで決め 79 が動いた時だけ
-                v30 = v31 or (dv in ('30', '31') and bool(dp77m.get('cy79', {}).get('on')))
-                ver = '南関 第31版' if v31 else '南関 第30版' if v30 else '南関 第29版' if v29 else '南関 第28版'
+                v30 = v31 or (dv in ('30', '31', '32') and bool(dp77m.get('cy79', {}).get('on')))
+                ver = '南関 第32版' if v32 else '南関 第31版' if v31 else '南関 第30版' if v30 else '南関 第29版' if v29 else '南関 第28版'
                 stamp = (f'{ver[3:]} 前日版の最後の率 + 並び読みの差 + 当日の土台の差(第26版の率は meta.dp77)'
                          + ('+能力試験の記録を台帳に無い馬にも結ぶ(決め 67-5)' if v29 else '')
-                         + ('+3 案まとめの並び読みの差(決め 82)' if v31 else '+調教入りの並び読みの差(決め 79)' if v30 else ''))
+                         + ('+3 案まとめの並び読みの差(決め 82)' if v31 else '+調教入りの並び読みの差(決め 79)' if v30 else '')
+                         + ('+前日の並び読みを 3 案まとめ + 調教の挟みに(決め 87)' if v32 else ''))
             elif dp77m.get('err'):
                 log('第28版 直前版 失敗(第26版のまま)', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), dp77m['err'])
         except Exception as e:  # noqa: BLE001  落ちても第26版の印は出す
@@ -423,7 +426,7 @@ def day_marks(Bk, odds, w, going, dm, day):
     if 'p1cap' in used:
         meta['p1cap'] = sys.modules['p1cap'].TAG
         meta['p1cap_n'] = ncap  # 勝つ率を動かした頭数
-    if c67 and ver in ('南関 第22版', '南関 第23版', '南関 第26版', '南関 第28版', '南関 第29版', '南関 第30版', '南関 第31版'):
+    if c67 and ver in ('南関 第22版', '南関 第23版', '南関 第26版', '南関 第28版', '南関 第29版', '南関 第30版', '南関 第31版', '南関 第32版'):
         meta['c67'] = c67
     if dp77m is not None:
         meta['dp77'] = dp77m
