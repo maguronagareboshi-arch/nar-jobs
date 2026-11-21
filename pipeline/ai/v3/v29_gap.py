@@ -742,20 +742,23 @@ def add_buy4(val, tr, day, rno, odds, cmb):
 
 
 def add_buyfin(val, b, tr, day, rno, odds, cmb, tri_full=None):
-    """買い方の最終案(2026-11-18): val['buyfin'] に軸と相手の 7 券の買い目(buyfin_live.race)。b = いま決めた全頭(丸めない ev・p3p・win)。
+    """買い方の最終案(2026-11-18 → 2026-11-21 決め 7): val['buyfin'] に軸と相手の買い目(buyfin_live.race・券種は定数の KINDS)。b = いま決めた全頭(丸めない ev・p3p・win)。
+    定数 buyfin に PREV(前の形)があれば val['buyfin_prev'] にも同じ作りで並べて書く(記録だけ・画面は buyfin だけを読む)。
     新しい買いの模型で決めたレースだけ(v31 の逃げ道は why)。作れなくても val はそのまま。⛔ログには点数だけ。"""
-    try:
-        if val.get('buy_model', 'v31') == 'v31':
-            val['buyfin'] = {'tag': BUYFIN.tag(), 'why': '買いの模型が v31'}
-            return
-        miss = [k for k in ('wide', 'umaren', 'umatan', 'sanrenpuku') if k not in cmb]
-        if miss:
-            cmb.update(latest_combos(tr, day, rno, tuple(miss)))
-        rows = [(int(x.umaban), float(x.ev), float(x.p3p), float(x.win)) for x in b.itertuples()]
-        val['buyfin'] = BUYFIN.race(rows, odds, latest_place(tr, day, rno), cmb)
-    except Exception as e:  # noqa: BLE001
-        val['buyfin'] = {'why': f'失敗 {type(e).__name__} {str(e)[:80]}'}
-        log(f'{tr}{rno}R: 買い方の最終案 失敗 {type(e).__name__} {str(e)[:120]}')
+    forms = [('buyfin', None)] + ([('buyfin_prev', BUYFIN.prev())] if BUYFIN.prev() else [])
+    for key, C in forms:
+        try:
+            if val.get('buy_model', 'v31') == 'v31':
+                val[key] = {'tag': BUYFIN.tag(C), 'why': '買いの模型が v31'}
+                continue
+            miss = [k for k in BUYFIN.boards_needed(C) if k not in cmb]
+            if miss:
+                cmb.update(latest_combos(tr, day, rno, tuple(miss)))
+            rows = [(int(x.umaban), float(x.ev), float(x.p3p), float(x.win)) for x in b.itertuples()]
+            val[key] = BUYFIN.race(rows, odds, latest_place(tr, day, rno), cmb, C)
+        except Exception as e:  # noqa: BLE001
+            val[key] = {'why': f'失敗 {type(e).__name__} {str(e)[:80]}'}
+            log(f'{tr}{rno}R: 買い方の最終案({key}) 失敗 {type(e).__name__} {str(e)[:120]}')
     add_tri2(val, tr, day, rno, cmb, tri_full)
 
 
@@ -1250,7 +1253,7 @@ def live(day, base_csv, mdir, write, until):
                 n_w += 1
                 n_buy += len(c)
                 log(f'{tr}{rno}R: 発走 {at:%H:%M}・{now:%H:%M:%S} に決めた{"(発走 " + prev_post + " から遅れて決め直し)" if prev_post else ""}・{len(b)} 頭(体重 {val["weights"]})'
-                    f'・{val["buy_model"]}・候補 {len(c)} 頭(複勝も {len(val.get("place") or [])})・3 連単 {len(val.get("tri") or [])}・3 連複 {len(val.get("trio") or [])} 組(記録)・参考(決め 53) {B53.count(val.get("b53"))} 点・決め 4 の段 2 {BUY4.count(val.get("buy4"))} 点・参考 {BUY4.count_ref(val.get("buy4"))} 点・最終案 {BUYFIN.count(val.get("buyfin"))} 点{"(" + val["buy4"]["why"] + ")" if (val.get("buy4") or {}).get("why") else ""}・書き込み {st}')
+                    f'・{val["buy_model"]}・候補 {len(c)} 頭(複勝も {len(val.get("place") or [])})・3 連単 {len(val.get("tri") or [])}・3 連複 {len(val.get("trio") or [])} 組(記録)・参考(決め 53) {B53.count(val.get("b53"))} 点・決め 4 の段 2 {BUY4.count(val.get("buy4"))} 点・参考 {BUY4.count_ref(val.get("buy4"))} 点・最終案 {BUYFIN.count(val.get("buyfin"))} 点{"(前の形 " + str(BUYFIN.count(val.get("buyfin_prev"))) + " 点)" if val.get("buyfin_prev") else ""}{"(" + val["buy4"]["why"] + ")" if (val.get("buy4") or {}).get("why") else ""}・書き込み {st}')
         if now > end:
             log('時間切れ: 書いた', n_w, 'R・候補', n_buy, '頭')
             _record_after(day, write)
