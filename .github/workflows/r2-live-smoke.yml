@@ -1,0 +1,21 @@
+name: r2-live-smoke
+# 置きファイルの棚(yukochi-live・d.yukochi.com)へ試しのファイルを 1 つ置く。手動だけ。
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: put smoke file
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_LIVE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_LIVE_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_LIVE_ENDPOINT }}
+        run: |
+          printf '{"ok":true,"at":"%s"}' "$(date -u +%FT%TZ)" > smoke.json
+          aws s3 cp smoke.json s3://yukochi-live/test/smoke.json --endpoint-url "$R2_ENDPOINT" --content-type application/json --cache-control "public, max-age=60"
+          aws s3 ls s3://yukochi-live/test/ --endpoint-url "$R2_ENDPOINT"
