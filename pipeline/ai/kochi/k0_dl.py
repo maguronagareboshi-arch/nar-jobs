@@ -119,7 +119,31 @@ def by_track_month(table, sel, order):
     if dup:
         raise SystemExit(f'⛔{table} に同じ行が {dup} 本(取り方の誤り)= 止まる')
     return _keep(table, sel, df, base is None)
-def whole(table, order, by_date=False):
+def _late(table, old, since, key):
+    """2026-11-22 穴の直し: 控えの古い行(since より前の日付)に、控えを丸ごと読んだ日より後に DB へ入った行を足す。
+    中央の走り(nar_jra_runs)は転入馬が出馬表に出た日に古い走りまでまとめて入る = 日付で読み直す範囲の外になり、
+    次の丸ごと(最長 7 日)まで本番に届かなかった(11/22 高知 6R プラニスフェリオ: 中央 18 走が全部抜け 3 着内 16.9% → 1 着)。
+    ・入った・入れ直した行 = updated_at が丸ごとの日の前日以降(日の境と時差の余裕に 1 日)で since より前の日付の行を読み、同じ鍵の控えの行と差し替える。
+    ・消えた馬 = 仮の行(kd*)の置き換えなどで DB から消えた馬の行は、今の馬の表に無い馬として控えから落とす。"""
+    if key is None or not len(old):
+        return old
+    full = _meta().get(table, {}).get('full')
+    cut = (dt.date.fromisoformat(full) - dt.timedelta(days=1)).isoformat()
+    t0 = time.time()
+    new = pd.DataFrame(pages(f'/rest/v1/{table}?select=*&updated_at=gte.{cut}&race_date=lt.{since}&order={",".join(key)}'))
+    ids = set(pd.DataFrame(pages('/rest/v1/nar_jra_horses?select=kb_horse_id&order=kb_horse_id')).kb_horse_id)
+    gone = ~old.kb_horse_id.isin(ids)
+    if len(new):
+        k_old = pd.MultiIndex.from_frame(old[key].astype(str))
+        k_new = pd.MultiIndex.from_frame(new[key].astype(str))
+        old = pd.concat([old[~k_old.isin(k_new) & ~gone], new[new.kb_horse_id.isin(ids)][old.columns]], ignore_index=True)
+    else:
+        old = old[~gone]
+    print(table, '控えより後に入った古い日付の行', len(new), '・消えた馬の行', int(gone.sum()), '(', cut, '〜 更新)', round(time.time() - t0), flush=True)
+    return old
+
+
+def whole(table, order, by_date=False, late_key=None):
     base, since = _base(table, '*') if by_date else (None, None)
     flt = f'&race_date=gte.{since}' if base is not None else ''
     rows, off, t0 = [], 0, time.time()
@@ -137,7 +161,8 @@ def whole(table, order, by_date=False):
     if base is not None:   # 丸ごとの並び = order の列の順。頭の列(文字)は DB の照合順なので、控えにある値は控えの順を使う(新しい値だけ後ろ)
         c0, rest = order.split(',')[0], order.split(',')[1:]
         rank = {v: i for i, v in enumerate(base[c0].drop_duplicates())}
-        df = _merge(base[base.race_date < since], df,
+        old = _late(table, base[base.race_date < since], since, late_key)
+        df = _merge(old, df,
                     sort=lambda d: [d[c0].map(rank).fillna(len(rank)), d[c0].where(~d[c0].isin(rank), '')] + [d[c] for c in rest])
     return _keep(table, '*', df, base is None)
 def main(argv):
@@ -161,7 +186,8 @@ def main(argv):
     if 'ext' in what:
         whole('nar_horse_ext_ids', 'source,ext_id').to_parquet(D + 'ext.parquet', index=False)
     if 'jra' in what:
-        whole('nar_jra_runs', 'kb_horse_id,race_date,race_no', by_date=True).to_parquet(D + 'jra.parquet', index=False)
+        whole('nar_jra_runs', 'kb_horse_id,race_date,race_no', by_date=True,
+              late_key=['kb_horse_id', 'race_date', 'place', 'race_no']).to_parquet(D + 'jra.parquet', index=False)
     if 'jrah' in what:
         whole('nar_jra_horses', 'kb_horse_id').to_parquet(D + 'jrah.parquet', index=False)
     print('done')
