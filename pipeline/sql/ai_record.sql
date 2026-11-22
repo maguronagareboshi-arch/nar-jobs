@@ -44,6 +44,26 @@ left join public.nar_ai_marks tl
  and (tj.model = 'banei-3'
       or jsonb_array_length(coalesce(tl.meta->'scratched', '[]'::jsonb)) > 0 or coalesce(tl.meta->>'direct', '') = 'true');
 
+-- 2026-11-22 ユーザー「試験運用から帯広を外してばんえいを南関と同じように独立させよう」「切り替えた時から第3版以降の成績と分けて」
+--   ・試験運用(base-v1)の成績から帯広ばを全期間外す(南関 4 場と同じ)
+--   ・ばんえい特化 = model 'banei-3'(10/31〜 の行そのまま・第 3 版以降の通算)
+--   ・版ごと = 'banei-3:v4' / 'banei-3:v5'(版を替えた日で分ける・版を上げたら下の表に 1 行と
+--     nar-viewer js/data.js の AI_BANEI_PERIODS に 1 行)
+--   ・切り替え前 = 'banei-old'(base-v1 の帯広ばの行・banei-3 の行が無い 10/30 まで)
+--   ⛔サイトの AI_BANEI_PUBLIC を false に戻すときは、ここも一緒に戻す
+insert into tmp_ai_src
+select 'banei-old', m.track, m.race_date, m.race_no, m.timing, m.marks, m.meta, m.computed_at
+from tmp_ai_src m
+where m.model = 'base-v1' and m.track = '帯広ば' and m.race_date < date '2026-10-31';
+insert into tmp_ai_src
+select v.id, m.track, m.race_date, m.race_no, m.timing, m.marks, m.meta, m.computed_at
+from tmp_ai_src m
+join (values ('banei-3:v4', date '2026-10-29', date '2026-11-20'),
+             ('banei-3:v5', date '2026-11-21', date '2099-12-31')) v(id, d1, d2)
+  on m.race_date between v.d1 and v.d2
+where m.model = 'banei-3' and m.track = '帯広ば';
+delete from tmp_ai_src where model = 'base-v1' and track = '帯広ば';
+
 -- 印は ◎○▲△△ の 5 頭(2026-10-10 ユーザー決定 B)。pos = 印の順(1〜5)= 配列の並び(書き手は常に ◎○▲△△ の順で保存)。
 -- 4 頭のまま保存された過去の試験運用(base-v1・v3n-1)の行は、2026-09-14 以降に限り、発走前に同じ行へ保存した meta.p から
 -- 5 頭目(印に無い馬で p 最大・同点は馬番の小さい方)を △(pos 5)として足す。⛔DB へは書き戻さない(nar_ai_marks_guard が捨てる)。
@@ -62,7 +82,7 @@ from (
           where not exists (select 1 from jsonb_array_elements(m.marks) x where (x->>'num')::int = e.key::int)
           order by e.value::numeric desc, e.key::int limit 1) as num
   from tmp_ai_src m
-  where m.model in ('base-v1', 'v3n-1') and m.race_date >= date '2026-09-14'
+  where m.model in ('base-v1', 'v3n-1', 'banei-old') and m.race_date >= date '2026-09-14'
     and jsonb_array_length(m.marks) = 4 and jsonb_typeof(m.meta->'p') = 'object'
 ) f
 where f.num is not null;
