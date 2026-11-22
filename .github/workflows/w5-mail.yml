@@ -1,0 +1,46 @@
+# 5重勝の今日の買い目を管理者にメールで送る(2026-11-22・cloud/w5_mail.py)。
+# 起動 = 本番 DB の pg_cron(ops/w5_mail_setup.sql・毎朝 09:30 JST)。GitHub の定時(schedule)は数時間遅れるので使わない。
+# ⛔秘密 W5_MAIL_USER / W5_MAIL_PASS / W5_MAIL_TO が無ければ送らずに緑で抜ける。⛔お金は動かさない。
+name: w5-mail
+
+on:
+  workflow_dispatch:
+    inputs:
+      date:
+        description: 'YYYY-MM-DD(空 = 今日 JST)'
+        required: false
+      dry:
+        description: 'yes = 本文を出すだけ(送らない)'
+        required: false
+        default: 'no'
+
+permissions:
+  contents: read
+concurrency:
+  group: w5-mail
+  cancel-in-progress: false
+
+jobs:
+  mail:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: '3.12'
+      - name: mail
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          W5_MAIL_USER: ${{ secrets.W5_MAIL_USER }}
+          W5_MAIL_PASS: ${{ secrets.W5_MAIL_PASS }}
+          W5_MAIL_TO: ${{ secrets.W5_MAIL_TO }}
+          IN_DATE: ${{ github.event.inputs.date }}
+          IN_DRY: ${{ github.event.inputs.dry }}
+          PYTHONIOENCODING: utf-8
+        run: |
+          A=""
+          if [ -n "$IN_DATE" ]; then A="$A --date $IN_DATE"; fi
+          if [ "$IN_DRY" = "yes" ]; then A="$A --dry-run"; fi
+          python -X utf8 cloud/w5_mail.py $A
