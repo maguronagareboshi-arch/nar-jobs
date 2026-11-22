@@ -40,6 +40,7 @@ import class_fix as cf  # noqa: E402
 import seq_core as sc  # noqa: E402
 import noken as nkm  # noqa: E402
 import bn_v5 as v5m  # noqa: E402
+import bn_v6 as v6m  # noqa: E402
 
 V = f1.OUT
 OUTD = V + 'prod/'
@@ -48,6 +49,7 @@ MODEL_ID = 'banei-3'
 MARKS = ['◎', '○', '▲', '△', '△']
 FORM = 'banei-4: v2tree355 0.8 + flat 0.2 + seq res + b*noken(debut) / clsfix / p3 sum3 / p1 = exp(b1*z) share'
 FORM5 = 'banei-5: (0.6 tree s0-2 + 0.2 cb + 0.2 nn0-2) 0.8 + flat 0.2 + seqX30 res + b*noken(debut) / clsfix / p3 sum3 / p1 = exp(b1*z) share'
+FORM6 = 'banei-6: tree s0-2 + cb + raceNN0-2 / flat / stackA + seqXC s801-806 / b*noken(debut) / clsfix / p3 sum3 / p1 = exp(b1*z) share'
 GAP_FROM = '2026-09-01'   # 固めた表の前の版(〜2026-08)より後 = 月ごとの埋めの対象
 LOCAL = os.environ.get('BANEI_LOCAL') == '1'
 JST = dt.timezone(dt.timedelta(hours=9))
@@ -305,6 +307,44 @@ def score_v5(D1, D2, ru, day, nxt, mdir, o, v2):
     return None, T5
 
 
+# ---------------------------------------------------------------- 第 6 版(ばんえい 決め 13・bn_v6.py)
+def fit_v6(D1, D2, ru, day, o, mdir):
+    """種 1・2 の木・CatBoost・レース全体を読む NN 0〜2・上の段(並び読み X 6 種 → 足し段 A 6 種・学び直した並び読み 6 種)。1 頭ずつの NN は学ばない。"""
+    C = v6m.consts()
+    for s in v5m.SEEDS_T:
+        (mdir / f'tree_s{s}.txt').write_text(tree_fit(D2, day, seed=s).model_to_string(), encoding='utf-8')
+    tr, cols = v5m.train_rows(D2, day)
+    t0 = time.time(); v5m.cb_fit(tr, cols).save_model(str(mdir / 'cb.cbm')); log('CatBoost', '学び', len(tr), '秒', round(time.time() - t0))
+    v5m.nn_save(v6m.ra_fit(tr, cols, int(C['ra_epochs'])), mdir / 'ra.pt')
+    del tr
+    hist, S30, E = x_inputs(D1, ru, day, o, mdir, fit=True)
+    aux = v5m.market_aux(E, day)[:, None]
+    v6m.save_top(v6m.fit_top(hist, aux, S30, E, D1, D2, cols, day, float(C.get('x_lam', 1.0))), mdir / 'top6.pt')
+
+
+def score_v6(D1, D2, ru, day, nxt, mdir, o, v2):
+    """当日の行の 上の段(足し段 A と学び直した並び読みの平均 × w_top)と T(木の混ぜのロジット)。列の名前は第 5 版と同じ(T5・rx)。"""
+    C = v6m.consts()
+    hist, S30, E = x_inputs(D1, ru, day, o, mdir, extra=v2.assign(off=lg(v2.p_v2.to_numpy(float))))
+    _, _, COLS = lock()
+    ga, xc, miss = v6m.apply_top(v6m.load_top(mdir / 'top6.pt'), hist, S30, E, D1, D2, COLS, day, nxt)
+    cur = (S30['date'] >= day) & (S30['date'] < nxt)
+    RX = E.loc[cur, K].assign(rx=(float(C['w_top']) * (ga + xc))[cur], r_ga=ga[cur], r_xc=xc[cur])
+    d = D2[(D2.scratch == 0) & (D2.race_date >= day) & (D2.race_date < nxt)]
+    ps = [v2.set_index(K).p_v2.reindex(pd.MultiIndex.from_frame(d[K])).to_numpy(float)]
+    for s in v5m.SEEDS_T:
+        ps.append(sc.booster_from((mdir / f'tree_s{s}.txt').read_text(encoding='utf-8')).predict(d[COLS]))
+    pcb = v5m.cb_load(mdir / 'cb.cbm').predict_proba(d[COLS])[:, 1]
+    pra = [v6m.ra_apply(st, d, COLS) for st in v5m.nn_load(mdir / 'ra.pt')]
+    T5 = d[K].copy()
+    T5['T5'] = v6m.tree_mix(ps, pcb, pra, C)
+    T5['p_s1'], T5['p_s2'], T5['p_cb'] = ps[1], ps[2], pcb
+    T5['p_ra'] = np.mean(pra, 0)
+    T5 = T5.merge(RX, on=K, how='left', validate='1:1')
+    log('第 6 版', '木の混ぜ', len(T5), '頭', '上の段の空', int(T5.rx.isna().sum()), '表の材料の結べない当日の行', miss)
+    return None, T5
+
+
 # ---------------------------------------------------------------- 入口
 def fit(day, mdir, use_db=True, use_gap=True):
     """朝: 前の日までで 木・並び読み(3 種)・平らな模型を学んで mdir に置く。止まる時は 2 を返す(書かない)。"""
@@ -320,8 +360,11 @@ def fit(day, mdir, use_db=True, use_gap=True):
     o = oof_table(D2, day, use_db, use_gap)
     Z = seq_arrays(D1, ru, day)
     S = S_of(Z, offsets(Z, o))
+    V6 = v6m.on()
     V5 = v5m.on()
-    if V5:
+    if V6:
+        fit_v6(D1, D2, ru, day, o, mdir)          # 第 6 版: 種 1・2 の木・CatBoost・レース全体を読む NN・上の段(1 頭ずつの NN と第 4 版の並び読みは学ばない)
+    elif V5:
         fit_v5(D1, D2, ru, day, o, mdir)          # 第 5 版: 種 1・2 の木・CatBoost・NN 0〜2・並び読み X(第 4 版の並び読みは学ばない)
     else:
         sc.save_states(sc.seq_fit(S['hist'], S['ctx'], S, day, log), mdir / 'seq.pt')
@@ -329,7 +372,7 @@ def fit(day, mdir, use_db=True, use_gap=True):
     (mdir / 'tree.txt').write_text(tm.model_to_string(), encoding='utf-8')
     (mdir / 'flat.txt').write_text(fm.model_to_string(), encoding='utf-8')
     o.to_parquet(mdir / 'oof.parquet', index=False)
-    info = dict(day=day, prev=prev, form=FORM5 if V5 else FORM, v5=V5, oof_rows=int(len(o)), oof_to=str(o.race_date.max()),
+    info = dict(day=day, prev=prev, form=FORM6 if V6 else FORM5 if V5 else FORM, v5=V5, v6=V6, oof_rows=int(len(o)), oof_to=str(o.race_date.max()),
                 has_off=int(S['has_off'].sum()), made=dt.datetime.now(JST).isoformat(timespec='seconds'))
     (mdir / 'info.json').write_text(json.dumps(info, ensure_ascii=False, indent=1), encoding='utf-8')
     log('学び済み', info)
@@ -357,7 +400,10 @@ def score(day, mdir, drop_race=None, no_going=False):
     o = pd.read_parquet(mdir / 'oof.parquet')
     S = S_of(Z, offsets(Z, o, v2.assign(off=lg(v2.p_v2.to_numpy(float)))))
     V5 = bool(info.get('v5'))
-    if V5:
+    V6 = bool(info.get('v6'))   # 模型を学んだ時の版で当てる(控えの古い模型は第 5 版のまま当てる)
+    if V6:
+        res, T5 = score_v6(D1, D2, ru, day, nxt, mdir, o, v2)
+    elif V5:
         res, T5 = score_v5(D1, D2, ru, day, nxt, mdir, o, v2)
     else:
         res = sc.seq_apply(sc.load_states(mdir / 'seq.pt'), S['hist'], S['ctx'], S, day, nxt)
@@ -369,10 +415,10 @@ def score(day, mdir, drop_race=None, no_going=False):
     out = out.merge(today[K + ['horse_name', 'a12_runs']], on=K, how='left', validate='1:1')
     if V5:
         out = out.merge(T5, on=K, how='left', validate='1:1')
-        out['res'] = out.rx   # 第 5 版: 並び読みの外した分 = X
+        out['res'] = out.rx   # 第 5 版: 並び読みの外した分 = X / 第 6 版: 足し段 A と学び直した並び読みの平均
     P = nkm.params()
     if V5:
-        P = dict(P, b=float(v5m.consts()['noken_b']))   # 第 5 版の能検の重み(ばんえい 決め 12 の最後の月 N)
+        P = dict(P, b=float((v6m if V6 else v5m).consts()['noken_b']))   # 能検の重み(第 5 版 = 決め 12・第 6 版 = 決め 13 の最後の月 N)
     try:
         out['nk'], hit, deb, nt = nkm.nk_of(out, P)
         log('能検', '新馬', deb, '頭のうち結べた', hit, '・合格の回', nt, '・b', P['b'])
@@ -384,7 +430,7 @@ def score(day, mdir, drop_race=None, no_going=False):
     z = (1 - sc.W_FLAT) * base + sc.W_FLAT * out.flat + out.res + float(P['b']) * out.nk
     out['p'] = 1 / (1 + np.exp(-z))
     out['p3'] = (out.p / out.groupby('rkey').p.transform('sum') * 3).clip(1e-4, 1 - 1e-4)      # 案 1: 割り直すだけ
-    out['p1'], b1, src = p1_of(out, z)                                                          # イ: exp(b1 × z) の割合
+    out['p1'], b1, src = p1_of(out, z, V6)                                                          # イ: exp(b1 × z) の割合
     info = dict(info, p1_b=b1, p1_src=src)
     log('勝つ率', src, 'b1', b1)
     bad = int(out[['res', 'flat', 'p_v2'] + (['T5'] if V5 else [])].isna().any(axis=1).sum())
@@ -397,18 +443,20 @@ def score(day, mdir, drop_race=None, no_going=False):
     return out, info
 
 
-def p1_params():
+def p1_params(v6=False):
+    if v6:         # 第 6 版の z で決めた b1(固めた表の banei_v6.json)
+        return dict(b1=v6m.consts()['p1_b1'])
     if v5m.on():   # 第 5 版の z で決めた b1(固めた表の banei_v5.json)
         return dict(b1=v5m.consts()['p1_b1'])
     return json.load(open(os.environ.get('BANEI_P1', f1.OUT + 'banei_p1.json'), encoding='utf-8'))
 
 
-def p1_of(out, z):
+def p1_of(out, z, v6=False):
     """勝つ率 イ = exp(b1 × z) をレースの中で合計 1 に(2026-10-30・v3 の out/banei_p1_check.md・b1 は固めた表 banei_kb/banei_p1.json)。
     ア(3 着内率の割合)は強い馬を低く・人気薄を高く見ていた(確かめ 3,295 R: 本命の見込み 22.7% に実際 34.8%)。
     ⛔係数が読めない日は ア で続け、meta.p1_src='share' に残す。印の順(3 着内率の順)は変わらない。"""
     try:
-        b1 = float(p1_params()['b1'])
+        b1 = float(p1_params(v6)['b1'])
     except Exception as e:  # noqa: BLE001
         log('勝つ率の係数が読めない = 3 着内率の割合(ア)で出す', repr(e)[:200])
         return out.p3 / out.groupby('rkey').p3.transform('sum'), None, 'share'
