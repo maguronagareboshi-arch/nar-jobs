@@ -14,6 +14,7 @@ AI = nar_ai_marks の朝の行(帯広 banei-3・他場 v3n-1)の meta.runners �
 終了コード: 0 = 送った・対象なし・dry-run / 1 = 送れなかった / 2 = 前提が足りない
 """
 import argparse
+import base64
 import datetime as dt
 import json
 import os
@@ -40,6 +41,29 @@ def http(url, headers=None, timeout=30):
     req = urllib.request.Request(url, headers={"User-Agent": "Mozilla/5.0", **(headers or {})})
     with urllib.request.urlopen(req, timeout=timeout) as r:
         return r.read()
+
+
+RELAY_URL = os.environ.get("W5_RELAY_URL", "https://qgsnsdjvzzeazbazjlwa.supabase.co/functions/v1/w5-relay")
+
+
+def loto_page(day, key):
+    """一覧の頁を読む。直接が断られたら(GitHub = 米国 = 403)東京の関数 w5-relay を通す(2026-11-23)。"""
+    url = LOTO_URL + day.replace("-", "")
+    try:
+        return http(url)
+    except Exception as e:
+        first = e
+    req = urllib.request.Request(RELAY_URL, data=json.dumps({"url": url}).encode(), method="POST", headers={
+        "Content-Type": "application/json", "Authorization": "Bearer " + key, "apikey": key,
+        "x-region": "ap-northeast-1", "User-Agent": "nar-w5-mail"})
+    try:
+        with urllib.request.urlopen(req, timeout=60) as r:
+            j = json.loads(r.read().decode("utf-8"))
+    except Exception as e:
+        raise RuntimeError(f"直接 {type(first).__name__}: {str(first)[:60]} / 中継 {type(e).__name__}: {str(e)[:60]}")
+    if j.get("status") != 200:
+        raise RuntimeError(f"直接 {str(first)[:60]} / 中継の先 {j.get('status')} {j.get('error', '')}")
+    return base64.b64decode(j["body_b64"])
 
 
 def parse_loto(html):
@@ -162,7 +186,7 @@ def main():
     if not base or not key:
         print("SUPABASE_URL / SUPABASE_SERVICE_KEY が無い"); return 2
     try:
-        html = http(LOTO_URL + day.replace("-", "")).decode("cp932", "ignore")
+        html = loto_page(day, key).decode("cp932", "ignore")
     except Exception as e:
         # ⛔読めない日も黙らない= 管理者に「読めなかった」を送る
         body, n = f"{day}: オッズパークの 5重勝の一覧が読めなかった({type(e).__name__}: {str(e)[:120]})。手で確かめる。", -1
