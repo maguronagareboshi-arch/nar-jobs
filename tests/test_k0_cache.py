@@ -99,8 +99,22 @@ def _same(a, b):
     return a[c].astype(str).sort_values(JKEY).reset_index(drop=True).equals(b[c].astype(str).sort_values(JKEY).reset_index(drop=True))
 
 
-def test_jra_late(tmp):
+def test_jra_late(tmp_path):
     """11/22 の穴(控えの後に入った古い日付の中央の走りが届かない)と 11/23 の守り 3 つ"""
+    old = (K.sb.__dict__.get('get'), K.TR)
+    K.sb.get = staticmethod(fake_get)  # pytest から呼ばれても偽の DB を使う(本番に繋がない)
+    K.TR = ['園田', '大井', '高知']
+    try:
+        _jra_late(tmp_path)
+    finally:
+        if old[0] is None:
+            del K.sb.get
+        else:
+            K.sb.get = old[0]
+        K.TR = old[1]
+
+
+def _jra_late(tmp):
     since = (TODAY - dt.timedelta(days=K.DIFF_DAYS)).replace(day=1).isoformat()
     now = TODAY.isoformat() + 'T01:00:00'
     base = _jra_db()
@@ -171,7 +185,7 @@ def main():
         # sel が変わったら丸ごと+dirty
         run(c, sel='track,race_date,race_no,umaban')
         assert (Path(c) / K.DIRTY).exists(), 'sel 変更で dirty.flag が無い'
-        test_jra_late(tmp)
+        _jra_late(tmp)
         print('ok', len(base), len(new), 'jra_late ok')
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
