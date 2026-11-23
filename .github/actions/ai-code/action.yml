@@ -1,0 +1,41 @@
+name: ai-code
+description: pipeline/ai を ops/ai_ref.txt の番号で置く
+inputs:
+  key:
+    required: true
+  mode:
+    default: strict   # 移行中だけ fallback
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      env:
+        AI_KEY: ${{ inputs.key }}
+        MODE: ${{ inputs.mode }}
+      run: |
+        set -euo pipefail
+        SHA=$(tr -d ' \r\n' < ops/ai_ref.txt)
+        echo "$SHA" | grep -Eq '^[0-9a-f]{40}$' || { echo "::error::ops/ai_ref.txt が 40 桁でない"; exit 1; }
+        K="$RUNNER_TEMP/ai_key"; H="$RUNNER_TEMP/ai_hosts"; E="$RUNNER_TEMP/ai_err"
+        ( umask 077; printf '%s\n' "$AI_KEY" | tr -d '\r' > "$K" )
+        echo 'github.com ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl' > "$H"
+        export GIT_SSH_COMMAND="ssh -i $K -o IdentitiesOnly=yes -o UserKnownHostsFile=$H -o StrictHostKeyChecking=yes"
+        rm -rf _ai; git init -q _ai; ok=0
+        for i in 1 2 3; do
+          if [ -s "$K" ] && git -C _ai fetch -q --depth 1 git@github.com:maguronagareboshi-arch/nj-core.git "$SHA" 2>"$E" \
+             && git -C _ai checkout -q FETCH_HEAD 2>>"$E"; then ok=1; break; fi
+          echo "ai-code: 取れない($i 回目)"; tail -n 2 "$E" || true; sleep 15
+        done
+        rm -f "$K" "$E"
+        if [ "$ok" = 1 ] && [ -f _ai/sealed.py ]; then
+          rm -rf _ai/.git
+          if [ -d pipeline/ai ]; then
+            if diff -rq pipeline/ai _ai >/dev/null; then echo "ai-code: 公開の写しと同じ"; else echo "::warning::ai-code: 公開の写しと違う"; fi
+          fi
+          rm -rf pipeline/ai; mkdir -p pipeline; mv _ai pipeline/ai
+          echo "ai-code: 非公開 ${SHA:0:7} を使った"
+        elif [ "$MODE" = fallback ] && [ -f pipeline/ai/sealed.py ]; then
+          rm -rf _ai; echo "::warning::ai-code: 非公開を取れず公開の写しで動かす"
+        else
+          rm -rf _ai; echo "::error::予想のコードを取れない(鍵・ops/ai_ref.txt を確かめる)"; exit 1
+        fi
