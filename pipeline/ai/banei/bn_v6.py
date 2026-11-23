@@ -251,11 +251,23 @@ def _zs(d, g, c):
     return (d[c] - m) / (s.fillna(0) + 1e-3)
 
 
+RU = None   # banei_v3 が公式の成績(ru)を入れる
+
+
 def race_feats(S, E, D1, day):
     """stack_pre.race_feats: 1 行 = 1 走。そのレースの中での AI の見込みと結果の 9 列。当日より前の結果だけを使う(当日の行は全部 0)。"""
     off = S['off']
     f = v5m.norm(D1[K + ['finish', 'dnf']].copy()).drop_duplicates(K)
-    kb = pd.read_parquet(f2.KB, columns=['race_date', 'race_no', 'umaban', 'time_sec', 'pass1', 'seg_obst']).rename(columns={'umaban': 'runner_number'})
+    import pyarrow.parquet as pq
+    has_t = 'time_sec' in pq.read_schema(f2.KB).names
+    kb = pd.read_parquet(f2.KB, columns=['race_date', 'race_no', 'umaban', 'pass1', 'seg_obst'] + (['time_sec'] if has_t else [])).rename(columns={'umaban': 'runner_number'})
+    if not has_t:   # 本番の競馬ブックの表には走破時計が無い → 公式の成績の走破時計(並び読みの入力と同じ元)
+        t = RU[RU.track == '帯広ば'][K + ['time_sec']].copy()
+        t['race_date'] = pd.to_datetime(t.race_date).dt.strftime('%Y-%m-%d')
+        t['runner_number'] = pd.to_numeric(t.runner_number, errors='coerce'); t = t.dropna(subset=['runner_number'])
+        kb['race_date'] = pd.to_datetime(kb.race_date).dt.strftime('%Y-%m-%d')
+        kb['runner_number'] = pd.to_numeric(kb.runner_number, errors='coerce'); kb = kb.dropna(subset=['runner_number'])
+        kb = v5m.norm(kb).merge(v5m.norm(t).drop_duplicates(K), on=K, how='left')
     kb['race_date'] = pd.to_datetime(kb.race_date).dt.strftime('%Y-%m-%d')
     kb['runner_number'] = pd.to_numeric(kb.runner_number, errors='coerce'); kb = kb.dropna(subset=['runner_number'])
     kb = v5m.norm(kb)

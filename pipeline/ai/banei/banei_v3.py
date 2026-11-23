@@ -309,6 +309,7 @@ def score_v5(D1, D2, ru, day, nxt, mdir, o, v2):
 
 # ---------------------------------------------------------------- 第 6 版(ばんえい 決め 13・bn_v6.py)
 def fit_v6(D1, D2, ru, day, o, mdir):
+    v6m.RU = ru
     """種 1・2 の木・CatBoost・レース全体を読む NN 0〜2・上の段(並び読み X 6 種 → 足し段 A 6 種・学び直した並び読み 6 種)。1 頭ずつの NN は学ばない。"""
     C = v6m.consts()
     for s in v5m.SEEDS_T:
@@ -323,6 +324,7 @@ def fit_v6(D1, D2, ru, day, o, mdir):
 
 
 def score_v6(D1, D2, ru, day, nxt, mdir, o, v2):
+    v6m.RU = ru
     """当日の行の 上の段(足し段 A と学び直した並び読みの平均 × w_top)と T(木の混ぜのロジット)。列の名前は第 5 版と同じ(T5・rx)。"""
     C = v6m.consts()
     hist, S30, E = x_inputs(D1, ru, day, o, mdir, extra=v2.assign(off=lg(v2.p_v2.to_numpy(float))))
