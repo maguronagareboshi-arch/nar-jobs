@@ -160,7 +160,7 @@ jobs:
           mkdir -p models
           GOT=
           if [ "$MODE" != "fit" ]; then
-            for L in $(gh run list -R "$GITHUB_REPOSITORY" -w banei-v3.yml -s success -L 10 --json databaseId --jq '.[].databaseId'); do
+            for L in 45033131565; do  # 11/23 試し: 第 5 版の模型(11/22 23:30 の便)を名指し
               if gh run download "$L" -R "$GITHUB_REPOSITORY" -n "banei-v3-models-$DAY" -D modeldl 2>/dev/null; then
                 bash ops/artifact_seal.sh unseal modeldl && cp -r modeldl/. models/ && GOT=$L && break
               fi
