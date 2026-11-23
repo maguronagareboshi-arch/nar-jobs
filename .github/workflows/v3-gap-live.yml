@@ -30,7 +30,7 @@ on:
 
 concurrency:
   # 2026-10-30 回し直し(guard=yes)は別の列 = 動いている便の後ろに並ばず、入口(job guard)で同じ便が動いていないかを見る
-  group: v3-gap-live-${{ github.event.inputs.part }}${{ github.event.inputs.guard == 'yes' && '-guard' || '' }}
+  group: v3-gap-live-${{ github.event.inputs.part }}${{ github.ref_name != 'master' && format('-{0}', github.ref_name) || '' }}${{ github.event.inputs.guard == 'yes' && '-guard' || '' }}
   cancel-in-progress: false
 
 permissions:
