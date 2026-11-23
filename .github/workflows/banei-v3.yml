@@ -241,6 +241,8 @@ jobs:
             for k in 1 2 3 4 5; do
               python -X utf8 -W ignore pipeline/ai/banei/banei_win2.py tick "$DAY" $W || echo "買い目 失敗(周は続ける)"
               sleep 120
+              # 2026-11-23: 体重がそろった未書きのレースがあれば周を早める(直前版を発走 30 分前より前に)
+              if python -X utf8 -W ignore pipeline/ai/banei/banei_v3.py ready "$DAY" models; then echo "体重がそろった → 周を早める"; break; fi
             done
           done
           echo "周 $n 回・失敗 $nf 回"

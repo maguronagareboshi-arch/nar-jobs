@@ -164,6 +164,41 @@ def zip_step(root, day):
         _apply(root, day, c)
 
 
+def ready(root, day, done, lo=15, hi=50):
+    """周の合間(2 分ごと)の軽い見張り: 発走まで lo〜hi 分で体重の空いたレースがある時だけ ZIP を取って置き場に溜め、
+    取消でない馬の体重がそろったのに前の周で書いていないレース(done に無い)を返す(2026-11-23 直前版を 30 分前に)。
+    1R の水分だけ空の時は取らない(周の本体が取る)= 公式への負荷は体重の出る窓の間だけ。"""
+    import json
+    o = Path(root) / 'official'
+    f = o / f'zip_{day}.json'
+    c = json.loads(f.read_text(encoding='utf-8')) if f.exists() else {'bw': {}, 'go': {}}
+    ru = pd.read_parquet(o / 'runs.parquet')
+    ru = ru[ru.race_date.astype(str) == day].copy()
+    if ru.empty:
+        return []
+    for k, v in c['bw'].items():
+        r, u = (int(x) for x in k.split('_'))
+        ru.loc[(ru.race_no == r) & (ru.runner_number == u), 'body_weight'] = v
+    live = ru.finish_note.fillna('').str.strip().eq('')
+    miss = set(ru[ru.body_weight.isna() & live].race_no.astype(int))
+    now = dt.datetime.now(dt.timezone(dt.timedelta(hours=9)))
+    want = False
+    for r, (pt, _g) in post_times(day).items():
+        m = re.fullmatch(r'(\d{1,2}):?(\d{2})', str(pt or '').strip())
+        if r in miss and m:
+            at = dt.datetime.combine(dt.date.fromisoformat(day), dt.time(int(m.group(1)), int(m.group(2))), now.tzinfo)
+            want = want or lo <= (at - now).total_seconds() / 60 <= hi
+    if want:
+        bw, go, _ = today(day)
+        if bw:
+            c['bw'].update({f'{r}_{u}': v[0] for (r, u), v in bw.items()}); c['go'].update({str(r): g for r, g in go.items()})
+            f.write_text(json.dumps(c, ensure_ascii=False), encoding='utf-8')
+            for (r, u), v in bw.items():
+                ru.loc[(ru.race_no == r) & (ru.runner_number == u), 'body_weight'] = v[0]
+    full = ru[live].groupby('race_no').body_weight.apply(lambda s: bool(s.notna().all() and (s > 0).all()))
+    return sorted(int(r) for r, ok in full.items() if ok and int(r) not in done)
+
+
 def _apply(root, day, c):
     bw = {(int(k.split('_')[0]), int(k.split('_')[1])): (v, None) for k, v in c['bw'].items()}
     go = {int(k): v for k, v in c['go'].items()}

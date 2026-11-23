@@ -607,6 +607,20 @@ if __name__ == '__main__':
     elif a[0] == 'predict':
         dr = int(a[a.index('--drop-race') + 1]) if '--drop-race' in a else None
         sys.exit(predict(a[1], a[2], '--write' in a, dr, '--no-going' in a))
+    elif a[0] == 'ready':
+        # 周の合間の見張り: 体重がそろって未だ書いていないレースがあれば 0(= 周を早める)・無ければ 1
+        import bn_dl
+        try:
+            last = json.loads(Path(a[2], f'banei3_{a[1]}.json').read_text(encoding='utf-8'))
+            done = {int(r['race_no']) for r in last}
+        except Exception:  # noqa: BLE001
+            done = set()
+        try:
+            new = bn_dl.ready(f1.V3, a[1], done)
+        except Exception as e:  # noqa: BLE001
+            log('見張り 失敗', type(e).__name__, str(e)[:120]); new = []
+        log('見張り: 体重のそろった未書きのレース', new or 'なし')
+        sys.exit(0 if new else 1)
     elif a[0] == 'morning':
         sys.exit(morning(a[1], a[2], '--write' in a))
     elif a[0] == 'selftest':
