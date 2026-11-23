@@ -1,0 +1,88 @@
+# レース画面の置きファイル(2026-11-24 ログ削減 A・nar-site/worktree-audit/wiring-plan-20261123.md §2-4)。
+# 画面 nar-viewer の data.js を Node で動かし、今日・明日の各レースの「朝に固まる読み」7 表(血統番号・父母と馬主・賞金の台帳・
+# 人の名簿・騎手の服・走りごとの服・馬主の服)を録って、R2 の yukochi-live/live/v1/<日>/r-<場>-<R>.json に置く
+# (台本 nar-viewer tools/race_bundle.mjs・画面はレース画面にいる間だけ先にここを見る・無い/古い/鍵が違う → 今まで通り DB)。
+# ⛔DB は合鍵(anon・data.js の中の鍵)で読むだけ。DB に書くのは heartbeat(race_bundle)だけ。期限は 1 本ごとに作成 + 16 時間。
+# 起動= 本番 DB の pg_cron(ops/race_bundle_dispatch.sql)だけ: 前の晩 18:00 JST(which=tomorrow)・朝 7:40 と昼 12:10 JST(which=today)。
+#   GitHub の schedule は数時間遅れるので使わない(leading-race と同じ)。
+# 必要な Secrets: VIEWER_READ_TOKEN(nar-viewer を読むだけの鍵)・R2_LIVE_ACCESS_KEY_ID / R2_LIVE_SECRET_ACCESS_KEY / R2_LIVE_ENDPOINT・
+#   NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY(heartbeat だけ)・任意 NAR_ADMIN_MARK(窓口の回数制限を外す印= day-live Worker と同じ)
+name: race-bundle
+on:
+  workflow_dispatch:
+    inputs:
+      which:
+        description: 'today / tomorrow / both'
+        required: false
+        default: today
+        type: choice
+        options:
+          - today
+          - tomorrow
+          - both
+      dry_run:
+        description: 'dry run (no upload)'
+        required: false
+        default: false
+        type: boolean
+permissions:
+  contents: read
+concurrency:
+  group: race-bundle
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v7
+      - name: checkout viewer
+        uses: actions/checkout@v7
+        with:
+          repository: ${{ github.repository_owner }}/nar-viewer
+          ref: master
+          path: viewer
+          token: ${{ secrets.VIEWER_READ_TOKEN }}
+          sparse-checkout: |
+            js
+            workers/day-live/src
+            tools/race_bundle.mjs
+          sparse-checkout-cone-mode: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: record races
+        env:
+          WHICH: ${{ github.event.inputs.which || 'today' }}
+          NAR_ADMIN_MARK: ${{ secrets.NAR_ADMIN_MARK }}
+        run: |
+          mkdir -p "$RUNNER_TEMP/rb"
+          node viewer/tools/race_bundle.mjs --out "$RUNNER_TEMP/rb" --which "$WHICH" | tee "$RUNNER_TEMP/rb-sum.json"
+          echo "files=$(find "$RUNNER_TEMP/rb" -name '*.json' | wc -l)"
+      - name: upload to R2
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          AWS_ACCESS_KEY_ID: ${{ secrets.R2_LIVE_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.R2_LIVE_SECRET_ACCESS_KEY }}
+          AWS_DEFAULT_REGION: auto
+          R2_ENDPOINT: ${{ secrets.R2_LIVE_ENDPOINT }}
+        run: |
+          if [ -d "$RUNNER_TEMP/rb/live" ]; then
+            aws s3 cp "$RUNNER_TEMP/rb/live" s3://yukochi-live/live --recursive --endpoint-url "$R2_ENDPOINT" \
+              --content-type "application/json; charset=utf-8" --cache-control "public, max-age=300" --only-show-errors
+          else
+            echo "置くレースが無い(開催なし)"
+          fi
+      # 最終成功時刻(表 nar_job_heartbeat)。⛔表が無くても落ちない
+      - name: heartbeat ok
+        if: ${{ github.event.inputs.dry_run != 'true' }}
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py race_bundle ok "$(head -c 300 "$RUNNER_TEMP/rb-sum.json")"
+      - name: heartbeat fail
+        if: failure()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: python3 cloud/beat.py race_bundle fail 失敗

@@ -516,6 +516,11 @@ jobs:
                   t = last_ok(job)
                   if t is None or t.date() != today:
                       bad.append(f"{job} が今日まだ成功していない(最終 {t})")
+          if hm >= 1000:
+              # race_bundle= レースの置きファイル(朝 7:40・昼 12:10・前の晩 18:00 翌日分・2026-11-24 ログ削減 A)。止まっても画面は DB に戻るだけ(=使用量が元に戻る)
+              t = last_ok('race_bundle')
+              if t is None or t.date() != today:
+                  bad.append(f"race_bundle が今日まだ成功していない(最終 {t})")
           if hm >= 1200:
               t = last_ok('k43_daily')
               if t is None or t.date() != today:
