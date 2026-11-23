@@ -5,7 +5,7 @@
 # ⛔DB は合鍵(anon・data.js の中の鍵)で読むだけ。DB に書くのは heartbeat(race_bundle)だけ。期限は 1 本ごとに作成 + 16 時間。
 # 起動= 本番 DB の pg_cron(ops/race_bundle_dispatch.sql)だけ: 前の晩 18:00 JST(which=tomorrow)・朝 7:40 と昼 12:10 JST(which=today)。
 #   GitHub の schedule は数時間遅れるので使わない(leading-race と同じ)。
-# 必要な Secrets: VIEWER_READ_TOKEN(nar-viewer を読むだけの鍵)・R2_LIVE_ACCESS_KEY_ID / R2_LIVE_SECRET_ACCESS_KEY / R2_LIVE_ENDPOINT・
+# 必要な Secrets: VIEWER_DEPLOY_KEY(nar-viewer を読むだけの合鍵= deploy key の秘密側)・R2_LIVE_ACCESS_KEY_ID / R2_LIVE_SECRET_ACCESS_KEY / R2_LIVE_ENDPOINT・
 #   NAR_SUPABASE_URL / NAR_SUPABASE_SERVICE_KEY(heartbeat だけ)・任意 NAR_ADMIN_MARK(窓口の回数制限を外す印= day-live Worker と同じ)
 name: race-bundle
 on:
@@ -42,7 +42,7 @@ jobs:
           repository: ${{ github.repository_owner }}/nar-viewer
           ref: master
           path: viewer
-          token: ${{ secrets.VIEWER_READ_TOKEN }}
+          ssh-key: ${{ secrets.VIEWER_DEPLOY_KEY }}
           sparse-checkout: |
             js
             workers/day-live/src
