@@ -344,7 +344,7 @@ def day_marks(Bk, odds, w, going, dm, day):
         ver = '南関 第23版'
     ot72m = None
     if ver == '南関 第23版' and OT72 is not None:
-        try:  # 一本の木を 5 割混ぜる(決め 72・研究 nankan-ai-v3 onetree72_judge.py・判定 2026-11-06 合格): 第23版の全部の段(勝つ率の守り)の後。
+        try:  # 一本の木を混ぜる(決め 72・研究 nankan-ai-v3 onetree72_judge.py・判定 2026-11-06 合格): 第23版の全部の段(勝つ率の守り)の後。
             #   定数の ON の日の前・一本の木の側の枠の窓の埋まりが足りない場は混ぜずに meta.ot72.p0(一本の木の側の枠の直しの前の p3 = 次の日からの窓の元)だけ残す
             import onetree72_live
             r_ = onetree72_live.apply_day(OT72, OT72G, AW, b, Bk.track.iloc[0], int(Bk.race_no.iloc[0]), u, np.asarray(p1, float), np.asarray(p3p, float), day)
@@ -353,8 +353,8 @@ def day_marks(Bk, odds, w, going, dm, day):
                 if r_['on']:  # 3 着内率と勝つ率は必ず一緒に替える(片方だけ替えない)
                     p1, p3, p3p = r_['p1'], r_['p3raw'], r_['p3']
                     used.append('ot72')
-                    ver = '南関 第26版'  # 第26版 = 第23版 + 一本の木 5 割(3 着内率・決め 72)+ 勝つ率は付いていく(決め 73)
-                    stamp += ' + 一本の木 5 割(勝つ率は付いていく)'
+                    ver = '南関 第26版'  # 第26版 = 第23版 + 一本の木(3 着内率・決め 72)+ 勝つ率は付いていく(決め 73)
+                    stamp += ' + 一本の木(勝つ率は付いていく)'
                 elif ot72m.get('err'):
                     log('一本の木の混ぜ 失敗(第23版のまま)', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), ot72m['err'])
         except Exception as e:  # noqa: BLE001  一本の木が落ちても第23版の印は出す

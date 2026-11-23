@@ -67,7 +67,7 @@ def test_once_uploads_only_changed_models():
         r.calls.clear()
         r.vers = [ver]
         mb.once(r, [D], None, seen)
-        assert [c[1] for c in r.calls if c[0] == "get"][0].startswith("nar_ai_marks?model=eq.v3-9&")
+        assert [c[1] for c in r.calls if c[0] == "get"][0].startswith("nar_ai_marks_pub?model=eq.v3-9&")
         assert len([c for c in r.calls if c[0] == "get"]) == 1
     v39 = sorted(k for k in r.files if "/v3-9/" in k)
     assert len(v39) == mb.KEEP and ("marks/v1/%s/v3-9/%s" % (D, mb.name_of(ver["v3-9"]))) in v39

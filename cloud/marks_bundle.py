@@ -66,7 +66,7 @@ def age_of(name):
 
 def build(rest, d, model, v):
     """版 v の束。読んだ後に版が変わっていれば None(次の回に任せる)"""
-    rows = rest.get("nar_ai_marks?model=eq.%s&race_date=eq.%s&select=%s&limit=2000" % (model, d, MODELS[model]))
+    rows = rest.get("nar_ai_marks_pub?model=eq.%s&race_date=eq.%s&select=%s&limit=2000" % (model, d, MODELS[model]))
     rows.sort(key=lambda r: (str(r.get("track")), int(r.get("race_no") or 0), str(r.get("timing"))))
     now = marks_ver(rest, d) or {}
     if now.get(model) != v or len(rows) != v[1]:

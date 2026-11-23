@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """南関 前日版の作り直し(決め 74・研究 nankan-ai-v3 src/f5_scripts/preday74_judge.py・preday74_prod.py・判定 2026-11-06 合格・
-out/preday74_judge.md)= 南関 第27版 前日版 = 第25版 + 前日の一本の木 5 割 + 前日の F3 2 割。
+out/preday74_judge.md)= 南関 第27版 前日版 = 第25版 + 前日の一本の木 + 前日の F3。
 
 前日の便(v3_daily)の最後の段(勝つ率の守り p1cap の後 = 第25版の最後の率)に 1 段:
   1. 前日の一本の木: 452 列(決め 72 の 460 列から当日の 8 列を外した物)= 土台の 'OT:'(段 1 の 182 列・onetree72_live.run_pre が書く)と

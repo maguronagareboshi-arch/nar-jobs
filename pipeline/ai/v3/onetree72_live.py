@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""南関 直前版に「一本の木」を 5 割混ぜる(決め 72・研究 nankan-ai-v3 src/f5_scripts/onetree72_judge.py・onetree72_prod.py・
+"""南関 直前版に「一本の木」を混ぜる(決め 72・研究 nankan-ai-v3 src/f5_scripts/onetree72_judge.py・onetree72_prod.py・
 判定 2026-11-06 合格・out/onetree72_judge.md)。
 
 一本の木 = 1 頭 1 行・460 列の LightGBM(3 着内 2400 本・勝ち 800 本・2018-06〜2026-08 で学んだ・種 1)。

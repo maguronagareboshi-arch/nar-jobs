@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 """ばんえい(帯広)第 3 版の便(2026-10-28・v3 の src/banei/prod/banei_v3.py を便の形に・ばんえい 決め 6 の形)。
 
-z = 0.8 × logit(第 2 版の木 355 列) + 0.2 × 平らな模型 + 並び読みの外した分 → 3 着内率 = 合計 3 に割り直すだけ(案 1・ユーザー 10/28)
+z = 第 2 版の木 355 列と平らな模型をロジットで混ぜた値 + 並び読みの外した分 → 3 着内率 = 合計 3 に割り直すだけ(案 1・ユーザー 10/28)
 → 勝つ率 = exp(b1 × z) をレースの中で合計 1 に(イ・2026-10-30 から。前は 3 着内率の割合 = ア)。級は class_fix.parse_class_fixed で読む。オッズ・人気は使わない。
 
   python -X utf8 pipeline/ai/banei/banei_v3.py fit DAY <模型の置き場>                    # 朝: 前の日までで学ぶ(木・並び読み 3 種・平ら)
@@ -47,8 +47,8 @@ OUTD = V + 'prod/'
 K = ['race_date', 'race_no', 'runner_number']
 MODEL_ID = 'banei-3'
 MARKS = ['◎', '○', '▲', '△', '△']
-FORM = 'banei-4: v2tree355 0.8 + flat 0.2 + seq res + b*noken(debut) / clsfix / p3 sum3 / p1 = exp(b1*z) share'
-FORM5 = 'banei-5: (0.6 tree s0-2 + 0.2 cb + 0.2 nn0-2) 0.8 + flat 0.2 + seqX30 res + b*noken(debut) / clsfix / p3 sum3 / p1 = exp(b1*z) share'
+FORM = 'banei-4: v2tree355 + flat + seq res + b*noken(debut) / clsfix / p3 sum3 / p1 = exp(b1*z) share'
+FORM5 = 'banei-5: (tree s0-2 + cb + nn0-2) + flat + seqX30 res + b*noken(debut) / clsfix / p3 sum3 / p1 = exp(b1*z) share'
 FORM6 = 'banei-6: tree s0-2 + cb + raceNN0-2 / flat / stackA + seqXC s801-806 / b*noken(debut) / clsfix / p3 sum3 / p1 = exp(b1*z) share'
 GAP_FROM = '2026-09-01'   # 固めた表の前の版(〜2026-08)より後 = 月ごとの埋めの対象
 LOCAL = os.environ.get('BANEI_LOCAL') == '1'

@@ -7,7 +7,7 @@
   NN 種 0〜2         = src/banei/mix_nn_pre.make(表の材料の全結合・学びの回数は固定 = 定数の nn_epochs)
   並び読み X          = src/banei/seqb5_pre.setup30 + inputs('X') + seq_month(過去 30 走 + 過去走の AI の見込みと外れ + 馬主の替わり
                        + 確定単勝の率を学びだけの補助の答えに・種 801〜803)
-  z = 0.8 × T + 0.2 × 平ら + X + b × 能検、T = 0.6 × (種 0・1・2 のロジットの平均) + 0.2 × CatBoost + 0.2 × (NN 0〜2 のロジットの平均)
+  z = T と平らな模型の混ぜ + X + b × 能検、T = 種 0・1・2 の木・CatBoost・NN 0〜2 のロジットの混ぜ(割合は固めた表)
 
 毎朝の読み手(便の中で作る):
   過去 30 走     = seq_banei.build を H = 30 で(banei_v3.seq_arrays(h=30))。10 走の表(平らな模型)とは別に作る。
