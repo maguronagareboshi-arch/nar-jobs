@@ -133,6 +133,22 @@ jobs:
           rm -f in/banei_win2.json.enc
           python -X utf8 -c "import json; c=json.load(open('work/banei_kb/banei_win2.json',encoding='utf-8')); print('買い目の数 読めた', sorted(c))"
 
+      # ⓪'' ばんえいのワイドの形(ばんえい 買い方 決め 4・2026-11-23)。⛔取れなくても予想と単勝は続ける(ワイドを出さないだけ)
+      - name: download banei wide4 consts (banei-wide4-20261123)
+        if: steps.d.outputs.races != '0'
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          mkdir -p in work/banei_kb
+          gh release download banei-wide4-20261123 -p 'banei_wide4.json.enc' -D in --clobber || { echo "::warning::ワイドの形(banei-wide4-20261123)が取れない = 今日はワイドを出さない"; exit 0; }
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/banei_wide4.json.enc -out work/banei_kb/banei_wide4.json
+          rm -f in/banei_wide4.json.enc
+          python -X utf8 -c "import json; c=json.load(open('work/banei_kb/banei_wide4.json',encoding='utf-8')); print('ワイドの形 読めた', sorted(c))"
+
       # ① 前の開催日の競馬ブック(DB に無い日だけ)。⛔取れない日は書かない = ② が「前の開催日の競馬ブックが無い」で止まる
       - name: keibabook banei results
         if: steps.d.outputs.races != '0'

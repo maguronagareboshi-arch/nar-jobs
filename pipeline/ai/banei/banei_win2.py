@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 """ばんえい(帯広)の単勝の買い目 = ばんえい 買い方 決め 2(2026-11-15 合格・nankan-ai-v3 の out/banei_buy2_judge.md)。
 予想の印は変えない。買い目だけ。
+2026-11-23 ばんえい 買い方 決め 4(ワイド・nankan-ai-v3 の out/banei_buy4_prereg.md)を同じ周で足した:
+  直前の印の上位の馬の中で、決めた形の組のワイドを 1 点ずつ(オッズでは選ばない)。value.wide に書く。
+  形の数は暗号化リリースの banei_wide4.json(環境変数 BANEI_WIDE4 の場所)。読めない日はワイドを出さない(単勝はそのまま)。
 
   勝つ率 q = レースの中の割合 exp(a × logit(p) + b × log m)
      p = 本番の行(nar_ai_marks・model banei-3・timing last)の meta.p(第 4 版の 3 着内率・割り直す前)
@@ -47,6 +50,32 @@ def consts():
     return C
 
 
+def consts_wide():
+    p = os.environ.get('BANEI_WIDE4') or str(Path(os.environ.get('BANEI_V3', 'work')) / 'banei_kb' / 'banei_wide4.json')
+    W = json.load(open(p, encoding='utf-8'))
+    for k in ('top', 'gap'):
+        int(W[k])
+    return W
+
+
+def decide_wide(top, odds, W):
+    """top = 直前の印の馬番(◎○▲△△ の順)・odds = 締め切り前の単勝(その場で取り消した馬はオッズが無い)。
+    上位 W['top'] 頭の中で馬番の差が W['gap'] の組 → [{'c': 'a-b'}]。取り消しの馬を含む組は飛ばす(埋めない・決め書 §1)。"""
+    t = [int(n) for n in top[:int(W['top'])]]
+    if len(t) < int(W['top']):
+        return []
+    out = []
+    for i in range(len(t)):
+        for j in range(i + 1, len(t)):
+            a, b = sorted((t[i], t[j]))
+            if b - a != int(W['gap']):
+                continue
+            if odds and (a not in odds or b not in odds):
+                continue
+            out.append({'c': f'{a}-{b}'})
+    return sorted(out, key=lambda x: [int(v) for v in x['c'].split('-')])
+
+
 def decide(p, odds, C):
     """p = {馬番: 3 着内率}・odds = {馬番: 単勝オッズ}。両方ある馬だけで決める。→ (runners, buy)"""
     nums = sorted(n for n in p if n in odds and odds[n] and odds[n] > 0 and p[n] is not None)
@@ -91,12 +120,13 @@ def post_at(day, pt):
 
 def marks_p(day):
     r = _rest(f'/rest/v1/nar_ai_marks?track=eq.{urllib.parse.quote(TRACK)}&race_date=eq.{day}&model=eq.{MODEL_ID}&timing=eq.last'
-              '&select=race_no,meta')
-    out = {}
+              '&select=race_no,meta,marks')
+    out, top = {}, {}
     for x in r or []:
         p = (x.get('meta') or {}).get('p') or {}
         out[int(x['race_no'])] = {int(k): float(v) for k, v in p.items() if v is not None}
-    return out
+        top[int(x['race_no'])] = [int(m['num']) for m in (x.get('marks') or [])]
+    return out, top
 
 
 def odds_at(day, rno, hhmm=None):
@@ -128,12 +158,17 @@ def tick(day, write=False, at=None):
     except Exception as e:  # noqa: BLE001  数が読めない日は買い目を出さない(予想の便は止めない)
         log('数が読めない = 買い目を出さない', type(e).__name__)
         return 0
+    try:
+        W = consts_wide()
+    except Exception as e:  # noqa: BLE001  ワイドの形が読めない日はワイドだけ出さない
+        log('ワイドの形が読めない = ワイドを出さない', type(e).__name__)
+        W = None
     each = at == 'each'   # 試し: レースごとに「その発走の 10 分前」で決める
     now = post_at(day, at) if (at and not each) else dt.datetime.now(JST)
     mins = int(C['minutes'])
     have = {} if at else stored(day)
-    P = None
-    n_w = n_buy = 0
+    P = TOP = None
+    n_w = n_buy = n_wide = 0
     for r in races(day) or []:
         rno = int(r['race_no'])
         if r.get('cancelled'):
@@ -148,7 +183,7 @@ def tick(day, write=False, at=None):
         if prev == pt.strftime('%H:%M'):
             continue
         if P is None:
-            P = marks_p(day)
+            P, TOP = marks_p(day)
         p = P.get(rno)
         odds, asof = odds_at(day, rno, now.strftime('%H:%M') if at else None)
         if not odds:
@@ -161,6 +196,10 @@ def tick(day, write=False, at=None):
         else:
             runners, buy = decide(p, odds, C)
             val.update(n=len(runners), runners=runners, buy=[{k: x[k] for k in ('num', 'odds', 'q', 'ev', 'p')} for x in buy])
+        if W is not None:   # ばんえい 買い方 決め 4(直前の印が無いレースは買わない)
+            val['wide_rule'] = W.get('rule')
+            val['wide'] = decide_wide(TOP.get(rno) or [], odds, W) if p else []
+            n_wide += len(val['wide'])
         if prev:
             val['redecided_from'] = prev
         if write:
@@ -172,8 +211,9 @@ def tick(day, write=False, at=None):
         n_w += 1
         n_buy += len(val['buy'])
         log(f'{rno}R: 発走 {pt:%H:%M}・{now:%H:%M} に決めた・{val["n"]} 頭・候補 {len(val["buy"])} 頭'
+            f'{"・ワイド " + str(len(val["wide"])) + " 点" if "wide" in val else ""}'
             f'{"・" + val["why"] if val.get("why") else ""}{"・決め直し" if prev else ""}・{"書いた" if write else "書かない(試し)"}')
-    log('この回', n_w, 'R・候補', n_buy, '頭')
+    log('この回', n_w, 'R・候補', n_buy, '頭・ワイド', n_wide, '点')
     return n_w
 
 
@@ -193,6 +233,13 @@ def selftest():
         assert r['buy'] == (r['ev'] >= 1.2 and r['odds'] <= 100)
     assert all(r['num'] != 4 for r in buy)  # 上限 100 倍を超える馬は買わない
     log('selftest ok', [(r['num'], r['q'], r['ev'], r['buy']) for r in runners])
+    # ワイドの形(手で作った印・形の数は試しの値)
+    Wt = {'top': 4, 'gap': 2}
+    top = [5, 3, 9, 1, 7, 8]
+    assert decide_wide(top, {}, Wt) == [{'c': '1-3'}, {'c': '3-5'}]          # 7 は 5 位なので 5-7・7-9 は入らない
+    assert decide_wide(top, {5: 3.0, 3: 5.0, 9: 9.0, 7: 20.0}, Wt) == [{'c': '3-5'}]   # 1 は取り消し = 1-3 を飛ばし埋めない
+    assert decide_wide([1, 2, 3], {}, Wt) == []                              # 印がそろわない
+    log('selftest wide ok')
 
 
 def main():
