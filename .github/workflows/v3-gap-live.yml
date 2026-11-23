@@ -92,6 +92,7 @@ jobs:
         id: b
         env:
           V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}   # 11/24 v3_precheck --count が元の印の表を読む(公開の鍵では読めなくなる)
           V3_GAP_KEY: ${{ secrets.V3_GAP_KEY }}
           V3_TRI_KEY: ${{ secrets.V3_TRI_KEY }}
           DAY: ${{ steps.d.outputs.day }}

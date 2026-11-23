@@ -34,7 +34,7 @@ PAST_MIN = 5   # 発走をこの分だけ過ぎたレースを見る(直前版�
 JST = dt.timezone(dt.timedelta(hours=9))
 SRC = (HERE / "day2_db_copy.py").read_text(encoding="utf-8")      # 公開の読み鍵(前向きの写しと同じ)を pandas なしで読む
 B = re.search(r"^B = '([^']+)'", SRC, re.M).group(1)
-KEY = re.search(r"^KEY = .*'(sb_publishable_[^']+)'", SRC, re.M).group(1)   # 10/20 鍵の行が環境変数優先になった= 公開の読み鍵だけ拾う
+KEY = os.environ.get("SUPABASE_SERVICE_KEY", "") or re.search(r"^KEY = .*'(sb_publishable_[^']+)'", SRC, re.M).group(1)   # 10/20 鍵の行が環境変数優先になった= 公開の読み鍵だけ拾う
 
 
 def rest(path):

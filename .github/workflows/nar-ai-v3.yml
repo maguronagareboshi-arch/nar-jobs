@@ -90,6 +90,7 @@ jobs:
       - name: precheck (racing day / already done / race card in DB)
         id: pc
         env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}   # 11/24 元の印の表は公開の鍵で読めなくなる
           AUTO: ${{ (github.event_name == 'schedule' || github.event.inputs.auto == 'yes') && 'yes' || 'no' }}
         run: |
           if [ "$AUTO" = "yes" ]; then A=--auto; else A=; fi
