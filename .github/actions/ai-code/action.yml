@@ -30,7 +30,9 @@ runs:
         if [ "$ok" = 1 ] && [ -f _ai/sealed.py ]; then
           rm -rf _ai/.git
           if [ -d pipeline/ai ]; then
-            if diff -rq pipeline/ai _ai >/dev/null; then echo "ai-code: 公開の写しと同じ"; else echo "::warning::ai-code: 公開の写しと違う"; fi
+            if diff -rq pipeline/ai _ai >/dev/null; then echo "ai-code: 公開の写しと同じ"
+            elif [ "$MODE" = fallback ]; then rm -rf _ai; echo "::warning::ai-code: 公開の写しと違う = 公開の写しで動かす(移行中)"; exit 0
+            else echo "::warning::ai-code: 公開の写しと違う"; fi
           fi
           rm -rf pipeline/ai; mkdir -p pipeline; mv _ai pipeline/ai
           echo "ai-code: 非公開 ${SHA:0:7} を使った"
