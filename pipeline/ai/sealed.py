@@ -62,7 +62,7 @@ def check():
         miss = [k for k in keys if k not in get(part)]
         if miss:
             raise KeyError(f'consts.json の {part} に {miss} が無い')
-    miss = [v for v in ('mo4', 'di4', 'mo5', 'di5', 'mo6', 'di6') if v not in get('v3n_p1')['K']]   # 決め 61・決め 70・決め 83 の勝つ率の直しの k
+    miss = [v for v in ('mo4', 'di4', 'mo5', 'di5', 'mo6', 'di6', 'mo7', 'di7') if v not in get('v3n_p1')['K']]   # 決め 61・決め 70・決め 83・決め 90 の勝つ率の直しの k
     if miss:
         raise KeyError(f'consts.json の v3n_p1.K に {miss} が無い')
     for f in ('v3n_one_p5.json', 'k26_cal_table.json'):

@@ -25,9 +25,10 @@ H, MAXN = 10, 16
 LOC = ['大井', '川崎', '船橋', '浦和', '門別', '盛岡', '水沢', '金沢', '笠松', '名古屋', '園田', '姫路', '高知', '佐賀']
 
 
-def build(d, std, day, tracks, g=False):
+def build(d, std, day, tracks, g=False, hh=H):
     """研究 k29_seq.build と同じ式(時計のならしは固定の表・SI は空)。予想する行 = day の tracks の行。→ T・hist(n, 10, 48)・ctx(n, 28)
-    g = True(第 8 版の直前版だけ)= runs_all の騎手・調教師から過去走ごとに 5 列を足す(研究 k44_seq3.build と同じ式)→ hist(n, 10, 53)"""
+    g = True(第 8 版の直前版だけ)= runs_all の騎手・調教師から過去走ごとに 5 列を足す(研究 k44_seq3.build と同じ式)→ hist(n, 10, 53)
+    hh = 30(第 15 版・決め 90 の 30 走の並び読み)= 過去 30 走 → hist(n, 30, 53)。後ろの 10 走は hh = 10 と同じ値・ctx は後ろの 10 走から(研究 v3n_seqb_1123 と同じ)"""
     fin = pd.to_numeric(d.finish, errors='coerce')
     stop = fin.isna() | d.finish_note.isin(['中止', '競走中止', '落馬'])
     isj = d.jra.to_numpy() == 1
@@ -75,15 +76,15 @@ def build(d, std, day, tracks, g=False):
     hk, dn = d.hk.to_numpy(), d.dn.to_numpy()
     pos = d.groupby('hk').cumcount().to_numpy()
     dist, ven = d.distance_m.to_numpy(float), d.ven.to_numpy()
-    hist = np.zeros((len(tgt), H, FR + nn_ + 4), np.float32)
+    hist = np.zeros((len(tgt), hh, FR + nn_ + 4), np.float32)
     T_ = FR + nn_
-    for k in range(1, H + 1):
+    for k in range(1, hh + 1):
         j = tgt - k
         ok = (pos[tgt] >= k) & (j >= 0)
         jj, ii = j[ok], np.where(ok)[0]
         same = (hk[jj] == hk[tgt[ii]]) & (dn[jj] < dn[tgt[ii]])
         jj, ii = jj[same], ii[same]
-        s = H - k
+        s = hh - k
         hist[ii, s, :FR] = run[jj]
         if nn_:
             it = tgt[ii]
@@ -98,9 +99,10 @@ def build(d, std, day, tracks, g=False):
         hist[ii, s, T_ + 3] = 1.0
     hist = hist.astype(np.float16).astype(np.float32)  # 研究は float16 で持った = 同じ丸めにそろえる
     T = d.iloc[tgt].reset_index(drop=True)
-    nprev = hist[:, :, -1].sum(1)
-    gap = np.where(nprev > 0, hist[:, H - 1, T_], 0)
-    nsame = (hist[:, :, T_ + 2] * hist[:, :, T_ + 3]).sum(1)
+    h10 = hist[:, hh - H:]   # ctx は後ろの 10 走から(hh = 30 でも 10 走の版と同じ ctx)
+    nprev = h10[:, :, -1].sum(1)
+    gap = np.where(nprev > 0, h10[:, H - 1, T_], 0)
+    nsame = (h10[:, :, T_ + 2] * h10[:, :, T_ + 3]).sum(1)
     mon = pd.to_datetime(T.race_date).dt.month.to_numpy()
     lpt = np.log(T.prize1.where(T.prize1 > 0))
     ctx = np.column_stack([
@@ -161,7 +163,68 @@ def prep(off, day, tracks, log=print):
     nprev = hist[:, :, -1].sum(1)
     log('並び読み 出走', len(T), '・過去 0 走', round(float((nprev == 0).mean()), 3) if len(T) else '-',
         '・10 走そろう', round(float((nprev == H).mean()), 3) if len(T) else '-')
-    return {'W': Ws, 'ix': ix, 'hist': hist, 'ctx': ctx}
+    try:   # 第 15 版(決め 90): 30 走の並び読み。⛔作れなくても第 14 版の u のまま(S30 = None)
+        S30 = prep30(d, day, tracks, 'mo', log)
+    except Exception as e:  # noqa: BLE001
+        log('30 走の並び読み 失敗 = 第 14 版の u のまま', type(e).__name__, str(e)[:200])
+        S30 = None
+    return {'W': Ws, 'ix': ix, 'hist': hist, 'ctx': ctx, 'S30': S30}
+
+
+# ================================================================ 第 15 版(決め 90・2026-11-25・v3 の out/v3n_seqb90_judge.md)
+# 今の並び読みの u と 30 走の並び読み h30(過去 30 走・騎手/調教師 5 列・AI の見込みの列なし・種 3 本の平均)を半々で混ぜる。
+# 重み = V3N_SEQ30(暗号化リリース v3n-seqb90-20261125: v3n_seq30_mo.npz・v3n_seq30_di.npz・v3n_seq30_prod.json・v3n_seq_std.csv)。
+# 研究 v3 src/f5_scripts/v3n_seqb90_prod.py(単独 2016-01〜2026-08・仕上げ 2024-09〜2026-08)。無い・作れない日は今の u のまま = 第 14 版。
+SEQ30 = Path(os.environ.get('V3N_SEQ30', 'v3n_seq30'))
+H30 = 30
+W90 = 0.5   # 今の u と h30 の混ぜ(決め書 out/v3n_seqb90_plan.md の半々)
+FORM90 = 'v3n-15: seqb90'
+
+
+def w30(ver):
+    """→ (meta, 重み 3 本)か None(固定ファイルが無い)"""
+    need = [SEQ30 / 'v3n_seq30_prod.json', SEQ30 / f'v3n_seq30_{ver}.npz', SEQ30 / 'v3n_seq_std.csv']
+    if not all(p.exists() for p in need):
+        return None
+    meta = json.loads((SEQ30 / 'v3n_seq30_prod.json').read_text(encoding='utf-8'))
+    Z = np.load(SEQ30 / f'v3n_seq30_{ver}.npz')
+    Ws = [{k.split('/', 1)[1]: Z[k].astype(float) for k in Z.files if k.startswith(f's{s}/')} for s in meta['seeds']]
+    assert len(Ws) == 3 and all(Ws), '30 走の並び読みの重みが 3 本そろわない'
+    return meta, Ws
+
+
+def prep30(d, day, tracks, ver, log=print):
+    """runs_all の表 d から今日の出走馬の 30 走の並び → {'W', 'ix', 'hist', 'ctx'} か None"""
+    w = w30(ver)
+    if w is None:
+        log('30 走の並び読み 固定ファイルが無い = 第 14 版の u のまま', SEQ30)
+        return None
+    meta, Ws = w
+    std = pd.read_csv(SEQ30 / 'v3n_seq_std.csv', encoding='utf-8')
+    T, hist, ctx = build(d, std, day, tracks, True, H30)
+    assert hist.shape[1:] == (meta['H'], meta['fh']) and ctx.shape[1] == 28, '30 走の並びの形が模型と合わない'
+    ix = {(str(a), int(b), int(c)): i for i, (a, b, c) in enumerate(zip(T.track, T.race_no, T.umaban))}
+    nprev = hist[:, :, -1].sum(1)
+    log('30 走の並び読み 出走', len(T), '・11 走以上', round(float((nprev > H).mean()), 3) if len(T) else '-',
+        '・30 走そろう', round(float((nprev == H30).mean()), 3) if len(T) else '-')
+    return {'W': Ws, 'ix': ix, 'hist': hist, 'ctx': ctx, 'T': T}
+
+
+def h30_of(W, hist, ctx):
+    return np.mean([S2.forward(w, hist, ctx) for w in W], axis=0)
+
+
+def resid90(S, track, rno, nums, use=True):
+    """→ (u, 混ぜたか)。u = 今の u(resid)と h30 の半々・h30 が作れない(材料に無い馬・重みが無い・use=False)なら (今の u, False)"""
+    u = resid(S, track, rno, nums)
+    S30 = (S or {}).get('S30')
+    if u is None or not use or S30 is None:
+        return u, False
+    idx = [S30['ix'].get((str(track), int(rno), int(n))) for n in nums]
+    if any(i is None for i in idx):
+        return u, False
+    idx = np.asarray(idx)
+    return (1 - W90) * u + W90 * h30_of(S30['W'], S30['hist'][idx], S30['ctx'][idx]), True
 
 
 def resid(S, track, rno, nums):
@@ -193,9 +256,21 @@ def prep_day(off, day, tracks, out, log=print):
     meta = json.loads((DAY_SEQ / 'v3n_seq_prod.json').read_text(encoding='utf-8'))
     d = S2.runs_all(off)
     T, hist, ctx = build(d, std, day, tracks, int(meta.get('new', 0)) == NEW)  # 第 8 版 = 騎手・調教師 + 3 着差(runs_all に騎手・調教師の列あり)
+    ex = {}
+    try:   # 第 15 版(決め 90): 30 走の並び(直前の重みがある時だけ)。⛔作れなくても 10 走の材料は書く = 直前は第 14 版の u
+        if w30('di') is not None:
+            S30 = prep30(d, day, tracks, 'di', log)
+            k0 = list(zip(T.track, T.race_no.astype(int), T.umaban.astype(int)))
+            k1 = list(zip(S30['T'].track, S30['T'].race_no.astype(int), S30['T'].umaban.astype(int)))
+            assert k0 == k1 and np.allclose(S30['ctx'], ctx), '30 走の並びの行が 10 走の材料と合わない'
+            ex['hist30'] = S30['hist'].astype(np.float16)
+        else:
+            log('30 走の並び読み 直前の固定ファイルが無い = 第 14 版の u のまま', SEQ30)
+    except Exception as e:  # noqa: BLE001
+        log('30 走の並び読み 直前の材料 失敗 = 第 14 版の u のまま', type(e).__name__, str(e)[:200])
     np.savez_compressed(out, track=T.track.to_numpy().astype('U4'), race_no=T.race_no.to_numpy(int), umaban=T.umaban.to_numpy(int),
-                        hist=hist.astype(np.float16), ctx=ctx, bw_prev=T.bw_prev.to_numpy(float))
-    log('並び読み 直前版の材料', out, hist.shape, 'R', T[['track', 'race_no']].drop_duplicates().shape[0])
+                        hist=hist.astype(np.float16), ctx=ctx, bw_prev=T.bw_prev.to_numpy(float), **ex)
+    log('並び読み 直前版の材料', out, hist.shape, 'R', T[['track', 'race_no']].drop_duplicates().shape[0], '・30 走', ex['hist30'].shape if ex else 'なし')
     return out
 
 
@@ -210,15 +285,17 @@ def load_day(prep_npz):
     P = np.load(prep_npz)
     assert P['ctx'].shape[1] + 7 == meta['fc'] and P['hist'].shape[1:] == (meta['H'], meta['fh']), '直前版の材料の形が模型と合わない'
     ix = {(str(a), int(b), int(c)): i for i, (a, b, c) in enumerate(zip(P['track'], P['race_no'], P['umaban']))}
-    return {'W': Ws, 'ix': ix, 'hist': P['hist'].astype(np.float32), 'ctx': P['ctx'], 'bwp': P['bw_prev'],
-            'form': str(meta.get('form') or 'v3n-6: seq day')}
+    S = {'W': Ws, 'ix': ix, 'hist': P['hist'].astype(np.float32), 'ctx': P['ctx'], 'bwp': P['bw_prev'],
+         'form': str(meta.get('form') or 'v3n-6: seq day')}
+    w = w30('di') if 'hist30' in P.files else None   # 第 15 版(決め 90): 材料と重みの両方がある時だけ
+    if w is not None:
+        assert P['hist30'].shape[1:] == (w[0]['H'], w[0]['fh']) and P['ctx'].shape[1] + 7 == w[0]['fc']['di'], '30 走の材料の形が模型と合わない'
+        S['W30'], S['hist30'] = w[1], P['hist30'].astype(np.float32)
+    return S
 
 
-def resid_day(S, track, rno, nums, going, bws):
-    """nums = 取消を外した後の馬番・going = 今日のそのレースの馬場・bws = 馬番 → 今日の体重。
-    → 馬ごとの外した分(3 本の平均)か None(材料に無い馬・馬場が読めない・体重が全頭そろっていない)"""
-    if S is None:
-        return None
+def day_in(S, track, rno, nums, going, bws):
+    """→ (行の番号, 当日の 7 列を足した ctx)か None(材料に無い馬・馬場が読めない・体重が全頭そろっていない)"""
     g = GOING.get(str(going or '').strip(), -1)
     idx = [S['ix'].get((str(track), int(rno), int(u))) for u in nums]
     tb = np.array([float(bws.get(int(u)) or np.nan) for u in nums])
@@ -231,5 +308,25 @@ def resid_day(S, track, rno, nums, going, bws):
     go[:, g] = 1.0
     bwd = np.nan_to_num(np.clip(tb - S['bwp'][idx], -30, 30), nan=0.0) / 10
     cd = np.column_stack([go, (tb - 470) / 30, bwd, np.zeros(len(nums))]).astype(np.float32)
-    c = np.concatenate([c, cd], 1)
+    return idx, np.concatenate([c, cd], 1)
+
+
+def resid_day(S, track, rno, nums, going, bws):
+    """nums = 取消を外した後の馬番・going = 今日のそのレースの馬場・bws = 馬番 → 今日の体重。
+    → 馬ごとの外した分(3 本の平均)か None(材料に無い馬・馬場が読めない・体重が全頭そろっていない)"""
+    if S is None:
+        return None
+    r = day_in(S, track, rno, nums, going, bws)
+    if r is None:
+        return None
+    idx, c = r
     return np.mean([S2.forward(W, S['hist'][idx], c) for W in S['W']], axis=0)
+
+
+def resid_day90(S, track, rno, nums, going, bws, use=True):
+    """→ (u, 混ぜたか)。第 15 版: 直前の u と 30 走の直前の h30 の半々。use = 朝の行が決め 90 で混ぜた行か(朝と直前で版をそろえる)"""
+    u = resid_day(S, track, rno, nums, going, bws)
+    if u is None or not use or 'W30' not in S:
+        return u, False
+    idx, c = day_in(S, track, rno, nums, going, bws)
+    return (1 - W90) * u + W90 * h30_of(S['W30'], S['hist30'][idx], c), True

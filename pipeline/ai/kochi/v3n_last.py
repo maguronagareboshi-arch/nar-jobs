@@ -60,10 +60,11 @@ F41_TAG = '決め41 直前 29 個'  # meta.f41(本番の行で入ったかを確
 SEQ_FORM = ''  # 直前版の並び読みの版(load_day の重みの添え書き)= 行の meta.seq_day に残す(本番の行で版を確かめる)
 
 
-def relabel(meta, gone, ud=None, sf=None, rk=None):
+def relabel(meta, gone, ud=None, sf=None, rk=None, b90d=False):
     """朝の meta と外す馬番の集合 → (marks, 新しい meta)。外すと 1 頭も残らないときは None。
     ud = 直前版の並び読みの外した分(馬番 → logit・当日の馬場と体重入り)。あれば朝の u の代わりに足し meta.direct = True
-    sf = 決め 41 の材料(v3n_f41.load)・rk = (場, R)。直前版(ud あり)の第 10 版の行だけ使う"""
+    sf = 決め 41 の材料(v3n_f41.load)・rk = (場, R)。直前版(ud あり)の第 10 版の行だけ使う
+    b90d = ud が決め 90 の 30 走の並び読みと半々で混ぜた値か(第 15 版)。直前でない行は朝の meta.seqb90 に従う"""
     p = {int(k): float(v) for k, v in (meta.get('p') or {}).items()}
     keep = [n for n in sorted(p) if n not in gone]
     if not keep:
@@ -132,7 +133,8 @@ def relabel(meta, gone, ud=None, sf=None, rk=None):
     if pc and all(n in pc for n in keep):
         import v3n_p1
         xs = np.array([(u[n] if (u and all(m in u for m in keep)) else 0.0) + (v3n_e1.BETA_NOKEN * nz.get(n, 0.0) if e1on else 0.0) + (fs[n] if fs is not None else 0.0) for n in keep])
-        ver = ('di' if ud is not None else 'mo') + (('6' if (meta.get('mx70') or {}).get('set') == 'na83' else '5') if meta.get('mx70') else '4' if rb is not None else '3' if meta.get('trees54') else '2' if meta.get('one15') else '1' if one else '')  # 第 10 版(決め 32)の朝の行 = k mo2・di2・第 11 版(決め 54)= mo3・di3・第 12 版(決め 61)= mo4・di4・第 13 版(決め 70)= mo5・di5
+        b90 = b90d if ud is not None else bool(meta.get('seqb90'))   # 第 15 版(決め 90): 混ぜた u の行は k mo7・di7
+        ver = ('di' if ud is not None else 'mo') + ((('7' if b90 else '6') if (meta.get('mx70') or {}).get('set') == 'na83' else '5') if meta.get('mx70') else '4' if rb is not None else '3' if meta.get('trees54') else '2' if meta.get('one15') else '1' if one else '')  # 第 10 版(決め 32)の朝の行 = k mo2・di2・第 11 版(決め 54)= mo3・di3・第 12 版(決め 61)= mo4・di4・第 13 版(決め 70)= mo5・di5
         p1n = dict(zip(keep, v3n_p1.follow([pc[n] for n in keep], xs, ver)))
         import v3n_p1mix
         if meta.get('one15') and len(keep) >= v3n_p1mix.MIN_N:  # 決め 40: 画面の勝つ率を 3 着内率(E1・能検の後・max の前)と混ぜる。第 10 版の行だけ・印は key の順のまま
@@ -173,6 +175,7 @@ def relabel(meta, gone, ud=None, sf=None, rk=None):
         'direct': ud is not None,
         **({'u_day': {str(k): round(float(v), 4) for k, v in ud.items()}} if ud is not None else {}),
         **({'seq_day': SEQ_FORM} if ud is not None and SEQ_FORM else {}),
+        **({'seqb90_di': bool(b90d)} if ud is not None and meta.get('seqb90') else {}),
         **({'f41': F41_TAG, 'f41_s': {str(n): round(fs[n], 4) for n in keep}} if fs is not None else {}),
         **({'rb61': rb_new} if rb_new is not None else {}),
         **({'mx70': {**meta['mx70'], 'tag': v3n_mx70.TAG['di' if ud is not None else 'mo'],
@@ -280,20 +283,20 @@ def main():
         at = post_at(day, post.get(key))
         if at is not None and (at - now).total_seconds() < 15 * 60:
             continue
-        ud = None
+        ud, b90d = None, False
         if SD is not None:
             keep = [int(n) for n in (meta.get('p') or {}) if int(n) not in g]
             try:
-                r_ = SQ.resid_day(SD, key[0], key[1], sorted(keep), going.get(key), bws.get(key, {}))
+                r_, b90d = SQ.resid_day90(SD, key[0], key[1], sorted(keep), going.get(key), bws.get(key, {}), use=bool(meta.get('seqb90')))
             except Exception as e:  # noqa: BLE001
                 print('並び読み 直前版の計算に失敗', key, type(e).__name__, str(e)[:120])
-                r_ = None
+                r_, b90d = None, False
             if r_ is not None:
                 ud = dict(zip(sorted(keep), r_))
         prev = done.get(key)
         if prev is not None and prev[0] == sorted(g) and (prev[1] or ud is None):
             continue   # 外した馬が同じで、直前版を書いた後か まだ書けない = 書き直さない
-        res = relabel(meta, g, ud, SF, key)
+        res = relabel(meta, g, ud, SF, key, b90d)
         if res is None:
             show.append(f'{key[0]}{key[1]}R 全頭が外れた = 書かない')
             continue
@@ -309,6 +312,7 @@ def main():
     print('勝つ率の混ぜ(決め 40)', sum(1 for r in rows if r['meta'].get('p1mix')), '/', len(rows), 'R')
     print('決め 41 のずらし', sum(1 for r in rows if r['meta'].get('f41')), '/', len(rows), 'R')
     print('決め 61 の有利の直し', sum(1 for r in rows if (r['meta'].get('rb61') or {}).get('fin0')), '/', len(rows), 'R')
+    print('決め 90 の 30 走の混ぜ 直前', sum(1 for r in rows if r['meta'].get('seqb90_di')), '/', sum(1 for r in rows if r['meta'].get('direct')), 'R(直前版の行のうち)')
     if write and rows:
         sys.path.insert(0, os.environ.get('NAR_JOBS_AI', str(HERE.parent)))
         import ai_common
