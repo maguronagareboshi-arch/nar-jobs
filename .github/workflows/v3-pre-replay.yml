@@ -500,7 +500,7 @@ jobs:
                       return out
                   off += 1000
           m = get(f'nar_ai_marks?model=eq.v3-9&timing=eq.morning&race_date=eq.{day}&select=track,race_no,meta&order=track,race_no')
-          r = get(f'nar_runs?race_date=eq.{day}&select=track,race_no,runner_number,finish,finish_note&order=track,race_no,runner_number')
+          r = get(f'nar_runs?race_date=eq.{day}&select=track,race_no,runner_number,finish,finish_note,popularity&order=track,race_no,runner_number')
           json.dump(m, open(f'out/prod_marks_{day}.json', 'w'), ensure_ascii=False)
           json.dump(r, open(f'out/runs_{day}.json', 'w'), ensure_ascii=False)
           print('本番の行', len(m), '着順の行', len(r))
