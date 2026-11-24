@@ -101,6 +101,9 @@ def build_rows(csv_path, day, src, stamp=STAMP):
             if 'sq87' in g.columns and g.sq87.fillna(0).max() > 0:  # 決め 87: 前日の並び読みを 3 案まとめ + 調教の挟みの重みで読んだレース
                 import pre87_live
                 meta['sq87'] = pre87_live.tag()
+                if 'sq_u_old' in g.columns and g.sq_u_old.notna().any():  # 決め 67-8: u_P旧 を残したレース(前日版の率は第32版と同じ・直前版の直しの元)
+                    import c678_live
+                    meta['c678'] = c678_live.tag()
         if 'g68_a' in g.columns and g.g68_a.notna().all():  # 枠の内外の有利の直し(決め 68)を足したレース = 元の率は p3p_g0・p1_g0(次の日からの窓の元)
             import gate68_live  # 記録の字 = gate68_live.tag()(暗号化した定数)
             meta['g68'] = {'tag': gate68_live.tag(), 'lag': 1, 'a': {str(int(r.umaban)): round(float(r.g68_a), 4) for r in g.itertuples()},
@@ -370,6 +373,19 @@ def main():
                 if SQ.get('pre87') and nsq:
                     import pre87_live
                     pre87_live.mark_csv(csv_path, log=log)
+                    try:  # 決め 67-8(研究 nankan-ai-v3 correct67_8.py・判定 2026-11-25 合格・ユーザー承認 11/25): ON の日から、決め 63 の今の重みで読んだ
+                        #   u_P旧 を表の sq_u_old に残す(前日版の率には使わない・直前版の勝つ率の直しの元)。落ちたら残さない = 直前版は第32版のまま
+                        import c678_live
+                        if c678_live.is_on(day):
+                            SQo = seqpre_live.load(seq2_live.SEQ2, out / f'{day}_seq2.npz')
+                            if SQo is None:
+                                log('決め 67-8 u_P旧 の重みか材料なし(残さない = 第32版のまま)')
+                            else:
+                                c678_live.add_old(SQo, csv_path, log=log)
+                        else:
+                            log('決め 67-8 ON の前(u_P旧 は残さない)')
+                    except Exception as e:  # noqa: BLE001
+                        log('決め 67-8 u_P旧 失敗(残さない = 第32版のまま)', type(e).__name__, str(e)[:200])
         except Exception as e:  # noqa: BLE001
             log('前日版の並び読み 失敗(前の段のまま)', type(e).__name__, str(e)[:200])
     ng = 0
@@ -469,7 +485,12 @@ def main():
         sq87 = {(str(t), int(r)) for t, r, f in zip(_x87.track, _x87.race_no, _x87.sq87) if f == 1} if v31 and 'sq87' in _x87.columns else set()
     except Exception:  # noqa: BLE001
         sq87 = set()
-    n87 = 0
+    try:  # 決め 67-8: u_P旧 を残したレース(表の sq_u_old)= 南関 第33版 前日版(前日版の中身は第32版と同じ・番号は直前版とそろえる)
+        _x678 = pd.read_csv(csv_path, encoding='utf-8-sig', usecols=lambda c: c in ('track', 'race_no', 'sq_u_old'))
+        c678 = {(str(t), int(r)) for t, r, f in zip(_x678.track, _x678.race_no, _x678.sq_u_old) if pd.notna(f)} if 'sq_u_old' in _x678.columns else set()
+    except Exception:  # noqa: BLE001
+        c678 = set()
+    n87 = n33 = 0
     for r in rows:  # 決め 74: 混ぜたレースは版の字を第27版に(混ぜないレース・影の日は第25版のまま + meta.pt74.p0)
         m74 = PT74.get((r['track'], int(r['race_no'])))
         if m74 is None:
@@ -478,14 +499,16 @@ def main():
         if m74.get('on'):
             v28 = int(m74.get('ver', 27)) == 28   # 決め 76: 前日の一本の木を種 3 本の平均 + 調教の元の記録 88 列に = 南関 第28版 前日版 → 11/9 決め 67-5 の能検の結びの直しを足して第29版(番号の決まり: 変えたら両方の版を 1 つ上げる)
             v32 = v28 and (r['track'], int(r['race_no'])) in sq87
-            r['meta']['stamp'] = r['meta']['stamp'].replace('南関 第25版 前日版', '南関 第32版 前日版' if v32 else v29n if v28 else '南関 第27版 前日版', 1) + (STAMP_PT76 + STAMP_NK675 if v28 else STAMP_PT74)
+            v33 = v32 and (r['track'], int(r['race_no'])) in c678
+            r['meta']['stamp'] = r['meta']['stamp'].replace('南関 第25版 前日版', '南関 第33版 前日版' if v33 else '南関 第32版 前日版' if v32 else v29n if v28 else '南関 第27版 前日版', 1) + (STAMP_PT76 + STAMP_NK675 if v28 else STAMP_PT74)
             if v32:
                 r['meta']['stamp'] = r['meta']['stamp'].replace(STAMP_SQ, STAMP_SQ87, 1)
                 n87 += 1
+                n33 += v33
             n74 += 1
             n76 += v28
     if PT74:
-        log('版', '南関 第32版 前日版', n87, 'R ・', v29n, n76 - n87, 'R ・南関 第27版 前日版', n74 - n76, 'R ・第25版のまま', len(rows) - n74, 'R')
+        log('版', '南関 第33版 前日版', n33, 'R ・南関 第32版 前日版', n87 - n33, 'R ・', v29n, n76 - n87, 'R ・南関 第27版 前日版', n74 - n76, 'R ・第25版のまま', len(rows) - n74, 'R')
     try:  # 決め 77(南関 第28版 直前版・研究 nankan-ai-v3 dayonpre77_judge.py・判定 2026-11-09 合格): 第28版 前日版の最後の率・u_P・p_Nx を土台へ。
         #   当日の便がそのレースの前日版が第28版の時だけ足す。前日版の表と行には触らない。失敗したら直前版は第26版のまま
         import dayonpre77_live
