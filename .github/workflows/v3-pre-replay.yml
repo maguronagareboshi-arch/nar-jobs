@@ -478,6 +478,34 @@ jobs:
 
       # 2026-11-16 展開図 = 上の v3_daily が落とした公式の表(v3/official)から、その日の南関の出走馬の位置を予想して
       # 公開バケット cond-stats/tenkai/v1/<日>/<場>-<R>.json へ置く(DB の表は読まない・書かない)。落ちても予想の行は変わらない
+      # 11/25 比べ用: その日の本番の前日版の行と着順を読むだけで写す(書かない・成果物にだけ入る)
+      - name: dump production rows and results (read only)
+        if: always() && steps.pc.outputs.run == 'yes'
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          DAY: ${{ steps.d.outputs.day }}
+        run: |
+          mkdir -p out
+          python - <<'PY'
+          import json, os, urllib.request
+          u, k, day = os.environ['SUPABASE_URL'].rstrip('/'), os.environ['SUPABASE_SERVICE_KEY'].strip(), os.environ['DAY']
+          def get(path):
+              out, off = [], 0
+              while True:
+                  rq = urllib.request.Request(f'{u}/rest/v1/{path}', headers={'apikey': k, 'Authorization': f'Bearer {k}', 'Range': f'{off}-{off + 999}'})
+                  b = json.load(urllib.request.urlopen(rq, timeout=60))
+                  out += b
+                  if len(b) < 1000:
+                      return out
+                  off += 1000
+          m = get(f'nar_ai_marks?model=eq.v3-9&timing=eq.morning&race_date=eq.{day}&select=track,race_no,meta&order=track,race_no')
+          r = get(f'nar_runs?race_date=eq.{day}&select=track,race_no,runner_number,finish,finish_note&order=track,race_no,runner_number')
+          json.dump(m, open(f'out/prod_marks_{day}.json', 'w'), ensure_ascii=False)
+          json.dump(r, open(f'out/runs_{day}.json', 'w'), ensure_ascii=False)
+          print('本番の行', len(m), '着順の行', len(r))
+          PY
+
       - name: seal table csv with V3_ASSET_KEY
         if: always() && steps.pc.outputs.run == 'yes'
         env:
