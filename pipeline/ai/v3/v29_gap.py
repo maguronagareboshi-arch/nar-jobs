@@ -36,6 +36,7 @@ import v3_tri as TRI  # noqa: E402  3 連単・3 連複のずれ模型(記録だ
 import b53 as B53  # noqa: E402  全券種の参考の買い目(決め 53・書く行の runners と枠番だけから作る)
 import buy4_live as BUY4  # noqa: E402  買い方 決め 4 の段 2(組 6 券種の買い目・直前版の行の p1・p3 と 10 分前の板から)
 import buyfin_live as BUYFIN  # noqa: E402  買い方の最終案(2026-11-18・軸 + 相手の 7 券・記録だけ)
+import tri12_live as TRI12  # noqa: E402  3連単の参考の買い目(買い方 決め 12・2026-11-25・表示だけ・買わない)
 
 HERE = Path(__file__).resolve().parent
 JST = dt.timezone(dt.timedelta(hours=9))
@@ -769,6 +770,32 @@ def add_buyfin(val, b, tr, day, rno, odds, cmb, tri_full=None):
             log(f'{tr}{rno}R: 買い方の最終案({key}) 失敗 {type(e).__name__} {str(e)[:120]}')
     if BUYFIN.form() != 'k9':   # 決め 9(2026-11-21〜)は 3 連単を買わない = 画面用の 3 連単 tri2 も書かない
         add_tri2(val, tr, day, rno, cmb, tri_full)
+    add_tri12(val, b, tr, day, rno, cmb)   # 買い方 決め 12(2026-11-25): 3連単の参考の買い目(表示だけ・定数 tri12 が無い間は書かない)
+
+
+def add_tri12(val, b, tr, day, rno, cmb):
+    """買い方 決め 12(2026-11-25 合格・ユーザー 11/25「決め12の形で表示」): val['buyfin']['tri12'] = [[組, 10 分前のオッズ], …]。
+    3連単の参考の買い目 = 表示だけ(お金は賭けない・buyfin の axes の外に置く = 買い目の点数と成績に入れない)。組は tri12_live.race。
+    定数 tri12 が無い・buyfin が作れなかった行(why)・買いの模型が v31 の行は書かない。板に無い組はオッズ None。失敗しても他はそのまま。"""
+    bf = val.get('buyfin')
+    if not isinstance(bf, dict) or bf.get('why') or val.get('buy_model', 'v31') == 'v31':
+        return
+    try:
+        C = TRI12.consts()
+    except KeyError:
+        return
+    try:
+        rows = [(int(x.umaban), float(x.ev), float(x.p3p), float(x.win)) for x in b.itertuples()]
+        _, keys = TRI12.race(rows, C)
+        board = {}
+        if keys:
+            if 'sanrentan' not in cmb:
+                cmb.update(latest_combos(tr, day, rno, ('sanrentan',)))
+            board = TRI._rows(cmb.get('sanrentan'), 3, True)
+        bf['tri12'] = [[k, (float(board[k]) if board.get(k) is not None and board[k] > 0 else None)] for k in keys]
+        bf['tri12_tag'] = TRI12.tag(C)
+    except Exception as e:  # noqa: BLE001
+        log(f'{tr}{rno}R: 3連単の参考の買い目(決め 12) 失敗 {type(e).__name__} {str(e)[:120]}')
 
 
 
@@ -1243,7 +1270,7 @@ def live(day, base_csv, mdir, write, until):
                 n_w += 1
                 n_buy += len(c)
                 log(f'{tr}{rno}R: 発走 {at:%H:%M}・{now:%H:%M:%S} に決めた{"(発走 " + prev_post + " から遅れて決め直し)" if prev_post else ""}・{len(b)} 頭(体重 {val["weights"]})'
-                    f'・{val["buy_model"]}・軸 {len(c)} 頭・買い方 {BUYFIN.count(val.get("buyfin"))} 点{"(" + val["buyfin"]["why"] + ")" if (val.get("buyfin") or {}).get("why") else ""}・書き込み {st}')
+                    f'・{val["buy_model"]}・軸 {len(c)} 頭・買い方 {BUYFIN.count(val.get("buyfin"))} 点・3連単の参考 {len((val.get("buyfin") or {}).get("tri12") or [])} 点{"(" + val["buyfin"]["why"] + ")" if (val.get("buyfin") or {}).get("why") else ""}・書き込み {st}')
         if now > end:
             log('時間切れ: 書いた', n_w, 'R・候補', n_buy, '頭')
             _record_after(day, write)
