@@ -752,7 +752,7 @@ def add_buyfin(val, b, tr, day, rno, odds, cmb, tri_full=None):
     """買い方の最終案(2026-11-18 → 2026-11-21 決め 7 → 2026-11-21 決め 9): val['buyfin'] に軸と相手の買い目(buyfin_live.race・券種は定数の KINDS)。b = いま決めた全頭(丸めない ev・p3p・win)。
     定数 buyfin に PREV(前の形)があれば val['buyfin_prev'] にも同じ作りで並べて書く(記録だけ・画面は buyfin だけを読む)。
     新しい買いの模型で決めたレースだけ(v31 の逃げ道は why)。作れなくても val はそのまま。⛔ログには点数だけ。"""
-    forms = [('buyfin', None)] + ([('buyfin_prev', BUYFIN.prev())] if BUYFIN.prev() else [])
+    forms = [('buyfin', None)]  # 2026-11-25: 前の形(buyfin_prev)は書かない = 1 本
     for key, C in forms:
         try:
             if val.get('buy_model', 'v31') == 'v31':
@@ -769,6 +769,12 @@ def add_buyfin(val, b, tr, day, rno, odds, cmb, tri_full=None):
     if BUYFIN.form() != 'k9':   # 決め 9(2026-11-21〜)は 3 連単を買わない = 画面用の 3 連単 tri2 も書かない
         add_tri2(val, tr, day, rno, cmb, tri_full)
 
+
+
+def buy_axes(b, bf):
+    """2026-11-25: 単勝の買い(val['buy'])= 今の買い方(buyfin)の軸と同じ馬。軸なし・作れなかった(why)= 空。"""
+    nums = {int(x['num']) for x in ((bf or {}).get('axes') or [])} if isinstance(bf, dict) and not bf.get('why') else set()
+    return b[b.umaban.astype(int).isin(nums)]
 
 TRI2_CAP = 3  # 画面 nar-viewer js/data-race.js NK_TRI_AXIS2_CAP と同じ
 
@@ -1204,54 +1210,29 @@ def live(day, base_csv, mdir, write, until):
                 if b.empty:
                     done.add(dk)
                     continue
-                c = b[b.buy]
                 rk = {int(u): i for i, u in enumerate(b.sort_values(['p3p', 'p1', 'umaban'], ascending=[False, False, True]).umaban)}
-                lines = {**COMBO_LINES, **(meta.get('combo_lines') or {})}
+                # 2026-11-25 ユーザー「1 本に絞って」: 書く買い目は今の買い方(buyfin)だけ。古い単勝の線・複勝(決め 39)・組の線(決め 52)・
+                #   3 連単/3 連複(丙)・決め 4 の段 2・決め 53 の参考・前の形(buyfin_prev)は作らない。'buy' = 今の買い方の単勝(軸)と同じ馬。
                 cmb = {}
-                try:
-                    cmb = latest_combos(tr, day, rno, TRI.KINDS if tm is not None else ('wide', 'umaren'))
-                    bc = b.assign(pg1=b.pg1_b38.to_numpy()) if 'pg1_b38' in b.columns else b  # 組の記録(紙の試し)は 決め 38-1 の模型の率のまま
-                    combo, combo_all = combo_pick(bc, {k: cmb.get(k) for k in ('wide', 'umaren')}, lines)
-                except Exception as e:  # noqa: BLE001  組は記録だけ= 取れなくても単勝は書く
-                    log(f'{tr}{rno}R: 組のオッズ 失敗 {type(e).__name__}')
-                    combo, combo_all = {}, {}
-                tri = None
-                tri_full = {}  # 3 連単の全部の組 {組: (オッズ, 模型の率)}(最終案の 3 連単の期待値用・2026-11-20)
-                if tm is not None and cmb:
-                    try:  # 3 連単(d1b)・3 連複(c8)の期待値 ≥ 1.0 の組 = 記録だけ(買わない)
-                        p3b = Bk.drop_duplicates('umaban').set_index('umaban').p3p
-                        h3 = b[['umaban', 'win', 'p1']].assign(pg1=b.pg1_v31.to_numpy(), p3p_base=b.umaban.map(p3b).to_numpy())  # 3 連単・3 連複は v31 の率で学んだ = v31 のまま
-                        tri = TRI.race(h3, cmb, tm, tri_full)
-                    except Exception as e:  # noqa: BLE001
-                        log(f'{tr}{rno}R: 3 連単・3 連複 失敗 {type(e).__name__} {str(e)[:120]}')
-                val = {'model': 'v29', 'line': meta['line'], 'p3_min': meta['p3_min'], 'post': at.strftime('%H:%M'),
+                val = {'model': 'v29', 'post': at.strftime('%H:%M'),
                        'decided_at': now.strftime('%H:%M:%S'), 'odds_asof': asof, 'n': int(len(b)),
                        'weights': int(b.bw.notna().sum()),
-                       'buy': [{'num': int(x.umaban), 'name': x.horse_name, 'odds': float(x.win),
-                                'ev': round(float(x.ev), 3), 'pg1': round(float(x.pg1), 4), 'q': round(float(x.q), 4),
-                                'p3': round(float(x.p3p), 4)} for x in c.itertuples()],
                        'runners': [{'num': int(x.umaban), 'name': x.horse_name, 'rank': rk[int(x.umaban)] + 1,
                                     'mark': MARKS[rk[int(x.umaban)]] if rk[int(x.umaban)] < 5 else '',
                                     'p3': round(float(x.p3p), 4), 'odds': float(x.win),
-                                    # 2026-11-13: pg1 = 紙の試し(〜12/28)の入力 = 決め 38-1 の模型の率のまま。新しい模型の率は pg1w(ev・buy はこちら)
-                                    'pg1': round(float(getattr(x, 'pg1_b38', x.pg1)), 4),
-                                    **({'pg1w': round(float(x.pg1), 4)} if hasattr(x, 'pg1_b38') else {}),
-                                    'ev': round(float(x.ev), 3), 'buy': bool(x.buy), 'pg1_v31': round(float(x.pg1_v31), 4)}
-                                   for x in b.itertuples()],
-                       'combo_line': lines['wide'], 'combo_lines': lines, 'combo': combo, 'combo_all': combo_all}
+                                    'pg1': round(float(x.pg1), 4), 'ev': round(float(x.ev), 3)}
+                                   for x in b.itertuples()]}
                 if prev_post:  # 2026-11-12: 発走が遅れて決め直した(前の発走で決めた行を上書き)
                     val['redecided_from'] = prev_post
-                val.update(bm)  # 決め 38-1: どちらの模型で決めたか(buy_model = b38… / v31・buy_model_why・day_at・day_parts)
-                if bm.get('buy_model', 'v31') != 'v31':  # 決め 39: 複勝も(記録だけ・取消は答え合わせで数えない)
-                    val['place_line'] = PLACE_LINE
-                    val['place'] = [{'num': int(x.umaban), 'odds': float(x.win), 'ev': round(float(x.ev), 3)}
-                                    for x in c.itertuples() if x.ev >= PLACE_LINE]
-                if tri:
-                    val['tri_model'] = {'tri': tri_name, 'trio': 'c8', 'ev_min': TRI.EV_MIN, 'cols': ['組', 'オッズ', '期待値', '模型の率', '市場の率']}
-                    val.update(tri)
-                add_buy4(val, tr, day, rno, odds, cmb)  # 買い方 決め 4 の段 2(失敗しても単勝・組の記録はそのまま書く)
-                add_buyfin(val, b, tr, day, rno, odds, cmb, tri_full)  # 買い方の最終案(2026-11-18・記録だけ・失敗しても他はそのまま書く)
-                add_b53(val, tr, day, rno, cmb)  # 決め 53: 全券種の参考の買い目(失敗しても単勝・組の記録はそのまま書く)
+                val.update(bm)  # どちらの模型で決めたか(buy_model・buy_model_why・day_at・day_parts)
+                add_buyfin(val, b, tr, day, rno, odds, cmb, {})  # 今の買い方(失敗しても印の行はそのまま書く)
+                c = buy_axes(b, val.get('buyfin'))
+                val['buy'] = [{'num': int(x.umaban), 'name': x.horse_name, 'odds': float(x.win),
+                               'ev': round(float(x.ev), 3), 'pg1': round(float(x.pg1), 4), 'q': round(float(x.q), 4),
+                               'p3': round(float(x.p3p), 4)} for x in c.itertuples()]
+                ax = set(c.umaban.astype(int))
+                for x in val['runners']:
+                    x['buy'] = x['num'] in ax
                 try:
                     st = put_gap(k, val, tr, day, rno) if write else 'dry'
                 except Exception as e:  # noqa: BLE001
@@ -1261,7 +1242,7 @@ def live(day, base_csv, mdir, write, until):
                 n_w += 1
                 n_buy += len(c)
                 log(f'{tr}{rno}R: 発走 {at:%H:%M}・{now:%H:%M:%S} に決めた{"(発走 " + prev_post + " から遅れて決め直し)" if prev_post else ""}・{len(b)} 頭(体重 {val["weights"]})'
-                    f'・{val["buy_model"]}・候補 {len(c)} 頭(複勝も {len(val.get("place") or [])})・3 連単 {len(val.get("tri") or [])}・3 連複 {len(val.get("trio") or [])} 組(記録)・参考(決め 53) {B53.count(val.get("b53"))} 点・決め 4 の段 2 {BUY4.count(val.get("buy4"))} 点・参考 {BUY4.count_ref(val.get("buy4"))} 点・最終案 {BUYFIN.count(val.get("buyfin"))} 点{"(前の形 " + str(BUYFIN.count(val.get("buyfin_prev"))) + " 点)" if val.get("buyfin_prev") else ""}{"(" + val["buy4"]["why"] + ")" if (val.get("buy4") or {}).get("why") else ""}・書き込み {st}')
+                    f'・{val["buy_model"]}・軸 {len(c)} 頭・買い方 {BUYFIN.count(val.get("buyfin"))} 点{"(" + val["buyfin"]["why"] + ")" if (val.get("buyfin") or {}).get("why") else ""}・書き込み {st}')
         if now > end:
             log('時間切れ: 書いた', n_w, 'R・候補', n_buy, '頭')
             _record_after(day, write)
@@ -1272,127 +1253,82 @@ def live(day, base_csv, mdir, write, until):
 # ================================================================ 4) 夜の答え合わせ(当日の便の終わりに自動・直近 3 日を作り直す)
 REC_KEY = 'record'
 # 3 連単・3 連複の記録の数え方(研究 d3・c10 の選び方: その時の期待値 ≥ 線・オッズの帯・1R 最大 N 点・期待値の大きい順)。
-# 払戻の券種名(nar_race_payouts の t)。組は記録に全部残すので、ここを変えれば数え直せる。
-TRI_PICK = {'tri': (50, 500, 10, 'trifecta'), 'trio': (30, 300, 10, 'trio')}
-TRI_LINES = (1.1, 1.2, 1.3)
-# 公開の 3 連単 丙(2026-10-04 から公開の予想に出している形): 期待値 ≥ 1.0・50 ≤ オッズ < 500・1R 期待値の大きい順に 3 点
-HEI = (1.0, 50, 500, 3)
-HEI_FROM = '2026-10-04'
+# 2026-11-25 ユーザー「1 本に絞って」: 答え合わせは今の買い方(行の buyfin)だけを数える。古い単勝の線・組の線・丙・複勝(決め 39)は数えない。
+#   BUY_FROM = 今の形(決め 9 → 決め 10)の行がある最初の開催日。それより前の日は記録から外す(古い形の成績と混ぜない)。
+BUY_FROM = '2026-11-24'
+BUY_KINDS = {'tan': 'win', 'fuku': 'place', 'wide': 'wide', 'umaren': 'quinella'}  # 行の券種 → 払戻の券種名(nar_race_payouts の t)
+REC_FORM = 'buyfin-1'  # 記録の作りの印(違えば全部の日を作り直す)
 
 
 def record(days):
-    """nar_v3_gap の DAY:場:R の候補 × nar_race_payouts の単勝 → 日ごとの点数・的中・払戻を nar_v3_gap 'record' に貯める。
-    払戻がまだ無いレースは数えない(次の日の便で作り直す)。1 点 100 円。"""
+    """nar_v3_gap の DAY:場:R の今の買い方(buyfin)× nar_race_payouts → 日ごと・券種ごとの点数・的中・払戻を nar_v3_gap 'record' に貯める。
+    払戻がまだ無いレースは数えない(次の日の便で作り直す)。1 点 100 円。走らなかった馬(確定の単勝オッズが無い)を含む券は返還 = 数えない。
+    total の bets・hits・return は単勝(画面の古い読み方と同じ場所)、total.kinds に券種ごと、total.all に全部。"""
     # ⛔読めなかったときに空から始めると、直近 3 日分だけの通算で上書きしてしまう(監査 11/3)= 止める
     cur = (_get(f'{GAP}?key=eq.{REC_KEY}&select=value') or [{}])[0].get('value') or {}
-    dd = dict(cur.get('days') or {})
-    # 丙の数えが無い日(足す前に作った日)も作り直す = 公開を始めた 10/4 からの通算を出す
-    days = sorted(set(days) | {d for d, v in dd.items() if d >= HEI_FROM and 'hei' not in (v or {})})
+    dd = {d: v for d, v in (cur.get('days') or {}).items() if d >= BUY_FROM} if cur.get('form') == REC_FORM else {}
+    if cur.get('form') != REC_FORM:  # 作りが替わった = 今の形の最初の日から全部作り直す
+        d0, d1 = dt.date.fromisoformat(BUY_FROM), max(dt.date.fromisoformat(d) for d in days)
+        days = [(d0 + dt.timedelta(days=i)).isoformat() for i in range((d1 - d0).days + 1)]
+    days = sorted(d for d in set(days) if d >= BUY_FROM)
+    q = urllib.parse.quote(','.join(NANKAN))
     for day in days:
-        rows = _get(f"{GAP}?race_date=eq.{day}&select=key,value")
+        rows = _get(f"{GAP}?race_date=eq.{day}&track=in.({q})&select=key,value")
         if not rows:
             continue
-        q = urllib.parse.quote(','.join(NANKAN))
         pay = {(r['track'], int(r['race_no'])): r.get('payouts') or [] for r in _get(
             f'/rest/v1/nar_race_payouts?race_date=eq.{day}&track=in.({q})&select=track,race_no,payouts')}
-        n = hit = ret = races = pend = 0
-        cb = {k: {'bets': 0, 'hits': 0, 'return': 0} for k in ('wide', 'umaren')}
-        tc = {k: {str(L): {'bets': 0, 'hits': 0, 'return': 0} for L in TRI_LINES} for k in TRI_PICK}
-        hei = {'bets': 0, 'hits': 0, 'return': 0}
-        plc = {'bets': 0, 'hits': 0, 'return': 0}  # 決め 39 の複勝(取消 = 確定の単勝オッズが無い馬は数えない)
         ran = None
+        kc = {k: {'bets': 0, 'hits': 0, 'return': 0} for k in BUY_KINDS}
+        races = pend = 0
+        tags = set()
         for r in rows:
             _, tr, rno = r['key'].split(':')
-            if tr not in NANKAN:  # 2026-11-15: ばんえいの単勝の買い目(banei_win2.py)も同じ表に書く = 南関の記録に数えない
+            if tr not in NANKAN:
                 continue
-            v = r.get('value') or {}
-            p = pay.get((tr, int(rno)))
-            if p and v.get('tri'):
-                L, lo, hi, N = HEI
-                yt = {}
-                for x in p:
-                    if x.get('t') == 'trifecta':
-                        yt[str(x.get('c'))] = yt.get(str(x.get('c')), 0) + int(x.get('y') or 0)
-                for g in sorted([g for g in v['tri'] if g[2] >= L and lo <= g[1] < hi], key=lambda g: -g[2])[:N]:
-                    y = yt.get(g[0], 0)
-                    hei['bets'] += 1
-                    hei['hits'] += y > 0
-                    hei['return'] += y
-            if p and any(v.get(k) for k in TRI_PICK):
-                for k, (lo, hi, N, t) in TRI_PICK.items():
-                    yp = {}
-                    for x in p:
-                        if x.get('t') == t:
-                            yp[str(x.get('c'))] = yp.get(str(x.get('c')), 0) + int(x.get('y') or 0)
-                    for L in TRI_LINES:
-                        got = [g for g in v.get(k) or [] if g[2] >= L and lo <= g[1] < hi][:N]
-                        a = tc[k][str(L)]
-                        for g in got:
-                            y = yp.get(g[0], 0)
-                            a['bets'] += 1
-                            a['hits'] += y > 0
-                            a['return'] += y
-            if p and v.get('place'):
-                if ran is None:  # 確定の単勝オッズ(f = true)のある馬 = 走った馬
-                    ran = {(x['track'], int(x['race_no'])): {int(k) for k, o in (x.get('w') or {}).items() if o not in (None, '') and float(o) > 0}
-                           for x in _get(f'/rest/v1/nar_odds_ticks?race_date=eq.{day}&track=in.({q})&f=eq.true&select=track,race_no,w')}
-                yp = {}
-                for x in p:
-                    if x.get('t') == 'place':
-                        yp[str(x.get('c'))] = yp.get(str(x.get('c')), 0) + int(x.get('y') or 0)
-                for b in v['place']:
-                    if int(b['num']) not in ran.get((tr, int(rno)), {int(b['num'])}):
-                        continue
-                    y = yp.get(str(b['num']), 0)
-                    plc['bets'] += 1
-                    plc['hits'] += y > 0
-                    plc['return'] += y
-            buy = (r.get('value') or {}).get('buy') or []
-            combo = (r.get('value') or {}).get('combo') or {}
-            if not buy and not any(combo.values()):
+            bf = (r.get('value') or {}).get('buyfin')
+            if not isinstance(bf, dict) or bf.get('why') or not bf.get('axes'):
                 continue
             p = pay.get((tr, int(rno)))
             if not p:
                 pend += 1
                 continue
-            win, cp = {}, {'wide': {}, 'umaren': {}}
+            if ran is None:  # 確定の単勝オッズ(f = true)のある馬 = 走った馬
+                ran = {(x['track'], int(x['race_no'])): {int(k) for k, o in (x.get('w') or {}).items() if o not in (None, '') and float(o) > 0}
+                       for x in _get(f'/rest/v1/nar_odds_ticks?race_date=eq.{day}&track=in.({q})&f=eq.true&select=track,race_no,w')}
+            rn = ran.get((tr, int(rno)))
+            yp = {}
             for x in p:
-                t, cc, yy = x.get('t'), str(x.get('c')), int(x.get('y') or 0)
-                if t == 'win':
-                    win[cc] = win.get(cc, 0) + yy
-                elif t in ('wide', 'quinella'):
-                    kk = 'wide' if t == 'wide' else 'umaren'
-                    cp[kk][cc] = cp[kk].get(cc, 0) + yy
-            for kk, lst in combo.items():
-                for g in lst or []:
-                    y = cp.get(kk, {}).get(g['pair'], 0)
-                    cb[kk]['bets'] += 1
-                    cb[kk]['hits'] += y > 0
-                    cb[kk]['return'] += y
+                yp[(x.get('t'), str(x.get('c')))] = yp.get((x.get('t'), str(x.get('c'))), 0) + int(x.get('y') or 0)
             races += 1
-            for b in buy:
-                n += 1
-                y = win.get(str(b['num']), 0)
-                hit += y > 0
-                ret += y
-        dd[day] = {'races': races, 'bets': n, 'hits': hit, 'return': ret, 'pending': pend, **cb, **tc,
-                   **({'hei': hei} if day >= HEI_FROM else {}), **({'place': plc} if plc['bets'] else {})}
-    tot = {k: sum(v.get(k, 0) for v in dd.values()) for k in ('races', 'bets', 'hits', 'return')}
-    tot['roi'] = round(100 * tot['return'] / (100 * tot['bets']), 1) if tot['bets'] else None
-    for kk in ('wide', 'umaren', 'hei', 'place'):
-        t = {k: sum((v.get(kk) or {}).get(k, 0) for v in dd.values()) for k in ('bets', 'hits', 'return')}
-        t['roi'] = round(t['return'] / t['bets'], 1) if t['bets'] else None
-        tot[kk] = t
-    for kk in TRI_PICK:
-        tot[kk] = {}
-        for L in TRI_LINES:
-            t = {k: sum(((v.get(kk) or {}).get(str(L)) or {}).get(k, 0) for v in dd.values()) for k in ('bets', 'hits', 'return')}
-            t['roi'] = round(t['return'] / t['bets'], 1) if t['bets'] else None
-            tot[kk][str(L)] = t
-    val = {'model': 'v29', 'unit': 100, 'days': dict(sorted(dd.items())), 'total': tot,
+            tags.add(str(bf.get('tag')))
+            for ax in bf['axes']:
+                for k, lst in (ax.get('tickets') or {}).items():
+                    if k not in BUY_KINDS:
+                        continue
+                    for t in lst or []:
+                        c = str(t[0])
+                        if rn is not None and any(int(h) not in rn for h in c.split('-')):
+                            continue  # 取消を含む券 = 返還
+                        y = yp.get((BUY_KINDS[k], c), 0)
+                        kc[k]['bets'] += 1
+                        kc[k]['hits'] += y > 0
+                        kc[k]['return'] += y
+        if races or pend:
+            dd[day] = {'races': races, 'pending': pend, 'tags': sorted(tags), **kc['tan'],
+                       'kinds': kc, 'all': {k: sum(v[k] for v in kc.values()) for k in ('bets', 'hits', 'return')}}
+    roi = lambda t: round(t['return'] / t['bets'], 1) if t['bets'] else None  # noqa: E731  1 点 100 円 = 払戻 ÷ 点数 が %
+    kinds = {}
+    for k in BUY_KINDS:
+        t = {f: sum(((v.get('kinds') or {}).get(k) or {}).get(f, 0) for v in dd.values()) for f in ('bets', 'hits', 'return')}
+        kinds[k] = {**t, 'roi': roi(t)}
+    al = {f: sum(t[f] for t in kinds.values()) for f in ('bets', 'hits', 'return')}
+    tot = {'races': sum(v.get('races', 0) for v in dd.values()), **{f: kinds['tan'][f] for f in ('bets', 'hits', 'return')},
+           'roi': kinds['tan']['roi'], 'kinds': kinds, 'all': {**al, 'roi': roi(al)}}
+    val = {'model': 'v29', 'form': REC_FORM, 'from': BUY_FROM, 'unit': 100, 'days': dict(sorted(dd.items())), 'total': tot,
            'built': dt.datetime.now(JST).isoformat(timespec='seconds')}
     put_gap(REC_KEY, val)
-    log('答え合わせ: 通算', tot['bets'], '点・的中', tot['hits'], '・回収率', tot['roi'], '%')
+    log('答え合わせ(今の買い方): 通算', al['bets'], '点・的中', al['hits'], '・回収率', tot['all']['roi'], '%(単勝', tot['roi'], '%)')
     return val
 
 
