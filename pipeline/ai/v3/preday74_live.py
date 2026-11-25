@@ -173,12 +173,15 @@ def mix(t1, t3, s1, s3):
     return p1, ot.sum3(np.maximum(p3m, np.minimum(p1, 0.999)))
 
 
-def add_f3(p1, p3, q3, q1, u):
-    """研究 add_f3: 前日の F3 を WF3 の割合で足す。→ (p1, p3)"""
+def add_f3(p1, p3, q3, q1, u, log1=False):
+    """研究 add_f3: 前日の F3 を WF3 の割合で足す。→ (p1, p3)
+    log1 = True(決め 67-9・南関 第34版・s34_live.f3log()): 勝ちの側は F3 の勝つ率の logit q1 でなく ln(F3 の勝つ率) = −ln(1 + e^(−q1)) で混ぜる
+    (ln の側に logit を混ぜると強い馬ほど −WF3 × ln(1 − p) 上乗せされる誤り)。3 着内は変えない。"""
     import p1cap
     wf = float(consts()['WF3'])
     u = np.asarray(u, float)
-    o1 = (1 - wf) * np.log(np.clip(p1, 1e-12, 1)) + wf * (np.asarray(q1, float) + u)
+    q1 = np.asarray(q1, float)
+    o1 = (1 - wf) * np.log(np.clip(p1, 1e-12, 1)) + wf * ((-np.logaddexp(0.0, -q1) if log1 else q1) + u)
     o3 = (1 - wf) * ot.lg(np.clip(p3, 1e-9, 1 - 1e-9)) + wf * (np.asarray(q3, float) + u)
     e = np.exp(o1)
     r1 = e / e.sum()
@@ -198,11 +201,11 @@ def race_tree(M, b, u, D, a, cy=None):
     return {'p0': p3n, 't1': t1, 't3': t3, 'Xf': Xf, 'z3': z3, 'z1': z1}
 
 
-def race_mix(M, r, u, s1, s3):
-    """混ぜと前日の F3(3・4)。→ (p1, p3) = 第27版の率"""
+def race_mix(M, r, u, s1, s3, log1=False):
+    """混ぜと前日の F3(3・4)。→ (p1, p3) = 第27版の率(log1 = 決め 67-9・add_f3)"""
     m1, m3 = mix(r['t1'], r['t3'], s1, s3)
     q3, q1 = f3_q(M['F3'], r['Xf'])
-    return add_f3(m1, m3, q3, q1, u)
+    return add_f3(m1, m3, q3, q1, u, log1)
 
 
 def race(M, b, u, D, a, s1, s3, cy=None):
@@ -259,6 +262,15 @@ def apply_csv_pre(M, GT, AW, day, csv_path, base_csv, log=log0, cy=None):
     vb['umaban'] = pd.to_numeric(vb.umaban).astype(int)
     vb = vb.drop_duplicates(Q4).set_index(Q4)
     x['p1_t74'], x['p3p_t74'] = x.p1, x.p3p
+    log34, on34 = False, False
+    try:  # 決め 67-9(南関 第34版 前日版・研究 nankan-ai-v3 correct67_9_judge.py): ON34 の日から F3 の勝つ率を ln で混ぜる。定数なし・落ちたら今の形
+        import s34_live
+        if s34_live.is_on(day):
+            on34 = True   # 第34版の前日の便(直前版の B の印 '34' の元)。F3 の ln の混ぜは F3LOG34 = 1 の時だけ(67-9 は 11/25 に閉じた = 0)
+            log34 = s34_live.f3log()
+            log('(前日) 決め 67-9 F3 の勝つ率を ln で混ぜる', log34)
+    except Exception as e:  # noqa: BLE001
+        log('(前日) 決め 67-9 の定数を読めない = 今の形(第33版)', type(e).__name__, str(e)[:80])
     out, st = {}, {'on': 0, 'shadow': 0, 'none': 0, 'err': 0}
     for (tr, rd, rno), g in x.groupby(KEY, sort=False):
         g = g.sort_values('umaban', kind='mergesort')
@@ -287,12 +299,15 @@ def apply_csv_pre(M, GT, AW, day, csv_path, base_csv, log=log0, cy=None):
             m['p0'] = {str(int(n)): round(float(v), 6) for n, v in zip(nums, r['p0'])}   # 窓の元(混ぜが落ちても残す)
             on = mixing_on(day, tr, GT) and a is not None
             if on:
-                p1, p3 = race_mix(M, r, u, s1, s3)
+                p1, p3 = race_mix(M, r, u, s1, s3, log34)
                 if not (np.isfinite(p1).all() and np.isfinite(p3).all() and abs(float(p1.sum()) - 1) < 1e-6 and abs(float(p3.sum()) - 3) < 1e-6
                         and (p1 <= p3 + 1e-12).all()):
                     raise ValueError('率が数でないか合計が 1・3 でないか勝つ率 > 3 着内')
                 x.loc[g.index, 'p1'], x.loc[g.index, 'p3p'] = p1, p3
                 m['on'] = True
+                if on34:
+                    m['s34'] = True
+                    m['f3log'] = bool(log34)
                 m['s1'] = {str(int(n)): round(float(v), 4) for n, v in zip(nums, s1)}   # 第25版の最後の率
                 m['s3'] = {str(int(n)): round(float(v), 4) for n, v in zip(nums, s3)}
                 st['on'] += 1

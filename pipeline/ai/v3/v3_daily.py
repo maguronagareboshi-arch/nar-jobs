@@ -490,7 +490,7 @@ def main():
         c678 = {(str(t), int(r)) for t, r, f in zip(_x678.track, _x678.race_no, _x678.sq_u_old) if pd.notna(f)} if 'sq_u_old' in _x678.columns else set()
     except Exception:  # noqa: BLE001
         c678 = set()
-    n87 = n33 = 0
+    n87 = n33 = n34 = 0
     for r in rows:  # 決め 74: 混ぜたレースは版の字を第27版に(混ぜないレース・影の日は第25版のまま + meta.pt74.p0)
         m74 = PT74.get((r['track'], int(r['race_no'])))
         if m74 is None:
@@ -500,15 +500,19 @@ def main():
             v28 = int(m74.get('ver', 27)) == 28   # 決め 76: 前日の一本の木を種 3 本の平均 + 調教の元の記録 88 列に = 南関 第28版 前日版 → 11/9 決め 67-5 の能検の結びの直しを足して第29版(番号の決まり: 変えたら両方の版を 1 つ上げる)
             v32 = v28 and (r['track'], int(r['race_no'])) in sq87
             v33 = v32 and (r['track'], int(r['race_no'])) in c678
-            r['meta']['stamp'] = r['meta']['stamp'].replace('南関 第25版 前日版', '南関 第33版 前日版' if v33 else '南関 第32版 前日版' if v32 else v29n if v28 else '南関 第27版 前日版', 1) + (STAMP_PT76 + STAMP_NK675 if v28 else STAMP_PT74)
+            v34 = v32 and bool(m74.get('s34'))   # 決め 92: 第34版の前日の便で作ったレース = 南関 第34版 前日版(前日版の中身は第33版と同じ・u_P旧 に依らない)
+            r['meta']['stamp'] = r['meta']['stamp'].replace('南関 第25版 前日版', '南関 第34版 前日版' if v34 else '南関 第33版 前日版' if v33 else '南関 第32版 前日版' if v32 else v29n if v28 else '南関 第27版 前日版', 1) + (STAMP_PT76 + STAMP_NK675 if v28 else STAMP_PT74)
             if v32:
                 r['meta']['stamp'] = r['meta']['stamp'].replace(STAMP_SQ, STAMP_SQ87, 1)
                 n87 += 1
-                n33 += v33
+                n34 += v34
+                n33 += v33 and not v34
+            if v34 and m74.get('f3log'):
+                r['meta']['stamp'] += '+勝つ率の F3 を ln で混ぜる(決め 67-9)'
             n74 += 1
             n76 += v28
     if PT74:
-        log('版', '南関 第33版 前日版', n33, 'R ・南関 第32版 前日版', n87 - n33, 'R ・', v29n, n76 - n87, 'R ・南関 第27版 前日版', n74 - n76, 'R ・第25版のまま', len(rows) - n74, 'R')
+        log('版', '南関 第34版 前日版', n34, 'R ・南関 第33版 前日版', n33, 'R ・南関 第32版 前日版', n87 - n33 - n34, 'R ・', v29n, n76 - n87, 'R ・南関 第27版 前日版', n74 - n76, 'R ・第25版のまま', len(rows) - n74, 'R')
     try:  # 決め 77(南関 第28版 直前版・研究 nankan-ai-v3 dayonpre77_judge.py・判定 2026-11-09 合格): 第28版 前日版の最後の率・u_P・p_Nx を土台へ。
         #   当日の便がそのレースの前日版が第28版の時だけ足す。前日版の表と行には触らない。失敗したら直前版は第26版のまま
         import dayonpre77_live

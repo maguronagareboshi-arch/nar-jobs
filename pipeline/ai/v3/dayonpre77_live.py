@@ -179,6 +179,12 @@ def write_base(csv_path, base_csv, PT74, pnx, log=log0):
             m33 = m87 & np.array([(str(t), int(float(r))) in r33 for t, r in zip(vb.track, vb.race_no)], bool)
             vb.loc[m33, 'D77:v'] = '33'
             log('(前日) 決め 67-8 の土台(D77:v = 33)', len(r33), 'R')
+        # 2026-11-25 決め 92: 決め 87 のレースを第34版の前日の便で作った(meta.pt74.s34)= 第34版の前日の便の土台(当日の便は 1 段の形で「第34版 直前版」)。
+        #   u_P旧(sq_u_old)には依らない(1 週間後に u_P旧 の段を外しても '34' のまま・反証 直す 1)
+        r34 = {k for k, m in (PT74 or {}).items() if m.get('s34') and m.get('on') and not m.get('err')}
+        m34 = m87 & np.array([(str(t), int(float(r))) in r34 for t, r in zip(vb.track, vb.race_no)], bool)
+        vb.loc[m34, 'D77:v'] = '34'
+        log('(前日) 決め 92 の土台(D77:v = 34)', len({(t, r) for t, r in zip(vb.track[m34], vb.race_no[m34])}), 'R')
     vb.to_csv(base_csv, index=False, encoding='utf-8-sig')
     n = int(d.drop_duplicates(KEY)[P + 'on'].sum())
     log('(前日) 決め 77 の土台', len(d), '頭・第28版のレース', n, '・p_Nx あり率', round(float(d[P + 'pnx'].notna().mean()), 3))
@@ -274,19 +280,48 @@ def apply_day(b, day, ux, pday, s1, s3, going='', ucy=None, ub=None):
     except Exception as e:  # noqa: BLE001
         m['err'] = f'{type(e).__name__} {str(e)[:80]}'
         return no('計算が落ちた')
+    dv = str(b['D77:v'].iloc[0]).split('.')[0] if 'D77:v' in b.columns else ''
+    if dv == '34':   # 決め 92(南関 第34版 直前版): 前日の土台が第34版の時だけ、当日の 3 段を 1 段に(s34_live)。落ちたら下の第33版までの形
+        try:
+            import s34_live
+            ok34 = s34_live.is_on(day)
+            wb = s34_live.wb()
+        except Exception as e:  # noqa: BLE001
+            ok34, m['s34'] = False, {'on': False, 'why': f'定数なし {type(e).__name__}'}
+        if ok34:
+            try:
+                uxa = np.asarray(ux, float)
+                uba = np.full_like(uxa, np.nan) if ub is None else np.asarray(ub, float)
+                d82 = np.where(np.isfinite(uxa) & np.isfinite(uba), uba - uxa, 0.0)   # 研究: u_b の無い馬は差 0(レースごとに落とさない)
+                D = du + 0.5 * d82
+                q1, q3 = race(n1, n3, D, eb, dict(C, WDU1=wb, WDU3=1.0))
+                if not ok_(q1, q3):
+                    raise ValueError('率が数でないか合計が 1・3 でないか勝つ率 > 3 着内')
+                m['s34'] = {'on': True, 'tag': s34_live.tag(), 'wb': wb, 'nb': int(np.isfinite(uba).sum()),
+                            'd': {str(int(n)): round(float(v), 4) for n, v in zip(nums, D)}}
+                m['on'] = True
+                m['cx'] = int(nf - len(b))
+                m['s1'] = {str(int(n)): round(float(v), 4) for n, v in zip(nums, s1)}
+                m['s3'] = {str(int(n)): round(float(v), 4) for n, v in zip(nums, s3)}
+                m['du'] = {str(int(n)): round(float(v), 4) for n, v in zip(nums, du)}
+                m['eb'] = {str(int(n)): round(float(v), 4) for n, v in zip(nums, eb)}
+                return {'on': True, 'p1': q1, 'p3': q3, 'meta': m}
+            except Exception as e:  # noqa: BLE001
+                m['s34'] = {'on': False, 'why': '計算が落ちた', 'err': f'{type(e).__name__} {str(e)[:80]}'}
+        elif 's34' not in m:
+            m['s34'] = {'on': False, 'why': 'ON34 の前'}
     # 決め 79(南関 第30版 直前版): 調教入りの並び読みの差を du と同じ所に足す。動かない・落ちた時は上の第28・29版の率のまま(わけ meta.cy79.why)
     dcy, mc, A = cy79_diff(day, ux, ucy)
-    dv = str(b['D77:v'].iloc[0]).split('.')[0] if 'D77:v' in b.columns else ''
-    if dcy is not None and dv not in ('30', '31', '32', '33'):   # 前日の土台が第30版(か第31・32版)の前日の便の物の時だけ(版の名前と中身をそろえる)
+    if dcy is not None and dv not in ('30', '31', '32', '33', '34'):   # 前日の土台が第30版(か第31・32版)の前日の便の物の時だけ(版の名前と中身をそろえる)
         dcy, mc = None, dict(mc, on=False, why='前日の土台が第30版でない')
     # 決め 82(南関 第31版 直前版): 調教入りの差 d = u_cy − u_X を 3 案まとめの差 d = u_b − u_X に替える(倍は同じ)。動かない・落ちた時は第30版の形のまま(わけ meta.b82.why)
     d82, mb, A82 = b82_diff(day, ux, ub)
-    if d82 is not None and dv not in ('31', '32', '33'):   # 決め 87: 第32版の前日の便の土台(前日の並び読みを替えた)でも同じ形で足す
+    if d82 is not None and dv not in ('31', '32', '33', '34'):   # 決め 87: 第32版の前日の便の土台(前日の並び読みを替えた)でも同じ形で足す
         d82, mb = None, dict(mb, on=False, why='前日の土台が第31版でない')
     if d82 is not None:
         try:
             k678 = None   # 決め 67-8(第33版 直前版): 前日の土台が第33版(u_P旧 を残した)の時だけ、勝つ率の前に − K678 × (u_P新 − u_P旧)
-            if dv == '33' and 'K678' in C and UPO in g:   # 列ごと無い(土台が古い)時は直さない = 第32版のまま・馬ごとの欠けは 0 にしてから引く(研究と同じ)
+            if dv in ('33', '34') and 'K678' in C and UPO in g:   # 列ごと無い(土台が古い)時は直さない = 第32版のまま・馬ごとの欠けは 0 にしてから引く(研究と同じ)
                 k678 = term678(g[P + 'up'], g[UPO], float(C['K678']))
             q1, q3 = race(n1, n3, du, eb, C, dcy=d82, A=A82, k1=k678)
             if not ok_(q1, q3):
