@@ -762,7 +762,8 @@ def add_buyfin(val, b, tr, day, rno, odds, cmb, tri_full=None):
             if miss:
                 cmb.update(latest_combos(tr, day, rno, tuple(miss)))
             rows = [(int(x.umaban), float(x.ev), float(x.p3p), float(x.win)) for x in b.itertuples()]
-            val[key] = BUYFIN.race(rows, odds, latest_place(tr, day, rno), cmb, C)
+            p1 = {int(u): float(v) for u, v in zip(b.umaban, b.p1d)} if 'p1d' in b.columns else None   # 決め 11: AI の勝つ率(直前版)
+            val[key] = BUYFIN.race(rows, odds, latest_place(tr, day, rno), cmb, C, p1=p1)
         except Exception as e:  # noqa: BLE001
             val[key] = {'why': f'失敗 {type(e).__name__} {str(e)[:80]}'}
             log(f'{tr}{rno}R: 買い方の最終案({key}) 失敗 {type(e).__name__} {str(e)[:120]}')

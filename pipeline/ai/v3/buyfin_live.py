@@ -3,6 +3,9 @@
   2026-11-18 の形(研究 nankan-ai-v3 out/buy_final_1118.md)→ 2026-11-21 買い方 決め 7 の形(研究 out/buy_judge7_1121_judge.md・2024-01〜10 で合格)
   → 2026-11-21 買い方 決め 9 の形(研究 out/buy9_1121_k6_judge.md・持ち回り 690 日で合格・定数の FORM = 'k9')。
 
+  → 2026-11-25 買い方 決め 11(研究 nankan-ai-v3 out/buy11_plan_1125.md・判定 120.5 で合格・FORM 'k11'):
+      軸 = AI の勝つ率(直前版・人気を見ない = b.p1d)≥ AI_P1 かつ 期待値(買いの模型の率 × 10 分前の単勝)≥ AX_EV の馬。券 = 単勝 + 複勝(同じ馬)だけ。
+      相手・組の券種は無い。AX_LO・AX_HI・P3・EV_S は定数の必須の項目なので置くが、AX_LO 0・AX_HI 大きい数 = 単勝の帯なし。
   → 2026-11-25 買い方 決め 10(研究 out/buy10_1125_v34_k6_judge.md・第34版の率で学び直した買いの模型): FORM k9 のまま KINDS = 単勝・複勝・ワイド・W_N 2。
       複勝 = 軸(下限なし)。KINDS に fuku が無い定数(決め 9)は今までと 1 点も変わらない。
   決め 9(FORM k9): 軸 = 下と同じ(期待値 ≥ AX_EV・単勝 AX_LO 以上 AX_HI 未満)。券 = 単勝 + ワイド W_N 点 + 馬連 U_N 点(軸−相手)。
@@ -154,6 +157,19 @@ def pick9(rows, C=None):
     return out
 
 
+def pick11(rows, p1, C=None):
+    """決め 11: rows = [(馬番, 期待値, 3 着内率, 単勝)]・p1 = {馬番: AI の勝つ率}。→ 軸の馬番(馬番の順)。AI の勝つ率が無い馬は軸にしない。"""
+    C = C or consts()
+    out = []
+    for u, e, _, o in sorted((int(u), e, p, o) for u, e, p, o in rows):
+        a = (p1 or {}).get(u)
+        if e is None or o is None or a is None or a != a:
+            continue
+        if a >= C['AI_P1'] and e >= C['AX_EV'] and C['AX_LO'] <= o < C['AX_HI']:
+            out.append(u)
+    return out
+
+
 def tickets(a, S, ks=KINDS_1118):
     """軸 a と相手 S → {券種: [組の字]}(馬連・ワイド・3連複は小さい順・馬単は 1 着-2 着・3連単は 1 着-2 着(軸)-3 着)。"""
     j = lambda xs: '-'.join(str(x) for x in xs)  # noqa: E731
@@ -189,7 +205,7 @@ def _board_odds(boards):
     return out
 
 
-def race(rows, win, place, boards, C=None):
+def race(rows, win, place, boards, C=None, p1=None):
     """1 レース。rows = [(馬番, 期待値, 3 着内率, 単勝)](便がいま決めた全頭・丸めない値)・win = {馬番: 単勝}・place = {馬番: [下限, 上限]}・boards = 組の板。
     C = 形の定数(無い = buyfin)。
     → {'tag', 'n', 'axes': [{'num', 'odds', 'ev', 'partners', 'tickets': {券種: [[組, オッズ], …]}}], 'points'}(軸なし = axes 空)か {'tag', 'why'}。"""
@@ -205,6 +221,18 @@ def race(rows, win, place, boards, C=None):
     bo = _board_odds(boards)
     ev = {int(u): e for u, e, _, _ in rows}
     axes = []
+    if form(C) == 'k11':   # 決め 11: 単勝 + 複勝(同じ馬)だけ。p1 = {馬番: AI の勝つ率}
+        if not p1:
+            out['why'] = 'AI の勝つ率なし'
+            return out
+        for a in pick11(rows, p1, C):
+            od = {'tan': {str(a): _f((win or {}).get(a))}, 'fuku': {str(a): _f(((place or {}).get(a) or [None])[0])}}
+            axes.append({'num': a, 'odds': _f((win or {}).get(a)), 'ev': round(ev[a], 3), 'p1': round(float(p1[a]), 4), 'partners': [],
+                         'tickets': {k: [[str(a), od[k].get(str(a))]] for k in ks}})
+        out['n'] = len(rows)
+        out['axes'] = axes
+        out['points'] = count(out)
+        return out
     k9 = form(C) == 'k9'
     seen = set()
     for a, S in (pick9(rows, C) if k9 else pick(rows, C)):
