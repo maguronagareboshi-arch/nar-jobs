@@ -266,7 +266,7 @@ def apply_csv_pre(M, GT, AW, day, csv_path, base_csv, log=log0, cy=None):
     try:  # 決め 67-9(南関 第34版 前日版・研究 nankan-ai-v3 correct67_9_judge.py): ON34 の日から F3 の勝つ率を ln で混ぜる。定数なし・落ちたら今の形
         import s34_live
         if s34_live.is_on(day):
-            on34 = True   # 第34版の前日の便(直前版の B の印 '34' の元)。F3 の ln の混ぜは F3LOG34 = 1 の時だけ(67-9 は 11/25 に閉じた = 0)
+            on34 = True   # 第34版の前日の便(直前版の B の印 '34' の元)。F3 の ln の混ぜは F3LOG34 = 1 の時だけ(決め 67-9 は 11/25 夜に合格 = 1)
             log34 = s34_live.f3log()
             log('(前日) 決め 67-9 F3 の勝つ率を ln で混ぜる', log34)
     except Exception as e:  # noqa: BLE001
