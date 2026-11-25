@@ -5,7 +5,7 @@
 
 買い方 =「堅さで組数を配る」(研究 nankan-ai-v3 src/triple_picks.py・out/triple_1118/ai_use2.py と同じ計算):
   前日版の印の行(nar_ai_marks・model v3-9・timing morning)の勝つ率 p1・3 着内率 p3 だけを使う(オッズは使わない)。
-  馬単の率 = 1 着 p1 × 2 着 (p1^0.27 × p3^0.85)。各レースで率の高い順に並べ、3 レースの組数の掛け算が 200(= 1 万円)以内で
+  馬単の率 = 1 着 p1 × 2 着 (p1^0.27 × p3^0.85)。各レースで率の高い順に並べ、3 レースの組数の掛け算が 100(= 5 千円)以内で
   3 つとも当たる見込みが一番高い配り方を選ぶ。
 持ち越し(キャリーオーバー)は場ごと。公式の結果の一覧(nankankeiba.com・国外からは本番 DB 経由 = cloud/jp_fetch.py)から、
   その場の前の開催日の値を読む。前の開催日の結果がまだ一覧に無い(前日の夜の最終レースの前)ときは「結果待ち」と書き、
@@ -35,11 +35,11 @@ JST = dt.timezone(dt.timedelta(hours=9))
 V = 1
 BUCKET = 'cond-stats'
 ROOT = 'triple/v1/'
-CACHE = 'public, max-age=600'
+CACHE = 'public, max-age=60'   # 2026-11-26 1 本目を直前版で作り直す(締め切りの 10 分ほど前)ので短く
 MODEL, TIMING = 'v3-9', 'morning'
 JO = {'浦和': '18', '船橋': '19', '大井': '20', '川崎': '21'}
 PREFIX = {'浦和': 'urawa', '船橋': 'funabashi', '大井': 'ooi', '川崎': 'kawasaki'}  # サイト js/data.js の VENUES と同じ
-MAXN = 200      # 1 日 1 万円 = 50 円 × 200 枚(ユーザーの決め 11/18)
+MAXN = 100      # 1 日 5 千円 = 50 円 × 100 枚(2026-11-26 期間を分けた検証 nankan-ai-v3 out/triple_1118/tri_judge_plan.md・ユーザー「反証してから準備」)
 UA = 'nar-jobs triple_live'
 
 
@@ -75,9 +75,9 @@ def rest(query):
     return json.loads(_req('/rest/v1/' + query, headers={'Accept': 'application/json'}))
 
 
-def marks(day):
-    """{場: {R: [(馬番, p1, p3), …]}}(前日版の行)。"""
-    q = (f'nar_ai_marks?select=track,race_no,meta&model=eq.{MODEL}&timing=eq.{TIMING}&race_date=eq.{day}'
+def marks(day, timing=TIMING):
+    """{場: {R: [(馬番, p1, p3), …]}}(timing = morning 前日版 / last 直前版)。"""
+    q = (f'nar_ai_marks?select=track,race_no,meta&model=eq.{MODEL}&timing=eq.{timing}&race_date=eq.{day}'
          + '&track=in.(' + ','.join(urllib.parse.quote(t) for t in JO) + ')')
     out = {}
     for r in rest(q):
@@ -119,7 +119,7 @@ def carry_rows(html):
 def carry_of(track, day, lists):
     """→ {state: none(なし)| yes(あり)| wait(前の開催日の結果待ち)| unknown(読めない), yen, from, times, buy}。lists = 年 → carry_rows の結果(使い回す)。
     times = 持ち越しが何回続いたか(前の開催日から数えて、当たりなしが続いた開催日の数)。
-    buy = 買う日か(2026-11-19 ユーザーの決め: 持ち越しなし と 2 回以上続いた持ち越し = 買う・1 回目 = 見送り)。
+    buy = 買う日か。2026-11-26 から持ち越しに関わらず毎日買う(期間を分けた検証で「全部の日」が選ばれた。11/19 の「1 回目は見送り」は替えた)。
       2 回以上続いた日は、買った人全体への戻りが売上を超える日が多い(南関 2014〜 165 日で中央値 1.09 倍・88% の日で 1 倍超)。"""
     d8 = day.replace('-', '')
     try:
@@ -131,7 +131,7 @@ def carry_of(track, day, lists):
             if rows:
                 break
         if not rows:
-            return {'state': 'unknown', 'yen': None, 'from': None, 'times': None, 'buy': False}
+            return {'state': 'unknown', 'yen': None, 'from': None, 'times': None, 'buy': True}
         times = 0
         for k in sorted(rows, reverse=True):            # 前の開催日から遡って、持ち越しが続いた日を数える
             if rows[k] <= 0:
@@ -147,11 +147,11 @@ def carry_of(track, day, lists):
         frm = f'{last[:4]}-{last[4:6]}-{last[6:]}'
         pd_ = prev_day(track, day)
         if pd_ and pd_ > frm:
-            return {'state': 'wait', 'yen': None, 'from': pd_, 'times': None, 'buy': False}
-        return {'state': 'yes' if rows[last] > 0 else 'none', 'yen': rows[last], 'from': frm, 'times': times, 'buy': times == 0 or times >= 2}
+            return {'state': 'wait', 'yen': None, 'from': pd_, 'times': None, 'buy': True}
+        return {'state': 'yes' if rows[last] > 0 else 'none', 'yen': rows[last], 'from': frm, 'times': times, 'buy': True}
     except Exception as e:  # noqa: BLE001
         _log(track, '持ち越しが読めなかった', type(e).__name__, e)
-        return {'state': 'unknown', 'yen': None, 'from': None, 'times': None, 'buy': False}
+        return {'state': 'unknown', 'yen': None, 'from': None, 'times': None, 'buy': True}
 
 
 def exacta(run):
@@ -177,9 +177,11 @@ def split(cum):
     return best[1]
 
 
-def build(day):
-    """→ (公開する doc の tracks, 字の行)。"""
+def build(day, leg1=None):
+    """→ (公開する doc の tracks, 字の行)。leg1 = {場: [(馬番, p1, p3), …]} = 1 本目を直前版の率で差し替える(当日の便 v29_gap.py から)。
+    2026-11-26: 1 本目だけ直前版で作ると期間を分けた検証で一番良かった(2 本目・3 本目は締め切りの時刻にまだ直前版が無い = 前日版)。"""
     M = marks(day)
+    leg1 = leg1 or {}
     d8 = day.replace('-', '')
     tracks, lines, lists = [], [], {}
     if not M:
@@ -189,7 +191,9 @@ def build(day):
         if len(legs) < 3 or any(len(R[r]) < 5 for r in legs):
             lines.append(f'{d8} {track}: 最終 3 レースの率がそろっていない')
             continue
-        E = [exacta(R[r]) for r in legs]
+        l1 = leg1.get(track)
+        use_last = bool(l1) and len(l1) >= 5
+        E = [exacta(l1 if (use_last and i == 0) else R[r]) for i, r in enumerate(legs)]
         cum = [np.cumsum([p for p, _, _ in e[0]]) for e in E]
         ks = split(cum)
         n = ks[0] * ks[1] * ks[2]
@@ -197,18 +201,16 @@ def build(day):
         hp = lp[0] * lp[1] * lp[2]                        # 3 つとも当たる見込み(2023-01〜26-08 の 750 日で 見込み 73.3 本 = 実際 73 本)
         ci = carry_of(track, day, lists)
         frm = (ci['from'] or '').replace('-', '')
-        lines.append(f'■ {d8} {track} トリプル馬単({legs[0]}R・{legs[1]}R・{legs[2]}R)')
+        lines.append(f'■ {d8} {track} トリプル馬単({legs[0]}R・{legs[1]}R・{legs[2]}R)・1 本目 ' + ('直前版' if use_last else '前日版(直前版の前)'))
         if ci['state'] == 'unknown':
             lines.append('  持ち越し: 読めなかった(公式の頁で確かめる)')
         elif ci['state'] == 'wait':
             lines.append(f'  持ち越し: 前の開催日({frm})の結果待ち')
-        elif ci['state'] == 'yes' and ci['buy']:
-            lines.append(f"  持ち越し: あり {ci['yen']:,} 円({ci['times']} 回続き・{frm} から)→ 買う日(2 回以上続いた持ち越しは戻りが売上を超えやすい)")
         elif ci['state'] == 'yes':
-            lines.append(f"  持ち越し: あり {ci['yen']:,} 円(1 回目・{frm} から)→ 見送り(1 回目の持ち越しは五分)。買うなら下の買い目")
+            lines.append(f"  持ち越し: あり {ci['yen']:,} 円({ci['times']} 回続き・{frm} から)→ 買う日(毎日買う)")
         else:
-            lines.append(f'  持ち越し: なし(前回 {frm})→ 買う日')
-        lines.append(f'  組数 {ks[0]} × {ks[1]} × {ks[2]} = {n} 枚・{n * 50:,} 円・当たる見込み {100 * hp:.0f}%(過去 750 日で見込みの合計 73.3 本・実際 73 本)')
+            lines.append(f'  持ち越し: なし(前回 {frm})→ 買う日(毎日買う)')
+        lines.append(f'  組数 {ks[0]} × {ks[1]} × {ks[2]} = {n} 枚・{n * 50:,} 円・当たる見込み {100 * hp:.0f}%(この買い方は 2025-01〜26-08 の 456 日で 32 本 = 14 日に 1 本)')
         races = []
         for r, e, k, q in zip(legs, E, ks, lp):
             by = {}
@@ -219,7 +221,7 @@ def build(day):
                 lines.append(f'      1 着 {a:>2} → 2 着 ' + '・'.join(map(str, bs)))
             races.append({'no': int(r), 'k': int(k), 'p': round(q, 4), 'pairs': [[a, bs] for a, bs in by.items()]})
         lines.append('')
-        tracks.append({'track': track, 'prefix': PREFIX[track], 'legs': [int(x) for x in legs], 'carry': ci,
+        tracks.append({'track': track, 'prefix': PREFIX[track], 'legs': [int(x) for x in legs], 'carry': ci, 'leg1': 'last' if use_last else 'morning',
                        'ks': [int(x) for x in ks], 'hit': round(hp, 4), 'n': int(n), 'yen': int(n * 50), 'races': races})
     return tracks, lines
 
@@ -229,12 +231,20 @@ def upload(path, data):
          {'Content-Type': 'application/json; charset=utf-8', 'x-upsert': 'true', 'Cache-Control': CACHE})
 
 
-def run(day, write=False, out_dir='out_triple'):
-    """入口(便から呼ぶ)。戻り = 買い目を作れた場の数(開催なし・率がそろわない日は 0 = 何も置かない)。"""
+def run(day, write=False, out_dir='out_triple', leg1=None):
+    """入口(便から呼ぶ)。戻り = 買い目を作れた場の数(開催なし・率がそろわない日は 0 = 何も置かない)。
+    leg1 = 1 本目の直前版の率 {場: [(馬番, p1, p3), …]}(当日の便から)。None のときは DB の直前版の行(timing last)があれば使う
+    (前日 15 時・夜 22:40・朝の便では直前版はまだ無い = 前日版のまま。当日の便が書いた後に回し直しても 1 本目は直前版のまま)。"""
     t0 = time.time()
     day = day if '-' in day else f'{day[:4]}-{day[4:6]}-{day[6:]}'
     dt.date.fromisoformat(day)
-    tracks, lines = build(day)
+    if leg1 is None:
+        try:
+            L = marks(day, 'last'); M0 = marks(day)
+            leg1 = {t: L[t][sorted(M0[t])[-3]] for t in M0 if t in L and len(M0[t]) >= 3 and sorted(M0[t])[-3] in L[t]}
+        except Exception as e:  # noqa: BLE001  直前版が読めなければ前日版のまま
+            _log('直前版の行が読めない(1 本目は前日版)', type(e).__name__, str(e)[:120]); leg1 = {}
+    tracks, lines = build(day, leg1)
     for s in lines:
         _log(s)
     if not tracks:

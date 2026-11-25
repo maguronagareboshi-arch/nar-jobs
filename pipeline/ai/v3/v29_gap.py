@@ -35,6 +35,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 import v3_tri as TRI  # noqa: E402  3 連単・3 連複のずれ模型(記録だけ)
 import b53 as B53  # noqa: E402  全券種の参考の買い目(決め 53・書く行の runners と枠番だけから作る)
 import buy4_live as BUY4  # noqa: E402  買い方 決め 4 の段 2(組 6 券種の買い目・直前版の行の p1・p3 と 10 分前の板から)
+import triple_live as TRIPLE  # noqa: E402  2026-11-26 トリプル馬単の 1 本目を直前版で作り直す(当日の印を書いた直後に 1 回)
 import buyfin_live as BUYFIN  # noqa: E402  買い方の最終案(2026-11-18・軸 + 相手の 7 券・記録だけ)
 import tri12_live as TRI12  # noqa: E402  3連単の参考の買い目(買い方 決め 12・2026-11-25・表示だけ・買わない)
 
@@ -1204,6 +1205,14 @@ def live(day, base_csv, mdir, write, until):
                                                     'at': now.strftime('%H:%M:%S')}}
                         log(f'{tr}{rno}R: 当日版の印 発走 {at:%H:%M}・{now:%H:%M:%S}・体重 {row["meta"]["weights"]}/{row["meta"]["n"]} 頭'
                             f'・◎ {row["marks"][0]["num"] if row["marks"] else "-"}・書き込み {took}')
+                        # 2026-11-26 トリプル馬単: その場の最終 3 レースの 1 本目の直前版を書いたら、買い目を作り直して置き直す(締め切り = 発走 5 分前)。
+                        #   ⛔失敗しても周は続ける(前日版の買い目が置かれたまま)。書く便だけ(DB の直前版の行を読み直すので)
+                        try:
+                            nos = sorted(int(x['race_no']) for x in races if x['track'] == tr)
+                            if write and len(nos) >= 3 and rno == nos[-3]:
+                                TRIPLE.run(day, write=True)
+                        except Exception as e:  # noqa: BLE001
+                            log(f'{tr}{rno}R: トリプル馬単の作り直し 失敗 {type(e).__name__} {str(e)[:120]}')
                 except Exception as e:  # noqa: BLE001
                     log(f'{tr}{rno}R: 当日版の印 失敗 {type(e).__name__} {str(e)[:120]}')
                 day_done.add(k)
