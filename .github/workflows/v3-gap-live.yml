@@ -213,11 +213,12 @@ jobs:
           # 2026-10-15 決め 38-1: 直前版の勝つ率で学んだ買いの模型(種 3 本・V3_ASSET_KEY)。無ければ全部 v31 で決める
           # 2026-11-13: 単勝の買い目の決め直し = 今の版(南関 第30版 直前版)の率で学び直した買いの模型(種 3 本)+ 線と単勝の帯(json の中)。
           #   同じ名前 buy38_new.json で置く(ai_rate = final = 画面と同じ最後の率を渡す)。取れない・開けない時は決め 38-1 の模型に戻る
+          # 2026-11-25 買い方 決め 10: 南関 第34版 直前版の率で学び直した買いの模型(線・単勝の帯は同じ)= v3-buywin-20261126
           # 2026-11-19: 単勝の線の替え = 模型は同じ・json の線と単勝の帯だけ替えた v3-buywin-20261119(最終案の軸と同じ線・行の buy_model は bwin2 …)
-          if gh release download v3-buywin-20261119 -p 'v3_buywin.tar.gz.enc' -D in \
+          if gh release download v3-buywin-20261126 -p 'v3_buywin.tar.gz.enc' -D in \
              && openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_buywin.tar.gz.enc | tar -C gapm -xzf - \
              && [ -s gapm/buy38_new.json ]; then
-            echo "買いの模型 = 今の版で学び直した物(v3-buywin-20261119)"
+            echo "買いの模型 = 今の版で学び直した物(v3-buywin-20261126)"
             # 紙の試し(馬連・ワイド・馬単・全券種の参考 〜12/28)の入力は 決め 38-1 の模型の率のまま = gapm/b38old に置く
             mkdir -p gapm/b38old in/b38old
             if gh release download v3-buy38-20261015 -p 'v3_buy38.tar.gz.enc' -D in/b38old                && openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/b38old/v3_buy38.tar.gz.enc | tar -C gapm/b38old -xzf -; then

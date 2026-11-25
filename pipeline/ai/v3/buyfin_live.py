@@ -3,6 +3,8 @@
   2026-11-18 の形(研究 nankan-ai-v3 out/buy_final_1118.md)→ 2026-11-21 買い方 決め 7 の形(研究 out/buy_judge7_1121_judge.md・2024-01〜10 で合格)
   → 2026-11-21 買い方 決め 9 の形(研究 out/buy9_1121_k6_judge.md・持ち回り 690 日で合格・定数の FORM = 'k9')。
 
+  → 2026-11-25 買い方 決め 10(研究 out/buy10_1125_v34_k6_judge.md・第34版の率で学び直した買いの模型): FORM k9 のまま KINDS = 単勝・複勝・ワイド・W_N 2。
+      複勝 = 軸(下限なし)。KINDS に fuku が無い定数(決め 9)は今までと 1 点も変わらない。
   決め 9(FORM k9): 軸 = 下と同じ(期待値 ≥ AX_EV・単勝 AX_LO 以上 AX_HI 未満)。券 = 単勝 + ワイド W_N 点 + 馬連 U_N 点(軸−相手)。
     相手の選び = 組の当たる率(勝つ率 = 期待値 ÷ 単勝 と 3 着内率から作る率)と、単勝のオッズだけから作る組の率。
       ワイド: 相手の期待値 ≥ EV_S かつ ワイドの当たる率 ≥ W_FLOOR の馬を、割安さ(当たる率 ÷ 単勝から作る率)の高い順に W_N 頭。
@@ -207,7 +209,7 @@ def race(rows, win, place, boards, C=None):
     seen = set()
     for a, S in (pick9(rows, C) if k9 else pick(rows, C)):
         if k9:
-            tk = {'tan': [str(a)]}
+            tk = {'tan': [str(a)], 'fuku': [str(a)]}   # 複勝は KINDS に入れた時だけ出る(決め 10 = 単勝 + 複勝 + ワイド)
             for k in ('wide', 'umaren'):
                 cs = [c for c in tickets(a, S[k], (k,))[k] if (k, c) not in seen]   # 同じレースで同じ組は 1 枚
                 seen.update((k, c) for c in cs)
