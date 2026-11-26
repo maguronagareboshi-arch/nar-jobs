@@ -1293,8 +1293,9 @@ REC_KEY = 'record'
 # 2026-11-25 ユーザー「1 本に絞って」: 答え合わせは今の買い方(行の buyfin)だけを数える。古い単勝の線・組の線・丙・複勝(決め 39)は数えない。
 #   BUY_FROM = 第34版(買い方 決め 10 = 単勝 + 複勝 + ワイド 2 点)の初日(ユーザー 11/25「11/26 からに」)。それより前の日は記録から外す(古い形の成績と混ぜない)。
 BUY_FROM = '2026-11-26'
-BUY_KINDS = {'tan': 'win', 'fuku': 'place', 'wide': 'wide', 'umaren': 'quinella'}  # 行の券種 → 払戻の券種名(nar_race_payouts の t)
-REC_FORM = 'buyfin-1'  # 記録の作りの印(違えば全部の日を作り直す)
+BUY_KINDS = {'tan': 'win', 'fuku': 'place', 'wide': 'wide', 'umaren': 'quinella', 'tri12': 'trifecta'}  # 行の券種 → 払戻の券種名(nar_race_payouts の t)
+# 2026-11-26 ユーザー「今までのやつに足せばいいじゃん」: 3連単(buyfin.tri12・axes の外)も成績に足す。印を替えて 11/26 から作り直す
+REC_FORM = 'buyfin-2'  # 記録の作りの印(違えば全部の日を作り直す)
 
 
 def record(days):
@@ -1324,7 +1325,7 @@ def record(days):
             if tr not in NANKAN:
                 continue
             bf = (r.get('value') or {}).get('buyfin')
-            if not isinstance(bf, dict) or bf.get('why') or not bf.get('axes'):
+            if not isinstance(bf, dict) or bf.get('why') or not (bf.get('axes') or bf.get('tri12')):
                 continue
             p = pay.get((tr, int(rno)))
             if not p:
@@ -1339,8 +1340,10 @@ def record(days):
                 yp[(x.get('t'), str(x.get('c')))] = yp.get((x.get('t'), str(x.get('c'))), 0) + int(x.get('y') or 0)
             races += 1
             tags.add(str(bf.get('tag')))
-            for ax in bf['axes']:
-                for k, lst in (ax.get('tickets') or {}).items():
+            # 3連単(buyfin.tri12 = [[組, オッズ], …])は軸の外 = 軸の券と同じ形の 1 つとして足す
+            tix = [ax.get('tickets') or {} for ax in (bf.get('axes') or [])] + ([{'tri12': bf['tri12']}] if isinstance(bf.get('tri12'), list) else [])
+            for tk in tix:
+                for k, lst in tk.items():
                     if k not in BUY_KINDS:
                         continue
                     for t in lst or []:
