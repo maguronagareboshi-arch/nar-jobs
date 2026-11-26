@@ -63,6 +63,7 @@ OT72, OT72G = None, None  # 一本の木(決め 72・onetree72_live.load の戻�
 PREB = {}  # (場, R) → {馬番: (p1, p3′)} = F3 の混ぜの前の直前版(買いの模型 決め38-1 はこの率で学んだので、買いにはこれを渡す)
 DAY_MIN = 30      # 当日版の印は発走 30 分前から出す(体重はもう出ている・ユーザー 2026-10-01)
 DAY_LAST_MIN = 16  # 発走 15 分前を過ぎた印は DB のトリガーが捨てるので、その手前まで
+TRI_EARLY_MIN = 45  # 2026-11-26 トリプル馬単の 1 本目だけ 45 分前から(体重が全頭そろった時だけ・ユーザー「40 分前ぐらいに」)
 DECIDE_MIN = 10   # 発走 10 分前 = 締め切り(発走 2 分前)の 8 分前を過ぎたら決める
 LATE_MIN = 3      # 発走 3 分前を過ぎても決まっていないレースは見送る(古い材料で後から書かない)
 REC_FROM_MIN = 15  # 答え合わせは最後の発走の 15 分後から(払戻は発走の 15〜18 分後に入る)
@@ -926,6 +927,26 @@ def db_weights(day):
     return wt
 
 
+def tri_lead1(races):
+    """2026-11-26 トリプル馬単の 1 本目 = 各場の最後から 3 つ目のレース {場: レース番号}(3 レース未満の場は無し)。"""
+    by = {}
+    for x in races:
+        by.setdefault(x['track'], []).append(int(x['race_no']))
+    return {t: sorted(v)[-3] for t, v in by.items() if len(v) >= 3}
+
+
+def full_weights(B, wt, tr, rno):
+    """そのレースの土台の馬が全頭 体重そろったか(1 頭でも欠ければ False)。"""
+    need = {int(u) for u in B[(B.track == tr) & (B.race_no == rno)].umaban}
+    return bool(need) and need <= set(wt.get((tr, rno), {}))
+
+
+def day_window(todo, lead1, day_done):
+    """当日版の印を見に行くレース = 発走 30〜16 分前(トリプル馬単の 1 本目だけ 45〜16 分前)。todo = [(分前, 行, 鍵, 発走)]。"""
+    return [x for x in todo if x[2] not in day_done
+            and DAY_LAST_MIN < x[0] <= (TRI_EARLY_MIN if lead1.get(x[1]['track']) == int(x[1]['race_no']) else DAY_MIN)]
+
+
 def today_weights(day, wt, go, need=()):
     """要るレース need の体重を 公式の当日 ZIP → 本番 DB → 保険(出馬表の画面・cloud/official_alt.py)の順に、まだ無い分だけ読む。
     2026-10-07 にこの便の機械だけ 2 時間 ZIP を断られ大井 1〜4R の直前版が出なかった(記録に状態番号と URL も残す)。
@@ -1168,14 +1189,23 @@ def live(day, base_csv, mdir, write, until):
             _record_wait(day, write, last_at, t_start)
             return 0
         # 当日版の印(発走 30〜16 分前・体重が出たら 1 回)。失敗しても 10 分前の候補は止めない
-        dd = [x for x in todo if DAY_LAST_MIN < x[0] <= DAY_MIN and x[2] not in day_done] if dm is not None and has_s2 else []
+        #   2026-11-26 ユーザー「トリプル馬単の対象のレースは 40 分前ぐらいに出て欲しい」= トリプル馬単の 1 本目(各場の最後から 3 つ目)だけ
+        #   発走 45 分前から体重を見に行き、全頭そろったらその場で書く(そろわなければ 30 分前からの今までどおり)。予想の中身は体重が同じなら 30 分前と同じ
+        lead1 = tri_lead1(races)
+        full_w = lambda tr_, rno_: full_weights(B, wt, tr_, rno_)  # noqa: E731
+        dd = day_window(todo, lead1, day_done) if dm is not None and has_s2 else []
         if dd:
-            if any(not wt.get((x[1]['track'], int(x[1]['race_no']))) for x in dd) and (wt_at is None or (now - wt_at).total_seconds() > 60):
+            if any(not wt.get((x[1]['track'], int(x[1]['race_no']))) or (x[0] > DAY_MIN and not full_w(x[1]['track'], int(x[1]['race_no']))) for x in dd) \
+                    and (wt_at is None or (now - wt_at).total_seconds() > 60):
                 wt, go = today_weights(day, wt, go, [(x[1]['track'], int(x[1]['race_no'])) for x in dd])
                 wt_at = now
             for mins, r, k, at in dd:
                 tr, rno = r['track'], int(r['race_no'])
                 w = wt.get((tr, rno), {})
+                if mins > DAY_MIN:  # 早出しの窓(トリプル馬単の 1 本目だけ)= 全頭の体重がそろった時だけ
+                    if not full_w(tr, rno):
+                        continue
+                    log(f'{tr}{rno}R: トリプル馬単の 1 本目 体重 全頭そろい 発走 {mins:.0f} 分前 → 当日版の印を早く書く')
                 if not w:
                     if mins > DAY_LAST_MIN + 1.5:
                         continue  # 体重がまだ = 次の回
