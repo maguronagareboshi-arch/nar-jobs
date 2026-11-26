@@ -408,6 +408,22 @@ def day_marks(Bk, odds, w, going, dm, day):
                 log('第28版 直前版 失敗(第26版のまま)', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), dp77m['err'])
         except Exception as e:  # noqa: BLE001  落ちても第26版の印は出す
             log('第28版 直前版 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
+    tfm = None
+    if ver == '南関 第34版':
+        try:  # 2026-11-26 移籍馬の専用の木(研究 nankan-ai-v3 tf_model_1126.py・判定 11/26 合格): 第34版 直前版の最後の率の上で、前日の便が土台に書いた
+            #   移籍馬の木の値 TF:v を混ぜる = 南関 第35版 直前版。定数なし・TF:v なし・落ちたら第34版のまま
+            import tf_live
+            r_ = tf_live.apply_day(b, day, np.asarray(p1, float), np.asarray(p3p, float))
+            tfm = r_['meta']
+            if r_['on']:
+                p1, p3, p3p = r_['p1'], r_['p3'], r_['p3']
+                used.append('tf')
+                ver = '南関 第35版'
+                stamp += '+移籍馬の専用の木'
+            elif tfm.get('err'):
+                log('移籍馬の木 失敗(第34版のまま)', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), tfm['err'])
+        except Exception as e:  # noqa: BLE001  落ちても第34版の印は出す
+            log('移籍馬の木 失敗', Bk.track.iloc[0], int(Bk.race_no.iloc[0]), type(e).__name__, str(e)[:120])
     stamp = f'{ver} 直前版 = {stamp}'
     d = pd.DataFrame({'num': b.umaban.astype(int).to_numpy(), 'p1': p1, 'p3': p3p, 'p3_raw': p3})
     d = d.sort_values(['p3', 'p1', 'num'], ascending=[False, False, True], kind='mergesort').reset_index(drop=True)
@@ -449,6 +465,8 @@ def day_marks(Bk, odds, w, going, dm, day):
         meta['ot72'] = ot72m
     if g68m is not None:
         meta['g68'] = g68m
+    if tfm is not None:
+        meta['tf'] = tfm
     return {'track': tr, 'race_date': day, 'race_no': rno, 'marks': marks, 'meta': meta}
 
 

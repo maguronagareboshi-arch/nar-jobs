@@ -432,6 +432,7 @@ def main():
         cyb = cy_band.make(cap.get('F'))
     except Exception as e:  # noqa: BLE001
         log('調教の札 失敗', type(e).__name__, str(e)[:200])
+    F_tf = cap.get('F')   # 2026-11-26 移籍馬の専用の木(tf_live)がその日の調教 t8.cy_feats を使う
     del cap
     ver = '南関 第21版 前日版' if b12 and nt and nsq and ncap is not None else '南関 第20版 前日版' if b12 and nt and nsq else '南関 第19版 前日版' if b12 and nt and naw else '南関 第15版 前日版' if b12 and nt else '南関 第12版 前日版' if b12 else '南関 第11版 前日版' if bundle else '南関 第10版 前日版'  # 版の名前(研究 nankan-ai-v3 VERSIONS.md)
     import c67_cancel
@@ -465,6 +466,16 @@ def main():
         except Exception as e:  # noqa: BLE001
             log('前日の一本の木 失敗(第25版のまま)', type(e).__name__, str(e)[:200])
             PT74 = {}
+    TFm, csv_notf = {}, None
+    try:  # 2026-11-26 移籍馬の専用の木(研究 nankan-ai-v3 tf_model_1126.py・tf_prod_1126.py・判定 11/26 合格・ユーザー承認 11/26「少しでも良くなるなら入れる」):
+        #   第34版 前日版の最後の率の上で、移籍馬(中央から・他場からの 1〜3 戦目)の 3 着内を木と混ぜる = 南関 第35版 前日版。木の値は土台へ TF:v(当日の便が使う)。
+        #   当日の便の土台には混ぜる前の率を渡す(csv_notf)。定数なし・公式の表なし・落ちたら第34版のまま
+        import tf_live
+        import seq2_live
+        csv_notf, TFm = tf_live.run_pre(day, csv_path, out / f'{day}_v29_base.csv', seq2_live.OFFICIAL, F_tf, PT74, log=log)
+    except Exception as e:  # noqa: BLE001
+        log('移籍馬の木 失敗(第34版のまま)', type(e).__name__, str(e)[:200])
+        TFm, csv_notf = {}, None
     rows = build_rows(csv_path, day, src, ver + ' = ' + ((STAMP12 + (STAMP_DEB if nd else '') + (STAMP_TPL if nt else '') + (STAMP_AW if naw else '') + (STAMP_SQ if nsq else '') + (STAMP_G68 if ng else '') + (STAMP_PT if npt else '') + (STAMP_PM if npm else '') + (STAMP_CAP if ncap is not None else '')) if b12 else (STAMP11 if bundle else STAMP)))
     for r in rows if c67 else ():
         r['meta']['c67'] = c67
@@ -513,10 +524,21 @@ def main():
             n76 += v28
     if PT74:
         log('版', '南関 第34版 前日版', n34, 'R ・南関 第33版 前日版', n33, 'R ・南関 第32版 前日版', n87 - n33 - n34, 'R ・', v29n, n76 - n87, 'R ・南関 第27版 前日版', n74 - n76, 'R ・第25版のまま', len(rows) - n74, 'R')
+    n35 = 0
+    for r in rows:  # 2026-11-26 移籍馬の専用の木を混ぜたレース(第34版 前日版の上だけ)= 南関 第35版 前日版
+        mt = TFm.get((r['track'], int(r['race_no'])))
+        if mt is None:
+            continue
+        r['meta']['tf'] = mt
+        if mt.get('on') and '南関 第34版 前日版' in r['meta']['stamp']:
+            r['meta']['stamp'] = r['meta']['stamp'].replace('南関 第34版 前日版', '南関 第35版 前日版', 1) + '+移籍馬の専用の木'
+            n35 += 1
+    if TFm:
+        log('版 南関 第35版 前日版', n35, 'R')
     try:  # 決め 77(南関 第28版 直前版・研究 nankan-ai-v3 dayonpre77_judge.py・判定 2026-11-09 合格): 第28版 前日版の最後の率・u_P・p_Nx を土台へ。
         #   当日の便がそのレースの前日版が第28版の時だけ足す。前日版の表と行には触らない。失敗したら直前版は第26版のまま
         import dayonpre77_live
-        dayonpre77_live.write_base(csv_path, out / f'{day}_v29_base.csv', PT74, PNX77, log=log)
+        dayonpre77_live.write_base(csv_notf or csv_path, out / f'{day}_v29_base.csv', PT74, PNX77, log=log)   # 移籍馬の木を混ぜる前の率(研究の直前版の土台)
     except Exception as e:  # noqa: BLE001
         log('決め 77 の土台 失敗(直前版は第26版のまま)', type(e).__name__, str(e)[:200])
     if notes:
