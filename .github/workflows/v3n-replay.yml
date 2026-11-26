@@ -1,0 +1,274 @@
+# 他場の朝の便(nar-ai-v3n.yml・master edbac43 = 他場 第 15 版)を過去の日について「書かずに」回し直す研究の便(2026-11-26・枝 wip/v3n-replay-1126 だけ)。
+# なぜ: 本番の朝の行 10/12〜11/25 で 4〜5 番人気を AI 6 位以下に置いた馬の 実際 ÷ 見込み = 1.50(756 頭)・研究の確かめ(第 15 版 C_mo)は 1.17。
+#   本番の材料だけの遅れ・抜けか、6 週の揺れかを分ける(v3 の out/HANDOFF_v3n_replay_1126.md)。
+# 起動 = この枝への push(日付は ops/v3n_replay_days.txt)。⛔--write なし・キャッシュは読まず保存もしない・生存の記録なし・出力は暗号化した成果物。
+#   prep: 公式の表を 1 回だけ丸ごと落とす(便ごとに落とさない = 通信量)→ 成果物 v3n-replay-official(2 日)。
+#   predict: 日 × mask(1 = 当日の走った後の値を空 = 本番の朝に近い・0 = 空にしない = 研究と同じ)。
+#   材料表はサイトの表なしの自分の表(meta.feat_src = own-nosite)= 本番の 11/7 以降の own と同じ作り。
+#   成果物 v3n-replay-<日付>-m<mask> = v3n_<日付>.json(回し直しの行)・prod_marks(本番の朝の行)・runs(着順と人気)・ログ。鍵 = V3_ASSET_KEY。
+name: v3n-replay
+
+on:
+  push:
+    branches: ['wip/v3n-replay-1126']
+
+concurrency:
+  group: v3n-replay
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    outputs:
+      days: ${{ steps.p.outputs.days }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: p
+        run: echo "days=$(grep -E '^[0-9]{4}-[0-9]{2}-[0-9]{2}$' ops/v3n_replay_days.txt | jq -R . | jq -cs .)" >> "$GITHUB_OUTPUT"
+
+  prep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ai-code
+        with:
+          key: ${{ secrets.V3_AI_DEPLOY_KEY }}
+          mode: fallback
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install python packages (手元と同じ版)
+        run: pip install -q "pandas==2.2.3" "numpy==1.26.4" "pyarrow==25.0.1" "lightgbm==4.7.0" "catboost==1.2.10" requests
+      - name: official tables (whole, once)
+        env:
+          PYTHONUNBUFFERED: '1'
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          set -o pipefail
+          mkdir -p official
+          cd pipeline/ai/kochi && python -X utf8 -W ignore -c "import k0_dl; k0_dl.main(['$GITHUB_WORKSPACE/official'])"
+          ls -l "$GITHUB_WORKSPACE/official"
+      - name: seal official
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: bash ops/artifact_seal.sh seal official sealed_off/official.tar.gz.enc
+      - uses: actions/upload-artifact@v4
+        with:
+          name: v3n-replay-official
+          path: sealed_off/
+          retention-days: 2
+          if-no-files-found: error
+
+  predict:
+    needs: [plan, prep]
+    strategy:
+      fail-fast: false
+      max-parallel: 10
+      matrix:
+        day: ${{ fromJSON(needs.plan.outputs.days) }}
+        mask: ['1', '0']
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/ai-code
+        with:
+          key: ${{ secrets.V3_AI_DEPLOY_KEY }}
+          mode: fallback
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: install python packages (手元と同じ版)
+        run: pip install -q "pandas==2.2.3" "numpy==1.26.4" "pyarrow==25.0.1" "lightgbm==4.7.0" "catboost==1.2.10" requests
+      - uses: actions/download-artifact@v4
+        with:
+          name: v3n-replay-official
+          path: work/official
+      - name: open official and cut to the day
+        env:
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+        run: |
+          bash ops/artifact_seal.sh unseal work/official
+          python -X utf8 ops/v3n_replay_mask.py work/official "${{ matrix.day }}" "${{ matrix.mask }}"
+          ls -l work/official
+      # 2026-10-14 第 9 版 = 全国 1 本の固定の木(v3 の src/f5_scripts/v3n_one_prod.py tree・2026-09-01 切り)。⛔無ければ v3n_daily が落ちる(何も書かない)
+      - name: download v3n one model
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3n-trees54-20261025 -p 'v3n_one.tar.gz.enc' -D in
+          mkdir -p v3n_one
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3n_one.tar.gz.enc | tar -C v3n_one -xzf -
+          rm -f in/v3n_one.tar.gz.enc
+          ls -l v3n_one
+
+      # 2026-10-31 第 12 版(決め 61・v3 の out/v3n_rb61_judge.md)= 2 本目の木(直近 2 年・v3 の src/f5_scripts/v3n_rb61_prod.py tree・2026-09-01 切り)。⛔無ければ v3n_daily が落ちる(何も書かない)
+      - name: download v3n rb61 model
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3n-rb61-20261031 -p 'v3n_rb61.tar.gz.enc' -D in
+          mkdir -p v3n_rb61
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3n_rb61.tar.gz.enc | tar -C v3n_rb61 -xzf -
+          rm -f in/v3n_rb61.tar.gz.enc
+          ls -l v3n_rb61
+
+      # 2026-11-06 第 13 版(決め 70・v3 の out/v3n_mix_judge.md)= CatBoost 3 本・ニューラルネット 3 本(v3 の src/f5_scripts/v3n_mx70_prod.py・2026-09-01 切り)。⛔無ければ v3n_daily が落ちる(何も書かない)
+      - name: download v3n mx70 models
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3n-mx70-20261107 -p 'v3n_mx70.tar.gz.enc' -D in
+          mkdir -p v3n_mx70
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3n_mx70.tar.gz.enc | tar -C v3n_mx70 -xzf -
+          rm -f in/v3n_mx70.tar.gz.enc
+          ls -l v3n_mx70
+
+      # 2026-11-19 他場 第 14 版(決め 83・v3 の out/nn83/judge.md)= NN 3 本をレース全体を読む NN 3 本と入れ替え(v3 の src/f5_scripts/v3n_ab_fit_1118.py の A・2026-09-01 切り)。
+      #   無い・開けない日は v3n_mx70.load が第 13 版の組(上の NN 3 本)で出す = 止めない。戻すときはこの段を消すか commit を revert
+      - name: download v3n na83 models
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3n-na83-20261120 -p 'v3n_na83.tar.gz.enc' -D in
+          mkdir -p v3n_na83_tmp
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3n_na83.tar.gz.enc | tar -C v3n_na83_tmp -xzf -
+          rm -f in/v3n_na83.tar.gz.enc
+          mv v3n_na83_tmp v3n_na83   # 開けきった時だけ置く(途中で落ちた半端な置き場を読ませない)
+          ls -l v3n_na83
+      # 2026-11-25 他場 第 15 版(決め 90・v3 の out/v3n_seqb90_judge.md)= 並び読みの u を 30 走の並び読み h30(種 3 本の平均)と半々に・勝つ率の直しの k は mo7・di7。
+      #   重みは v3 の src/f5_scripts/v3n_seqb90_prod.py(単独 2016-01〜2026-08・仕上げ 2024-09〜2026-08)。無い・開けない日は第 14 版の u と k のまま = 止めない。
+      #   戻すときはこの commit を revert(定数の名前も一緒に戻る)
+      - name: download v3n seqb90 files
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3n-seqb90-20261125 -p 'v3n_seq30.tar.gz.enc' -D in
+          mkdir -p v3n_seq30_tmp
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3n_seq30.tar.gz.enc | tar -C v3n_seq30_tmp -xzf -
+          rm -f in/v3n_seq30.tar.gz.enc
+          mv v3n_seq30_tmp v3n_seq30   # 開けきった時だけ置く
+          ls -l v3n_seq30
+      # 2026-10-12 第 6 版 = 並び読み(14 場 + 中央の過去 10 走・v3 の out/v3n_seq.md)の固定ファイル(時計のならし・重み 3 本)。
+      #   2026-10-14 第 9 版: 重みをイの p5 で仕上げ直した版(v3n-seq-one-20261014)。戻すときは v3n-seq-20261012 と v3n_daily の第 8 版を一緒に。
+      #   無ければ v3n_daily は並び読みを足さずに書く
+      - name: download v3n seq files
+        continue-on-error: true
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          gh release download v3n-seq-trees54-20261025 -p 'v3n_seq.tar.gz.enc' -D in
+          mkdir -p v3n_seq
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3n_seq.tar.gz.enc | tar -C v3n_seq -xzf -
+          rm -f in/v3n_seq.tar.gz.enc
+          ls -l v3n_seq
+
+      # 2026-10-15 予想の学んだ定数・表(勝つ率の直し・談話の印・他場の曲線など)= 暗号化したリリース v3-consts-20261127t(公開のコードに置かない)。
+      #   取れない・開けない・中身が欠けている時は止める(黙って別の値で予想を出さない)。中身の確かめ = pipeline/ai/sealed.py check
+      - name: download sealed constants
+        id: sc
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          : "${V3_ASSET_KEY:?secrets.V3_ASSET_KEY が無い}"
+          mkdir -p in sealed_consts
+          for i in 1 2 3; do
+            gh release download v3-consts-20261127t -p 'v3_consts.tar.gz.enc' -D in --clobber && break
+            [ "$i" = 3 ] && { echo "::error::⛔ 予想の定数(v3-consts-20261127t)を 3 回取れなかった"; exit 1; }
+            sleep 20
+          done
+          openssl enc -d -aes-256-cbc -pbkdf2 -pass env:V3_ASSET_KEY -in in/v3_consts.tar.gz.enc | tar -C sealed_consts -xzf -
+          rm -f in/v3_consts.tar.gz.enc
+          V3_CONSTS="$PWD/sealed_consts" python -X utf8 pipeline/ai/sealed.py check
+          echo "V3_CONSTS=$PWD/sealed_consts" >> "$GITHUB_ENV"
+
+      - name: v3n replay (no fetch・no write)
+        timeout-minutes: 45
+        env:
+          PYTHONUNBUFFERED: '1'
+          V3N_SEQ: v3n_seq
+          V3N_ONE: v3n_one
+          V3N_RB61: v3n_rb61
+          V3N_MX70: v3n_mx70
+          V3N_NA83: v3n_na83
+          V3N_FEAT: feat/none.csv.gz
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          NAR_JOBS_AI: pipeline/ai
+        run: |
+          set -o pipefail
+          python -X utf8 -W ignore pipeline/ai/kochi/v3n_daily.py "${{ matrix.day }}" work --no-fetch 2>&1 | tee out_log.txt
+      - name: copy production morning rows and results (read only)
+        if: always()
+        env:
+          SUPABASE_URL: ${{ secrets.NAR_SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.NAR_SUPABASE_SERVICE_KEY }}
+          DAY: ${{ matrix.day }}
+        run: |
+          mkdir -p out
+          cp work/v3n_*.json out/ 2>/dev/null || true
+          cp out_log.txt out/ 2>/dev/null || true
+          python -X utf8 - <<'PY2'
+          import json, os, urllib.request
+          U, K, day = os.environ['SUPABASE_URL'].rstrip('/'), os.environ['SUPABASE_SERVICE_KEY'], os.environ['DAY']
+          def get(p):
+              out, off = [], 0
+              while True:
+                  q = urllib.request.Request(f'{U}/rest/v1/{p}&limit=1000&offset={off}', headers={'apikey': K, 'Authorization': f'Bearer {K}'})
+                  b = json.load(urllib.request.urlopen(q, timeout=60))
+                  out += b
+                  if len(b) < 1000:
+                      return out
+                  off += 1000
+          m = get(f'nar_ai_marks?model=eq.v3n-1&timing=eq.morning&race_date=eq.{day}&select=track,race_no,meta&order=track,race_no')
+          r = get(f'nar_runs?race_date=eq.{day}&select=track,race_no,runner_number,finish,finish_note,popularity&order=track,race_no,runner_number')
+          json.dump(m, open(f'out/prod_marks_{day}.json', 'w'), ensure_ascii=False)
+          json.dump(r, open(f'out/runs_{day}.json', 'w'), ensure_ascii=False)
+          print('本番の朝の行', len(m), '着順の行', len(r))
+          PY2
+      - name: seal out with V3_ASSET_KEY
+        if: always()
+        env:
+          V3_ASSET_KEY: ${{ secrets.V3_ASSET_KEY }}
+        run: |
+          set -o pipefail
+          V3_ASSET_KEY=$(printf %s "$V3_ASSET_KEY" | tr -d '\r\n'); export V3_ASSET_KEY
+          mkdir -p sealed_out
+          tar -C out -czf - . | openssl enc -aes-256-cbc -pbkdf2 -salt -pass env:V3_ASSET_KEY -out sealed_out/v3n-replay.tar.gz.enc
+          ls -l sealed_out
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: v3n-replay-${{ matrix.day }}-m${{ matrix.mask }}
+          path: sealed_out/
+          retention-days: 14
+          if-no-files-found: warn
