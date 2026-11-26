@@ -1294,8 +1294,12 @@ REC_KEY = 'record'
 #   BUY_FROM = 第34版(買い方 決め 10 = 単勝 + 複勝 + ワイド 2 点)の初日(ユーザー 11/25「11/26 からに」)。それより前の日は記録から外す(古い形の成績と混ぜない)。
 BUY_FROM = '2026-11-26'
 BUY_KINDS = {'tan': 'win', 'fuku': 'place', 'wide': 'wide', 'umaren': 'quinella', 'tri12': 'trifecta'}  # 行の券種 → 払戻の券種名(nar_race_payouts の t)
-# 2026-11-26 ユーザー「今までのやつに足せばいいじゃん」: 3連単(buyfin.tri12・axes の外)も成績に足す。印を替えて 11/26 から作り直す
-REC_FORM = 'buyfin-2'  # 記録の作りの印(違えば全部の日を作り直す)
+# 2026-11-26 ユーザー「今までのやつに足せばいいじゃん」「今まで参考の買い目の3連単の成績にだよ」:
+#   3連単は前の参考の買い目の 3連単の成績(丙 = 行の tri から期待値 ≥ 1.0・50 ≤ オッズ < 500・期待値の大きい順に 3 点・2026-10-04〜)の続きに足す。
+#   BUY_FROM より前の日 = 丙・BUY_FROM から = buyfin.tri12。3連単だけ TRI_FROM から数え、合計(all)は BUY_FROM からの日だけ。
+TRI_FROM = '2026-10-04'
+HEI = (1.0, 50, 500, 3)
+REC_FORM = 'buyfin-3'  # 記録の作りの印(違えば全部の日を作り直す)
 
 
 def record(days):
@@ -1304,11 +1308,11 @@ def record(days):
     total の bets・hits・return は単勝(画面の古い読み方と同じ場所)、total.kinds に券種ごと、total.all に全部。"""
     # ⛔読めなかったときに空から始めると、直近 3 日分だけの通算で上書きしてしまう(監査 11/3)= 止める
     cur = (_get(f'{GAP}?key=eq.{REC_KEY}&select=value') or [{}])[0].get('value') or {}
-    dd = {d: v for d, v in (cur.get('days') or {}).items() if d >= BUY_FROM} if cur.get('form') == REC_FORM else {}
-    if cur.get('form') != REC_FORM:  # 作りが替わった = 今の形の最初の日から全部作り直す
-        d0, d1 = dt.date.fromisoformat(BUY_FROM), max(dt.date.fromisoformat(d) for d in days)
+    dd = {d: v for d, v in (cur.get('days') or {}).items() if d >= TRI_FROM} if cur.get('form') == REC_FORM else {}
+    if cur.get('form') != REC_FORM:  # 作りが替わった = 3連単の最初の日から全部作り直す
+        d0, d1 = dt.date.fromisoformat(TRI_FROM), max(dt.date.fromisoformat(d) for d in days)
         days = [(d0 + dt.timedelta(days=i)).isoformat() for i in range((d1 - d0).days + 1)]
-    days = sorted(d for d in set(days) if d >= BUY_FROM)
+    days = sorted(d for d in set(days) if d >= TRI_FROM)
     q = urllib.parse.quote(','.join(NANKAN))
     for day in days:
         rows = _get(f"{GAP}?race_date=eq.{day}&track=in.({q})&select=key,value")
@@ -1323,6 +1327,26 @@ def record(days):
         for r in rows:
             _, tr, rno = r['key'].split(':')
             if tr not in NANKAN:
+                continue
+            if day < BUY_FROM:  # 前の参考の買い目の 3連単(丙)だけ
+                v = r.get('value') or {}
+                p = pay.get((tr, int(rno)))
+                if not v.get('tri'):
+                    continue
+                if not p:
+                    pend += 1
+                    continue
+                races += 1
+                yt = {}
+                for x in p:
+                    if x.get('t') == 'trifecta':
+                        yt[str(x.get('c'))] = yt.get(str(x.get('c')), 0) + int(x.get('y') or 0)
+                L, lo, hi, N = HEI
+                for g in sorted([g for g in v['tri'] if g[2] >= L and lo <= g[1] < hi], key=lambda g: -g[2])[:N]:
+                    y = yt.get(str(g[0]), 0)
+                    kc['tri12']['bets'] += 1
+                    kc['tri12']['hits'] += y > 0
+                    kc['tri12']['return'] += y
                 continue
             bf = (r.get('value') or {}).get('buyfin')
             if not isinstance(bf, dict) or bf.get('why') or not (bf.get('axes') or bf.get('tri12')):
@@ -1355,17 +1379,17 @@ def record(days):
                         kc[k]['hits'] += y > 0
                         kc[k]['return'] += y
         if races or pend:
-            dd[day] = {'races': races, 'pending': pend, 'tags': sorted(tags), **kc['tan'],
-                       'kinds': kc, 'all': {k: sum(v[k] for v in kc.values()) for k in ('bets', 'hits', 'return')}}
+            dd[day] = {'races': races, 'pending': pend, 'tags': sorted(tags), **kc['tan'], 'kinds': kc,
+                       'all': {k: (sum(v[k] for v in kc.values()) if day >= BUY_FROM else 0) for k in ('bets', 'hits', 'return')}}
     roi = lambda t: round(t['return'] / t['bets'], 1) if t['bets'] else None  # noqa: E731  1 点 100 円 = 払戻 ÷ 点数 が %
     kinds = {}
     for k in BUY_KINDS:
         t = {f: sum(((v.get('kinds') or {}).get(k) or {}).get(f, 0) for v in dd.values()) for f in ('bets', 'hits', 'return')}
         kinds[k] = {**t, 'roi': roi(t)}
-    al = {f: sum(t[f] for t in kinds.values()) for f in ('bets', 'hits', 'return')}
-    tot = {'races': sum(v.get('races', 0) for v in dd.values()), **{f: kinds['tan'][f] for f in ('bets', 'hits', 'return')},
+    al = {f: sum((v.get('all') or {}).get(f, 0) for v in dd.values()) for f in ('bets', 'hits', 'return')}   # 合計は BUY_FROM からの日だけ
+    tot = {'races': sum(v.get('races', 0) for d, v in dd.items() if d >= BUY_FROM), **{f: kinds['tan'][f] for f in ('bets', 'hits', 'return')},
            'roi': kinds['tan']['roi'], 'kinds': kinds, 'all': {**al, 'roi': roi(al)}}
-    val = {'model': 'v29', 'form': REC_FORM, 'from': BUY_FROM, 'unit': 100, 'days': dict(sorted(dd.items())), 'total': tot,
+    val = {'model': 'v29', 'form': REC_FORM, 'from': BUY_FROM, 'tri_from': TRI_FROM, 'unit': 100, 'days': dict(sorted(dd.items())), 'total': tot,
            'built': dt.datetime.now(JST).isoformat(timespec='seconds')}
     put_gap(REC_KEY, val)
     log('答え合わせ(今の買い方): 通算', al['bets'], '点・的中', al['hits'], '・回収率', tot['all']['roi'], '%(単勝', tot['roi'], '%)')
