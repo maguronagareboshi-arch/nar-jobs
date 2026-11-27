@@ -1,3 +1,4 @@
+# 2026-11-27 予想のコード(pipeline/ai)は非公開の置き場 nj-core へ切った。この便を動かす前に .github/actions/ai-code の段を足すこと。
 # 研究用・1 回きり(2026-11-03)。予想 AI base-v1 の馬場差を「今の作り方(A)」と「サイトの馬場差(B)」で比べる。
 #   A= pipeline/sql/ai_feat_20260908.sql のまま / B= t_baba だけ差し替えた写し pipeline/sql/research_ai_feat_babasite.sql
 #   比べ= cloud/research_ai_baba.py(base_v1 の PARAMS・ROUNDS・feature_cols morning をそのまま・学習 〜2025-10-31・試験 2025-11-01〜)

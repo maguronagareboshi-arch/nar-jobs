@@ -62,7 +62,6 @@ jobs:
       - uses: ./.github/actions/ai-code
         with:
           key: ${{ secrets.V3_AI_DEPLOY_KEY }}
-          mode: fallback
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'

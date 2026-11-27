@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
 """厩舎の話 → 「よく出る話」の札(平易な札名)。2026-11-09・モックの台本(scratchpad traits.py)と同じ対応。
-型の判定は nar-jobs pipeline/ai/v3/dw_tmpl.py の tags(変えない)。状態・口ぶり・前走など毎回出る型は入れない。
+型の判定は同じフォルダの dw_tmpl.py の tags(変えない)。状態・口ぶり・前走など毎回出る型は入れない。
 使い方: note_tags(comment) -> ['休み明け', '流れ次第', ...](dw_tmpl の欄の順・重なりなし)。
 明日からの便はこのファイルを写して使う(DW_TMPL_DIR で dw_tmpl.py の場所を変えられる)。
 """
@@ -8,9 +8,8 @@ import os
 import re
 import sys
 
-# 便では repo の pipeline/ai/v3(cloud/danwa から 2 つ上)を使う
-sys.path.insert(0, os.environ.get('DW_TMPL_DIR', os.path.join(os.path.dirname(os.path.abspath(__file__)),
-                                                             '..', '..', 'pipeline', 'ai', 'v3')))
+# 2026-11-27 dw_tmpl.py はこのフォルダ(予想のコードを非公開へ切った時に pipeline/ai/v3 から移した)
+sys.path.insert(0, os.environ.get('DW_TMPL_DIR', os.path.dirname(os.path.abspath(__file__))))
 import dw_tmpl  # noqa: E402
 
 # 渡す前に消す語(馬場・展開の札に誤って当たる言い回し)

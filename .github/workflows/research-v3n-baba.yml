@@ -1,3 +1,4 @@
+# 2026-11-27 予想のコード(pipeline/ai)は非公開の置き場 nj-core へ切った。この便を動かす前に .github/actions/ai-code の段を足すこと。
 # 研究(2026-11-03): 他場版 v3n の場の材料の馬場差 D_T をサイトの馬場差 d1 に替えると予想が良くなるか(手動だけ)。
 # ⛔本番の DB・便は変えない = 公開 REST とサイトの公開 JSON を読むだけ。結果は成果物 research-v3n-baba。
 name: research-v3n-baba

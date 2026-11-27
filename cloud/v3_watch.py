@@ -27,12 +27,12 @@ import urllib.request
 from pathlib import Path
 
 HERE = Path(__file__).resolve().parent
-sys.path.insert(0, str(HERE.parents[2] / "cloud"))
+sys.path.insert(0, str(HERE))
 NANKAN = ("大井", "川崎", "船橋", "浦和")
 TAJO = ("門別", "盛岡", "水沢", "金沢", "笠松", "名古屋", "園田", "姫路", "高知", "佐賀")   # nar-viewer js/data.js の AI_TAJO_TRACKS と同じ
 PAST_MIN = 5   # 発走をこの分だけ過ぎたレースを見る(直前版は発走 15 分前までに書く)
 JST = dt.timezone(dt.timedelta(hours=9))
-SRC = (HERE / "day2_db_copy.py").read_text(encoding="utf-8")      # 公開の読み鍵(前向きの写しと同じ)を pandas なしで読む
+SRC = (HERE / "pubkey.py").read_text(encoding="utf-8")      # 公開の読み鍵(cloud/pubkey.py)を pandas なしで読む
 B = re.search(r"^B = '([^']+)'", SRC, re.M).group(1)
 KEY = os.environ.get("SUPABASE_SERVICE_KEY", "") or re.search(r"^KEY = .*'(sb_publishable_[^']+)'", SRC, re.M).group(1)   # 10/20 鍵の行が環境変数優先になった= 公開の読み鍵だけ拾う
 

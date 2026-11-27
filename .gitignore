@@ -11,3 +11,6 @@ data/
 pipeline/.env*
 *.env.*
 fonts/*.ttf
+
+# 2026-11-27 予想のコードは非公開の置き場(nj-core)。便は .github/actions/ai-code で ops/ai_ref.txt の番号を取る
+/pipeline/ai/

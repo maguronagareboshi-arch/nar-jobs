@@ -38,7 +38,7 @@ jobs:
         if: ${{ !cancelled() }}
         run: |
           rc=0
-          for f in tests/test_day_trend_norm.py tests/test_k0_cache.py tests/test_pre_race_only.py tests/test_tokai_official.py tests/wind_backfill_test.py tests/test_partition_s240_sql.py; do
+          for f in tests/test_day_trend_norm.py tests/test_pre_race_only.py tests/test_tokai_official.py tests/wind_backfill_test.py tests/test_partition_s240_sql.py; do
             echo "::group::$f"
             python -X utf8 "$f" || { rc=1; echo "::error::$f が落ちた"; }
             echo "::endgroup::"

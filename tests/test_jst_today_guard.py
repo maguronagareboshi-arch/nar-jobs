@@ -22,6 +22,8 @@ def _counts():
     got = {}
     for top in ("cloud", "pipeline"):
         for p in (ROOT / top).rglob("*.py"):
+            if "pipeline/ai/tests/" in p.as_posix():   # 11/27 非公開へ移した試し(この守り自身を含む)は数えない
+                continue
             n = len(PAT.findall(p.read_text(encoding="utf-8", errors="replace")))
             if n:
                 got[p.relative_to(ROOT).as_posix()] = n
