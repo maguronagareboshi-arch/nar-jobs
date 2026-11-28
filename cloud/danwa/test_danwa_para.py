@@ -191,3 +191,47 @@ def test_pick_back_only_failed_or_missing():
     got = [r["umaban"] for r in D.pick(rows, have, False, back=True)]
     assert got == [2, 3], got
     assert D.pick(rows, have, True, back=True) == []
+
+
+def test_run_entry_default_window_uses_back(monkeypatch=None):
+    # 11/28 入口 run() を丸ごと: 既定の窓(前日〜翌日)は言い換えの道へ進み(札の付け直しへ行かない)、前の 7 日は落ちた馬だけ
+    import argparse
+    import datetime as dt
+    today = dt.datetime.now(D.JST).date()
+    old_day = (today - dt.timedelta(days=4)).isoformat()
+    src = [{"track": "浦和", "race_date": today.isoformat(), "race_no": 1, "umaban": 1, "race_id": "new", "horse_id": "h1", "trainer": "", "comment": SRC},
+           {"track": "浦和", "race_date": old_day, "race_no": 1, "umaban": 2, "race_id": "old", "horse_id": "h2", "trainer": "", "comment": SRC},
+           {"track": "浦和", "race_date": old_day, "race_no": 1, "umaban": 3, "race_id": "old", "horse_id": "h3", "trainer": "", "comment": SRC}]
+    sh = D.src_hash(SRC)
+    note = [{"race_id": "old", "umaban": 2, "src_hash": sh, "status": "failed", "model": D.MODEL, "race_date": old_day},
+            {"race_id": "old", "umaban": 3, "src_hash": sh, "status": "ok", "model": D.MODEL, "race_date": old_day}]
+    seen = []
+
+    class FakeRest:
+        def __init__(self, *a):
+            pass
+
+        def get_all(self, table, select, m0, m1):
+            rows = src if table == D.SRC else note
+            return [r for r in rows if m0.isoformat() <= r["race_date"] <= m1.isoformat()]
+
+        def upsert(self, *a):
+            raise AssertionError("dry-run で書いた")
+
+    def fake_client(key, model=D.MODEL):
+        def call(system, user):
+            seen.append((model, user))
+            body = json.loads(user.split("\n")[1])
+            return _reply([{"umaban": h["umaban"], "para": GOOD} for h in body])
+        return call
+    o_rest, o_cl = D.Rest, D.anthropic_client
+    D.Rest, D.anthropic_client = FakeRest, fake_client
+    try:
+        a = argparse.Namespace(date_from=None, date_to=None, tags_only=False, tags_haiku=False, dry_run=True,
+                               redo=(), limit=None, src_json=None, call=None)
+        st = D.run(a, {"SUPABASE_URL": "x", "SUPABASE_SERVICE_KEY": "y", "ANTHROPIC_API_KEY": "z"})
+    finally:
+        D.Rest, D.anthropic_client = o_rest, o_cl
+    assert st["target"] == 2 and st["ok"] == 2, st      # 今日の 1 頭 + 前の日の落ちた 1 頭(ok の 3 番は選ばない)
+    asked = sorted(json.loads(u.split("\n")[1])[0]["umaban"] for _, u in seen)
+    assert asked == [1, 2], asked

@@ -420,6 +420,7 @@ def run(a, env):
         groups = [(m0, m1, None) for m0, m1 in months(d0, d1)]
         if not a.date_from and not a.tags_only:  # 11/28 既定の窓の前 7 日の落ちた馬も作り直す
             groups = [(m0, m1, "back") for m0, m1 in months(d0 - dt.timedelta(days=BACK_DAYS), d0 - dt.timedelta(days=1))] + groups
+    if a.tags_haiku:
         if db is None or not env.get("ANTHROPIC_API_KEY"):
             raise RuntimeError("--tags-haiku は SUPABASE_* と ANTHROPIC_API_KEY が要る")
         return run_tags_haiku(a, d0, d1, db, a.call or anthropic_client(env["ANTHROPIC_API_KEY"]))
