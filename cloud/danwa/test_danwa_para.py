@@ -158,3 +158,36 @@ if __name__ == "__main__":
             f()
             n += 1
     print(f"ok {n}")
+
+
+def test_strong_model_after_haiku_fails():
+    # 11/28 Haiku が MAX_TRIES 回とも写しで落ちた馬だけ、強い模型に 1 回頼む(合格なら model=STRONG_MODEL)
+    horses = [{"umaban": 1, "comment": SRC}, {"umaban": 2, "comment": SRC}]
+    weak, strong = [], []
+
+    def call(system, user):
+        weak.append(user)
+        return _reply([{"umaban": 1, "para": GOOD}, {"umaban": 2, "para": SRC}])
+
+    def call_strong(system, user):
+        strong.append(user)
+        return _reply([{"umaban": 2, "para": GOOD}])
+    res = D.paraphrase_race(horses, call, call_strong)
+    assert res[1][0] == GOOD and res[1][4] == D.MODEL
+    assert res[2][0] == GOOD and res[2][1] == D.MAX_TRIES + 1 and res[2][4] == D.STRONG_MODEL
+    assert len(weak) == D.MAX_TRIES and len(strong) == 1 and '"umaban": 1' not in strong[0].split('\n')[1]
+    # 強い模型も落ちれば None のまま
+    res2 = D.paraphrase_race(horses[1:], call, lambda s, u: _reply([{"umaban": 2, "para": SRC}]))
+    assert res2[2][0] is None and res2[2][4] is None
+
+
+def test_pick_back_only_failed_or_missing():
+    # 11/28 既定の窓より前の日は、原文のある馬で行が無い・failed の物だけ
+    rows = [{"race_id": "r", "umaban": u, "comment": c} for u, c in [(1, SRC), (2, SRC), (3, SRC), (4, ""), (5, SRC)]]
+    sh = D.src_hash(SRC)
+    have = {("r", 1): {"src_hash": sh, "status": "ok", "model": D.MODEL},
+            ("r", 2): {"src_hash": sh, "status": "failed", "model": D.MODEL},
+            ("r", 5): {"src_hash": sh, "status": "pending", "model": None}}
+    got = [r["umaban"] for r in D.pick(rows, have, False, back=True)]
+    assert got == [2, 3], got
+    assert D.pick(rows, have, True, back=True) == []

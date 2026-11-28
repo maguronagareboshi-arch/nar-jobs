@@ -47,6 +47,8 @@ SRC = "nar_kb_danwa"
 DST = "nar_danwa_note"
 JOB = "danwa_para"
 MODEL = "claude-haiku-5-5"
+STRONG_MODEL = "claude-sonnet-5-5"              # 11/28 Haiku が 3 回とも落ちた馬だけ 1 回(11/25・26 浦和 4 頭が 8 字の写しで 3 回落ちた)
+BACK_DAYS = 7                                   # 11/28 落ちた馬・行の無い馬は既定の窓(前日〜翌日)の前 7 日も作り直す(見張りの窓と同じ)
 MAX_TOKENS = 16000                               # Haiku 5.5 は考える段階が既定でオン= 4000 では返事が切れた(11/11)
 PAGE = 1000
 CHUNK = 500
@@ -193,14 +195,14 @@ def parse_items(text):
     return out
 
 
-def anthropic_client(api_key):
+def anthropic_client(api_key, model=MODEL):
     """(system, user) → 返事の字。⛔鍵に触るのはここだけ"""
     import anthropic                             # cloud/requirements.txt にある(便でだけ要る)
     cl = anthropic.Anthropic(api_key=api_key)
 
     def call(system, user):
         # ⛔temperature は渡さない(news_writer.py と同じ)
-        res = cl.messages.create(model=MODEL, max_tokens=MAX_TOKENS,
+        res = cl.messages.create(model=model, max_tokens=MAX_TOKENS,
                                  system=system, messages=[{"role": "user", "content": user}])
         text = "".join(getattr(b, "text", "") for b in res.content)
         if res.stop_reason != "end_turn":        # 読めない返事の手掛かり(原文は出さない)
@@ -209,16 +211,20 @@ def anthropic_client(api_key):
     return call
 
 
-def paraphrase_race(horses, call):
-    """1 レースの馬(comment のあるもの)→ {umaban: (para|None, tries, why, tags|None)}。外れた馬だけ作り直す。
-    tags= Haiku の札(合格した回まで・最後に取れた回のもの)。1 回も取れなければ None(呼び手が語句ルールで埋める)。"""
-    res = {h["umaban"]: (None, 0, ['未'], None) for h in horses}
+def paraphrase_race(horses, call, strong=None):
+    """1 レースの馬(comment のあるもの)→ {umaban: (para|None, tries, why, tags|None, model|None)}。外れた馬だけ作り直す。
+    tags= Haiku の札(合格した回まで・最後に取れた回のもの)。1 回も取れなければ None(呼び手が語句ルールで埋める)。
+    strong= MAX_TRIES 回とも外れた馬だけ 1 回頼む強い模型の call(11/28)。合格した馬は model=STRONG_MODEL。"""
+    res = {h["umaban"]: (None, 0, ['未'], None, None) for h in horses}
     todo, why = list(horses), None
-    for _ in range(MAX_TRIES):
+    calls = [call] * MAX_TRIES + ([strong] if strong else [])
+    for k, fn in enumerate(calls):
         if not todo:
             break
+        if k == MAX_TRIES:
+            print(f"  強い模型で 1 回: {len(todo)} 頭", flush=True)
         try:
-            text = call(SYSTEM, user_prompt(todo, why))
+            text = fn(SYSTEM, user_prompt(todo, why))
             got, tg = parse_items(text), tags_from(parse_obj(text))
         except Exception as e:                   # noqa: BLE001
             print(f"  ⚠API {type(e).__name__}: {str(e)[:120]}", flush=True)
@@ -231,11 +237,11 @@ def paraphrase_race(horses, call):
             tries = res[u][1] + 1
             tags = tg.get(u, res[u][3])
             if bad:
-                res[u] = (None, tries, bad, tags)
+                res[u] = (None, tries, bad, tags, None)
                 nxt.append(h)
                 why[u] = bad
             else:
-                res[u] = (p, tries, [], tags)
+                res[u] = (p, tries, [], tags, STRONG_MODEL if k == MAX_TRIES else MODEL)
         todo = nxt
     return res
 
@@ -322,13 +328,18 @@ def load_env(path):
     return env
 
 
-def pick(src_rows, have, tags_only, redo=()):
+def pick(src_rows, have, tags_only, redo=(), back=False):
     """対象の行を選ぶ。have = {(race_id, umaban): note 行}。
-    redo= 作り直す model の頭(例 claude-haiku-5-5)。ok でもその model の行は選ぶ。hand-* は選ばない。"""
+    redo= 作り直す model の頭(例 claude-haiku-5-5)。ok でもその model の行は選ぶ。hand-* は選ばない。
+    back= 既定の窓より前の日(11/28): 原文のある馬で、行が無い・status が failed の物だけを選ぶ。"""
     out = []
     for r in src_rows:
         k = (r["race_id"], int(r["umaban"]))
         h = have.get(k)
+        if back:
+            if (r.get("comment") or "").strip() and not tags_only and (not h or h.get("status") == "failed"):
+                out.append(r)
+            continue
         sh = src_hash(r.get("comment"))
         if h and h.get("src_hash") == sh:
             if h.get("status") == "ok":
@@ -407,15 +418,17 @@ def run(a, env):
         if db is None:
             raise RuntimeError("SUPABASE_URL / SUPABASE_SERVICE_KEY が無い")
         groups = [(m0, m1, None) for m0, m1 in months(d0, d1)]
-    if a.tags_haiku:
+        if not a.date_from and not a.tags_only:  # 11/28 既定の窓の前 7 日の落ちた馬も作り直す
+            groups = [(m0, m1, "back") for m0, m1 in months(d0 - dt.timedelta(days=BACK_DAYS), d0 - dt.timedelta(days=1))] + groups
         if db is None or not env.get("ANTHROPIC_API_KEY"):
             raise RuntimeError("--tags-haiku は SUPABASE_* と ANTHROPIC_API_KEY が要る")
         return run_tags_haiku(a, d0, d1, db, a.call or anthropic_client(env["ANTHROPIC_API_KEY"]))
     api_key = None if a.tags_only else env.get("ANTHROPIC_API_KEY")
-    call = None
+    call = strong = None
     if api_key:
         try:
             call = anthropic_client(api_key)
+            strong = anthropic_client(api_key, STRONG_MODEL)
         except Exception as e:                   # noqa: BLE001  SDK が無い等= 札だけ入れる
             print(f"⚠anthropic が使えない({type(e).__name__})= 札だけ入れて status=pending", flush=True)
     elif not a.tags_only:
@@ -423,7 +436,8 @@ def run(a, env):
     st = {"src": 0, "target": 0, "tagged": 0, "ok": 0, "failed": 0, "pending": 0, "written": 0, "api_races": 0}
     left = a.limit
     for m0, m1, rows in groups:
-        if rows is None:
+        back = rows == "back"
+        if back or rows is None:
             rows = db.get_all(SRC, "track,race_date,race_no,umaban,race_id,horse_id,trainer,comment", m0, m1)
         have = {}
         if db is not None:
@@ -434,7 +448,7 @@ def run(a, env):
                 if not a.dry_run:
                     raise
                 print(f"⚠{DST} が読めない(HTTP {e.code})= dry-run なので全部を対象として数える", flush=True)
-        tg = pick(rows, have, a.tags_only, a.redo)
+        tg = pick(rows, have, a.tags_only, a.redo, back=back)
         if left is not None:
             tg, left = tg[:left], max(0, left - len(tg))
         st["src"] += len(rows)
@@ -448,7 +462,7 @@ def run(a, env):
             talk = [dict(r, umaban=int(r["umaban"])) for r in rs if (r.get("comment") or "").strip()]
             res = {}
             if call and talk:
-                res = paraphrase_race(talk, call)
+                res = paraphrase_race(talk, call, strong)
                 st["api_races"] += 1
             for r in rs:
                 u = int(r["umaban"])
@@ -456,12 +470,12 @@ def run(a, env):
                 if a.tags_only or not has or not call:
                     row = note_row(r, None, "pending", None, 0, now)
                 else:
-                    p, tries, why, hk = res.get(u, (None, 0, ['未'], None))
+                    p, tries, why, hk, used = res.get(u, (None, 0, ['未'], None, None))
                     if p is not None and norm(p) == norm(r["comment"]):
                         p, why = None, ['原文と同じ']            # 念のため二重に止める
                     if p is None:
                         print(f"  ✗{rid}-{u} {re.sub(r'8字:[^ ]+', '8字', ' '.join(why))}", flush=True)  # 公開 repo= 原文の断片を出さない
-                    row = note_row(r, p, "ok" if p else "failed", MODEL, tries, now,
+                    row = note_row(r, p, "ok" if p else "failed", used or MODEL, tries, now,
                                    tags=T.merge_tags(hk, r.get("comment")))
                     old = have.get((r["race_id"], u)) or {}
                     if not p and old.get("status") == "ok":
@@ -477,7 +491,7 @@ def run(a, env):
             st["written"] += len(out)
         if tag_out and not a.dry_run:
             db.upsert(DST, tag_out, "race_id,umaban")
-        print(f"{m0}〜{m1}: 原文 {len(rows)}・対象 {len(tg)}・書き {0 if a.dry_run else len(out)}", flush=True)
+        print(f"{m0}〜{m1}{'(前の日の落ちた馬)' if back else ''}: 原文 {len(rows)}・対象 {len(tg)}・書き {0 if a.dry_run else len(out)}", flush=True)
         if left == 0:
             break
     return st
